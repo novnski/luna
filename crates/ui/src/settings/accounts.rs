@@ -1470,9 +1470,9 @@ impl Render for AccountsPage {
                             )
                             .child(widgets::page_subtitle(
                                 &theme,
-                                "The Claude Code, Codex, and Cursor logins on this device. LUNA \
-                                 detects the live session, keeps each account backed up, and can \
-                                 swap between them.",
+                                "LUNA detects existing Claude Code, Codex, and Cursor logins on \
+                                 this device. Each provider manages its own credentials; LUNA \
+                                 keeps no credential copies.",
                             ))
                             .when_some(self.error.clone(), |el, message| {
                                 el.child(
@@ -1495,10 +1495,9 @@ impl Render for AccountsPage {
                                     .line_height(px(19.0))
                                     .text_color(theme.text_muted.opacity(0.6))
                                     .child(SharedString::from(
-                                        "Switching rewrites the CLI\u{2019}s stored login, so new \
-                                         agent sessions use the selected account immediately. On \
-                                         macOS, an already-running Claude Code can hold the previous \
-                                         login for up to ~30 seconds (Keychain cache).",
+                                        "Explicit provider sign-in can update that provider\u{2019}s \
+                                         native login. Existing logins remain managed by Claude \
+                                         Code, Codex, or Cursor.",
                                     )),
                             ),
                     ),
