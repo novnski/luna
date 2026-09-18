@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=LUNA
+GenericName=Coding Agent Controller
+Comment=Multi-device controller for coding agents
+Exec=luna %u
+TryExec=luna
+Icon=luna
+Terminal=false
+Categories=Development;Utility;
+Keywords=agent;claude;codex;ai;coding;
+StartupWMClass=luna
+MimeType=x-scheme-handler/luna;
