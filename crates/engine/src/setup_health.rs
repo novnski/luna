@@ -311,7 +311,7 @@ impl SetupHealth {
                 Some(&models),
                 native_session_identity_observed,
             ),
-            remediation: remediation(state),
+            remediation: remediation(state, authenticated),
         };
         if provider.is_fresh_available() {
             self.cache().insert(provider.harness, provider.clone());
@@ -338,7 +338,7 @@ impl SetupHealth {
                 })
             {
                 capability.state = SetupCapabilityState::Supported;
-                capability.detail = "Observed from a completed LUNA provider session.".into();
+                capability.detail = "Observed from a LUNA provider session.".into();
             }
             return previous;
         }
@@ -386,7 +386,7 @@ fn authentication(harness: HarnessId, accounts: Option<&AgentAccountsSnapshot>) 
 }
 
 fn classify_provider(
-    harness: HarnessId,
+    _harness: HarnessId,
     configured: EvidenceState,
     authenticated: EvidenceState,
 ) -> ProviderReadinessState {
@@ -398,12 +398,9 @@ fn classify_provider(
         };
     }
     match authenticated {
-        EvidenceState::Confirmed | EvidenceState::Unsupported => ProviderReadinessState::Available,
-        EvidenceState::Missing => ProviderReadinessState::Configured,
-        EvidenceState::Unknown if known_account_provider(harness) => {
-            ProviderReadinessState::Unknown
-        }
-        EvidenceState::Unknown => ProviderReadinessState::Available,
+        EvidenceState::Confirmed => ProviderReadinessState::Available,
+        EvidenceState::Missing | EvidenceState::Unsupported => ProviderReadinessState::Configured,
+        EvidenceState::Unknown => ProviderReadinessState::Unknown,
     }
 }
 
@@ -413,10 +410,10 @@ fn provider_detail(
     models: usize,
 ) -> String {
     match state {
-        ProviderReadinessState::Available if authentication == EvidenceState::Unsupported => {
-            format!("Catalog available ({models} models); no separate auth signal is exposed.")
-        }
         ProviderReadinessState::Available => format!("Authenticated with {models} models."),
+        ProviderReadinessState::Configured if authentication == EvidenceState::Unsupported => {
+            format!("Catalog available ({models} models); execution readiness is unverified.")
+        }
         ProviderReadinessState::Configured => "Configured; sign-in is still required.".into(),
         ProviderReadinessState::Authenticated => "Authenticated; no models are available.".into(),
         ProviderReadinessState::Installed => "Installed, but not ready to run.".into(),
@@ -426,11 +423,17 @@ fn provider_detail(
     }
 }
 
-fn remediation(state: ProviderReadinessState) -> Option<SetupRemediation> {
+fn remediation(
+    state: ProviderReadinessState,
+    authentication: EvidenceState,
+) -> Option<SetupRemediation> {
     match state {
         ProviderReadinessState::Available => None,
-        ProviderReadinessState::Configured => {
+        ProviderReadinessState::Configured if authentication == EvidenceState::Missing => {
             Some(remediation_value(SetupRemediationKind::OpenAccounts))
+        }
+        ProviderReadinessState::Configured => {
+            Some(remediation_value(SetupRemediationKind::Refresh))
         }
         ProviderReadinessState::Installed | ProviderReadinessState::NotInstalled => {
             Some(remediation_value(SetupRemediationKind::OpenAgents))
@@ -549,7 +552,7 @@ fn capabilities(
                 SetupCapabilityState::Unknown
             },
             if native_session_identity_observed {
-                "Observed from a completed LUNA provider session."
+                "Observed from a LUNA provider session."
             } else {
                 "Observed only after a real session starts."
             },
@@ -673,7 +676,15 @@ mod tests {
                 EvidenceState::Confirmed,
                 EvidenceState::Unsupported,
             ),
-            ProviderReadinessState::Available
+            ProviderReadinessState::Configured
+        );
+        assert_eq!(
+            classify_provider(
+                HarnessId::Opencode,
+                EvidenceState::Confirmed,
+                EvidenceState::Unknown,
+            ),
+            ProviderReadinessState::Unknown
         );
     }
 
