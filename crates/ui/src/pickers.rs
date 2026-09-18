@@ -213,6 +213,37 @@ fn provider_effective_permission_mode(
     .unwrap_or(PermissionMode::Ask)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectivePermissionPreview {
+    Known(PermissionMode),
+    /// The draft targets another/unknown execution host. Provider capability
+    /// alone cannot prove that host's machine or environment ceiling.
+    Pending,
+}
+
+fn permission_preview(
+    authoritative_effective: Option<PermissionMode>,
+    target_is_local: bool,
+    harness: HarnessId,
+    requested: PermissionMode,
+) -> EffectivePermissionPreview {
+    if let Some(effective) = authoritative_effective {
+        return EffectivePermissionPreview::Known(effective);
+    }
+    if !target_is_local {
+        return EffectivePermissionPreview::Pending;
+    }
+    EffectivePermissionPreview::Known(
+        zeron_engine::permissions::resolve_preview(harness, requested).effective_mode,
+    )
+}
+
+fn stage_permission_request(config: &mut ChatConfig, requested: PermissionMode) {
+    // Requested policy may update immediately, but effective/ceiling fields
+    // describe the currently active host policy until authoritative sync.
+    config.permission_mode = requested;
+}
+
 // ---------------------------------------------------------------------------
 // Pure: default resolution (no "Default" placeholders — a concrete pick always)
 // ---------------------------------------------------------------------------
@@ -884,15 +915,23 @@ impl Pickers {
             .unwrap_or_else(|| default_permission_mode(harness))
     }
 
-    fn preview_effective_permission_mode(
+    fn effective_permission_preview(
         &self,
         cx: &App,
         requested: PermissionMode,
-    ) -> PermissionMode {
+    ) -> EffectivePermissionPreview {
         let Some(harness) = self.effective_harness(cx) else {
-            return PermissionMode::Ask;
+            return EffectivePermissionPreview::Pending;
         };
-        provider_effective_permission_mode(harness, requested)
+        let state = self.state.read(cx);
+        let authoritative_effective = state
+            .selected_chat_row()
+            .and_then(|chat| chat.config.as_ref())
+            .map(|config| config.effective_permission_mode);
+        let target = state.effective_device_id();
+        let target_is_local =
+            target.is_some() && target.as_deref() == state.local_device_id.as_deref();
+        permission_preview(authoritative_effective, target_is_local, harness, requested)
     }
 
     /// Effective model id: the draft pick, the selected chat's config, or (on
@@ -989,6 +1028,13 @@ impl Pickers {
     /// loaded (no "engine picks a default" passthrough).
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
         let permission_mode = self.requested_permission_mode(cx);
+        let effective_permission_mode = match self.effective_permission_preview(cx, permission_mode)
+        {
+            EffectivePermissionPreview::Known(mode) => mode,
+            // The authoritative execution host resolves before dispatch. Ask
+            // is the only safe persisted placeholder while that is unknown.
+            EffectivePermissionPreview::Pending => PermissionMode::Ask,
+        };
         ResolvedRunConfig {
             harness: self.effective_harness(cx),
             model: self
@@ -999,7 +1045,7 @@ impl Pickers {
             reasoning: self.effective_reasoning(cx),
             model_options: self.explicit_options(cx),
             permission_mode,
-            effective_permission_mode: self.preview_effective_permission_mode(cx, permission_mode),
+            effective_permission_mode,
         }
     }
 
@@ -1671,11 +1717,10 @@ impl Pickers {
         else {
             return;
         };
-        let policy = zeron_engine::permissions::resolve_preview(config.harness, mode);
-        config.permission_mode = mode;
-        config.effective_permission_mode = policy.effective_mode;
-        config.permission_ceiling_source = policy.ceiling_source;
-        config.permission_degradation_reason = policy.degradation_reason;
+        stage_permission_request(&mut config, mode);
+        // Preserve the host-authoritative effective policy while this mutate
+        // is pending. Active work keeps that policy until a safe boundary;
+        // the engine's synced ChatConfig updates effective/ceiling afterward.
         self.state.update(cx, |state, cx| {
             state.apply_chat_config(&chat_id, config);
             cx.notify();
@@ -5082,34 +5127,40 @@ impl Render for Pickers {
             )
         };
         let requested_permission = self.requested_permission_mode(cx);
-        let effective_permission = self.preview_effective_permission_mode(cx, requested_permission);
+        let effective_permission = self.effective_permission_preview(cx, requested_permission);
         let permission_label: SharedString = match effective_permission {
-            PermissionMode::Ask => "Ask",
-            PermissionMode::Auto => "Auto",
-            PermissionMode::Full => "Full",
+            EffectivePermissionPreview::Known(PermissionMode::Ask) => "Ask",
+            EffectivePermissionPreview::Known(PermissionMode::Auto) => "Auto",
+            EffectivePermissionPreview::Known(PermissionMode::Full) => "Full",
+            EffectivePermissionPreview::Pending => "Pending",
         }
         .into();
-        let permission_suffix = (requested_permission != effective_permission).then(|| {
-            (
+        let permission_suffix = match effective_permission {
+            EffectivePermissionPreview::Known(effective) if requested_permission == effective => {
+                None
+            }
+            EffectivePermissionPreview::Known(_) | EffectivePermissionPreview::Pending => Some((
                 SharedString::from(match requested_permission {
                     PermissionMode::Ask => "Requested Ask",
                     PermissionMode::Auto => "Requested Auto",
                     PermissionMode::Full => "Requested Full",
                 }),
                 Some(theme.warning.opacity(0.82)),
-            )
-        });
+            )),
+        };
+        let effective_full =
+            effective_permission == EffectivePermissionPreview::Known(PermissionMode::Full);
         let permission_chip = self.trigger_chip(
             PickerKind::Permission,
             permission_label,
             true,
             Some((
-                if effective_permission == PermissionMode::Full {
+                if effective_full {
                     crate::icons::DANGER_TRIANGLE
                 } else {
                     crate::icons::KEY_MINIMALISTIC
                 },
-                (effective_permission == PermissionMode::Full).then_some(theme.warning),
+                effective_full.then_some(theme.warning),
             )),
             false,
             false,
@@ -5178,6 +5229,37 @@ mod tests {
         assert_eq!(
             provider_effective_permission_mode(HarnessId::Cursor, PermissionMode::Full),
             PermissionMode::Ask
+        );
+        assert_eq!(
+            permission_preview(
+                Some(PermissionMode::Ask),
+                false,
+                HarnessId::Codex,
+                PermissionMode::Full,
+            ),
+            EffectivePermissionPreview::Known(PermissionMode::Ask),
+            "existing tasks display the execution host's authoritative effective mode"
+        );
+        assert_eq!(
+            permission_preview(None, false, HarnessId::Codex, PermissionMode::Full,),
+            EffectivePermissionPreview::Pending,
+            "a remote draft must not infer Full from provider capability alone"
+        );
+        let mut config = ResolvedRunConfig {
+            harness: Some(HarnessId::Codex),
+            permission_mode: PermissionMode::Ask,
+            effective_permission_mode: PermissionMode::Ask,
+            ..Default::default()
+        }
+        .chat_config()
+        .unwrap();
+        config.permission_ceiling_source = Some(zeron_proto::PermissionCeilingSource::Machine);
+        stage_permission_request(&mut config, PermissionMode::Full);
+        assert_eq!(config.permission_mode, PermissionMode::Full);
+        assert_eq!(config.effective_permission_mode, PermissionMode::Ask);
+        assert_eq!(
+            config.permission_ceiling_source,
+            Some(zeron_proto::PermissionCeilingSource::Machine)
         );
     }
 

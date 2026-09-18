@@ -45,13 +45,15 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             supports_workspace_sandbox: true,
             supports_automatic_reviewer: false,
             supports_live_mode_change: false,
-            supports_task_allowance: true,
+            // Runtime-gated: verified 1.x is process scoped, while 2.x
+            // persists `always` project-wide and must not advertise it.
+            supports_task_allowance: false,
             approval_kinds: vec![Command, FileChange, Network, ExternalPath, Tool],
             network_control: "session-scoped OpenCode permission rules".into(),
             known_limitations: vec![
                 "Approve for me safely degrades to Ask because OpenCode exposes no automatic reviewer."
                     .into(),
-                "Allow for task is session-scoped and is never persisted to project configuration."
+                "Allow for task is exposed only on verified 1.x process-scoped permission replies; 2.x disables it."
                     .into(),
             ],
         },
@@ -358,6 +360,10 @@ mod tests {
         assert_eq!(
             provider_capabilities(HarnessId::Opencode).supported_modes,
             vec![Ask, Full]
+        );
+        assert!(
+            !provider_capabilities(HarnessId::Opencode).supports_task_allowance,
+            "task allowance is negotiated from the live OpenCode protocol"
         );
         assert!(
             provider_capabilities(HarnessId::Cursor)

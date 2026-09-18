@@ -1774,8 +1774,44 @@ fn opencode_permission_rules(mode: zeron_proto::PermissionMode) -> Value {
             { "permission": "list", "pattern": "*", "action": "allow" },
             { "permission": "bash", "pattern": "*", "action": "ask" },
             { "permission": "webfetch", "pattern": "*", "action": "ask" },
-            { "permission": "external_directory", "pattern": "*", "action": "ask" }
+            { "permission": "websearch", "pattern": "*", "action": "ask" },
+            { "permission": "external_directory", "pattern": "*", "action": "ask" },
+            // OpenCode uses the LAST matching rule. Keep sensitive env files
+            // behind approval while allowing explicit example templates.
+            { "permission": "read", "pattern": "*.env", "action": "ask" },
+            { "permission": "read", "pattern": "*.env.*", "action": "ask" },
+            { "permission": "read", "pattern": "*.env.example", "action": "allow" },
+            { "permission": "edit", "pattern": "*.env", "action": "ask" },
+            { "permission": "edit", "pattern": "*.env.*", "action": "ask" },
+            { "permission": "edit", "pattern": "*.env.example", "action": "allow" },
+            { "permission": "write", "pattern": "*.env", "action": "ask" },
+            { "permission": "write", "pattern": "*.env.*", "action": "ask" },
+            { "permission": "write", "pattern": "*.env.example", "action": "allow" }
         ]),
+    }
+}
+
+fn opencode_supports_task_allowance(protocol: Protocol) -> bool {
+    // 1.x keeps `always` grants only in the lifetime of this LUNA-owned
+    // server process (one task runtime). 2.x persists them into project-wide
+    // rules, which outlives the task and is therefore not an L04 task grant.
+    protocol == Protocol::V1
+}
+
+fn opencode_approval_options(protocol: Protocol) -> Vec<String> {
+    let mut options = vec!["Deny".into(), "Allow once".into()];
+    if opencode_supports_task_allowance(protocol) {
+        options.push("Allow for task".into());
+    }
+    options.push("Cancel".into());
+    options
+}
+
+fn opencode_permission_reply(protocol: Protocol, decision: Option<&str>) -> &'static str {
+    match decision {
+        Some("Allow once") => "once",
+        Some("Allow for task") if opencode_supports_task_allowance(protocol) => "always",
+        _ => "reject",
     }
 }
 
@@ -2462,6 +2498,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             };
             let session = session.to_owned();
             let protocol = server.protocol().await;
+            let supports_task_allowance = opencode_supports_task_allowance(protocol);
             // 1.x: global permission endpoint + a session-scoped fallback;
             // 2.x: the reply rides the session's permission route
             // (`{"reply": "once" | "always" | "reject"}`).
@@ -2504,12 +2541,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 id: format!("permission:{id}"),
                 header: "Permission".into(),
                 question: format!("{summary}. Target: {}.", permission_policy.machine_name),
-                options: vec![
-                    "Deny".into(),
-                    "Allow once".into(),
-                    "Allow for task".into(),
-                    "Cancel".into(),
-                ],
+                options: opencode_approval_options(protocol),
                 multi_select: false,
                 approval: Some(zeron_proto::ApprovalRequest {
                     provider_request_id: id.to_owned(),
@@ -2533,7 +2565,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                         .unwrap_or_default()
                         .as_millis() as i64
                         + 120_000,
-                    supports_task_allowance: true,
+                    supports_task_allowance,
                 }),
             };
             tokio::spawn(async move {
@@ -2562,13 +2594,9 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                             .and_then(|answer| answer.labels.into_iter().next())
                     })
                 };
-                // V2 "always" writes durable project-wide permission rules.
-                // Approval of this request must not grant future runs access.
-                let reply = match decision.as_deref() {
-                    Some("Allow once") => "once",
-                    Some("Allow for task") => "always",
-                    _ => "reject",
-                };
+                // V2 "always" writes durable project-wide permission rules,
+                // so even a forged/stale task-allowance answer fails closed.
+                let reply = opencode_permission_reply(protocol, decision.as_deref());
                 if server
                     .post_json(
                         &reply_path,

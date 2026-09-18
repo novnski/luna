@@ -1183,6 +1183,370 @@ async fn respond_input_resolves_pending_question() {
     .await;
 }
 
+#[tokio::test]
+async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_approval() {
+    struct ApprovalHarness;
+    #[async_trait]
+    impl Harness for ApprovalHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Approval"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            _request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            tokio::spawn(async move {
+                let answers = (controls.request_input)(vec![zeron_proto::UserInputQuestion {
+                    id: "approval-question".into(),
+                    header: "Approve command".into(),
+                    question: "Allow echo safe?".into(),
+                    options: vec!["Deny".into(), "Allow once".into()],
+                    multi_select: false,
+                    approval: Some(zeron_proto::ApprovalRequest {
+                        provider_request_id: "provider-approval".into(),
+                        provider: HarnessId::Mock,
+                        turn_id: None,
+                        machine_name: "test-machine".into(),
+                        action_kind: zeron_proto::ApprovalActionKind::Command,
+                        summary: "echo safe".into(),
+                        requested_scope: zeron_proto::PermissionScope::Workspace,
+                        expires_at_ms: i64::MAX,
+                        supports_task_allowance: false,
+                    }),
+                }])
+                .await
+                .unwrap_or_default();
+                let picked = answers
+                    .first()
+                    .and_then(|answer| answer.labels.first())
+                    .cloned()
+                    .unwrap_or_else(|| "none".into());
+                let _ = tx
+                    .send(Ok(AgentEvent::TextDelta {
+                        text: format!("approval {picked}"),
+                    }))
+                    .await;
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(dir.path(), Arc::new(ApprovalHarness));
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_viewer(
+        handle.doc(),
+        "cmd-run-approval",
+        SessionCommandPayload::Run {
+            request: run_request("approve"),
+            message_id: "m-approval".into(),
+        },
+    );
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).map(|s| s.status)
+                == Some(SessionStatus::AwaitingApproval)
+        },
+        "awaiting typed approval",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        MessagePart::Input {
+                            resolved: false,
+                            ..
+                        }
+                    )
+                })
+            })
+        },
+        "typed approval part appears",
+    )
+    .await;
+    let request_id = entries(&core)
+        .iter()
+        .find_map(|entry| {
+            entry.parts.iter().find_map(|part| match part {
+                MessagePart::Input {
+                    request_id,
+                    resolved: false,
+                    ..
+                } => Some(request_id.clone()),
+                _ => None,
+            })
+        })
+        .unwrap();
+
+    queue_as_viewer(
+        handle.doc(),
+        "cmd-approval-bypass",
+        SessionCommandPayload::RespondInput {
+            request_id: request_id.clone(),
+            answers: vec![zeron_proto::UserInputAnswer {
+                question_id: "approval-question".into(),
+                labels: vec!["Allow once".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "cmd-approval-bypass")
+                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
+        },
+        "ordinary input bypass rejected",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-bypass"),
+        Some((
+            SessionCommandStatus::Rejected,
+            Some("no pending input request".into())
+        ))
+    );
+    assert_eq!(
+        core.sessions.session_status(CHAT).map(|s| s.status),
+        Some(SessionStatus::AwaitingApproval)
+    );
+    assert!(
+        entries(&core)
+            .iter()
+            .any(|entry| entry.parts.iter().any(|part| matches!(
+                part,
+                MessagePart::Input {
+                    resolved: false,
+                    ..
+                }
+            )))
+    );
+
+    queue_as_viewer(
+        handle.doc(),
+        "cmd-approval-right",
+        SessionCommandPayload::RespondApproval {
+            request_id,
+            decision: zeron_proto::ApprovalDecision::AllowOnce,
+        },
+    );
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(
+                    |part| matches!(part, MessagePart::Text { text, .. } if text == "approval Allow once"),
+                )
+            })
+        },
+        "typed approval completes",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-right"),
+        Some((SessionCommandStatus::Applied, None))
+    );
+}
+
+#[tokio::test]
+async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_can() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(
+        dir.path(),
+        Arc::new(MockHarness {
+            script: mock_script(),
+        }),
+    );
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_viewer(
+        handle.doc(),
+        "cmd-seed-run",
+        SessionCommandPayload::Run {
+            request: run_request("seed config"),
+            message_id: "m-seed".into(),
+        },
+    );
+    wait_for(
+        || core.sessions.session_status(CHAT).map(|s| s.status) == Some(SessionStatus::Idle),
+        "seed run settles",
+    )
+    .await;
+
+    handle
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "ordinary-input".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Input {
+                id: "ordinary-part".into(),
+                request_id: "ordinary-request".into(),
+                questions: vec![zeron_proto::UserInputQuestion {
+                    id: "ordinary-question".into(),
+                    header: "Pick".into(),
+                    question: "Which one?".into(),
+                    options: vec!["a".into(), "b".into()],
+                    multi_select: false,
+                    approval: None,
+                }],
+                resolved: false,
+            }],
+            created_at: 10,
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    queue_as_viewer(
+        handle.doc(),
+        "cmd-recovered-ordinary",
+        SessionCommandPayload::RespondInput {
+            request_id: "ordinary-request".into(),
+            answers: vec![zeron_proto::UserInputAnswer {
+                question_id: "ordinary-question".into(),
+                labels: vec!["b".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "cmd-recovered-ordinary")
+                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
+        },
+        "ordinary recovered answer applies",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-recovered-ordinary"),
+        Some((
+            SessionCommandStatus::Applied,
+            Some("answered as new turn".into())
+        ))
+    );
+    wait_for(
+        || core.sessions.session_status(CHAT).map(|s| s.status) == Some(SessionStatus::Idle),
+        "ordinary recovery run settles",
+    )
+    .await;
+
+    handle
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "approval-input".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Input {
+                id: "approval-part".into(),
+                request_id: "approval-request".into(),
+                questions: vec![zeron_proto::UserInputQuestion {
+                    id: "approval-question".into(),
+                    header: "Approval".into(),
+                    question: "Allow?".into(),
+                    options: vec!["Deny".into(), "Allow once".into()],
+                    multi_select: false,
+                    approval: Some(zeron_proto::ApprovalRequest {
+                        provider_request_id: "provider-request".into(),
+                        provider: HarnessId::Mock,
+                        turn_id: None,
+                        machine_name: "test-machine".into(),
+                        action_kind: zeron_proto::ApprovalActionKind::Command,
+                        summary: "echo safe".into(),
+                        requested_scope: zeron_proto::PermissionScope::Workspace,
+                        expires_at_ms: i64::MAX,
+                        supports_task_allowance: false,
+                    }),
+                }],
+                resolved: false,
+            }],
+            created_at: 20,
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    queue_as_viewer(
+        handle.doc(),
+        "cmd-recovered-bypass",
+        SessionCommandPayload::RespondInput {
+            request_id: "approval-request".into(),
+            answers: vec![zeron_proto::UserInputAnswer {
+                question_id: "approval-question".into(),
+                labels: vec!["Allow once".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "cmd-recovered-bypass")
+                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
+        },
+        "recovered approval bypass rejected",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-recovered-bypass"),
+        Some((
+            SessionCommandStatus::Rejected,
+            Some("typed approval requires respondApproval".into())
+        ))
+    );
+    assert!(handle.doc().read_entries().unwrap().iter().any(|entry| {
+        entry.parts.iter().any(|part| {
+            matches!(
+                part,
+                MessagePart::Input {
+                    request_id,
+                    resolved: false,
+                    ..
+                } if request_id == "approval-request"
+            )
+        })
+    }));
+
+    queue_as_viewer(
+        handle.doc(),
+        "cmd-recovered-deny",
+        SessionCommandPayload::RespondApproval {
+            request_id: "approval-request".into(),
+            decision: zeron_proto::ApprovalDecision::AllowOnce,
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "cmd-recovered-deny")
+                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
+        },
+        "recovered approval safely closes",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-recovered-deny"),
+        Some((
+            SessionCommandStatus::Applied,
+            Some("provider disconnected; approval denied safely".into())
+        ))
+    );
+}
+
 /// Resilience: a RespondInput whose id matches no pending request is REJECTED
 /// with a resolution (never silently dropped), the question stays live (the
 /// panel persists), and a subsequent correct answer still resumes the run —

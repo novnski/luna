@@ -15,10 +15,41 @@ fn permission_modes_compile_to_session_scoped_rules() {
             .iter()
             .any(|rule| { rule["permission"] == "edit" && rule["action"] == "allow" })
     );
+    let ask = ask.as_array().unwrap();
+    assert_eq!(
+        &ask[ask.len() - 9..],
+        &[
+            json!({ "permission": "read", "pattern": "*.env", "action": "ask" }),
+            json!({ "permission": "read", "pattern": "*.env.*", "action": "ask" }),
+            json!({ "permission": "read", "pattern": "*.env.example", "action": "allow" }),
+            json!({ "permission": "edit", "pattern": "*.env", "action": "ask" }),
+            json!({ "permission": "edit", "pattern": "*.env.*", "action": "ask" }),
+            json!({ "permission": "edit", "pattern": "*.env.example", "action": "allow" }),
+            json!({ "permission": "write", "pattern": "*.env", "action": "ask" }),
+            json!({ "permission": "write", "pattern": "*.env.*", "action": "ask" }),
+            json!({ "permission": "write", "pattern": "*.env.example", "action": "allow" }),
+        ]
+    );
     let full = opencode_permission_rules(zeron_proto::PermissionMode::Full);
     assert_eq!(
         full,
         json!([{ "permission": "*", "pattern": "*", "action": "allow" }])
+    );
+}
+
+#[test]
+fn task_allowance_is_only_offered_on_process_scoped_v1() {
+    assert!(opencode_supports_task_allowance(Protocol::V1));
+    assert!(!opencode_supports_task_allowance(Protocol::V2));
+    assert!(opencode_approval_options(Protocol::V1).contains(&"Allow for task".to_string()));
+    assert!(!opencode_approval_options(Protocol::V2).contains(&"Allow for task".to_string()));
+    assert_eq!(
+        opencode_permission_reply(Protocol::V1, Some("Allow for task")),
+        "always"
+    );
+    assert_eq!(
+        opencode_permission_reply(Protocol::V2, Some("Allow for task")),
+        "reject"
     );
 }
 
@@ -57,7 +88,7 @@ impl TurnWire {
         queued: bool,
         v2: bool,
         auto_approve: bool,
-        answer: Option<bool>,
+        answer: Option<&'static str>,
     ) -> Self {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -155,10 +186,15 @@ impl TurnWire {
                 request_input: Box::new(move |questions| {
                     let answer = answer.expect("fixture must not ask for input");
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let _ = tx.send(questions.into_iter().map(|q| UserInputAnswer {
-                        question_id: q.id,
-                        labels: vec![if answer { "Allow once" } else { "Deny" }.into()],
-                    }).collect());
+                    let _ = tx.send(
+                        questions
+                            .into_iter()
+                            .map(|q| UserInputAnswer {
+                                question_id: q.id,
+                                labels: vec![answer.into()],
+                            })
+                            .collect(),
+                    );
                     rx
                 }),
                 steering,
@@ -1197,7 +1233,8 @@ async fn permissions_stay_session_scoped_and_never_persist_grants() {
 #[tokio::test]
 async fn permissions_without_auto_approve_require_an_explicit_answer() {
     for accept in [false, true] {
-        let mut wire = TurnWire::start_policy(false, true, false, Some(accept)).await;
+        let answer = if accept { "Allow once" } else { "Deny" };
+        let mut wire = TurnWire::start_policy(false, true, false, Some(answer)).await;
         wire.request("/api/model").await;
         wire.request("/prompt").await;
         wire.v2(
@@ -1221,6 +1258,47 @@ async fn permissions_without_auto_approve_require_an_explicit_answer() {
         .await
         .unwrap();
         assert_eq!(body["reply"], if accept { "once" } else { "reject" });
+    }
+}
+
+#[tokio::test]
+async fn task_allowance_never_persists_through_v2() {
+    for v2 in [false, true] {
+        let mut wire = TurnWire::start_policy(false, v2, false, Some("Allow for task")).await;
+        if v2 {
+            wire.request("/api/model").await;
+        }
+        wire.request(if v2 { "/prompt" } else { "/prompt_async" })
+            .await;
+        if v2 {
+            wire.v2(
+                "permission.asked",
+                json!({"id":"approval", "sessionID":"fixture"}),
+            );
+        } else {
+            wire.bus
+                .send(json!({"type":"permission.asked","properties":{
+                    "id":"approval", "sessionID":"fixture"
+                }}))
+                .unwrap();
+        }
+        let body = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some((_, body)) = wire
+                    .posts
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|(path, _)| path.contains("permission"))
+                {
+                    break body.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(body["reply"], if v2 { "reject" } else { "always" });
     }
 }
 

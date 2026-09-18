@@ -104,6 +104,24 @@ fn expire_pending_approval(
     true
 }
 
+fn take_pending_ordinary_input(
+    pending_inputs: &PendingInputs,
+    request_id: &str,
+) -> Option<PendingInput> {
+    let mut pending_inputs = lock(pending_inputs);
+    let pending = pending_inputs.get(request_id)?;
+    if pending
+        .questions
+        .iter()
+        .any(|question| question.approval.is_some())
+    {
+        // Typed approvals have stricter decision, expiry, and task-allowance
+        // semantics. They may only leave through `respond_approval`.
+        return None;
+    }
+    pending_inputs.remove(request_id)
+}
+
 /// A harness-native session id plus the cwd it was created under. Harness
 /// session stores are cwd-scoped (claude keys conversations by project
 /// directory — zeron sessions.ts:563 "harness session stores are keyed by
@@ -757,7 +775,7 @@ impl SessionsEngine {
         let Some((pending, engine_tx)) = target else {
             return Ok(false);
         };
-        let Some(pending) = lock(&pending).remove(request_id) else {
+        let Some(pending) = take_pending_ordinary_input(&pending, request_id) else {
             return Ok(false);
         };
         let _ = pending.resolver.send(answers);
@@ -2575,6 +2593,7 @@ async fn drive_run(
 mod tests {
     use super::{
         PendingInput, RuntimeConfig, approval_answer, expire_pending_approval, subagent_doc_id,
+        take_pending_ordinary_input,
     };
     use zeron_proto::{HarnessId, RunRequest, SandboxLevel};
 
@@ -2633,6 +2652,39 @@ mod tests {
                 if request_id == "approval-1"
         ));
         assert!(!expire_pending_approval(&pending, &event_tx, "approval-1"));
+    }
+
+    #[test]
+    fn ordinary_input_route_cannot_consume_a_typed_approval() {
+        let pending = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let (resolver, _answer) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert(
+            "approval-1".into(),
+            PendingInput {
+                questions: vec![zeron_proto::UserInputQuestion {
+                    id: "question-1".into(),
+                    header: "Approval".into(),
+                    question: "Allow?".into(),
+                    options: vec!["Deny".into(), "Allow once".into()],
+                    multi_select: false,
+                    approval: Some(zeron_proto::ApprovalRequest {
+                        provider_request_id: "provider-1".into(),
+                        provider: HarnessId::Codex,
+                        turn_id: None,
+                        machine_name: "test-machine".into(),
+                        action_kind: zeron_proto::ApprovalActionKind::Command,
+                        summary: "echo safe".into(),
+                        requested_scope: zeron_proto::PermissionScope::Workspace,
+                        expires_at_ms: i64::MAX,
+                        supports_task_allowance: true,
+                    }),
+                }],
+                resolver,
+            },
+        );
+
+        assert!(take_pending_ordinary_input(&pending, "approval-1").is_none());
+        assert!(pending.lock().unwrap().contains_key("approval-1"));
     }
 
     #[tokio::test]

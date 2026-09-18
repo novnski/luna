@@ -4323,6 +4323,15 @@ impl DocHost {
                         Some("no pending input request".into()),
                     ));
                 };
+                if questions.iter().any(|question| question.approval.is_some()) {
+                    // A recovered approval has no provider response channel.
+                    // Only RespondApproval may close it (as a safe denial);
+                    // never turn arbitrary input labels into a resumed prompt.
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some("typed approval requires respondApproval".into()),
+                    ));
+                }
                 // The run died under the question (engine restart, crash).
                 // The question is still open in the doc and the command is
                 // durable, so honor it anyway — stamp the part resolved and
