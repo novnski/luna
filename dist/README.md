@@ -44,13 +44,16 @@ an owned signed feed exists. The manual steps it automates, for reference
    sed "s/__VERSION__/$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')/" \
      dist/macos/Info.plist > LUNA.app/Contents/Info.plist
    ```
-3. Icon: generate `luna.icns` from `dist/macos/icon-1024.png` (the macOS-shaped
-   variant of the artwork — squircle mask, margins, and shadow pre-baked, since
-   `sips` can't apply an alpha mask) and place it at
+3. Icon: generate `luna.icns` from `dist/macos/luna.iconset`. Each frame uses
+   the supplied size-specific Default artwork, centered on an 824/1024
+   (80.47%) legacy-ICNS tile within its transparent canvas. This keeps the
+   flattened icon's apparent size aligned with native macOS icons on systems
+   that don't apply the newer Icon Composer mask and scale automatically.
+   Place it at
    `LUNA.app/Contents/Resources/luna.icns`:
    ```sh
-   mkdir luna.iconset && sips -z 256 256 dist/macos/icon-1024.png --out luna.iconset/icon_256x256.png
-   iconutil -c icns luna.iconset -o LUNA.app/Contents/Resources/luna.icns
+   iconutil -c icns dist/macos/luna.iconset \
+     -o LUNA.app/Contents/Resources/luna.icns
    ```
 4. Sign + notarize (required for distribution):
    ```sh

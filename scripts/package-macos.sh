@@ -31,18 +31,11 @@ sed "s/__VERSION__/$VERSION/" "$ROOT/dist/macos/Info.plist" >"$APP/Contents/Info
 mkdir -p "$APP/Contents/Resources/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$APP/Contents/Resources/licenses/fonts/"
 
-# Icon: iconset from the pre-masked macOS icon (squircle + margins + shadow
-# baked into dist/macos/icon-1024.png — sips can't alpha-mask, so the mask is
-# applied ahead of time; the upstream artwork remains attributed and unchanged).
-ICONSET="$OUT_DIR/luna.iconset"
-rm -rf "$ICONSET" && mkdir -p "$ICONSET"
-for size in 16 32 128 256 512; do
-  sips -z "$size" "$size" "$ROOT/dist/macos/icon-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-  retina=$((size * 2))
-  sips -z "$retina" "$retina" "$ROOT/dist/macos/icon-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/luna.icns"
-rm -rf "$ICONSET"
+# Preserve the supplied per-size LUNA artwork and its legacy-ICNS inset instead
+# of downsampling a single source image. The checked-in iconset is also used by
+# the development bundle.
+iconutil -c icns "$ROOT/dist/macos/luna.iconset" \
+  -o "$APP/Contents/Resources/luna.icns"
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   # Hardened runtime + secure timestamp are both notarization requirements.
