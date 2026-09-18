@@ -22,7 +22,6 @@ const CAPTURED_ENV: &[&str] = &[
     "PATH",
     "LUNA_DATA_DIR",
     "ZERON_EDGE_URL",
-    "ZERON_EDGE_TOKEN",
     "ZERON_ORG_ID",
     "ZERON_WORKOS_CLIENT_ID",
     "ZERON_WORKOS_API_BASE",
@@ -405,6 +404,10 @@ mod tests {
         assert!(CAPTURED_ENV.contains(&"LUNA_IPC_PORT"));
         assert!(!CAPTURED_ENV.contains(&"ZERON_DATA_DIR"));
         assert!(!CAPTURED_ENV.contains(&"ZERON_IPC_PORT"));
+        assert!(
+            !CAPTURED_ENV.contains(&"ZERON_EDGE_TOKEN"),
+            "daemon installation must never copy a bearer into plist/unit metadata"
+        );
     }
 
     #[test]

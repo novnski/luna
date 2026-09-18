@@ -810,6 +810,10 @@ pub struct AgentAccount {
     pub email: Option<String>,
     pub plan_label: Option<String>,
     pub active: bool,
+    /// Metadata-only provider-native authentication state. No credential value
+    /// or provider auth-store path is ever serialized to clients.
+    #[serde(default)]
+    pub authentication: AgentAuthenticationState,
     #[serde(default)]
     pub usage_windows: Vec<AgentUsageWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -826,6 +830,16 @@ pub struct AgentAccount {
     /// Epoch millis of the slot's last snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentAuthenticationState {
+    Authenticated,
+    Expired,
+    Unavailable,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -1022,15 +1022,10 @@ fn forwardable(method: &str) -> bool {
             | methods::WRITE_TERMINAL
             | methods::RESIZE_TERMINAL
             | methods::CLOSE_TERMINAL
-            // Agent accounts are per-device CLI logins (the device switcher
-            // retargets which device's logins are shown).
+            // Provider account metadata may be inspected per device. Login,
+            // activation, forgetting, polling, and cancellation remain local
+            // until L29-L31 establish paired authenticated E2EE transport.
             | methods::LIST_AGENT_ACCOUNTS
-            | methods::ACTIVATE_AGENT_ACCOUNT
-            | methods::FORGET_AGENT_ACCOUNT
-            | methods::START_AGENT_LOGIN
-            | methods::COMPLETE_AGENT_LOGIN
-            | methods::POLL_AGENT_LOGIN
-            | methods::CANCEL_AGENT_LOGIN
             // Uploads/attachments target the chat's host device (the agent reads
             // the committed file from that device's disk).
             | methods::UPLOAD_CHUNK
@@ -1039,6 +1034,23 @@ fn forwardable(method: &str) -> bool {
             // Updates report/apply on the device whose binary they concern.
             | methods::UPDATE_STATUS
             | methods::APPLY_UPDATE
+    )
+}
+
+fn local_only_credential_method(method: &str) -> bool {
+    matches!(
+        method,
+        methods::LIST_CREDENTIAL_METADATA
+            | methods::SIGN_IN
+            | methods::SIGN_IN_HEADLESS
+            | methods::COMPLETE_SIGN_IN
+            | methods::SIGN_OUT
+            | methods::ACTIVATE_AGENT_ACCOUNT
+            | methods::FORGET_AGENT_ACCOUNT
+            | methods::START_AGENT_LOGIN
+            | methods::COMPLETE_AGENT_LOGIN
+            | methods::POLL_AGENT_LOGIN
+            | methods::CANCEL_AGENT_LOGIN
     )
 }
 
@@ -1169,6 +1181,7 @@ impl AuthRpc {
         matches!(
             method,
             methods::AUTH_STATUS
+                | methods::LIST_CREDENTIAL_METADATA
                 | methods::SIGN_IN
                 | methods::SIGN_IN_HEADLESS
                 | methods::COMPLETE_SIGN_IN
@@ -1185,6 +1198,12 @@ impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
         match method {
             methods::AUTH_STATUS => Ok(RpcReply::Stream(watch_stream(self.auth.watch_state()))),
+            methods::LIST_CREDENTIAL_METADATA => RpcReply::value(
+                &self
+                    .auth
+                    .credential_metadata()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?,
+            ),
             methods::SIGN_IN => {
                 let url = self
                     .auth
@@ -1210,7 +1229,9 @@ impl RpcService for AuthRpc {
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
             methods::SIGN_OUT => {
-                self.auth.sign_out();
+                self.auth
+                    .sign_out()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
             methods::LIST_ORGS => {
@@ -1254,6 +1275,17 @@ impl RpcService for AuthRpc {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if local_only_credential_method(method)
+            && params
+                .get("targetDeviceId")
+                .and_then(|value| value.as_str())
+                .is_some_and(|target| target != self.doc_host.device_id())
+        {
+            return Err(RpcError::Failed(
+                "Remote credential actions are unavailable until paired end-to-end transport is implemented."
+                    .into(),
+            ));
+        }
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
         if forwardable(method)
@@ -2474,6 +2506,14 @@ mod tests {
         assert!(!forwardable(methods::LOCAL_DEVICE));
         assert!(!forwardable(methods::ENGINE_INFO));
         assert!(!forwardable(methods::ENGINE_READY));
+        assert!(!forwardable(methods::START_AGENT_LOGIN));
+        assert!(!forwardable(methods::COMPLETE_AGENT_LOGIN));
+        assert!(local_only_credential_method(methods::START_AGENT_LOGIN));
+        assert!(local_only_credential_method(methods::SIGN_IN));
+        assert!(local_only_credential_method(methods::SIGN_OUT));
+        assert!(local_only_credential_method(
+            methods::LIST_CREDENTIAL_METADATA
+        ));
         assert!(forwardable(methods::QUEUE_COMMAND));
         assert!(forwardable(methods::SEARCH_FILES));
         assert!(forwardable(methods::SEARCH_GIT_HISTORY));

@@ -19,6 +19,7 @@ pub mod agent_accounts;
 pub mod auth;
 pub mod change_requests;
 pub mod chat2_host;
+pub mod credentials;
 pub mod diff_sync;
 pub mod doc_host;
 mod http_error;
@@ -44,6 +45,10 @@ pub mod workspace_host;
 pub use agent_accounts::{AgentAccounts, AgentAccountsConfig};
 pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership};
 pub use change_requests::{ChangeRequestCacheKey, CheckoutChangeRequests};
+pub use credentials::{
+    CredentialBroker, CredentialClass, CredentialError, CredentialLease, CredentialMetadata,
+    CredentialScope, CredentialState, SecretIngress,
+};
 pub use diff_sync::{
     CheckoutDiffSync, DiffFileTextPair, DiffSidecar, DiffSnapshot, TurnSnapshot,
     capture_commit_diff, capture_diff, capture_diff_against, capture_turn_diff, merge_base,
@@ -76,6 +81,8 @@ pub(crate) const LEGACY_UNKNOWN_DEVICE_NAME: &str = "unknown-device";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
+    #[error("credential: {0}")]
+    Credential(#[from] credentials::CredentialError),
     #[error(transparent)]
     Token(#[from] zeron_rpc::TokenError),
     #[error("doc: {0}")]
@@ -101,7 +108,7 @@ pub(crate) fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EngineConfig {
     /// Data directory (default `~/.luna`, development builds use an isolated target path).
     pub data_dir: PathBuf,
@@ -119,6 +126,23 @@ pub struct EngineConfig {
     pub org_id: Option<String>,
     /// WorkOS client id — enables real auth; `None` = dev mode (bearer = `edge_token`).
     pub workos_client_id: Option<String>,
+}
+
+impl std::fmt::Debug for EngineConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineConfig")
+            .field("data_dir", &self.data_dir)
+            .field("edge_url", &self.edge_url)
+            .field(
+                "edge_token",
+                &self.edge_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("ipc_port", &self.ipc_port)
+            .field("default_harness", &self.default_harness)
+            .field("org_id", &self.org_id)
+            .field("workos_client_id", &self.workos_client_id)
+            .finish()
+    }
 }
 
 /// The assembled engine core — also constructible without the IPC server for tests

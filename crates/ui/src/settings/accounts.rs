@@ -162,7 +162,7 @@ enum LoginFlow {
 }
 
 impl LoginFlow {
-    /// Dialog title (zeron: "Add Claude account" / "Add Codex account").
+    /// Provider-owned sign-in dialog title.
     fn title(&self) -> &'static str {
         let harness = match self {
             LoginFlow::Starting { harness }
@@ -170,9 +170,9 @@ impl LoginFlow {
             | LoginFlow::Browser { harness, .. } => *harness,
         };
         match harness {
-            HarnessId::Codex => "Add Codex account",
+            HarnessId::Codex => "Sign in to Codex",
             HarnessId::Cursor => "Connect Cursor",
-            _ => "Add Claude account",
+            _ => "Sign in to Claude Code",
         }
     }
 }
@@ -901,11 +901,7 @@ impl AccountsPage {
                                     .truncate()
                                     .text_size(crate::typography::ui_rems(11.5))
                                     .text_color(theme.text_muted.opacity(0.6))
-                                    .child(SharedString::from(if account.switchable {
-                                        "Usage unavailable"
-                                    } else {
-                                        "Credentials unavailable"
-                                    })),
+                                    .child(SharedString::from("Usage unavailable")),
                             )
                         } else {
                             el.child(
@@ -983,9 +979,9 @@ impl AccountsPage {
                     .flex_col()
                     .child(div().mt(px(8.0)).child(popover::dialog_body(
                         &theme,
-                        "A browser window opened. Sign in to the account you want to add, \
-                         approve access, then paste the code Anthropic shows you below. Your \
-                         current login is untouched until you switch.",
+                        "A browser window opened. Sign in to Claude Code, approve access, then \
+                         paste the code Anthropic shows you below. Claude Code saves the login \
+                         in its own credential store; LUNA keeps no copy.",
                     )))
                     .child(url_link(
                         "login-open-url",
@@ -1027,7 +1023,7 @@ impl AccountsPage {
                                     if submitting {
                                         "Verifying…"
                                     } else {
-                                        "Add account"
+                                        "Sign in"
                                     },
                                 )
                                 .id("login-submit-code")
@@ -1051,9 +1047,8 @@ impl AccountsPage {
                          dashboard — it is separate from `cursor-agent login`."
                     }
                     _ => {
-                        "Finish signing in to OpenAI in your browser. The new login is \
-                         captured in an isolated profile — your current session is untouched \
-                         until you switch."
+                        "Finish signing in to OpenAI in your browser. The Codex CLI saves the \
+                         login in its provider-native home; LUNA keeps no copy."
                     }
                 };
                 div()
@@ -1364,7 +1359,7 @@ impl Render for AccountsPage {
                             ),
                             _ => format!(
                                 "No {name} login detected on this device — sign in \
-                                 with \u{201C}{cli}\u{201D} or add an account."
+                                 with \u{201C}{cli}\u{201D} or use Sign in."
                             ),
                         };
                         let card = if rows.is_empty() {
@@ -1411,7 +1406,7 @@ impl Render for AccountsPage {
                                                     .size(px(16.0))
                                                     .text_color(theme.text_muted),
                                             )
-                                            .child(SharedString::from("Add account")),
+                                            .child(SharedString::from("Sign in")),
                                     ),
                             )
                             .children(
@@ -1594,6 +1589,7 @@ mod tests {
             email: None,
             plan_label: None,
             active,
+            authentication: zeron_proto::AgentAuthenticationState::Authenticated,
             usage_windows: vec![],
             display_name: None,
             organization: None,

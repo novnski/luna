@@ -11,8 +11,9 @@
 //! - **WorkOS**: authorization-code flow. Headed devices use a loopback callback server
 //!   on an ephemeral port; headless devices use the paste-code flow (the redirect is the
 //!   edge's hosted `/auth/cli/callback` page, which shows `state.code` to paste back via
-//!   stdin or the `CompleteSignIn` RPC). The refresh token is persisted 0600 in the data
-//!   dir; access tokens are cached with dual-clock expiry (monotonic AND wall, whichever
+//!   stdin or the `CompleteSignIn` RPC). The refresh token is persisted in LUNA's
+//!   encrypted environment vault; `session.json` contains identity plus a credential
+//!   reference only. Access tokens are cached with dual-clock expiry (monotonic AND wall, whichever
 //!   aged more — see [`AccessEntry`]) and refreshed on demand plus by a background loop,
 //!   so the device-room relay and room clients always dial with a live `?token=`, even
 //!   on the first redial after a laptop wakes from sleep. Org onboarding: an org-less session is `NeedsOrganization`; `SelectOrg`
@@ -27,8 +28,12 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
+use zeroize::Zeroize;
 
 use crate::EngineError;
+use crate::credentials::{
+    CredentialBroker, CredentialLease, CredentialMetadata, CredentialScope, SecretIngress,
+};
 use crate::http_error::describe_http_error;
 use zeron_rpc::TokenError;
 
@@ -66,6 +71,62 @@ impl RefreshFailure {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn load_stored_session(
+    path: &std::path::Path,
+    credentials: &CredentialBroker,
+) -> (Option<StoredSession>, Option<String>) {
+    let mut raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (None, None),
+        Err(_) => {
+            return (
+                None,
+                Some("LUNA sync session metadata could not be read.".into()),
+            );
+        }
+    };
+    if let Ok(metadata) = serde_json::from_slice::<PersistedSession>(&raw)
+        && metadata.version == SESSION_VERSION
+    {
+        raw.zeroize();
+        return match credentials.lease_by_id(&metadata.credential_id, &CredentialScope::luna_sync())
+        {
+            Ok(credential) => (
+                Some(StoredSession {
+                    credential,
+                    user: metadata.user,
+                    org_id: metadata.org_id,
+                }),
+                None,
+            ),
+            Err(error) => (
+                None,
+                Some(format!(
+                    "The saved LUNA sync credential is unavailable: {error}"
+                )),
+            ),
+        };
+    }
+    let legacy_plaintext = raw
+        .windows(b"\"refreshToken\"".len())
+        .any(|window| window == b"\"refreshToken\"");
+    raw.zeroize();
+    if legacy_plaintext {
+        (
+            None,
+            Some(
+                "A legacy plaintext LUNA sync session was found. It was not read or migrated; sign in again to create an encrypted session, or explicitly sign out to remove it."
+                    .into(),
+            ),
+        )
+    } else {
+        (
+            None,
+            Some("LUNA sync session metadata is invalid and was not used.".into()),
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +213,7 @@ impl Serialize for AuthState {
 // Config + construction
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthConfig {
     /// Edge base URL (`/auth/*` routes).
     pub edge_url: String,
@@ -166,30 +227,73 @@ pub struct AuthConfig {
     pub dev_user_id: String,
     /// Loopback callback port; `None` = ephemeral.
     pub callback_port: Option<u16>,
+    credential_broker: CredentialBroker,
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("edge_url", &self.edge_url)
+            .field("data_dir", &self.data_dir)
+            .field("workos_client_id", &self.workos_client_id)
+            .field("workos_api_base", &self.workos_api_base)
+            .field("dev_user_id", &"[REDACTED]")
+            .field("callback_port", &self.callback_port)
+            .field("credential_broker", &self.credential_broker)
+            .finish()
+    }
 }
 
 impl AuthConfig {
     pub fn new(edge_url: impl Into<String>, data_dir: impl Into<PathBuf>) -> Self {
+        let data_dir = data_dir.into();
         Self {
             edge_url: edge_url.into(),
-            data_dir: data_dir.into(),
+            credential_broker: CredentialBroker::for_data_dir(&data_dir),
+            data_dir,
             workos_client_id: None,
             workos_api_base: "https://api.workos.com".into(),
             dev_user_id: "dev-user".into(),
             callback_port: None,
         }
     }
+
+    /// Isolated synthetic key store used by repository tests. This is never a
+    /// runtime fallback and cannot read a production Keychain item.
+    #[doc(hidden)]
+    pub fn use_in_memory_credentials_for_tests(&mut self) {
+        self.credential_broker = CredentialBroker::in_memory_for_tests(&self.data_dir);
+    }
+
+    #[doc(hidden)]
+    pub fn test_credential_broker(&self) -> CredentialBroker {
+        self.credential_broker.clone()
+    }
 }
 
-/// The persisted session (refresh token + user + last org scope).
+/// In-memory session. The raw refresh token is materialized only while making
+/// the exact edge refresh request.
+#[derive(Debug, Clone)]
+struct StoredSession {
+    credential: CredentialLease,
+    user: AuthUser,
+    org_id: Option<String>,
+}
+
+/// Metadata-only disk format. Version 1 was the historical plaintext shape;
+/// it is detected but never auto-migrated or silently reused.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StoredSession {
-    refresh_token: String,
+struct PersistedSession {
+    version: u32,
+    credential_id: String,
     user: AuthUser,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     org_id: Option<String>,
 }
+
+const SESSION_VERSION: u32 = 2;
+const SYNC_CREDENTIAL_NAME: &str = "refresh-token";
 
 /// Access-token cache. Expiry ages the token's own lifetime (`exp - iat`) by
 /// BOTH clocks, pessimistically. Monotonic alone (`Instant`) freezes across
@@ -234,10 +338,18 @@ impl AccessEntry {
     }
 }
 
+impl Drop for AccessEntry {
+    fn drop(&mut self) {
+        self.token.zeroize();
+    }
+}
+
 struct AuthInner {
     config: AuthConfig,
     /// `Some(client_id)` = WorkOS mode; `None` = dev mode.
     workos: Option<String>,
+    credentials: CredentialBroker,
+    startup_credential_error: Option<String>,
     /// Whether construction loaded a parseable WorkOS session. This is an
     /// immutable startup fact: refresh or sign-out must not rewrite it.
     loaded_workos_session: bool,
@@ -276,27 +388,35 @@ pub struct Auth {
 impl Auth {
     /// Build from config: dev mode unless a WorkOS client id is configured.
     pub fn new(config: AuthConfig) -> Self {
+        let credentials = config.credential_broker.clone();
         let workos = config
             .workos_client_id
             .clone()
             .filter(|s| !s.trim().is_empty());
         let session_file = config.data_dir.join("session.json");
-        let stored: Option<StoredSession> = if workos.is_some() {
-            std::fs::read_to_string(&session_file)
-                .ok()
-                .and_then(|raw| serde_json::from_str(&raw).ok())
+        let (stored, startup_credential_error) = if workos.is_some() {
+            load_stored_session(&session_file, &config.credential_broker)
         } else {
-            None
+            (None, None)
         };
         let initial = match (&workos, &stored) {
-            (None, _) => AuthState::SignedIn {
-                user: AuthUser {
-                    id: config.dev_user_id.clone(),
-                    email: config.dev_user_id.clone(),
-                    name: None,
-                },
-                org_id: None,
-            },
+            (None, _) => {
+                let identity = config
+                    .dev_user_id
+                    .split('@')
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("development")
+                    .to_string();
+                AuthState::SignedIn {
+                    user: AuthUser {
+                        id: identity.clone(),
+                        email: identity,
+                        name: None,
+                    },
+                    org_id: None,
+                }
+            }
             (Some(_), Some(session)) => state_for(session.user.clone(), session.org_id.clone()),
             (Some(_), None) => AuthState::SignedOut,
         };
@@ -312,6 +432,8 @@ impl Auth {
             inner: Arc::new(AuthInner {
                 config,
                 workos,
+                credentials,
+                startup_credential_error,
                 loaded_workos_session,
                 http,
                 state_tx,
@@ -367,6 +489,21 @@ impl Auth {
     /// The value stays true even if a later refresh revokes that session.
     pub fn loaded_workos_session(&self) -> bool {
         self.inner.loaded_workos_session
+    }
+
+    /// Sanitized startup problem for status/Doctor surfaces. It never contains
+    /// credential material or a provider-native credential path.
+    pub fn startup_credential_error(&self) -> Option<&str> {
+        self.inner.startup_credential_error.as_deref()
+    }
+
+    /// Metadata-only credential inventory for local settings and diagnostics.
+    /// There is intentionally no corresponding raw-value API.
+    pub fn credential_metadata(&self) -> Result<Vec<CredentialMetadata>, EngineError> {
+        self.inner
+            .credentials
+            .list_metadata()
+            .map_err(EngineError::from)
     }
 
     /// Live auth status (current value + changes).
@@ -544,22 +681,31 @@ impl Auth {
         self.finish_sign_in(result, generation)
     }
 
-    pub fn sign_out(&self) {
+    pub fn sign_out(&self) -> Result<(), EngineError> {
         let mut sign_in = lock(&self.inner.sign_in);
-        self.clear_session(&mut sign_in);
+        self.clear_session(&mut sign_in)
     }
 
-    fn clear_session(&self, sign_in: &mut SignInLifecycle) {
+    fn clear_session(&self, sign_in: &mut SignInLifecycle) -> Result<(), EngineError> {
         sign_in.generation = sign_in.generation.wrapping_add(1);
         sign_in.pending.clear();
-        *lock(&self.inner.stored) = None;
+        let stored = lock(&self.inner.stored).take();
         *lock(&self.inner.access) = None;
         self.retry_refresh();
-        self.persist::<&StoredSession>(None);
+        let revoke = stored.as_ref().map(|session| {
+            self.inner
+                .credentials
+                .forget(&session.credential, &CredentialScope::luna_sync())
+                .map(|_| ())
+                .map_err(EngineError::from)
+        });
+        let persist = self.persist(None);
         self.inner.state_tx.send_replace(AuthState::SignedOut);
         self.inner
             .token_tx
             .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+        revoke.transpose()?;
+        persist
     }
 
     // -- organizations ------------------------------------------------------
@@ -717,31 +863,48 @@ impl Auth {
         })
     }
 
-    fn finish_sign_in(&self, result: SignInResult, generation: u64) -> Result<(), EngineError> {
+    fn finish_sign_in(&self, mut result: SignInResult, generation: u64) -> Result<(), EngineError> {
         // Serialize the final commit with sign-out. A callback can consume its
         // OAuth state and spend time exchanging the code; if cancellation wins
         // during that await, its old generation must never restore credentials.
         let sign_in = lock(&self.inner.sign_in);
         if sign_in.generation != generation {
             return Err(EngineError::Other(
-                "sign-in was canceled — start again from Zeron".into(),
+                "sign-in was canceled — start again from LUNA".into(),
             ));
         }
         let org_id = jwt_claims(&result.access_token).and_then(|c| c.org_id);
-        *lock(&self.inner.access) = Some(AccessEntry::fresh(result.access_token));
+        let access = AccessEntry::fresh(std::mem::take(&mut result.access_token));
+        let stored_credential = self.inner.credentials.store_local(
+            SecretIngress::LocalEngine,
+            CredentialScope::luna_sync(),
+            SYNC_CREDENTIAL_NAME,
+            "Refresh the optional LUNA sync session",
+            "LUNA edge authentication",
+            result.refresh_token.as_bytes(),
+        );
+        result.refresh_token.zeroize();
+        let (_, credential) = stored_credential?;
         let session = StoredSession {
-            refresh_token: result.refresh_token,
+            credential,
             user: result.user.clone(),
             org_id: org_id.clone(),
         };
-        self.persist(Some(&session));
+        if let Err(error) = self.persist(Some(&session)) {
+            let _ = self
+                .inner
+                .credentials
+                .forget(&session.credential, &CredentialScope::luna_sync());
+            return Err(error);
+        }
+        *lock(&self.inner.access) = Some(access);
         *lock(&self.inner.stored) = Some(session);
         self.retry_refresh();
         tracing::info!(email = %result.user.email, org = org_id.as_deref().unwrap_or("<none>"),
             "auth: signed in");
         self.inner
             .state_tx
-            .send_replace(state_for(result.user, org_id));
+            .send_replace(state_for(result.user.clone(), org_id));
         self.inner
             .token_tx
             .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
@@ -843,16 +1006,21 @@ impl Auth {
         &self,
         organization_id: Option<&str>,
     ) -> Result<Option<String>, EngineError> {
-        let (generation, refresh_token) = {
+        let (generation, credential) = {
             let sign_in = lock(&self.inner.sign_in);
-            let Some(refresh_token) = lock(&self.inner.stored)
+            let Some(credential) = lock(&self.inner.stored)
                 .as_ref()
-                .map(|s| s.refresh_token.clone())
+                .map(|s| s.credential.clone())
             else {
                 return Ok(None);
             };
-            (sign_in.generation, refresh_token)
+            (sign_in.generation, credential)
         };
+        let refresh_material = self
+            .inner
+            .credentials
+            .materialize(&credential, &CredentialScope::luna_sync())?;
+        let refresh_token = refresh_material.as_utf8()?;
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct RefreshBody<'a> {
@@ -869,7 +1037,7 @@ impl Auth {
             .http
             .post(&url)
             .json(&RefreshBody {
-                refresh_token: &refresh_token,
+                refresh_token,
                 organization_id,
             })
             .send()
@@ -892,7 +1060,7 @@ impl Auth {
             if sign_in.generation != generation
                 || lock(&self.inner.stored)
                     .as_ref()
-                    .is_none_or(|s| s.refresh_token != refresh_token)
+                    .is_none_or(|s| s.credential != credential)
             {
                 return Ok(None);
             }
@@ -905,7 +1073,9 @@ impl Auth {
                 status,
                 "auth: refresh rejected — session revoked; signing out"
             );
-            self.clear_session(&mut sign_in);
+            if let Err(error) = self.clear_session(&mut sign_in) {
+                tracing::warn!(error = %error, "auth: revoked session cleanup incomplete");
+            }
             return Ok(None);
         }
         if !res.status().is_success() {
@@ -917,37 +1087,56 @@ impl Auth {
             access_token: String,
             refresh_token: String,
         }
-        let tokens: Tokens = res.json().await.map_err(|e| {
+        let mut tokens: Tokens = res.json().await.map_err(|e| {
             EngineError::Other(format!(
                 "malformed refresh response: {}",
                 describe_http_error(e)
             ))
         })?;
-        let sign_in = lock(&self.inner.sign_in);
+        let mut sign_in = lock(&self.inner.sign_in);
         if sign_in.generation != generation
             || lock(&self.inner.stored)
                 .as_ref()
-                .is_none_or(|s| s.refresh_token != refresh_token)
+                .is_none_or(|s| s.credential != credential)
         {
             return Ok(None);
         }
         let org_id = jwt_claims(&tokens.access_token).and_then(|c| c.org_id);
         let entry = AccessEntry::fresh(tokens.access_token.clone());
         tracing::info!(ttl_s = entry.ttl.as_secs(), "auth: access token refreshed");
-        *lock(&self.inner.access) = Some(entry);
+        let stored_credential = self.inner.credentials.store_local(
+            SecretIngress::LocalEngine,
+            CredentialScope::luna_sync(),
+            SYNC_CREDENTIAL_NAME,
+            "Refresh the optional LUNA sync session",
+            "LUNA edge authentication",
+            tokens.refresh_token.as_bytes(),
+        );
+        tokens.refresh_token.zeroize();
+        let (_, next_credential) = match stored_credential {
+            Ok(stored) => stored,
+            Err(error) => {
+                let cleanup = self.clear_session(&mut sign_in);
+                if let Err(cleanup_error) = cleanup {
+                    tracing::warn!(error = %cleanup_error, "auth: failed refresh cleanup incomplete");
+                }
+                return Err(error.into());
+            }
+        };
         let (user, org_changed) = {
             let mut stored = lock(&self.inner.stored);
             match stored.as_mut() {
                 Some(session) => {
                     let changed = session.org_id != org_id;
-                    session.refresh_token = tokens.refresh_token;
+                    session.credential = next_credential;
                     session.org_id = org_id.clone();
                     (session.user.clone(), changed)
                 }
                 None => return Ok(None), // signed out mid-refresh
             }
         };
-        self.persist(lock(&self.inner.stored).as_ref());
+        self.persist(lock(&self.inner.stored).as_ref())?;
+        *lock(&self.inner.access) = Some(entry);
         if org_changed {
             self.inner.state_tx.send_replace(state_for(user, org_id));
         }
@@ -961,22 +1150,26 @@ impl Auth {
         self.inner.config.data_dir.join("session.json")
     }
 
-    /// Persist (0600) or remove the stored session. Never panics: a disk error degrades
-    /// to a logged warning, not a crash mid-refresh.
-    fn persist<S: std::borrow::Borrow<StoredSession>>(&self, session: Option<S>) {
+    /// Persist metadata only (0600) or remove it. Raw credential values are
+    /// never serialized here.
+    fn persist(&self, session: Option<&StoredSession>) -> Result<(), EngineError> {
         let path = self.session_file();
         let outcome = match session {
-            Some(session) => serde_json::to_vec(session.borrow())
-                .map_err(std::io::Error::other)
-                .and_then(|bytes| write_private(&path, &bytes)),
+            Some(session) => serde_json::to_vec(&PersistedSession {
+                version: SESSION_VERSION,
+                credential_id: session.credential.id.clone(),
+                user: session.user.clone(),
+                org_id: session.org_id.clone(),
+            })
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| write_private(&path, &bytes)),
             None => match std::fs::remove_file(&path) {
                 Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err),
                 _ => Ok(()),
             },
         };
-        if let Err(err) = outcome {
-            tracing::warn!(error = %err, "auth: failed to persist session");
-        }
+        outcome
+            .map_err(|_| EngineError::Other("auth session metadata could not be persisted".into()))
     }
 
     async fn authed_json<T: serde::de::DeserializeOwned>(
@@ -1040,6 +1233,13 @@ struct SignInResult {
     user: AuthUser,
     access_token: String,
     refresh_token: String,
+}
+
+impl Drop for SignInResult {
+    fn drop(&mut self) {
+        self.access_token.zeroize();
+        self.refresh_token.zeroize();
+    }
 }
 
 fn state_for(user: AuthUser, org_id: Option<String>) -> AuthState {
@@ -1262,26 +1462,41 @@ fn url_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Write a file readable only by the owner (0600). On non-unix targets a plain write.
+/// Atomically write metadata readable only by the owner (0600 on Unix).
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        // An existing file keeps its old mode through OpenOptions — enforce 0600 anyway.
-        file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-        file.write_all(bytes)
+    use std::io::Write;
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "session metadata path has no parent",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let temp = parent.join(format!(
+        ".session.tmp-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let outcome = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temp, path)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+        std::fs::File::open(parent)?.sync_all()
+    })();
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(temp);
     }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, bytes)
-    }
+    outcome
 }
 
 #[cfg(test)]
@@ -1294,12 +1509,31 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let dir = tempfile::tempdir().unwrap();
+        let mut config = AuthConfig::new("https://edge.invalid", dir.path());
+        config.use_in_memory_credentials_for_tests();
+        config.workos_client_id = Some("client_test".into());
+        let (_, credential) = config
+            .test_credential_broker()
+            .store_local(
+                SecretIngress::LocalEngine,
+                CredentialScope::luna_sync(),
+                SYNC_CREDENTIAL_NAME,
+                "Synthetic test refresh",
+                "Fixture edge",
+                b"refresh-secret",
+            )
+            .unwrap();
         std::fs::write(
             dir.path().join("session.json"),
-            r#"{"refreshToken":"refresh-secret","user":{"id":"user_1","email":"u@example.com"},"orgId":"org_1"}"#,
-        ).unwrap();
-        let mut config = AuthConfig::new("https://edge.invalid", dir.path());
-        config.workos_client_id = Some("client_test".into());
+            serde_json::json!({
+                "version": SESSION_VERSION,
+                "credentialId": credential.id,
+                "user": {"id":"user_1","email":"u@example.com"},
+                "orgId":"org_1"
+            })
+            .to_string(),
+        )
+        .unwrap();
         let mut auth = Auth::new(config);
         let dns = Arc::new(FailingDns::default());
         Arc::get_mut(&mut auth.inner).unwrap().http = dns.client();
@@ -1342,6 +1576,37 @@ mod tests {
         );
         assert!(auth.state().is_signed_in());
         assert!(dir.path().join("session.json").exists());
+    }
+
+    #[test]
+    fn legacy_plaintext_session_is_reported_but_not_read_or_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = r#"{"refreshToken":"legacy-synthetic-secret","user":{"id":"user_1","email":"u@example.com"},"orgId":"org_1"}"#;
+        let session = dir.path().join("session.json");
+        std::fs::write(&session, legacy).unwrap();
+        let mut config = AuthConfig::new("https://edge.invalid", dir.path());
+        config.use_in_memory_credentials_for_tests();
+        config.workos_client_id = Some("client_test".into());
+
+        let auth = Auth::new(config);
+
+        assert_eq!(auth.state(), AuthState::SignedOut);
+        assert!(!auth.loaded_workos_session());
+        let error = auth.startup_credential_error().unwrap();
+        assert!(error.contains("legacy plaintext"));
+        assert!(!error.contains("legacy-synthetic-secret"));
+        assert_eq!(std::fs::read_to_string(session).unwrap(), legacy);
+        assert!(!dir.path().join("credentials/environment-v1.vault").exists());
+    }
+
+    #[test]
+    fn auth_config_debug_redacts_dev_bearer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = AuthConfig::new("https://edge.invalid", dir.path());
+        config.dev_user_id = "synthetic-debug-bearer".into();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("synthetic-debug-bearer"));
     }
 
     #[test]

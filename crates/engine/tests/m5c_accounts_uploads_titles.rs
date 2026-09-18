@@ -1,6 +1,6 @@
-//! M5c integration: agent-account slot mechanics (claude-swap), uploads
+//! M5c integration: provider-native account discovery and sign-in, uploads
 //! chunk→commit→readback + path jail, chat auto-titling with the mock harness,
-//! and the RPC dispatch for each new method over the memory transport.
+//! and RPC dispatch over the memory transport.
 //!
 //! Account tests use explicit `AgentAccountsConfig` paths under a tempdir (never
 //! the real `~/.claude` / `~/.codex`), so they are hermetic and parallel-safe.
@@ -166,15 +166,15 @@ async fn wait_for<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
 }
 
 // ---------------------------------------------------------------------------
-// Agent accounts — claude slot swap round trip
+// Agent accounts — provider-native discovery without LUNA copies
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn claude_slot_swap_round_trip() {
+async fn claude_provider_login_is_discovered_without_copy_or_switch() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
 
-    // Live login = Alice. Listing detects + auto-snapshots her into a slot.
+    // Live login = Alice. Listing detects her without creating a LUNA slot.
     write_claude_login(&config, "alice@example.com", "uuid-alice", "token-alice");
     let snapshot = accounts.list(false).await.expect("list");
     assert_eq!(
@@ -189,92 +189,41 @@ async fn claude_slot_swap_round_trip() {
     );
     assert_eq!(alice.display_name.as_deref(), Some("Test User"));
     assert_eq!(alice.organization.as_deref(), Some("Test Org"));
-    assert!(alice.switchable);
+    assert!(!alice.switchable);
     assert!(snapshot.warnings.is_empty());
     let alice_id = alice.id.clone();
-    assert_eq!(alice_id.len(), 16, "slot id is 16 hex chars");
+    assert_eq!(alice_id.len(), 16, "redacted identity id is 16 hex chars");
+    assert!(!config.data_dir.join("agent-accounts/claude-code").exists());
 
-    // Bob logs in via the CLI (live files replaced) — next list snapshots Bob
-    // and shows Alice as a saved, inactive slot.
+    // Bob logs in via the CLI (live files replaced) — next list shows only Bob.
     write_claude_login(&config, "bob@example.com", "uuid-bob", "token-bob");
     let snapshot = accounts.list(false).await.expect("list bob");
-    let mut emails = account_emails(&snapshot, HarnessId::ClaudeCode);
-    emails.sort();
     assert_eq!(
-        emails,
-        vec![
-            ("alice@example.com".to_string(), false),
-            ("bob@example.com".to_string(), true)
-        ]
+        account_emails(&snapshot, HarnessId::ClaudeCode),
+        vec![("bob@example.com".to_string(), true)]
     );
 
-    // Activate Alice: her slot's tokens land in the live files, Bob's live
-    // session is auto-snapshotted first, identity merged into claude.json.
-    let snapshot = accounts
-        .activate(HarnessId::ClaudeCode, &alice_id)
-        .await
-        .expect("activate");
-    let mut emails = account_emails(&snapshot, HarnessId::ClaudeCode);
-    emails.sort();
-    assert_eq!(
-        emails,
-        vec![
-            ("alice@example.com".to_string(), true),
-            ("bob@example.com".to_string(), false)
-        ]
-    );
-    let creds: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(config.claude_config_dir.join(".credentials.json"))
-            .expect("creds readable"),
-    )
-    .expect("creds json");
-    assert_eq!(creds["claudeAiOauth"]["accessToken"], "token-alice");
-    let cfg: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&config.claude_config_file).expect("cfg"))
-            .expect("cfg json");
-    assert_eq!(cfg["oauthAccount"]["emailAddress"], "alice@example.com");
-    assert_eq!(cfg["userID"], "user-uuid-alice");
-    // The rest of the config survived the merge (only identity fields swapped).
+    let before = std::fs::read(config.claude_config_dir.join(".credentials.json")).unwrap();
+    let refused = accounts.activate(HarnessId::ClaudeCode, &alice_id).await;
     assert!(
-        cfg["projects"]["/keep/me"].is_object(),
-        "unrelated config keys preserved"
+        refused.is_err(),
+        "provider copy activation must stay disabled"
     );
-
-    // Slot files: exactly two, under data/agent-accounts/claude-code.
-    let slots_dir = config.data_dir.join("agent-accounts").join("claude-code");
-    let slot_count = std::fs::read_dir(&slots_dir)
-        .expect("slots dir")
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .count();
-    assert_eq!(slot_count, 2);
-
-    // Corrupt claude.json → activate must refuse rather than wipe it.
-    std::fs::write(&config.claude_config_file, "{ definitely not json").expect("corrupt");
-    let bob_id = snapshot
-        .accounts
-        .iter()
-        .find(|a| a.email.as_deref() == Some("bob@example.com"))
-        .expect("bob listed")
-        .id
-        .clone();
-    let refused = accounts.activate(HarnessId::ClaudeCode, &bob_id).await;
-    assert!(refused.is_err(), "parse-failed config must block the swap");
     assert_eq!(
-        std::fs::read_to_string(&config.claude_config_file).expect("still there"),
-        "{ definitely not json",
-        "the unparsable config was left untouched"
+        std::fs::read(config.claude_config_dir.join(".credentials.json")).unwrap(),
+        before,
+        "rejected switching must not touch provider-native credentials"
     );
 }
 
 #[tokio::test]
-async fn claude_account_switch_keeps_live_mcp_oauth() {
+async fn rejected_claude_switch_leaves_live_provider_and_mcp_credentials_untouched() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
     let creds_file = config.claude_config_dir.join(".credentials.json");
 
     write_claude_login(&config, "alice@example.com", "uuid-alice", "token-alice");
-    // Alice's first snapshot includes a MCP token that will go stale.
+    // Alice's provider-native file includes MCP material that will go stale.
     std::fs::write(
         &creds_file,
         serde_json::json!({
@@ -318,22 +267,24 @@ async fn claude_account_switch_keeps_live_mcp_oauth() {
     .expect("bob mcp creds");
     accounts.list(false).await.expect("list bob");
 
-    accounts
-        .activate(HarnessId::ClaudeCode, &alice_id)
-        .await
-        .expect("activate alice");
+    assert!(
+        accounts
+            .activate(HarnessId::ClaudeCode, &alice_id)
+            .await
+            .is_err()
+    );
 
     let creds: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&creds_file).expect("creds readable"))
             .expect("creds json");
-    assert_eq!(creds["claudeAiOauth"]["accessToken"], "token-alice");
+    assert_eq!(creds["claudeAiOauth"]["accessToken"], "token-bob");
     assert_eq!(
-        creds["trustedDeviceToken"], "alice-device",
-        "account-bound device token stays with the slot"
+        creds["trustedDeviceToken"], "bob-device",
+        "provider-owned account token stays unchanged"
     );
     assert_eq!(
         creds["mcpOAuth"]["github"]["accessToken"], "live-github",
-        "live MCP OAuth must survive the switch, not Alice's stale snapshot"
+        "rejected switching must leave live MCP OAuth untouched"
     );
     assert_eq!(creds["pluginSecrets"]["live"], true);
     assert!(
@@ -343,12 +294,12 @@ async fn claude_account_switch_keeps_live_mcp_oauth() {
 }
 
 #[tokio::test]
-async fn claude_account_switch_keeps_mcp_when_target_slot_has_none() {
+async fn rejected_claude_switch_never_rewrites_live_shared_credentials() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
     let creds_file = config.claude_config_dir.join(".credentials.json");
 
-    // Alice saved via the oauth-only shape (new login / usage refresh).
+    // Alice is the current provider-native OAuth login.
     write_claude_login(&config, "alice@example.com", "uuid-alice", "token-alice");
     let snapshot = accounts.list(false).await.expect("list alice");
     let alice_id = snapshot.accounts[0].id.clone();
@@ -369,20 +320,22 @@ async fn claude_account_switch_keeps_mcp_when_target_slot_has_none() {
     .expect("bob mcp creds");
     accounts.list(false).await.expect("list bob");
 
-    accounts
-        .activate(HarnessId::ClaudeCode, &alice_id)
-        .await
-        .expect("activate alice");
+    assert!(
+        accounts
+            .activate(HarnessId::ClaudeCode, &alice_id)
+            .await
+            .is_err()
+    );
 
     let creds: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&creds_file).expect("creds readable"))
             .expect("creds json");
-    assert_eq!(creds["claudeAiOauth"]["accessToken"], "token-alice");
+    assert_eq!(creds["claudeAiOauth"]["accessToken"], "token-bob");
     assert_eq!(creds["mcpOAuth"]["linear"]["accessToken"], "live-linear");
 }
 
 #[tokio::test]
-async fn codex_slot_swap_and_api_key_detection() {
+async fn codex_discovery_is_native_only_and_api_keys_are_redacted() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
 
@@ -396,29 +349,33 @@ async fn codex_slot_swap_and_api_key_detection() {
     assert_eq!(carol.email.as_deref(), Some("carol@example.com"));
     assert_eq!(carol.plan_label.as_deref(), Some("ChatGPT Plus"));
     assert!(carol.active);
+    assert!(!carol.switchable);
     let carol_id = carol.id.clone();
 
-    // Second login (Dave) becomes live; swap back to Carol.
+    // A provider-native change becomes the only visible login. LUNA refuses
+    // activation of its old metadata id and leaves auth.json untouched.
     write_codex_login(&config, "dave@example.com", "acct-dave");
-    accounts.list(false).await.expect("list dave");
-    let snapshot = accounts
-        .activate(HarnessId::Codex, &carol_id)
-        .await
-        .expect("activate carol");
-    let mut emails = account_emails(&snapshot, HarnessId::Codex);
-    emails.sort();
+    let before = std::fs::read(config.codex_home.join("auth.json")).unwrap();
+    let snapshot = accounts.list(false).await.expect("list dave");
     assert_eq!(
-        emails,
-        vec![
-            ("carol@example.com".to_string(), true),
-            ("dave@example.com".to_string(), false)
-        ]
+        account_emails(&snapshot, HarnessId::Codex),
+        vec![("dave@example.com".to_string(), true)]
+    );
+    assert!(
+        accounts
+            .activate(HarnessId::Codex, &carol_id)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(config.codex_home.join("auth.json")).unwrap(),
+        before
     );
     let auth: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(config.codex_home.join("auth.json")).expect("auth"),
     )
     .expect("auth json");
-    assert_eq!(auth["tokens"]["account_id"], "acct-carol");
+    assert_eq!(auth["tokens"]["account_id"], "acct-dave");
 
     // API-key mode: no tokens, just the key.
     std::fs::write(
@@ -434,10 +391,15 @@ async fn codex_slot_swap_and_api_key_detection() {
         .expect("api key account");
     assert_eq!(key_account.plan_label.as_deref(), Some("API key"));
     assert_eq!(key_account.email.as_deref(), Some("API key ·…abcd"));
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("sk-test-12345678abcd")
+    );
 }
 
 #[tokio::test]
-async fn forget_guards_and_removes_slots() {
+async fn forget_refuses_provider_and_legacy_credential_deletion() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
     write_claude_login(&config, "alice@example.com", "uuid-alice", "token-alice");
@@ -465,17 +427,25 @@ async fn forget_guards_and_removes_slots() {
             .is_err()
     );
 
-    // A non-active slot forgets cleanly.
-    write_claude_login(&config, "bob@example.com", "uuid-bob", "token-bob");
-    accounts.list(false).await.expect("list bob");
+    let legacy_dir = config.data_dir.join("agent-accounts/claude-code");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    let legacy = legacy_dir.join("0123456789abcdef.json");
+    let bytes = b"synthetic legacy provider credential fixture";
+    std::fs::write(&legacy, bytes).unwrap();
     let snapshot = accounts
-        .forget(HarnessId::ClaudeCode, &alice_id)
+        .list(false)
         .await
-        .expect("forget alice");
-    assert_eq!(
-        account_emails(&snapshot, HarnessId::ClaudeCode),
-        vec![("bob@example.com".to_string(), true)]
+        .expect("list with legacy artifact");
+    assert!(snapshot.warnings.iter().any(|warning| {
+        warning.harness == HarnessId::ClaudeCode && warning.message.contains("disabled")
+    }));
+    assert!(
+        accounts
+            .forget(HarnessId::ClaudeCode, "0123456789abcdef")
+            .await
+            .is_err()
     );
+    assert_eq!(std::fs::read(legacy).unwrap(), bytes);
 }
 
 #[test]
@@ -881,6 +851,35 @@ async fn rpc_dispatch_for_m5c_methods() {
         .expect("ListAgentAccounts");
     assert!(snapshot["accounts"].is_array());
     assert!(snapshot["warnings"].is_array());
+    let credential_metadata = client
+        .call(methods::LIST_CREDENTIAL_METADATA, serde_json::json!({}))
+        .await
+        .expect("ListCredentialMetadata");
+    assert_eq!(credential_metadata, serde_json::json!([]));
+
+    // Credential-bearing provider login is local-only until paired E2EE
+    // transport exists. A remote target must fail before a flow is created.
+    let remote = client
+        .call(
+            methods::START_AGENT_LOGIN,
+            serde_json::json!({
+                "harness": "claude-code",
+                "targetDeviceId": "remote-fixture-device"
+            }),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(remote.contains("Remote credential actions are unavailable"));
+    let remote_sync_logout = client
+        .call(
+            methods::SIGN_OUT,
+            serde_json::json!({ "targetDeviceId": "remote-fixture-device" }),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(remote_sync_logout.contains("Remote credential actions are unavailable"));
 
     // Login lifecycle: start (paste-code) → poll pending → cancel → gone.
     let start = client
@@ -983,11 +982,11 @@ fn now_ms_test() -> i64 {
 }
 
 #[tokio::test]
-async fn cursor_slot_swap_round_trip() {
+async fn cursor_discovery_tracks_only_provider_native_login() {
     let dir = tempfile::tempdir().expect("tmp");
     let (accounts, config) = test_accounts(dir.path());
 
-    // Live SDK login = Erin; listing detects + auto-snapshots her slot.
+    // Live SDK login = Erin; listing detects it without creating a slot.
     write_cursor_login(&config, "erin@example.com", 86_400_000);
     let snapshot = accounts.list(false).await.expect("list");
     assert_eq!(
@@ -995,6 +994,7 @@ async fn cursor_slot_swap_round_trip() {
         vec![("erin@example.com".to_string(), true)]
     );
     assert!(snapshot.warnings.is_empty(), "{:?}", snapshot.warnings);
+    assert!(!snapshot.accounts.iter().any(|account| account.switchable));
     let erin_id = snapshot.accounts[snapshot
         .accounts
         .iter()
@@ -1003,35 +1003,28 @@ async fn cursor_slot_swap_round_trip() {
     .id
     .clone();
 
-    // A second login (Frank) becomes live; both slots exist, Frank active.
+    // A second provider-native login replaces Erin; no copy remains in LUNA.
     write_cursor_login(&config, "frank@example.com", 86_400_000);
     let snapshot = accounts.list(false).await.expect("list");
     assert_eq!(
         account_emails(&snapshot, HarnessId::Cursor),
-        vec![
-            ("erin@example.com".to_string(), false),
-            ("frank@example.com".to_string(), true),
-        ]
+        vec![("frank@example.com".to_string(), true)]
     );
 
-    // Swap back to Erin: the SDK store file is rewritten from her slot.
-    let snapshot = accounts
-        .activate(HarnessId::Cursor, &erin_id)
-        .await
-        .expect("activate");
-    assert_eq!(
-        account_emails(&snapshot, HarnessId::Cursor),
-        vec![
-            ("erin@example.com".to_string(), true),
-            ("frank@example.com".to_string(), false),
-        ]
+    let before = std::fs::read(&config.cursor_sdk_auth_file).unwrap();
+    assert!(
+        accounts
+            .activate(HarnessId::Cursor, &erin_id)
+            .await
+            .is_err()
     );
+    assert_eq!(std::fs::read(&config.cursor_sdk_auth_file).unwrap(), before);
     let live: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&config.cursor_sdk_auth_file).unwrap())
             .unwrap();
-    assert_eq!(live["email"], "erin@example.com");
+    assert_eq!(live["email"], "frank@example.com");
 
-    // An expired live key detects (card + slot survive) but warns.
+    // An expired live key remains detectable but is explicitly reported.
     write_cursor_login(&config, "erin@example.com", -1000);
     let snapshot = accounts.list(false).await.expect("list");
     assert!(
@@ -1045,7 +1038,7 @@ async fn cursor_slot_swap_round_trip() {
 }
 
 #[tokio::test]
-async fn cursor_login_flow_spawns_shim_and_auto_activates() {
+async fn cursor_login_flow_writes_only_the_provider_native_store() {
     let dir = tempfile::tempdir().expect("tmp");
     let (accounts, config) = test_accounts(dir.path());
 
@@ -1095,8 +1088,8 @@ exit 0
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // First connect on a device with no live login: the minted key was
-    // auto-activated, so runs work immediately.
+    // First connect on a device with no live login: the provider's own login
+    // command wrote its native store, so runs work immediately.
     let live: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&config.cursor_sdk_auth_file).unwrap())
             .unwrap();

@@ -1,5 +1,5 @@
-//! AgentAccounts — the Claude Code / Codex / Cursor logins on this device
-//! (feature-inventory §3.7 "Agent accounts"; port of zeron's `agent-accounts.ts`).
+//! AgentAccounts — metadata-only discovery and provider-owned sign-in for the
+//! Claude Code / Codex / Cursor accounts on this device.
 //!
 //! Each provider stores exactly one live login:
 //!
@@ -14,22 +14,10 @@
 //!   browser login mints. Deliberately SEPARATE from `cursor-agent login`'s
 //!   whole-account session tokens, which zeron never reads.
 //!
-//! Claude-swap mechanics:
-//!
-//! 1. **Detect** the live login of each CLI and auto-snapshot it into a slot
-//!    under `{data_dir}/agent-accounts/{harness}/{slotId}.json` — the current
-//!    session is always backed up before any swap, and refreshed tokens stay
-//!    current.
-//! 2. **Swap** (`activate`): overwrite the CLI's credential store (and, for
-//!    Claude, merge the identity back into `~/.claude.json`) with a saved slot.
-//!    Claude's credential blob is overloaded: `claudeAiOauth` is per-account,
-//!    but sibling keys such as `mcpOAuth` are machine-shared MCP/plugin tokens.
-//!    Activate splices those live shared fields onto the target login so a
-//!    switch does not force every MCP server to re-auth.
-//! 3. **Add** (`start_login`…): drive an OAuth flow for a NEW account without
-//!    touching the live one. Claude uses the public PKCE code flow (paste-code);
-//!    Codex spawns `codex login` against a throwaway `CODEX_HOME` and polls
-//!    until its loopback callback lands.
+//! Provider-native homes are authoritative. LUNA detects the active identity
+//! and may run an explicit provider sign-in, but never snapshots, imports,
+//! activates, migrates, or deletes provider credential material. Historical
+//! plaintext slot files are only detected and reported; they are not opened.
 //!
 //! Usage probes: all three providers expose the rate-limit view their own CLIs render
 //! (`/usage` in Claude Code, `/status` in Codex; Cursor's key has no quota view,
@@ -51,10 +39,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 use zeron_proto::{
-    AgentAccount, AgentAccountWarning, AgentAccountsSnapshot, AgentAuthKind, AgentLoginMode,
-    AgentLoginPoll, AgentLoginStart, AgentLoginStatus, AgentUsageWindow, HarnessId,
+    AgentAccount, AgentAccountWarning, AgentAccountsSnapshot, AgentAuthKind,
+    AgentAuthenticationState, AgentLoginMode, AgentLoginPoll, AgentLoginStart, AgentLoginStatus,
+    AgentUsageWindow, HarnessId,
 };
 
 use crate::repos::home_dir;
@@ -96,7 +86,8 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// explicit in tests.
 #[derive(Debug, Clone)]
 pub struct AgentAccountsConfig {
-    /// Engine data dir; slots live under `{data_dir}/agent-accounts/`.
+    /// Engine data dir; historical slots may remain under
+    /// `{data_dir}/agent-accounts/` but LUNA no longer opens them.
     pub data_dir: PathBuf,
     /// Claude config dir (`$CLAUDE_CONFIG_DIR` or `~/.claude`) — holds `.credentials.json`.
     pub claude_config_dir: PathBuf,
@@ -161,35 +152,28 @@ struct SlotProfile {
     auth_kind: AgentAuthKind,
 }
 
-/// One saved login (`{slotId}.json`), same field surface as zeron's slot files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Ephemeral provider login material used only while probing usage or
+/// completing an explicit provider-native sign-in. Never persisted by LUNA.
+#[derive(Clone)]
 struct Slot {
     id: String,
-    harness: HarnessId,
     /// The provider-side identity the slot is keyed by (account uuid/email).
     account_key: String,
     profile: SlotProfile,
     /// Claude: the `.credentials.json`/Keychain payload. Codex: `auth.json`.
     credentials: serde_json::Value,
-    /// Claude only: `{oauthAccount, userID}` merged into `~/.claude.json` on swap.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Claude only: `{oauthAccount, userID}` merged into the provider config
+    /// while completing an explicit sign-in.
     claude_config: Option<serde_json::Value>,
-    saved_at: i64,
-    /// First time this account was saved — the STABLE sort key, so switching the
-    /// active account (which re-snapshots and bumps `saved_at`) never reorders.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    created_at: Option<i64>,
 }
 
-/// A live detection result (before it's persisted into a slot).
-#[derive(Debug, Clone)]
+/// A live provider-native detection result.
+#[derive(Clone)]
 struct Detected {
     account_key: String,
     profile: SlotProfile,
     /// `None` ⇒ we know a login exists but couldn't read the secret.
     credentials: Option<serde_json::Value>,
-    claude_config: Option<serde_json::Value>,
 }
 
 // ── login flows ─────────────────────────────────────────────────────────────
@@ -199,16 +183,17 @@ enum LoginFlow {
         verifier: String,
         started_at: Instant,
     },
-    /// A spawned login child polled to completion: `codex login` against a
-    /// throwaway `CODEX_HOME`, or the cursor shim's login mode minting into a
-    /// throwaway store file. Either way the LIVE login is never touched;
-    /// completion is the credential file appearing under `home`.
+    /// A provider-owned login child polled to completion.
     Spawned {
         harness: HarnessId,
         /// The login child; monitored (try_wait) + killable from cancel.
         child: Arc<Mutex<Option<zeron_harness::process::Child>>>,
-        /// Throwaway credential dir, reclaimed on cancel/completion.
+        /// Provider credential dir watched for completion.
         home: PathBuf,
+        /// Digest of the provider-native auth file before explicit sign-in.
+        /// Prevents an already-authenticated account from being mistaken for
+        /// completion of the new browser flow.
+        baseline_fingerprint: Option<[u8; 32]>,
         started_at: Instant,
         output: Arc<Mutex<String>>,
         /// `Some(code)` once the child exited (`None` code = killed by signal).
@@ -263,9 +248,6 @@ struct Inner {
     flows: Mutex<HashMap<String, LoginFlow>>,
     /// `"{harness}:{accountKey}"` → cached usage windows.
     usage_cache: Mutex<HashMap<String, CachedUsage>>,
-    /// Slots with a token refresh in flight — a second refresh of the same
-    /// (commonly single-use) refresh token would revoke the family.
-    inflight_refreshes: Mutex<std::collections::HashSet<String>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -279,18 +261,6 @@ pub struct AgentAccounts {
 
 impl AgentAccounts {
     pub fn new(config: AgentAccountsConfig) -> Self {
-        // Startup sweep: a previous process that crashed mid-login leaves
-        // `.login-<uuid>` throwaway CODEX_HOME dirs — each may hold live OAuth
-        // tokens — with no owner to clean them. Reclaim them at boot.
-        let root = config.root_dir();
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(".login-") {
-                    let _ = std::fs::remove_dir_all(entry.path());
-                }
-            }
-        }
         let http = reqwest::Client::builder()
             .timeout(HTTP_TIMEOUT)
             .build()
@@ -301,22 +271,18 @@ impl AgentAccounts {
                 http,
                 flows: Mutex::new(HashMap::new()),
                 usage_cache: Mutex::new(HashMap::new()),
-                inflight_refreshes: Mutex::new(std::collections::HashSet::new()),
             }),
         }
     }
 
     // ── list ────────────────────────────────────────────────────────────────
 
-    /// Detect both CLIs, auto-snapshot the live logins, and assemble the view.
+    /// Detect provider-native live logins and assemble a metadata-only view.
     pub async fn list(&self, force_usage: bool) -> Result<AgentAccountsSnapshot, EngineError> {
         if force_usage {
             lock(&self.inner.usage_cache).clear();
         }
         let mut warnings: Vec<AgentAccountWarning> = Vec::new();
-        let mut active_keys: HashMap<HarnessId, String> = HashMap::new();
-        let mut unreadable: HashMap<HarnessId, Detected> = HashMap::new();
-
         let (claude, claude_warning) = self.detect_claude().await;
         if let Some(message) = claude_warning {
             warnings.push(AgentAccountWarning {
@@ -324,21 +290,9 @@ impl AgentAccounts {
                 message,
             });
         }
-        if let Some(detected) = claude {
-            active_keys.insert(HarnessId::ClaudeCode, detected.account_key.clone());
-            if detected.credentials.is_some() {
-                self.snapshot_detected(HarnessId::ClaudeCode, &detected)?;
-            } else {
-                unreadable.insert(HarnessId::ClaudeCode, detected);
-            }
-        }
-        if let Some(detected) = self.detect_codex() {
-            active_keys.insert(HarnessId::Codex, detected.account_key.clone());
-            self.snapshot_detected(HarnessId::Codex, &detected)?;
-        }
-        if let Some(detected) = self.detect_cursor() {
-            active_keys.insert(HarnessId::Cursor, detected.account_key.clone());
-            self.snapshot_detected(HarnessId::Cursor, &detected)?;
+        let codex = self.detect_codex();
+        let cursor = self.detect_cursor();
+        if cursor.is_some() {
             // The SDK's minted keys expire (90-day default) — an expired live
             // key fails every run with an auth error, so say so up front.
             if !self.cursor_live_usable() {
@@ -349,99 +303,83 @@ impl AgentAccounts {
                 });
             }
         }
-
-        // Stable presentation order: provider, then slot creation order (never
-        // active-first — switching must not reshuffle the cards).
         let mut accounts: Vec<AgentAccount> = Vec::new();
-        for harness in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Cursor] {
-            let active_key = active_keys.get(&harness).cloned();
-            let slots = self.read_slots(harness);
-            for slot in &slots {
-                let active = active_key.as_deref() == Some(slot.account_key.as_str());
-                let usage = self.usage_for(harness, slot, active, force_usage).await;
+        for (harness, detected) in [
+            (HarnessId::ClaudeCode, claude),
+            (HarnessId::Codex, codex),
+            (HarnessId::Cursor, cursor),
+        ] {
+            if let Some(detected) = detected {
+                let slot = Slot {
+                    id: slot_id_for(harness, &detected.account_key),
+                    account_key: detected.account_key.clone(),
+                    profile: detected.profile.clone(),
+                    credentials: detected
+                        .credentials
+                        .clone()
+                        .unwrap_or_else(|| serde_json::json!({})),
+                    claude_config: None,
+                };
+                let usage = self.usage_for(harness, &slot, true, force_usage).await;
                 accounts.push(AgentAccount {
-                    id: slot.id.clone(),
+                    id: slot.id,
                     harness,
-                    email: Some(slot.profile.email.clone()),
-                    // A live plan from the usage probe (Codex `plan_type`)
-                    // supersedes the login-time snapshot; fall back to the
-                    // snapshot when the probe wasn't forced or failed.
+                    email: Some(detected.profile.email.clone()),
+                    authentication: if detected.credentials.is_none() {
+                        AgentAuthenticationState::Unavailable
+                    } else if harness == HarnessId::Cursor && !self.cursor_live_usable() {
+                        AgentAuthenticationState::Expired
+                    } else {
+                        AgentAuthenticationState::Authenticated
+                    },
                     plan_label: usage
                         .as_ref()
                         .and_then(|usage| usage.plan_label.clone())
-                        .or_else(|| slot.profile.plan.clone()),
-                    active,
-                    usage_windows: usage.map(|usage| usage.windows).unwrap_or_default(),
-                    display_name: slot.profile.display_name.clone(),
-                    organization: slot.profile.organization.clone(),
-                    auth_kind: Some(slot.profile.auth_kind),
-                    switchable: true,
-                    saved_at: Some(slot.saved_at),
-                });
-            }
-            // A live login whose credentials we couldn't read has no slot — still
-            // show it (active, but not re-activatable until the Keychain relents).
-            if let Some(u) = unreadable.get(&harness)
-                && !slots.iter().any(|s| s.account_key == u.account_key)
-            {
-                accounts.push(AgentAccount {
-                    id: slot_id_for(harness, &u.account_key),
-                    harness,
-                    email: Some(u.profile.email.clone()),
-                    plan_label: u.profile.plan.clone(),
+                        .or_else(|| detected.profile.plan.clone()),
                     active: true,
-                    usage_windows: Vec::new(),
-                    display_name: u.profile.display_name.clone(),
-                    organization: u.profile.organization.clone(),
-                    auth_kind: Some(u.profile.auth_kind),
+                    usage_windows: usage.map(|usage| usage.windows).unwrap_or_default(),
+                    display_name: detected.profile.display_name,
+                    organization: detected.profile.organization,
+                    auth_kind: Some(detected.profile.auth_kind),
                     switchable: false,
                     saved_at: None,
                 });
             }
+            if self.legacy_slots_present(harness) {
+                warnings.push(AgentAccountWarning {
+                    harness,
+                    message: "Legacy LUNA account copies are present but disabled. LUNA will not read, activate, migrate, or delete them automatically. Provider-native login remains authoritative."
+                        .into(),
+                });
+            }
+        }
+        if self.legacy_login_dirs_present() {
+            warnings.push(AgentAccountWarning {
+                harness: HarnessId::Codex,
+                message: "An unfinished legacy isolated sign-in directory is present. LUNA left it untouched because it may contain credential material."
+                    .into(),
+            });
         }
         Ok(AgentAccountsSnapshot { accounts, warnings })
     }
 
     // ── swap ────────────────────────────────────────────────────────────────
 
-    /// Swap the CLI's live login to a saved slot. Detection runs first, so the
-    /// CURRENT login is snapshotted into its slot before being overwritten (the
-    /// claude-swap trick — a swap never strands the session it replaces).
+    /// LUNA-owned provider account copies are disabled. Provider-native login
+    /// controls remain the only account-switching authority.
     pub async fn activate(
         &self,
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
-        self.list(false).await?;
-        let slot = self
-            .read_slots(harness)
-            .into_iter()
-            .find(|s| s.id == account_id)
-            .ok_or_else(|| {
-                EngineError::Other(
-                    "That saved login no longer exists — refresh and try again.".into(),
-                )
-            })?;
-        match harness {
-            HarnessId::ClaudeCode => self.activate_claude(&slot).await?,
-            HarnessId::Codex => self.activate_codex(&slot)?,
-            HarnessId::Cursor => self.write_cursor_auth(&slot.credentials)?,
-            other => {
-                return Err(EngineError::Other(format!(
-                    "agent accounts are not supported for {other:?}"
-                )));
-            }
-        }
-        self.list(false).await
+        let _ = (harness, account_id);
+        Err(EngineError::Other(
+            "Provider accounts are provider-owned. Switch accounts with the provider's supported login interface, then refresh LUNA."
+                .into(),
+        ))
     }
 
     async fn activate_claude(&self, slot: &Slot) -> Result<(), EngineError> {
-        // Slot owns the account login; live owns MCP/plugin OAuth that lives in
-        // the same blob. A wholesale replace would restore stale (or empty)
-        // mcpOAuth from the target snapshot and force every MCP to re-auth.
-        let (live, _) = self.read_claude_credentials().await;
-        let credentials = compose_claude_credentials(&slot.credentials, live.as_ref());
-        self.write_claude_credentials(&credentials).await?;
         // Merge the identity back into ~/.claude.json — everything else (caches,
         // project history, onboarding flags, mcpServers) is left untouched, which
         // is all Claude Code needs to treat this as a fresh login.
@@ -485,16 +423,18 @@ impl AgentAccounts {
                 map.remove("userID");
             }
         }
+
+        // Validate and prepare the config merge before mutating the provider's
+        // credential store. Slot owns the account login; live owns MCP/plugin
+        // OAuth that lives in the same blob. A wholesale replace would restore
+        // stale (or empty) mcpOAuth and force every MCP to re-auth.
+        let (live, _) = self.read_claude_credentials().await;
+        let credentials = compose_claude_credentials(&slot.credentials, live.as_ref());
+        self.write_claude_credentials(&credentials).await?;
+
         // Atomic: Claude Code rewrites this file frequently — a torn write from
         // our side must never be readable as "empty config".
         write_file_atomic(file, merged.to_string().as_bytes(), false)
-    }
-
-    fn activate_codex(&self, slot: &Slot) -> Result<(), EngineError> {
-        std::fs::create_dir_all(&self.inner.config.codex_home)?;
-        let json = serde_json::to_string_pretty(&slot.credentials)
-            .map_err(|e| EngineError::Other(format!("serialize codex auth: {e}")))?;
-        write_file_atomic(&self.inner.config.codex_auth_file(), json.as_bytes(), true)
     }
 
     // ── forget ──────────────────────────────────────────────────────────────
@@ -504,33 +444,11 @@ impl AgentAccounts {
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
-        // Reject anything that isn't a slot id (16 lowercase hex) BEFORE touching
-        // the filesystem: `account_id` is a raw RPC string that becomes a path,
-        // so a crafted id (`../../…`) must never reach `remove_file`.
-        if account_id.len() != 16
-            || !account_id
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
-            return Err(EngineError::Other("Unknown account.".into()));
-        }
-        let snapshot = self.list(false).await?;
-        let active = snapshot
-            .accounts
-            .iter()
-            .any(|a| a.harness == harness && a.id == account_id && a.active);
-        if active {
-            return Err(EngineError::Other(
-                "That's the live login — switch to another account first (it would just be \
-                 re-detected)."
-                    .into(),
-            ));
-        }
-        let file = self.slots_dir(harness)?.join(format!("{account_id}.json"));
-        if file.exists() {
-            std::fs::remove_file(&file)?;
-        }
-        self.list(false).await
+        let _ = (harness, account_id);
+        Err(EngineError::Other(
+            "Provider credentials are provider-owned. LUNA will not delete provider logins or legacy credential copies through this action."
+                .into(),
+        ))
     }
 
     // ── add-account OAuth flows ─────────────────────────────────────────────
@@ -604,14 +522,11 @@ impl AgentAccounts {
     async fn start_codex_login(&self) -> Result<AgentLoginStart, EngineError> {
         self.reap_spawned_flows(HarnessId::Codex);
         let login_id = new_id();
-        // A throwaway CODEX_HOME isolates the new login completely — the live
-        // ~/.codex session is never touched until the user explicitly switches.
-        let home = self
-            .inner
-            .config
-            .root_dir()
-            .join(format!(".login-{login_id}"));
+        // Explicit user action invokes Codex's own login against its native
+        // home. LUNA watches completion but never copies the resulting auth.
+        let home = self.inner.config.codex_home.clone();
         std::fs::create_dir_all(&home)?;
+        let baseline_fingerprint = file_fingerprint(&home.join("auth.json"));
         // Resolve through the harness itself (`CODEX_EXECUTABLE`, PATH, the
         // login-shell snapshot, install dirs — the Windows npm payload
         // included) and compose the same child PATH a chat run gets, so
@@ -619,7 +534,6 @@ impl AgentAccounts {
         let mut command = match zeron_harness::codex::login_command(&home) {
             Ok(command) => command,
             Err(err) => {
-                let _ = std::fs::remove_dir_all(&home);
                 return Err(EngineError::Other(match err {
                     zeron_harness::HarnessError::NotInstalled(hint) => {
                         format!(
@@ -647,7 +561,6 @@ impl AgentAccounts {
         let child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
-                let _ = std::fs::remove_dir_all(&home);
                 return Err(EngineError::Other(
                     if err.kind() == std::io::ErrorKind::NotFound {
                         "The `codex` CLI was not found on this device — install it first.".into()
@@ -668,6 +581,7 @@ impl AgentAccounts {
                 harness: HarnessId::Codex,
                 child,
                 home,
+                baseline_fingerprint,
                 started_at: Instant::now(),
                 output: output.clone(),
                 exit: exit.clone(),
@@ -733,32 +647,29 @@ impl AgentAccounts {
         }
     }
 
-    /// Cursor: the SDK's own PKCE browser flow, driven through the zeron shim
-    /// in login mode. The minted key lands in a throwaway store file (never
-    /// the live `~/.cursor/sdk/auth.json`), then snapshots into a slot on
-    /// poll — mirroring codex's throwaway `CODEX_HOME`.
+    /// Cursor: the SDK's own PKCE browser flow writes its provider-native SDK
+    /// credential file. LUNA watches completion and retains no copy.
     async fn start_cursor_login(&self) -> Result<AgentLoginStart, EngineError> {
         self.reap_spawned_flows(HarnessId::Cursor);
         let login_id = new_id();
         let home = self
             .inner
             .config
-            .root_dir()
-            .join(format!(".login-{login_id}"));
+            .cursor_sdk_auth_file
+            .parent()
+            .ok_or_else(|| EngineError::Other("Cursor credential path has no parent.".into()))?
+            .to_path_buf();
         std::fs::create_dir_all(&home)?;
+        let baseline_fingerprint = file_fingerprint(&home.join("auth.json"));
         let mut cmd = zeron_harness::cursor::login_command(&home.join("auth.json"))
             .await
-            .map_err(|e| {
-                let _ = std::fs::remove_dir_all(&home);
-                EngineError::Other(format!("Could not start the Cursor login: {e}"))
-            })?;
+            .map_err(|e| EngineError::Other(format!("Could not start the Cursor login: {e}")))?;
         cmd.stdin(zeron_harness::process::Stdio::null())
             .stdout(zeron_harness::process::Stdio::piped())
             .stderr(zeron_harness::process::Stdio::piped());
         let child = match cmd.spawn() {
             Ok(child) => child,
             Err(err) => {
-                let _ = std::fs::remove_dir_all(&home);
                 return Err(EngineError::Other(format!(
                     "Could not start the Cursor login: {err}"
                 )));
@@ -771,6 +682,7 @@ impl AgentAccounts {
                 harness: HarnessId::Cursor,
                 child,
                 home,
+                baseline_fingerprint,
                 started_at: Instant::now(),
                 output: output.clone(),
                 exit: exit.clone(),
@@ -784,8 +696,8 @@ impl AgentAccounts {
         })
     }
 
-    /// Exchange the pasted `code#state` for tokens and save the account as a slot
-    /// (the live login is untouched — switching is an explicit, separate act).
+    /// Exchange the pasted `code#state` and finish the explicit sign-in in
+    /// Claude's provider-native credential store. LUNA retains no slot copy.
     pub async fn complete_login(
         &self,
         login_id: &str,
@@ -826,10 +738,8 @@ impl AgentAccounts {
             .map_err(|e| EngineError::Other(format!("token exchange failed: {e}")))?;
         if !token.status().is_success() {
             let status = token.status();
-            let body = token.text().await.unwrap_or_default();
-            let excerpt: String = body.chars().take(200).collect();
             return Err(EngineError::Other(format!(
-                "Anthropic rejected the code ({status}): {excerpt}"
+                "Anthropic rejected the sign-in code ({status}); start the provider login again."
             )));
         }
         let token: serde_json::Value = token
@@ -925,9 +835,8 @@ impl AgentAccounts {
             }
         }
 
-        self.write_slot(&Slot {
+        let provider_login = Slot {
             id: slot_id_for(HarnessId::ClaudeCode, &account_uuid),
-            harness: HarnessId::ClaudeCode,
             account_key: account_uuid.clone(),
             profile: SlotProfile {
                 email,
@@ -938,9 +847,8 @@ impl AgentAccounts {
             },
             credentials: serde_json::json!({ "claudeAiOauth": oauth }),
             claude_config: Some(serde_json::json!({ "oauthAccount": oauth_account })),
-            saved_at: now_ms(),
-            created_at: None,
-        })?;
+        };
+        self.activate_claude(&provider_login).await?;
         lock(&self.inner.flows).remove(login_id);
         self.list(false).await
     }
@@ -950,45 +858,43 @@ impl AgentAccounts {
         if let Some(poll) = self.poll_task_login(login_id) {
             return Ok(poll);
         }
-        let (harness, home, exit, output) = match lock(&self.inner.flows).get(login_id) {
-            None => {
-                return Err(EngineError::Other(
-                    "This sign-in attempt expired — start again.".into(),
-                ));
-            }
-            Some(LoginFlow::Claude { .. }) => {
-                return Ok(AgentLoginPoll {
-                    status: AgentLoginStatus::Pending,
-                    message: None,
-                    url: None,
-                });
-            }
-            Some(LoginFlow::Task { .. }) => unreachable!("task logins poll above"),
-            Some(LoginFlow::Spawned {
-                harness,
-                home,
-                exit,
-                output,
-                ..
-            }) => (*harness, home.clone(), exit.clone(), output.clone()),
-        };
-        let detected = read_json(&home.join("auth.json")).and_then(|auth| match harness {
+        let (harness, home, baseline_fingerprint, exit, output) =
+            match lock(&self.inner.flows).get(login_id) {
+                None => {
+                    return Err(EngineError::Other(
+                        "This sign-in attempt expired — start again.".into(),
+                    ));
+                }
+                Some(LoginFlow::Claude { .. }) => {
+                    return Ok(AgentLoginPoll {
+                        status: AgentLoginStatus::Pending,
+                        message: None,
+                        url: None,
+                    });
+                }
+                Some(LoginFlow::Task { .. }) => unreachable!("task logins poll above"),
+                Some(LoginFlow::Spawned {
+                    harness,
+                    home,
+                    baseline_fingerprint,
+                    exit,
+                    output,
+                    ..
+                }) => (
+                    *harness,
+                    home.clone(),
+                    *baseline_fingerprint,
+                    exit.clone(),
+                    output.clone(),
+                ),
+            };
+        let auth_file = home.join("auth.json");
+        let detected = read_json(&auth_file).and_then(|auth| match harness {
             HarnessId::Codex => parse_codex_auth(auth),
             HarnessId::Cursor => parse_cursor_auth(auth),
             _ => None,
         });
-        if let Some(detected) = detected {
-            self.snapshot_detected(harness, &detected)?;
-            // Cursor "Connect" semantics: with no (usable) live login, the
-            // fresh key becomes the live one immediately — the page's CTA is
-            // "connect so runs work", not "add a spare". A live login stays
-            // untouched (switching remains explicit, codex parity).
-            if harness == HarnessId::Cursor
-                && !self.cursor_live_usable()
-                && let Some(credentials) = &detected.credentials
-            {
-                self.write_cursor_auth(credentials)?;
-            }
+        if detected.is_some() && file_fingerprint(&auth_file) != baseline_fingerprint {
             self.cancel_login(login_id);
             return Ok(AgentLoginPoll {
                 status: AgentLoginStatus::Done,
@@ -999,20 +905,21 @@ impl AgentAccounts {
         let exited = *lock(&exit);
         if let Some(code) = exited {
             self.cancel_login(login_id);
-            let message = if code == Some(0) {
-                "The sign-in finished without credentials.".to_string()
+            let message = if code == Some(0) && detected.is_some() {
+                return Ok(AgentLoginPoll {
+                    status: AgentLoginStatus::Done,
+                    message: None,
+                    url: None,
+                });
+            } else if code == Some(0) {
+                "The sign-in finished without a usable provider-native login.".to_string()
             } else {
-                let output = lock(&output);
-                // The cursor shim reports failures as a JSONL fatal frame;
-                // codex prints plain text. Surface the human part.
-                scan_shim_fatal(&output).unwrap_or_else(|| {
-                    output
-                        .trim()
-                        .lines()
-                        .last()
-                        .unwrap_or("sign-in failed")
-                        .to_string()
-                })
+                let _ = output;
+                format!(
+                    "The provider sign-in exited before a usable native login was detected{}.",
+                    code.map(|code| format!(" (exit {code})"))
+                        .unwrap_or_default()
+                )
             };
             return Ok(AgentLoginPoll {
                 status: AgentLoginStatus::Error,
@@ -1059,17 +966,15 @@ impl AgentAccounts {
         Some(poll)
     }
 
-    /// Drop a flow: kill a pending login child (`codex login` holds the fixed
-    /// loopback OAuth port; the cursor shim polls Cursor's backend) and
-    /// reclaim its throwaway home dir. Idempotent.
+    /// Drop a flow and kill its child. Provider-native credential homes are
+    /// never removed by cancellation.
     pub fn cancel_login(&self, login_id: &str) {
         let flow = lock(&self.inner.flows).remove(login_id);
         match flow {
-            Some(LoginFlow::Spawned { child, home, .. }) => {
+            Some(LoginFlow::Spawned { child, .. }) => {
                 if let Some(c) = lock(&child).as_mut() {
                     let _ = c.start_kill();
                 }
-                let _ = std::fs::remove_dir_all(&home);
             }
             Some(LoginFlow::Task { handle, .. }) => handle.abort(),
             _ => {}
@@ -1109,13 +1014,6 @@ impl AgentAccounts {
             return (None, None);
         };
         let (credentials, warning) = self.read_claude_credentials().await;
-        let user_id = cfg.as_ref().and_then(|c| c.get("userID")).cloned();
-        let mut claude_config = serde_json::json!({ "oauthAccount": oauth });
-        if let (Some(uid), Some(map)) = (user_id, claude_config.as_object_mut())
-            && uid.is_string()
-        {
-            map.insert("userID".into(), uid);
-        }
         (
             Some(Detected {
                 account_key: str_field(&oauth, "accountUuid").unwrap_or_else(|| email.clone()),
@@ -1130,7 +1028,6 @@ impl AgentAccounts {
                     auth_kind: AgentAuthKind::Oauth,
                 },
                 credentials,
-                claude_config: Some(claude_config),
             }),
             warning,
         )
@@ -1151,31 +1048,27 @@ impl AgentAccounts {
             .is_some_and(|auth| cursor_key_usable(&auth))
     }
 
-    fn write_cursor_auth(&self, credentials: &serde_json::Value) -> Result<(), EngineError> {
-        let file = &self.inner.config.cursor_sdk_auth_file;
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let json = serde_json::to_string_pretty(credentials)
-            .map_err(|e| EngineError::Other(format!("serialize cursor auth: {e}")))?;
-        write_file_atomic(file, json.as_bytes(), true)
+    /// Filename-only legacy detection. Never deserialize historical slot files:
+    /// their JSON contains provider-native access and refresh tokens.
+    fn legacy_slots_present(&self, harness: HarnessId) -> bool {
+        std::fs::read_dir(self.inner.config.root_dir().join(harness_slug(harness)))
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
     }
 
-    /// Persist a detected login into its slot (refreshing stored tokens).
-    fn snapshot_detected(&self, harness: HarnessId, d: &Detected) -> Result<(), EngineError> {
-        let Some(credentials) = &d.credentials else {
-            return Ok(());
-        };
-        self.write_slot(&Slot {
-            id: slot_id_for(harness, &d.account_key),
-            harness,
-            account_key: d.account_key.clone(),
-            profile: d.profile.clone(),
-            credentials: credentials.clone(),
-            claude_config: d.claude_config.clone(),
-            saved_at: now_ms(),
-            created_at: None,
-        })
+    fn legacy_login_dirs_present(&self) -> bool {
+        std::fs::read_dir(self.inner.config.root_dir())
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && entry.file_name().to_string_lossy().starts_with(".login-")
+            })
     }
 
     // ── Claude credential store (Keychain on macOS, file elsewhere) ─────────
@@ -1188,7 +1081,7 @@ impl AgentAccounts {
         }
         #[cfg(target_os = "macos")]
         {
-            return keychain::read_credentials().await;
+            keychain::read_credentials().await
         }
         #[cfg(not(target_os = "macos"))]
         (None, None)
@@ -1198,95 +1091,26 @@ impl AgentAccounts {
         &self,
         credentials: &serde_json::Value,
     ) -> Result<(), EngineError> {
-        let json = credentials.to_string();
+        let mut json = credentials.to_string();
         #[cfg(target_os = "macos")]
         {
             // claude-swap's primitive: update the Keychain item in place — but only
             // when no credentials FILE exists (the file wins when present).
             if !self.inner.config.claude_creds_file().exists() {
-                return keychain::write_credentials(&json).await;
+                let result = keychain::write_credentials(&json).await;
+                json.zeroize();
+                return result;
             }
         }
         std::fs::create_dir_all(&self.inner.config.claude_config_dir)?;
         // Atomic + owner-only from birth — live tokens.
-        write_file_atomic(
+        let result = write_file_atomic(
             &self.inner.config.claude_creds_file(),
             json.as_bytes(),
             true,
-        )
-    }
-
-    // ── slot files ──────────────────────────────────────────────────────────
-
-    fn slots_dir(&self, harness: HarnessId) -> Result<PathBuf, EngineError> {
-        let dir = self.inner.config.root_dir().join(harness_slug(harness));
-        std::fs::create_dir_all(&dir)?;
-        Ok(dir)
-    }
-
-    fn read_slots(&self, harness: HarnessId) -> Vec<Slot> {
-        let Ok(dir) = self.slots_dir(harness) else {
-            return Vec::new();
-        };
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return Vec::new();
-        };
-        let mut slots: Vec<Slot> = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            // One malformed slot file must skip THAT slot, not brick the page.
-            if let Some(slot) = std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|raw| serde_json::from_str::<Slot>(&raw).ok())
-            {
-                slots.push(slot);
-            }
-        }
-        // Creation order — stable across switches (saved_at churns on every
-        // auto-snapshot; created_at never does). Slot id breaks creation-time
-        // ties: two logins saved in the same millisecond otherwise land in
-        // read_dir order, which is filesystem-arbitrary for UUID-named files
-        // and reshuffles the page between restarts (issue #161).
-        slots.sort_by(|a, b| {
-            (a.created_at.unwrap_or(a.saved_at), &a.id)
-                .cmp(&(b.created_at.unwrap_or(b.saved_at), &b.id))
-        });
-        slots
-    }
-
-    fn write_slot(&self, slot: &Slot) -> Result<(), EngineError> {
-        let file = self
-            .slots_dir(slot.harness)?
-            .join(format!("{}.json", slot.id));
-        let existing: Option<Slot> = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok());
-        let mut full = slot.clone();
-        full.created_at = existing
-            .and_then(|e| e.created_at.or(Some(e.saved_at)))
-            .or(slot.created_at)
-            .or_else(|| {
-                // A brand-new slot: stamp it strictly after every sibling, so
-                // two logins inside the same millisecond still list in the
-                // order they were saved (creation order is the page's sort
-                // key; ms-resolution ties otherwise fall to read_dir order).
-                let floor = self
-                    .read_slots(slot.harness)
-                    .iter()
-                    .map(|s| s.created_at.unwrap_or(s.saved_at))
-                    .max()
-                    .map(|newest| newest + 1)
-                    .unwrap_or(slot.saved_at);
-                Some(floor.max(slot.saved_at))
-            });
-        let json = serde_json::to_string_pretty(&full)
-            .map_err(|e| EngineError::Other(format!("serialize slot: {e}")))?;
-        // Atomic + 0600 from birth: tokens must never be world-readable, and a
-        // crash mid-write must never leave torn JSON.
-        write_file_atomic(&file, json.as_bytes(), true)
+        );
+        json.zeroize();
+        result
     }
 
     // ── remaining usage ─────────────────────────────────────────────────────
@@ -1295,7 +1119,7 @@ impl AgentAccounts {
         &self,
         harness: HarnessId,
         slot: &Slot,
-        is_active: bool,
+        _is_active: bool,
         force: bool,
     ) -> Option<UsageSnapshot> {
         let key = format!("{}:{}", harness_slug(harness), slot.account_key);
@@ -1309,7 +1133,7 @@ impl AgentAccounts {
             return None;
         }
         let usage = match harness {
-            HarnessId::ClaudeCode => self.claude_usage(slot, is_active).await,
+            HarnessId::ClaudeCode => self.claude_usage(slot).await,
             HarnessId::Codex => self.codex_usage(slot).await,
             HarnessId::Cursor => self.cursor_usage(slot).await,
             _ => None,
@@ -1318,22 +1142,13 @@ impl AgentAccounts {
         usage
     }
 
-    async fn claude_usage(&self, slot: &Slot, is_active: bool) -> Option<UsageSnapshot> {
+    async fn claude_usage(&self, slot: &Slot) -> Option<UsageSnapshot> {
         let oauth = slot.credentials.get("claudeAiOauth")?;
         let access_token = str_field(oauth, "accessToken")?;
-        match self.claude_usage_request(&access_token).await {
-            Ok(usage) => usage,
-            // The stored expiry metadata can lie (a Claude Code regression
-            // wrote `expiresAt: 0` for fresh logins), so probe with the
-            // stored token first and rotate the slot-owned pair only after
-            // the endpoint actually rejected it. The active login is never
-            // rotated: the running CLI may hold its single-use refresh token.
-            Err(_) if !is_active => {
-                let fresh = self.refresh_claude_slot(slot).await?;
-                self.claude_usage_request(&fresh).await.ok().flatten()
-            }
-            Err(_) => None,
-        }
+        self.claude_usage_request(&access_token)
+            .await
+            .ok()
+            .flatten()
     }
 
     /// One usage probe: GET the endpoint and parse windows. `Err` means the
@@ -1457,129 +1272,46 @@ impl AgentAccounts {
             plan_label: None,
         })
     }
-
-    /// Refresh a saved Claude slot's expired access token so its usage stays
-    /// queryable. NEVER called for the active login. Single-flight per slot:
-    /// OAuth refresh tokens are commonly single-use, and a concurrent second
-    /// POST of the same one would revoke the family and brick the slot.
-    async fn refresh_claude_slot(&self, slot: &Slot) -> Option<String> {
-        if !lock(&self.inner.inflight_refreshes).insert(slot.id.clone()) {
-            return None;
-        }
-        let result = self.refresh_claude_slot_once(slot).await;
-        lock(&self.inner.inflight_refreshes).remove(&slot.id);
-        result
-    }
-
-    async fn refresh_claude_slot_once(&self, slot: &Slot) -> Option<String> {
-        let oauth = slot.credentials.get("claudeAiOauth")?.clone();
-        let refresh_token = str_field(&oauth, "refreshToken")?;
-        let body: serde_json::Value = self
-            .inner
-            .http
-            .post(CLAUDE_TOKEN_URL)
-            .json(&serde_json::json!({
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": CLAUDE_CLIENT_ID,
-            }))
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .json()
-            .await
-            .ok()?;
-        let access_token = str_field(&body, "access_token")?;
-        let expires_in = body
-            .get("expires_in")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(3600);
-        let mut updated = oauth;
-        if let Some(map) = updated.as_object_mut() {
-            map.insert("accessToken".into(), serde_json::json!(access_token));
-            map.insert(
-                "refreshToken".into(),
-                serde_json::json!(str_field(&body, "refresh_token").unwrap_or(refresh_token)),
-            );
-            map.insert(
-                "expiresAt".into(),
-                serde_json::json!(now_ms() + expires_in * 1000),
-            );
-        }
-        let mut refreshed = slot.clone();
-        // Keep sibling keys (mcpOAuth, pluginSecrets, …) — rewriting the blob
-        // as oauth-only would drop them, and a later activate of this slot
-        // would have nothing to merge if live credentials were also empty.
-        refreshed.credentials = with_claude_ai_oauth(&slot.credentials, updated);
-        refreshed.saved_at = now_ms();
-        if let Err(err) = self.write_slot(&refreshed) {
-            tracing::warn!(slot = %slot.id, error = %err, "refreshed slot write failed");
-        }
-        Some(access_token)
-    }
 }
 
 // ── macOS Keychain (documented here; compiled only on macOS) ────────────────
 //
 // Claude Code stores its credentials in the login Keychain under the service
-// `Claude Code-credentials`, account = the current username. Reads use
-// `security find-generic-password` — two-step (existence probe needs no
-// authorization, then `-w` for the secret) so a user denial is distinguishable
-// from "not logged in". Writes use `add-generic-password -U` (update in place).
-// Every call is bounded at 15s: an unanswered Keychain consent dialog blocks
-// `security` INDEFINITELY, and this runs on every list.
+// `Claude Code-credentials`, account = the current username. Native Security
+// Framework calls avoid placing credentials in process arguments. Calls are
+// moved to a blocking task and the UI wait is bounded at 15 seconds.
 #[cfg(target_os = "macos")]
 mod keychain {
     use super::*;
 
     const EXEC_TIMEOUT: Duration = Duration::from_secs(15);
 
-    async fn exec(args: &[&str]) -> (bool, String, String) {
-        let run = tokio::process::Command::new("security")
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .output();
-        match tokio::time::timeout(EXEC_TIMEOUT, run).await {
-            Ok(Ok(out)) => (
-                out.status.success(),
-                String::from_utf8_lossy(&out.stdout).to_string(),
-                String::from_utf8_lossy(&out.stderr).to_string(),
-            ),
-            _ => (false, String::new(), "security timed out".into()),
-        }
-    }
-
     fn account() -> String {
         std::env::var("USER").unwrap_or_else(|_| "unknown".into())
     }
 
     pub(super) async fn read_credentials() -> (Option<serde_json::Value>, Option<String>) {
-        let (probe_ok, ..) = exec(&["find-generic-password", "-s", KEYCHAIN_SERVICE]).await;
-        if !probe_ok {
-            return (None, None);
-        }
-        let (ok, stdout, _) = exec(&[
-            "find-generic-password",
-            "-a",
-            &account(),
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-w",
-        ])
-        .await;
-        if !ok {
-            return (
-                None,
-                Some(
-                    "A Claude Code login exists, but macOS Keychain denied access to it — \
-                     approve the prompt (choose “Always Allow”) and refresh to enable switching."
-                        .into(),
-                ),
-            );
-        }
-        match serde_json::from_str(stdout.trim()) {
+        let account = account();
+        let read = tokio::task::spawn_blocking(move || {
+            security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, &account)
+                .map_err(|error| error.code())
+        });
+        let mut bytes = match tokio::time::timeout(EXEC_TIMEOUT, read).await {
+            Ok(Ok(Ok(bytes))) => bytes,
+            Ok(Ok(Err(-25300))) => return (None, None), // errSecItemNotFound
+            _ => {
+                return (
+                    None,
+                    Some(
+                        "A Claude Code login may exist, but macOS Keychain access is unavailable or locked. Unlock Keychain and refresh to verify authentication."
+                            .into(),
+                    ),
+                );
+            }
+        };
+        let parsed = serde_json::from_slice(&bytes);
+        bytes.zeroize();
+        match parsed {
             Ok(creds) => (Some(creds), None),
             Err(_) => (
                 None,
@@ -1589,28 +1321,24 @@ mod keychain {
     }
 
     pub(super) async fn write_credentials(json: &str) -> Result<(), EngineError> {
-        let (ok, _, stderr) = exec(&[
-            "add-generic-password",
-            "-U",
-            "-a",
-            &account(),
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-w",
-            json,
-        ])
-        .await;
-        if ok {
-            Ok(())
-        } else {
-            Err(EngineError::Other(format!(
-                "Keychain write failed: {}",
-                if stderr.trim().is_empty() {
-                    "unknown error"
-                } else {
-                    stderr.trim()
-                }
-            )))
+        let account = account();
+        let mut bytes = json.as_bytes().to_vec();
+        let write = tokio::task::spawn_blocking(move || {
+            let result = security_framework::passwords::set_generic_password(
+                KEYCHAIN_SERVICE,
+                &account,
+                &bytes,
+            )
+            .map_err(|error| error.code());
+            bytes.zeroize();
+            result
+        });
+        match tokio::time::timeout(EXEC_TIMEOUT, write).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            _ => Err(EngineError::Other(
+                "Claude Code Keychain write failed or timed out; completion is unknown, so refresh provider status before retrying."
+                    .into(),
+            )),
         }
     }
 }
@@ -1633,10 +1361,19 @@ fn harness_slug(harness: HarnessId) -> &'static str {
 }
 
 fn read_json(file: &Path) -> Option<serde_json::Value> {
-    let raw = std::fs::read_to_string(file).ok()?;
-    serde_json::from_str(&raw)
+    let mut raw = std::fs::read(file).ok()?;
+    let parsed = serde_json::from_slice(&raw)
         .ok()
-        .filter(serde_json::Value::is_object)
+        .filter(serde_json::Value::is_object);
+    raw.zeroize();
+    parsed
+}
+
+fn file_fingerprint(file: &Path) -> Option<[u8; 32]> {
+    let mut bytes = std::fs::read(file).ok()?;
+    let fingerprint = Sha256::digest(&bytes).into();
+    bytes.zeroize();
+    Some(fingerprint)
 }
 
 fn str_field(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -1720,12 +1457,13 @@ fn codex_window_label(span_seconds: i64) -> &'static str {
     }
 }
 
-/// Compose a target Claude login with the machine's current shared fields.
+/// Compose an explicitly completed Claude login with the machine's current
+/// provider-owned shared fields.
 ///
 /// `claudeAiOauth` (and any other slot-owned sibling, including
-/// `trustedDeviceToken`) come from `target`. Allowlisted shared keys come
+/// `trustedDeviceToken`) come from the newly authenticated target. Allowlisted shared keys come
 /// from `live`, presence and absence alike — a key the live blob no longer
-/// holds is not resurrected from the slot. When there is no live JSON object
+/// holds is not resurrected from historical state. When there is no live JSON object
 /// (or the target is not a Claude OAuth blob), `target` is returned unchanged.
 fn compose_claude_credentials(
     target: &serde_json::Value,
@@ -1769,21 +1507,6 @@ fn compose_claude_credentials(
     serde_json::Value::Object(composed)
 }
 
-/// Replace `claudeAiOauth` without dropping sibling keys on the same blob.
-fn with_claude_ai_oauth(
-    credentials: &serde_json::Value,
-    oauth: serde_json::Value,
-) -> serde_json::Value {
-    let mut creds = credentials.clone();
-    match creds.as_object_mut() {
-        Some(map) => {
-            map.insert("claudeAiOauth".into(), oauth);
-            creds
-        }
-        None => serde_json::json!({ "claudeAiOauth": oauth }),
-    }
-}
-
 /// Parse a codex `auth.json` (the live one or a fresh login's).
 fn parse_codex_auth(auth: serde_json::Value) -> Option<Detected> {
     if let Some(id_token) = auth
@@ -1807,7 +1530,6 @@ fn parse_codex_auth(auth: serde_json::Value) -> Option<Detected> {
                 auth_kind: AgentAuthKind::Oauth,
             },
             credentials: Some(auth),
-            claude_config: None,
         });
     }
     let api_key = str_field(&auth, "OPENAI_API_KEY")?;
@@ -1830,7 +1552,6 @@ fn parse_codex_auth(auth: serde_json::Value) -> Option<Detected> {
             auth_kind: AgentAuthKind::ApiKey,
         },
         credentials: Some(auth),
-        claude_config: None,
     })
 }
 
@@ -1871,7 +1592,6 @@ fn parse_cursor_auth(auth: serde_json::Value) -> Option<Detected> {
             auth_kind: AgentAuthKind::Oauth,
         },
         credentials: Some(auth),
-        claude_config: None,
     })
 }
 
@@ -1982,10 +1702,6 @@ fn scan_shim_event(output: &str, ev: &str) -> Option<serde_json::Value> {
 
 fn scan_cursor_url(output: &str) -> Option<String> {
     str_field(&scan_shim_event(output, "auth-url")?, "url")
-}
-
-fn scan_shim_fatal(output: &str) -> Option<String> {
-    str_field(&scan_shim_event(output, "fatal")?, "message")
 }
 
 type LoginChildHandles = (
@@ -2286,11 +2002,6 @@ mod tests {
             Some("https://cursor.com/loginDeepControl?challenge=x")
         );
         assert_eq!(scan_cursor_url("no frames here"), None);
-        assert_eq!(
-            scan_shim_fatal("{\"ev\":\"fatal\",\"message\":\"cursor login failed: boom\"}\n")
-                .as_deref(),
-            Some("cursor login failed: boom")
-        );
     }
 
     #[test]
@@ -2384,16 +2095,5 @@ mod tests {
             api_key,
             "opaque/API-key shapes activate verbatim"
         );
-    }
-
-    #[test]
-    fn with_claude_ai_oauth_keeps_sibling_keys() {
-        let creds = serde_json::json!({
-            "claudeAiOauth": { "accessToken": "old" },
-            "mcpOAuth": { "github": { "accessToken": "keep" } },
-        });
-        let updated = with_claude_ai_oauth(&creds, serde_json::json!({ "accessToken": "new" }));
-        assert_eq!(updated["claudeAiOauth"]["accessToken"], "new");
-        assert_eq!(updated["mcpOAuth"]["github"]["accessToken"], "keep");
     }
 }

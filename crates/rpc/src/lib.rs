@@ -119,6 +119,8 @@ pub mod methods {
     /// engine behind its windows would leave that process unusable.
     pub const STOP_ENGINE: &str = "StopEngine";
     pub const AUTH_STATUS: &str = "AuthStatus";
+    /// Metadata-only inventory of LUNA-owned credentials. No value getter exists.
+    pub const LIST_CREDENTIAL_METADATA: &str = "ListCredentialMetadata";
     // AuthRpc mutations (feature-inventory §2 AuthRpc; IPC-only).
     pub const SIGN_IN: &str = "SignIn";
     pub const SIGN_IN_HEADLESS: &str = "SignInHeadless";
@@ -174,7 +176,7 @@ pub mod methods {
     pub const WATCH_CHECKOUT_CHANGE_REQUEST: &str = "WatchCheckoutChangeRequest";
     pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
     pub const GET_CHECKOUT_FILE_DIFF_TEXT: &str = "GetCheckoutFileDiffText";
-    // Agent accounts (ControlRpc, relay-forwardable — CLI logins are per-device).
+    // Agent account metadata is relay-readable; credential/login actions stay local.
     pub const LIST_AGENT_ACCOUNTS: &str = "ListAgentAccounts";
     pub const ACTIVATE_AGENT_ACCOUNT: &str = "ActivateAgentAccount";
     pub const FORGET_AGENT_ACCOUNT: &str = "ForgetAgentAccount";

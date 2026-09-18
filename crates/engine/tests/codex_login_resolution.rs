@@ -1,4 +1,4 @@
-//! The codex "Add account" flow must launch the same executable the harness
+//! The provider-owned Codex sign-in flow must launch the same executable the harness
 //! runs — `CODEX_EXECUTABLE`, PATH discovery, and the npm `.cmd` shim layout
 //! included — instead of a bare `Command::new("codex")` that only finds a
 //! top-level `codex.exe`.
@@ -62,13 +62,32 @@ async fn login_child() {
     };
     let root = std::env::temp_dir().join(format!("zeron-codex-login-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
+    let native_auth = root.join("codex/auth.json");
+    if expected == "true" {
+        std::fs::create_dir_all(native_auth.parent().unwrap()).unwrap();
+        std::fs::write(
+            &native_auth,
+            r#"{"OPENAI_API_KEY":"synthetic-existing-login"}"#,
+        )
+        .unwrap();
+    }
     let accounts = test_accounts(&root);
     let result = accounts.start_login(HarnessId::Codex).await;
     if expected == "true" {
         let start = result.expect("login starts");
         assert_eq!(start.mode, AgentLoginMode::Browser);
         assert_eq!(start.url, FAKE_URL);
+        let poll = accounts.poll_login(&start.login_id).await.unwrap();
+        assert_eq!(
+            poll.status,
+            zeron_proto::AgentLoginStatus::Pending,
+            "an unchanged existing native login is not completion of the new flow"
+        );
         accounts.cancel_login(&start.login_id);
+        assert!(
+            native_auth.exists(),
+            "cancel must preserve provider auth home"
+        );
     } else {
         let error = result
             .expect_err("login must fail without a CLI")

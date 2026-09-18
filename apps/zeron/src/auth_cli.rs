@@ -2,7 +2,7 @@
 //!
 //! Sign-in used to live only inside `luna headless`, coupling authentication to
 //! the long-running daemon. These commands work on the persisted session
-//! (`{data_dir}/session.json`) and exit, so a service-managed `luna headless`
+//! (encrypted environment vault plus metadata-only `{data_dir}/session.json`) and exit, so a service-managed `luna headless`
 //! only ever *loads* credentials. While an engine is running it owns the session
 //! (WorkOS refresh tokens are single-use and rotate on every refresh), so login
 //! and logout take the same data-dir lock the engine holds and refuse politely
@@ -77,7 +77,7 @@ fn account_status(scope: WorkspaceScope, auth: &AuthState) -> AccountStatus {
 }
 
 /// `luna login`: authenticate via the paste-code flow (and workspace
-/// onboarding), persist `session.json`, and exit.
+/// onboarding), persist the encrypted credential plus session metadata, and exit.
 pub async fn login(config: EngineConfig) -> anyhow::Result<()> {
     std::fs::create_dir_all(&config.data_dir)?;
     let _lock = engine_lock(&config, "sign in")?;
@@ -129,7 +129,7 @@ pub async fn logout(config: EngineConfig) -> anyhow::Result<()> {
     if !auth.workos_enabled() {
         // Dev mode has no live session, but clear any stale session.json from a
         // previous WorkOS-mode run so the next real run starts signed out.
-        auth.sign_out();
+        auth.sign_out()?;
         println!("Auth is in dev mode — cleared any stale saved session.");
         println!("The next engine start will remain in development mode.");
         return Ok(());
@@ -137,7 +137,7 @@ pub async fn logout(config: EngineConfig) -> anyhow::Result<()> {
     match auth.state() {
         AuthState::SignedOut => {
             // Also remove malformed or stale files that could not be loaded.
-            auth.sign_out();
+            auth.sign_out()?;
             println!("No valid saved session; cleared any stale session file.");
         }
         state => {
@@ -145,10 +145,9 @@ pub async fn logout(config: EngineConfig) -> anyhow::Result<()> {
                 .user()
                 .map(|u| u.email.clone())
                 .unwrap_or_else(|| "<unknown>".into());
-            auth.sign_out();
+            auth.sign_out()?;
             println!(
-                "Signed out {email} — removed {}.",
-                config.data_dir.join("session.json").display()
+                "Signed out {email} — revoked the local LUNA sync credential and removed session metadata."
             );
         }
     }
@@ -169,6 +168,9 @@ pub async fn status(config: EngineConfig) -> anyhow::Result<()> {
     println!("Edge:     {}", config.edge_url);
     println!("Mode:     {}", account.mode);
     println!("Auth:     {}", account.auth);
+    if let Some(problem) = auth.startup_credential_error() {
+        println!("Credential: {problem}");
+    }
     match InstanceLock::holder(&config.data_dir) {
         Some(pid) => println!("Engine:   running (pid {pid})"),
         None => println!("Engine:   not running"),
@@ -285,7 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logout_makes_the_next_engine_start_local() {
+    async fn logout_explicitly_removes_a_legacy_session_without_migrating_it() {
         let dir = tempfile::tempdir().unwrap();
         let config = config(dir.path());
         let session = dir.path().join("session.json");
@@ -297,8 +299,9 @@ mod tests {
         let before = Engine::build_auth(&config).await;
         assert_eq!(
             Engine::initial_workspace_scope(&before),
-            WorkspaceScope::Synced
+            WorkspaceScope::Local
         );
+        assert!(before.startup_credential_error().is_some());
 
         logout(config.clone()).await.unwrap();
 

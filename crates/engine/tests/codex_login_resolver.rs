@@ -31,7 +31,13 @@ async fn codex_login_resolves_override_and_adds_its_directory_to_child_path() {
         std::env::set_var("PATH", "/usr/bin:/bin");
         std::env::set_var("ZERON_NO_LOGIN_SHELL", "1");
     }
-    let accounts = AgentAccounts::new(AgentAccountsConfig::detect(dir.path()));
+    let accounts = AgentAccounts::new(AgentAccountsConfig {
+        data_dir: dir.path().join("data"),
+        claude_config_dir: dir.path().join("claude"),
+        claude_config_file: dir.path().join("claude.json"),
+        codex_home: dir.path().join("codex-home"),
+        cursor_sdk_auth_file: dir.path().join("cursor-sdk/auth.json"),
+    });
     let login = accounts.start_login(HarnessId::Codex).await.unwrap();
     assert_eq!(login.url, "https://auth.openai.com/authorize?test=resolver");
     accounts.cancel_login(&login.login_id);

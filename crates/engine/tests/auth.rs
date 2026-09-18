@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use zeron_engine::{Auth, AuthConfig, AuthState};
+use zeron_engine::{Auth, AuthConfig, AuthState, CredentialScope, SecretIngress};
 use zeron_rpc::{TokenError, TokenSource};
 
 // ---------------------------------------------------------------------------
@@ -250,9 +250,35 @@ async fn handle(mut stream: tokio::net::TcpStream, state: Arc<StubState>) {
 
 fn workos_config(edge_url: &str, data_dir: &std::path::Path) -> AuthConfig {
     let mut config = AuthConfig::new(edge_url, data_dir);
+    config.use_in_memory_credentials_for_tests();
     config.workos_client_id = Some("client_test".into());
     config.workos_api_base = "https://authkit.example".into();
     config
+}
+
+fn seed_session(config: &AuthConfig, refresh_token: &str, org_id: &str) {
+    let broker = config.test_credential_broker();
+    let (_, lease) = broker
+        .store_local(
+            SecretIngress::LocalEngine,
+            CredentialScope::luna_sync(),
+            "refresh-token",
+            "Test LUNA sync refresh",
+            "Fixture edge authentication",
+            refresh_token.as_bytes(),
+        )
+        .expect("seed encrypted refresh token");
+    std::fs::write(
+        config.data_dir.join("session.json"),
+        serde_json::json!({
+            "version": 2,
+            "credentialId": lease.id,
+            "user": {"id": "user_1", "email": "w@example.com"},
+            "orgId": org_id,
+        })
+        .to_string(),
+    )
+    .expect("seed metadata-only session");
 }
 
 fn query_param(url: &str, key: &str) -> Option<String> {
@@ -302,6 +328,22 @@ async fn dev_mode_is_signed_in_with_configured_bearer() {
 }
 
 #[tokio::test]
+async fn dev_bearer_is_not_exposed_in_auth_metadata() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = AuthConfig::new("http://127.0.0.1:1", dir.path());
+    config.dev_user_id = "fixture-user@synthetic-secret-org".into();
+    let auth = Auth::new(config);
+
+    assert_eq!(
+        auth.access_token().await.as_deref(),
+        Ok("fixture-user@synthetic-secret-org")
+    );
+    let metadata = serde_json::to_string(&auth.state()).unwrap();
+    assert!(metadata.contains("fixture-user"));
+    assert!(!metadata.contains("synthetic-secret-org"));
+}
+
+#[tokio::test]
 async fn headless_flow_exchanges_pasted_code_and_gates_on_org() {
     let edge = StubEdge::start().await;
     let dir = tempfile::tempdir().expect("tempdir");
@@ -345,10 +387,20 @@ async fn headless_flow_exchanges_pasted_code_and_gates_on_org() {
         matches!(auth.state(), AuthState::NeedsOrganization { user } if user.email == "w@example.com")
     );
 
-    // Session persisted 0600 with the exchange's refresh token.
+    // Session metadata is private and contains only the vault reference.
     let session_file = dir.path().join("session.json");
     let raw = std::fs::read_to_string(&session_file).expect("session persisted");
-    assert!(raw.contains("refresh-1"));
+    assert!(!raw.contains("refresh-1"));
+    assert!(!raw.contains("refreshToken"));
+    assert!(raw.contains("credentialId"));
+    let metadata = auth.credential_metadata().expect("credential metadata");
+    assert_eq!(metadata.len(), 1);
+    let metadata_json = serde_json::to_string(&metadata).unwrap();
+    assert!(!metadata_json.contains("refresh-1"));
+    assert!(!metadata_json.contains("rotated-"));
+    let vault = std::fs::read(dir.path().join("credentials/environment-v1.vault"))
+        .expect("encrypted vault");
+    assert!(!String::from_utf8_lossy(&vault).contains("refresh-1"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -384,15 +436,13 @@ async fn headless_flow_exchanges_pasted_code_and_gates_on_org() {
         Some("refresh-1"),
         "org refresh presents the stored refresh token"
     );
-    // Rotation persisted.
+    // Rotation stays encrypted; session metadata remains value-free.
     let raw = std::fs::read_to_string(&session_file).expect("session persisted");
-    assert!(
-        raw.contains("rotated-1"),
-        "rotated refresh token stored: {raw}"
-    );
+    assert!(!raw.contains("rotated-1"));
+    assert!(!raw.contains("refreshToken"));
 
     // Sign-out clears state and removes the persisted session.
-    auth.sign_out();
+    auth.sign_out().expect("encrypted credential revoked");
     assert_eq!(auth.state(), AuthState::SignedOut);
     assert!(!session_file.exists());
 }
@@ -435,13 +485,10 @@ async fn short_lived_tokens_refresh_on_demand() {
 async fn revoked_refresh_token_signs_out() {
     let edge = StubEdge::start().await;
     let dir = tempfile::tempdir().expect("tempdir");
-    // A persisted session whose refresh token the edge rejects with a definitive 4xx.
-    std::fs::write(
-        dir.path().join("session.json"),
-        r#"{"refreshToken":"dead","user":{"id":"user_1","email":"w@example.com"},"orgId":"org_1"}"#,
-    )
-    .expect("seed session");
-    let auth = Auth::new(workos_config(&edge.url(), dir.path()));
+    // A persisted encrypted session whose refresh token the edge rejects.
+    let config = workos_config(&edge.url(), dir.path());
+    seed_session(&config, "dead", "org_1");
+    let auth = Auth::new(config);
     assert!(
         auth.state().is_signed_in(),
         "boots from the persisted session"
@@ -464,12 +511,9 @@ async fn offline_refresh_loop_backs_off_without_revoking_session() {
     edge.state.drop_refresh.store(true, Ordering::SeqCst);
     let dir = tempfile::tempdir().expect("tempdir");
     let session_file = dir.path().join("session.json");
-    std::fs::write(
-        &session_file,
-        r#"{"refreshToken":"offline","user":{"id":"user_1","email":"w@example.com"},"orgId":"org_1"}"#,
-    )
-    .expect("seed session");
-    let auth = Auth::new(workos_config(&edge.url(), dir.path()));
+    let config = workos_config(&edge.url(), dir.path());
+    seed_session(&config, "offline", "org_1");
+    let auth = Auth::new(config);
 
     let refresh_loop = auth.spawn_refresh_loop();
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -485,11 +529,9 @@ async fn offline_refresh_loop_backs_off_without_revoking_session() {
 }
 
 fn persisted_auth(edge: &StubEdge, dir: &std::path::Path) -> Auth {
-    std::fs::write(
-        dir.join("session.json"),
-        r#"{"refreshToken":"offline","user":{"id":"user_1","email":"w@example.com"},"orgId":"org_1"}"#,
-    ).expect("seed session");
-    Auth::new(workos_config(&edge.url(), dir))
+    let config = workos_config(&edge.url(), dir);
+    seed_session(&config, "offline", "org_1");
+    Auth::new(config)
 }
 
 async fn twenty_consumers(auth: &Auth) -> Vec<Result<String, TokenError>> {
@@ -677,7 +719,7 @@ async fn sign_out_during_shared_refresh_does_not_restore_credentials() {
     )
     .await
     .unwrap();
-    auth.sign_out();
+    auth.sign_out().expect("sign out");
     edge.state.release_refresh.notify_one();
 
     assert!(pending.await.unwrap() == Err(TokenError::SignedOut));
@@ -708,7 +750,7 @@ async fn an_old_refresh_cannot_report_signed_out_after_a_new_sign_in() {
         .await
         .unwrap();
 
-        auth.sign_out();
+        auth.sign_out().expect("sign out old session");
         let url = auth.start_headless_sign_in();
         let state = query_param(&url, "state").unwrap();
         auth.complete_sign_in(&format!("{state}.new-code"))
@@ -728,7 +770,9 @@ async fn an_old_refresh_cannot_report_signed_out_after_a_new_sign_in() {
         let stored: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("session.json")).unwrap())
                 .unwrap();
-        assert_eq!(stored["refreshToken"], "refresh-1");
+        assert_eq!(stored["version"], 2);
+        assert!(stored.get("credentialId").is_some());
+        assert!(stored.get("refreshToken").is_none());
     }
 }
 
@@ -782,7 +826,7 @@ async fn sign_out_invalidates_pending_and_in_flight_oauth_callbacks() {
         .replace("%3A", ":")
         .replace("%2F", "/");
     let first_state = query_param(&first_url, "state").expect("state");
-    auth.sign_out();
+    auth.sign_out().expect("cancel pending sign-in");
     let canceled_pending = reqwest::get(format!("{callback}?code=old&state={first_state}"))
         .await
         .expect("pending callback response");
@@ -802,7 +846,7 @@ async fn sign_out_invalidates_pending_and_in_flight_oauth_callbacks() {
     .await
     .expect("exchange did not start");
 
-    auth.sign_out();
+    auth.sign_out().expect("cancel in-flight sign-in");
     edge.state.release_exchange.notify_one();
     let canceled_exchange = callback_request
         .await

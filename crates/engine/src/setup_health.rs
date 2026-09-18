@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use zeron_proto::{AgentAccountsSnapshot, HarnessId, Model};
+use zeron_proto::{AgentAccountsSnapshot, AgentAuthenticationState, HarnessId, Model};
 
 use crate::agent_accounts::AgentAccounts;
 use crate::registry::{HarnessDescriptor, HarnessRegistry, descriptor_enabled};
@@ -368,18 +368,24 @@ fn authentication(harness: HarnessId, accounts: Option<&AgentAccountsSnapshot>) 
     let Some(accounts) = accounts else {
         return EvidenceState::Unknown;
     };
-    if accounts
-        .warnings
-        .iter()
-        .any(|warning| warning.harness == harness)
-    {
-        EvidenceState::Unknown
+    if accounts.accounts.iter().any(|account| {
+        account.harness == harness
+            && account.active
+            && account.authentication == AgentAuthenticationState::Authenticated
+    }) {
+        EvidenceState::Confirmed
+    } else if accounts.accounts.iter().any(|account| {
+        account.harness == harness
+            && account.active
+            && account.authentication == AgentAuthenticationState::Expired
+    }) {
+        EvidenceState::Missing
     } else if accounts
         .accounts
         .iter()
         .any(|account| account.harness == harness && account.active)
     {
-        EvidenceState::Confirmed
+        EvidenceState::Unknown
     } else {
         EvidenceState::Missing
     }
@@ -671,6 +677,48 @@ fn inspect_workspace(path: Option<&str>) -> WorkspaceReadiness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account(authentication: AgentAuthenticationState) -> zeron_proto::AgentAccount {
+        zeron_proto::AgentAccount {
+            id: "fixture-account".into(),
+            harness: HarnessId::Codex,
+            email: Some("fixture@example.com".into()),
+            plan_label: None,
+            active: true,
+            authentication,
+            usage_windows: Vec::new(),
+            display_name: None,
+            organization: None,
+            auth_kind: Some(zeron_proto::AgentAuthKind::Oauth),
+            switchable: false,
+            saved_at: None,
+        }
+    }
+
+    #[test]
+    fn provider_authentication_state_stays_distinct_from_legacy_warnings() {
+        let mut snapshot = AgentAccountsSnapshot {
+            accounts: vec![account(AgentAuthenticationState::Authenticated)],
+            warnings: vec![zeron_proto::AgentAccountWarning {
+                harness: HarnessId::Codex,
+                message: "legacy copies disabled".into(),
+            }],
+        };
+        assert_eq!(
+            authentication(HarnessId::Codex, Some(&snapshot)),
+            EvidenceState::Confirmed
+        );
+        snapshot.accounts[0].authentication = AgentAuthenticationState::Expired;
+        assert_eq!(
+            authentication(HarnessId::Codex, Some(&snapshot)),
+            EvidenceState::Missing
+        );
+        snapshot.accounts[0].authentication = AgentAuthenticationState::Unavailable;
+        assert_eq!(
+            authentication(HarnessId::Codex, Some(&snapshot)),
+            EvidenceState::Unknown
+        );
+    }
     use zeron_proto::{ReasoningLevel, SteeringMode};
 
     #[test]
