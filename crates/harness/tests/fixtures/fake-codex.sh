@@ -18,7 +18,9 @@ fail_turn() { # $1 = request id, $2 = message
 read -r line || exit 1 # initialize
 has "$line" '"method":"initialize"' || exit 1
 has "$line" '"experimentalApi":true' || exit 1
-has "$line" '"name":"zeron-native"' || exit 1
+if ! has "$line" '"name":"zeron-native"' && ! has "$line" '"name":"luna-reconciler"'; then
+  exit 1
+fi
 emit "{\"id\":$(rid "$line"),\"result\":{\"userAgent\":\"fake-codex\"}}"
 
 read -r line || exit 1 # initialized notification (no reply)
@@ -26,6 +28,33 @@ has "$line" '"method":"initialized"' || exit 1
 
 # ---- thread start / resume -------------------------------------------------
 read -r line || exit 1
+if has "$line" '"method":"thread/read"'; then
+  if has "$line" '"threadId":"missing-thread"'; then
+    emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32602,\"message\":\"thread not found\"}}"
+    exit 0
+  fi
+  thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  status=idle
+  name='[LUNA QA] Imported fixture'
+  if [ "$thread_id" = 'qa-active' ]; then status=active; fi
+  if [ "$thread_id" = 'qa-archived' ]; then name='[LUNA QA] Archived fixture'; fi
+  emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"$name\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"$status\"},\"updatedAt\":1770000000,\"cliVersion\":\"0.154.0\",\"projectId\":null,\"ephemeral\":false}}}"
+  exec sleep 30
+fi
+if has "$line" '"method":"thread/list"'; then
+  if has "$line" '"archived":true' && has "$line" 'Archived fixture'; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"qa-archived\"}],\"nextCursor\":null}}"
+  elif has "$line" '"archived":false' && has "$line" 'Imported fixture'; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"qa-import\"}],\"nextCursor\":null}}"
+  else
+    emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[],\"nextCursor\":null}}"
+  fi
+  exec sleep 30
+fi
+if has "$line" '"method":"thread/name/set"' || has "$line" '"method":"thread/archive"' || has "$line" '"method":"thread/unarchive"'; then
+  emit "{\"id\":$(rid "$line"),\"result\":{}}"
+  exec sleep 30
+fi
 if has "$line" '"method":"config/read"'; then
   emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"test\":{\"enabled\":true}}}}}"
   read -r line || exit 1
@@ -71,9 +100,23 @@ fi
 
 # ---- first turn ------------------------------------------------------------
 read -r turnline || exit 1
+native_name_line=''
+if has "$turnline" '"method":"thread/name/set"'; then
+  native_name_line="$turnline"
+  emit "{\"id\":$(rid "$turnline"),\"result\":{}}"
+  read -r turnline || exit 1
+fi
 tid=$(rid "$turnline")
 
 case "$turnline" in
+
+*scenario:native-title*)
+  has "$thread_line" '"ephemeral":false' || { fail_turn "$tid" "ordinary thread must be durable"; exit 0; }
+  has "$native_name_line" '"name":"[LUNA] Native fixture"' || { fail_turn "$tid" "native LUNA title missing"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-native\"}}}"
+  emit '{"method":"thread/name/updated","params":{"threadId":"th-1","name":"[LUNA] Native fixture"}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-native","status":"completed"}}}'
+  ;;
 
 *scenario:image-*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"

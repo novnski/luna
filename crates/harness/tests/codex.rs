@@ -10,6 +10,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
+use zeron_harness::codex::native::CodexNativeClient;
 use zeron_harness::{
     CancellationToken, CodexHarness, Harness, HarnessError, RunControls, SteerMessage,
 };
@@ -33,6 +34,11 @@ fn fixture_path() -> PathBuf {
 
 fn harness() -> CodexHarness {
     CodexHarness::new().with_executable(fixture_path())
+}
+
+fn native_client() -> CodexNativeClient {
+    CodexNativeClient::new(std::env::temp_dir().join("luna-codex-native-fixture"))
+        .with_executable(fixture_path())
 }
 
 fn request(prompt: &str) -> RunRequest {
@@ -92,6 +98,176 @@ async fn run_to_end(
     )
     .await
     .expect("run finished in time")
+}
+
+#[tokio::test]
+async fn ordinary_threads_are_native_visible_and_strict_resume_never_rebinds() {
+    let (run_controls, _steer, _token) = controls("Yes");
+    let mut req = request("scenario:native-title");
+    req.model_options.insert(
+        zeron_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
+        "[LUNA] Native fixture".into(),
+    );
+    let events = run_to_end(&harness(), req, run_controls).await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ProviderTaskChanged { change } if change == "thread/name/updated"
+    )));
+
+    let (run_controls, _steer, _token) = controls("Yes");
+    let mut req = request("strict resume must fail");
+    req.resume = Some("resume-fail".into());
+    req.model_options.insert(
+        zeron_harness::codex::LUNA_STRICT_RESUME_OPTION.into(),
+        true.into(),
+    );
+    let events = run_to_end(&harness(), req, run_controls).await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::SessionStarted { .. }))
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Done {
+            status: DoneStatus::Errored,
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
+async fn native_metadata_client_uses_supported_methods_only() {
+    let client = native_client();
+    let observed = client
+        .observe_thread("qa-import")
+        .await
+        .unwrap()
+        .expect("fixture thread exists");
+    assert_eq!(observed.id, "qa-import");
+    assert_eq!(observed.name.as_deref(), Some("[LUNA QA] Imported fixture"));
+    assert_eq!(observed.archived, Some(false));
+    assert_eq!(client.observe_thread("missing-thread").await.unwrap(), None);
+    client
+        .set_name("qa-import", "[LUNA] Renamed fixture")
+        .await
+        .unwrap();
+    client.set_archived("qa-import", true).await.unwrap();
+    client.set_archived("qa-import", false).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "creates one clearly marked native Codex QA thread and one short GPT-5.6 Luna turn"]
+async fn live_l06_native_visibility_rename_archive_and_reopen() {
+    let home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+        .expect("CODEX_HOME or HOME");
+    let client = CodexNativeClient::new(home);
+    let name = format!(
+        "[LUNA QA L06] native reconciliation {}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+    let (run_controls, steer, _token) = controls("No");
+    drop(steer);
+    let mut req = request("Reply exactly L06-QA.");
+    req.model = Some("gpt-5.6-luna".into());
+    req.reasoning = Some(ReasoningLevel::Low);
+    req.cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    req.sandbox = SandboxLevel::ReadOnly;
+    req.model_options.insert(
+        zeron_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
+        name.clone().into(),
+    );
+    let stream = CodexHarness::new()
+        .run(req, run_controls)
+        .await
+        .expect("start live QA turn");
+    let events = tokio::time::timeout(
+        Duration::from_secs(120),
+        stream
+            .map(|event| event.expect("live QA event"))
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .expect("live QA turn finished in time");
+    let thread_id = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::SessionStarted { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .expect("live QA thread id");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    let created = client
+        .observe_thread(&thread_id)
+        .await
+        .expect("read live QA thread")
+        .expect("live QA thread remains visible");
+    assert!(!created.ephemeral);
+    assert_eq!(created.name.as_deref(), Some(name.as_str()));
+
+    let renamed = format!("{name} renamed");
+    client
+        .set_name(&created.id, &renamed)
+        .await
+        .expect("rename QA thread");
+    let readback = client
+        .observe_thread(&created.id)
+        .await
+        .expect("read renamed QA thread")
+        .expect("renamed QA thread remains visible");
+    assert_eq!(readback.name.as_deref(), Some(renamed.as_str()));
+
+    client
+        .set_archived(&created.id, true)
+        .await
+        .expect("archive QA thread");
+    assert_eq!(
+        client
+            .observe_thread(&created.id)
+            .await
+            .expect("read archived QA thread")
+            .expect("archived QA thread remains readable")
+            .archived,
+        Some(true)
+    );
+    client
+        .set_archived(&created.id, false)
+        .await
+        .expect("reopen QA thread");
+    let reopened = client
+        .observe_thread(&created.id)
+        .await
+        .expect("read reopened QA thread")
+        .expect("reopened QA thread remains visible");
+    assert_eq!(reopened.archived, Some(false));
+    println!(
+        "L06_NATIVE_QA thread_id={} name={} cwd={} cli_version={}",
+        reopened.id,
+        reopened.name.unwrap_or_default(),
+        reopened.cwd,
+        reopened.cli_version.unwrap_or_default()
+    );
 }
 
 #[tokio::test]

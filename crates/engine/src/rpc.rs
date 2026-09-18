@@ -60,7 +60,10 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use zeron_doc::{MessagePart, SessionCommandPayload};
-use zeron_proto::{ChatConfig, EngineInfo, HarnessId, PermissionMode, ToolCall, WorkspaceScope};
+use zeron_proto::{
+    ChatConfig, EngineInfo, HarnessId, ImportOwnership, PermissionMode, TaskLineage, ToolCall,
+    WorkspaceScope,
+};
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 
 use crate::agent_accounts::AgentAccounts;
@@ -82,6 +85,32 @@ const FILE_SEARCH_FEATURED_PATHS: usize = 32;
 #[serde(rename_all = "camelCase")]
 struct ChatParams {
     chat_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskIdentityParams {
+    task_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewProviderTaskImportParams {
+    provider_id: HarnessId,
+    provider_task_id: String,
+    ownership: ImportOwnership,
+    #[serde(default)]
+    space_id: Option<String>,
+    #[serde(default)]
+    device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdoptProviderTaskParams {
+    preview_id: String,
+    #[serde(default)]
+    config: Option<ChatConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -418,6 +447,10 @@ enum MutateParams {
         /// Cwd override (isolated-worktree path); default = the space's folder.
         #[serde(default)]
         cwd: Option<String>,
+        /// Parent hierarchy, fork/copy source, and lifecycle ownership remain
+        /// separate even before their later UI surfaces are implemented.
+        #[serde(default)]
+        lineage: TaskLineage,
     },
     /// Create a space (device + folder pair). Idempotent by id; a live
     /// duplicate `(deviceId, path)` no-ops. `gitDetected` is seeded from the
@@ -513,6 +546,7 @@ pub struct EngineRpc {
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
     agent_accounts: AgentAccounts,
+    task_identity: crate::TaskIdentityService,
     auth: Option<Auth>,
     links: Option<std::sync::Arc<LinkCache>>,
     updater: Option<zeron_update::Updater>,
@@ -534,6 +568,7 @@ impl EngineRpc {
         diff_sync: CheckoutDiffSync,
         uploads: Uploads,
         agent_accounts: AgentAccounts,
+        task_identity: crate::TaskIdentityService,
         workspace_scope: WorkspaceScope,
     ) -> Self {
         let engine_info = EngineInfo {
@@ -554,6 +589,7 @@ impl EngineRpc {
             diff_sync,
             uploads,
             agent_accounts,
+            task_identity,
             auth: None,
             links: None,
             updater: None,
@@ -808,7 +844,17 @@ impl EngineRpc {
                 config,
                 branch,
                 cwd,
+                lineage,
             } => {
+                self.task_identity
+                    .register_new_task(
+                        &chat_id,
+                        space_id.as_deref(),
+                        device_id.as_deref(),
+                        cwd.as_deref(),
+                        lineage,
+                    )
+                    .map_err(failed)?;
                 self.workspace
                     .create_chat(
                         &chat_id,
@@ -848,6 +894,9 @@ impl EngineRpc {
                 let sessions = self.sessions.clone();
                 let doc_host = self.doc_host.clone();
                 let chat_ids = deleted.chat_ids;
+                for chat_id in &chat_ids {
+                    self.task_identity.tombstone_task(chat_id).map_err(failed)?;
+                }
                 tokio::spawn(async move {
                     for chat_id in chat_ids {
                         if let Err(err) = sessions.interrupt(&chat_id).await {
@@ -858,11 +907,33 @@ impl EngineRpc {
                 });
                 Ok(())
             }
-            MutateParams::RenameChat { chat_id, title } => self
-                .workspace
-                .rename_chat(&chat_id, &title)
-                .map_err(failed)
-                .map(drop),
+            MutateParams::RenameChat { chat_id, title } => {
+                if self
+                    .task_identity
+                    .view(&chat_id)
+                    .and_then(|view| view.current_binding)
+                    .is_some()
+                {
+                    self.task_identity
+                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
+                        .await
+                        .map_err(failed)?;
+                    self.task_identity
+                        .set_provider_name(&chat_id, &title)
+                        .await
+                        .map_err(failed)?;
+                }
+                self.workspace
+                    .rename_chat(&chat_id, &title)
+                    .map_err(failed)?;
+                if self.task_identity.view(&chat_id).is_some() {
+                    self.task_identity
+                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
+                        .await
+                        .map_err(failed)?;
+                }
+                Ok(())
+            }
             MutateParams::SetChatBranch { chat_id, branch } => self
                 .workspace
                 .set_chat_branch(&chat_id, &branch)
@@ -887,11 +958,33 @@ impl EngineRpc {
                 .set_chat_host(&chat_id, &device_id)
                 .map_err(failed)
                 .map(drop),
-            MutateParams::SetChatArchived { chat_id, archived } => self
-                .workspace
-                .set_chat_archived(&chat_id, archived)
-                .map_err(failed)
-                .map(drop),
+            MutateParams::SetChatArchived { chat_id, archived } => {
+                if self
+                    .task_identity
+                    .view(&chat_id)
+                    .and_then(|view| view.current_binding)
+                    .is_some()
+                {
+                    self.task_identity
+                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
+                        .await
+                        .map_err(failed)?;
+                    self.task_identity
+                        .set_provider_archived(&chat_id, archived)
+                        .await
+                        .map_err(failed)?;
+                }
+                self.workspace
+                    .set_chat_archived(&chat_id, archived)
+                    .map_err(failed)?;
+                if self.task_identity.view(&chat_id).is_some() {
+                    self.task_identity
+                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
+                        .await
+                        .map_err(failed)?;
+                }
+                Ok(())
+            }
             MutateParams::SetChatConfig { chat_id, config } => self
                 .workspace
                 .set_chat_config(&chat_id, &config)
@@ -908,6 +1001,9 @@ impl EngineRpc {
                 .map_err(failed),
             MutateParams::DeleteChat { chat_id } => {
                 self.workspace.delete_chat(&chat_id).map_err(failed)?;
+                self.task_identity
+                    .tombstone_task(&chat_id)
+                    .map_err(failed)?;
                 self.doc_host.purge_chat(&chat_id);
                 Ok(())
             }
@@ -1294,6 +1390,57 @@ impl RpcService for EngineRpc {
         match method {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
+            methods::GET_TASK_IDENTITY => {
+                let p: TaskIdentityParams = parse_params(params)?;
+                RpcReply::value(&self.task_identity.view(&p.task_id))
+            }
+            methods::REFRESH_TASK_BINDING => {
+                let p: TaskIdentityParams = parse_params(params)?;
+                let view = self
+                    .task_identity
+                    .reconcile_task(&p.task_id, self.sessions.has_live_run(&p.task_id))
+                    .await
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&view)
+            }
+            methods::PREVIEW_PROVIDER_TASK_IMPORT => {
+                let p: PreviewProviderTaskImportParams = parse_params(params)?;
+                let preview = self
+                    .task_identity
+                    .preview_import(
+                        p.provider_id,
+                        &p.provider_task_id,
+                        p.ownership,
+                        p.space_id.as_deref(),
+                        p.device_id.as_deref(),
+                    )
+                    .await
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&preview)
+            }
+            methods::ADOPT_PROVIDER_TASK => {
+                let p: AdoptProviderTaskParams = parse_params(params)?;
+                let config = p.config.or_else(|| {
+                    Some(ChatConfig {
+                        harness: HarnessId::Codex,
+                        model: None,
+                        reasoning: None,
+                        model_options: serde_json::Map::new(),
+                        sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+                        permission_mode: zeron_proto::PermissionMode::Ask,
+                        effective_permission_mode: zeron_proto::PermissionMode::Ask,
+                        permission_ceiling_source: None,
+                        permission_degradation_reason: None,
+                        permission_audit: Vec::new(),
+                    })
+                });
+                let view = self
+                    .task_identity
+                    .adopt_preview(&p.preview_id, config)
+                    .await
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&view)
+            }
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {
@@ -1372,6 +1519,21 @@ impl RpcService for EngineRpc {
             }
             methods::WATCH_DOC_MESSAGES => {
                 let p: ChatParams = parse_params(params)?;
+                if self
+                    .task_identity
+                    .view(&p.chat_id)
+                    .and_then(|view| view.current_binding)
+                    .is_some()
+                {
+                    let identity = self.task_identity.clone();
+                    let task_id = p.chat_id.clone();
+                    let luna_active = self.sessions.has_live_run(&task_id);
+                    tokio::spawn(async move {
+                        if let Err(error) = identity.reconcile_task(&task_id, luna_active).await {
+                            tracing::warn!(task = %task_id, %error, "task-open reconciliation failed");
+                        }
+                    });
+                }
                 let handle = self
                     .doc_host
                     .open(&p.chat_id)

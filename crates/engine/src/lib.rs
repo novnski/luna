@@ -34,6 +34,7 @@ pub mod run_journal;
 pub mod sessions;
 pub mod source_control;
 pub mod spaces;
+pub mod task_identity;
 pub mod terminals;
 pub mod titles;
 mod transcript_history;
@@ -68,6 +69,7 @@ pub use source_control::{
     GitRemote, parse_git_remote,
 };
 pub use spaces::SpacesSync;
+pub use task_identity::TaskIdentityService;
 pub use terminals::Terminals;
 pub use titles::TitleGenerator;
 pub use uploads::{AttachmentChunk, Uploads};
@@ -160,6 +162,7 @@ pub struct EngineCore {
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
     pub agent_accounts: AgentAccounts,
+    pub task_identity: TaskIdentityService,
     pub device_id: String,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
@@ -252,7 +255,7 @@ impl EngineCore {
             },
         );
         let workspace = WorkspaceHost::open(
-            store,
+            store.clone(),
             WorkspaceHostConfig {
                 device_id: device_id.clone(),
                 device_name: local_device_name(&device_id),
@@ -262,9 +265,17 @@ impl EngineCore {
                 edge: edge.clone(),
             },
         )?;
+        let agent_accounts_config = AgentAccountsConfig::detect(data_dir);
+        let task_identity = TaskIdentityService::open(
+            store,
+            workspace.clone(),
+            &device_id,
+            agent_accounts_config.codex_home.clone(),
+        )?;
         doc_host.set_workspace(workspace.clone());
         doc_host.set_sessions(sessions.clone());
         sessions.set_doc_host(doc_host.clone());
+        sessions.set_task_identity(task_identity.clone());
         match sessions.recover_stale() {
             Ok(0) => {}
             Ok(recovered) => tracing::info!(recovered, "stale sessions recovered on boot"),
@@ -299,7 +310,6 @@ impl EngineCore {
         // Queued-attachment support: the doc host resolves `pending://` refs
         // against this store and pushes staged bytes to remote hosts.
         doc_host.set_uploads(uploads.clone());
-        let agent_accounts_config = AgentAccountsConfig::detect(data_dir);
         sessions.set_generated_images(
             uploads.clone(),
             agent_accounts_config.codex_home.join("generated_images"),
@@ -317,11 +327,9 @@ impl EngineCore {
             )
         });
         let agent_accounts = AgentAccounts::new(agent_accounts_config);
-        sessions.set_titles(TitleGenerator::new(
-            workspace.clone(),
-            registry.clone(),
-            repos.clone(),
-        ));
+        let titles = TitleGenerator::new(workspace.clone(), registry.clone(), repos.clone());
+        titles.set_task_identity(task_identity.clone());
+        sessions.set_titles(titles);
         let diff_sync = CheckoutDiffSync::start(repos.clone(), workspace.clone(), &device_id, edge);
         // Turn starts snapshot the checkout tree — the "Latest turn" diff base.
         let turn_diff = diff_sync.clone();
@@ -329,6 +337,7 @@ impl EngineCore {
             turn_diff.note_turn_start(chat_id, cwd);
         }));
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
+        task_identity.start_startup_reconciliation();
         Ok(Self {
             sessions,
             doc_host,
@@ -343,6 +352,7 @@ impl EngineCore {
             spaces_sync,
             uploads,
             agent_accounts,
+            task_identity,
             device_id,
             local_import,
             workspace_scope: profile.scope(),
@@ -473,6 +483,7 @@ impl EngineCore {
             self.diff_sync.clone(),
             self.uploads.clone(),
             self.agent_accounts.clone(),
+            self.task_identity.clone(),
             self.workspace_scope,
         )
         .with_auth(self.auth())

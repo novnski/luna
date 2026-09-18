@@ -262,6 +262,8 @@ struct Inner {
     harness_sessions: Mutex<HashMap<String, HarnessSessionRef>>,
     /// Auto-titler for untitled chats (wired at engine assembly; absent in bare tests).
     titles: OnceLock<crate::titles::TitleGenerator>,
+    /// Stable task/provider bindings (wired at engine assembly; absent in bare tests).
+    task_identity: OnceLock<crate::task_identity::TaskIdentityService>,
     generated_images: OnceLock<(crate::uploads::Uploads, std::path::PathBuf)>,
     /// Fired with `(chat_id, cwd)` when a user prompt starts a turn (fresh
     /// dispatch or accepted steer) — the diff sync snapshots the checkout tree
@@ -302,6 +304,7 @@ impl SessionsEngine {
                 last_requests: Mutex::new(HashMap::new()),
                 harness_sessions: Mutex::new(HashMap::new()),
                 titles: OnceLock::new(),
+                task_identity: OnceLock::new(),
                 generated_images: OnceLock::new(),
                 turn_listener: OnceLock::new(),
             }),
@@ -340,6 +343,10 @@ impl SessionsEngine {
         let _ = self.inner.titles.set(titles);
     }
 
+    pub fn set_task_identity(&self, task_identity: crate::task_identity::TaskIdentityService) {
+        let _ = self.inner.task_identity.set(task_identity);
+    }
+
     /// Wire the turn-start listener (called once at engine assembly).
     pub fn set_turn_listener(&self, listener: TurnListener) {
         let _ = self.inner.turn_listener.set(listener);
@@ -366,6 +373,10 @@ impl SessionsEngine {
 
     pub fn session_status(&self, chat_id: &str) -> Option<Session> {
         lock(&self.inner.statuses).get(chat_id).cloned()
+    }
+
+    pub fn has_live_run(&self, chat_id: &str) -> bool {
+        lock(&self.inner.runs).contains_key(chat_id)
     }
 
     /// Whether this harness takes a prompt *during* a turn, rather than only at
@@ -677,8 +688,37 @@ impl SessionsEngine {
         // and starting the retry fresh silently dropped a good conversation.
         let mut resume_injected = false;
         if request.resume.is_none() {
-            request.resume = self.inner.resume_for(chat_id, &request.cwd);
+            let managed = if let Some(task_identity) = self.inner.task_identity.get() {
+                task_identity
+                    .prepare_resume(chat_id, harness_id, &request.cwd)
+                    .await?
+            } else {
+                None
+            };
+            let managed_resume = managed.is_some();
+            request.resume = managed.or_else(|| self.inner.resume_for(chat_id, &request.cwd));
             resume_injected = request.resume.is_some();
+            if managed_resume {
+                request.model_options.insert(
+                    zeron_harness::codex::LUNA_STRICT_RESUME_OPTION.into(),
+                    true.into(),
+                );
+            }
+        }
+        if harness_id == HarnessId::Codex
+            && let Some(workspace) = self.inner.workspace()
+            && let Ok(Some(chat)) = workspace.chat(chat_id)
+        {
+            let title = chat
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .unwrap_or("New task");
+            request.model_options.insert(
+                zeron_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
+                format!("[LUNA] {title}").into(),
+            );
         }
         lock(&self.inner.last_requests).insert(chat_id.to_string(), request.clone());
 
@@ -2479,6 +2519,23 @@ async fn drive_run(
             continue;
         }
 
+        if let AgentEvent::ProviderTaskChanged { change } = &event {
+            if let Some(task_identity) = inner.task_identity.get()
+                && task_identity.view(&chat_id).is_some()
+            {
+                let task_identity = task_identity.clone();
+                let task = chat_id.clone();
+                let change = change.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = task_identity.reconcile_task(&task, true).await {
+                        tracing::warn!(task = %task, %change, %error, "provider notification reconciliation failed");
+                    }
+                });
+            }
+            // Control-plane signal only: no transcript/journal entry.
+            continue;
+        }
+
         match &event {
             AgentEvent::SessionStarted {
                 session_id, cwd, ..
@@ -2504,7 +2561,51 @@ async fn drive_run(
                 }
                 // The event's own cwd (where the harness actually created the
                 // session) scopes the stored id, not the request's.
+                if let Some(task_identity) = inner.task_identity.get()
+                    && let Err(error) =
+                        task_identity.record_session_binding(&chat_id, harness_id, session_id, cwd)
+                {
+                    // Binding conflicts are terminal. Publishing SessionStarted
+                    // without its durable mapping would make an unowned native
+                    // thread look resumable, so fail before that event escapes.
+                    inner.publish(
+                        &chat_id,
+                        &AgentEvent::Error {
+                            message: error.to_string(),
+                        },
+                    );
+                    inner.publish(
+                        &chat_id,
+                        &AgentEvent::Done {
+                            status: DoneStatus::Errored,
+                            result: None,
+                            error: Some(error.to_string()),
+                            session_id: Some(session_id.clone()),
+                        },
+                    );
+                    inner.remove_run(&chat_id, &run_id);
+                    inner.set_status(&chat_id, SessionStatus::Errored, false);
+                    return;
+                }
                 inner.remember_harness_session(&chat_id, session_id, cwd);
+                if harness_id == HarnessId::Codex
+                    && let Some(task_identity) = inner.task_identity.get()
+                    && let Some(title) = inner
+                        .workspace()
+                        .and_then(|workspace| workspace.chat(&chat_id).ok().flatten())
+                        .and_then(|chat| chat.title)
+                        .filter(|title| !title.trim().is_empty())
+                {
+                    let task_identity = task_identity.clone();
+                    let task = chat_id.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = task_identity.set_provider_name(&task, &title).await {
+                            tracing::warn!(task = %task, %error, "provider title synchronization failed");
+                            return;
+                        }
+                        let _ = task_identity.reconcile_task(&task, true).await;
+                    });
+                }
             }
             AgentEvent::Done {
                 session_id: Some(session_id),
@@ -2532,6 +2633,17 @@ async fn drive_run(
         }
 
         inner.publish(&chat_id, &event);
+
+        if matches!(&event, AgentEvent::Done { .. })
+            && let Some(task_identity) = inner.task_identity.get()
+            && task_identity.view(&chat_id).is_some()
+        {
+            let task_identity = task_identity.clone();
+            let task = chat_id.clone();
+            tokio::spawn(async move {
+                let _ = task_identity.reconcile_task(&task, false).await;
+            });
+        }
 
         // Defensive rule from zeron: a mid-run SessionStarted re-emission (Claude SDK
         // background re-invocations) must not wipe the segment being written.

@@ -111,6 +111,14 @@ pub mod methods {
     /// Readiness barrier for the engine runtime. The call completes once stores
     /// and journals are assembled, or fails with the assembly error.
     pub const ENGINE_READY: &str = "EngineReady";
+    /// Durable LUNA task identity and all preserved execution-binding generations.
+    pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
+    /// Explicit supported-provider refresh for one task binding.
+    pub const REFRESH_TASK_BINDING: &str = "RefreshTaskBinding";
+    /// Read-only provider-native import preview. No task or provider state is mutated.
+    pub const PREVIEW_PROVIDER_TASK_IMPORT: &str = "PreviewProviderTaskImport";
+    /// Adopt a current preview; task and binding persist before chat visibility.
+    pub const ADOPT_PROVIDER_TASK: &str = "AdoptProviderTask";
     /// Ask a headless IPC owner to drain its runtime and exit successfully.
     /// Headed IPC owners do not implement this method: closing another app's
     /// engine behind its windows would leave that process unusable.

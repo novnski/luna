@@ -592,6 +592,12 @@ pub enum AgentEvent {
     AvailableCommands {
         commands: Vec<SlashCommand>,
     },
+    /// Internal supported-provider notification that asks the engine to
+    /// refresh task metadata. It is consumed before journal/doc publication.
+    #[serde(rename_all = "camelCase")]
+    ProviderTaskChanged {
+        change: String,
+    },
     Error {
         message: String,
     },

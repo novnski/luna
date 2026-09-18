@@ -37,6 +37,7 @@
 //!   always ends with `Done { status: Interrupted }`.
 
 pub(crate) mod catalog;
+pub mod native;
 mod normalize;
 mod subagents;
 
@@ -65,6 +66,11 @@ use normalize::{
     ChildRoute, Phase, ReasoningStream, delta_text, item_id, item_type, notification_thread_id,
     route_child_notification, turn_error_message, turn_id, usage_event,
 };
+
+/// Engine-only model-option keys. They are consumed by this adapter and never
+/// forwarded as model configuration.
+pub const LUNA_NATIVE_THREAD_NAME_OPTION: &str = "lunaNativeThreadName";
+pub const LUNA_STRICT_RESUME_OPTION: &str = "lunaStrictResume";
 
 /// Locate the device's installed Codex CLI: `CODEX_EXECUTABLE`, then our own
 /// PATH, then the login-shell PATH snapshot (the user's shell init shapes
@@ -828,6 +834,9 @@ async fn run_session(session: Session) {
                     "features.memories": false
                 }),
             );
+        } else {
+            // Ordinary LUNA work must materialize as a provider-native thread.
+            p.insert("ephemeral".into(), false.into());
         }
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
         p.insert("approvalPolicy".into(), approval_policy.into());
@@ -876,13 +885,18 @@ async fn run_session(session: Session) {
                 }
             }
         }
+        let strict_resume = request
+            .model_options
+            .get(LUNA_STRICT_RESUME_OPTION)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let thread = if let Some(resume) = &request.resume {
             let mut p = start_params.clone();
             p.insert("threadId".into(), Value::String(resume.clone()));
             match client.request("thread/resume", Value::Object(p)).await {
                 Ok(thread) => thread,
                 // A missing/foreign rollout falls back to a fresh thread.
-                Err(e) => {
+                Err(e) if !strict_resume => {
                     tracing::debug!(
                         target: "zeron_harness::codex",
                         "thread/resume failed (starting fresh): {e}"
@@ -891,6 +905,7 @@ async fn run_session(session: Session) {
                         .request("thread/start", Value::Object(start_params.clone()))
                         .await?
                 }
+                Err(e) => return Err(e),
             }
         } else {
             client
@@ -898,6 +913,23 @@ async fn run_session(session: Session) {
                 .await?
         };
         let thread_id = thread["thread"]["id"].as_str().unwrap_or("").to_owned();
+        if !title_only
+            && let Some(name) = request
+                .model_options
+                .get(LUNA_NATIVE_THREAD_NAME_OPTION)
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+            && let Err(error) = client
+                .request(
+                    "thread/name/set",
+                    json!({"threadId": thread_id, "name": name}),
+                )
+                .await
+        {
+            // The durable thread still exists and must be surfaced to the
+            // engine so it can bind/reconcile it instead of orphaning it.
+            tracing::warn!(target: "zeron_harness::codex", %thread_id, %error, "native thread name set failed");
+        }
         let mut children = subagents::Subagents::new(thread_id.clone());
         children.restore(&thread["thread"]);
         Ok::<_, HarnessError>((thread_id, children))
@@ -1042,6 +1074,22 @@ async fn run_session(session: Session) {
                 }
                 match method.as_str() {
                     "turn/started" => router.note_started(turn_id(&params)),
+
+                    "thread/name/updated"
+                    | "thread/archived"
+                    | "thread/unarchived"
+                    | "thread/status/changed" => {
+                        if !send(
+                            &event_tx,
+                            AgentEvent::ProviderTaskChanged {
+                                change: method.clone(),
+                            },
+                        )
+                        .await
+                        {
+                            break 'main;
+                        }
+                    }
 
                     "item/agentMessage/delta" => {
                         streamed_text.insert(item_id(&params));

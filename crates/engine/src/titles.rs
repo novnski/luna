@@ -3,7 +3,7 @@
 //! Failures fall back to the prompt's first words. A user rename always wins.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use futures::StreamExt;
 
@@ -27,6 +27,7 @@ struct Inner {
     registry: Arc<HarnessRegistry>,
     repos: Repos,
     in_flight: Mutex<HashSet<String>>,
+    task_identity: OnceLock<crate::task_identity::TaskIdentityService>,
 }
 
 #[derive(Clone)]
@@ -42,8 +43,13 @@ impl TitleGenerator {
                 registry,
                 repos,
                 in_flight: Mutex::new(HashSet::new()),
+                task_identity: OnceLock::new(),
             }),
         }
+    }
+
+    pub fn set_task_identity(&self, task_identity: crate::task_identity::TaskIdentityService) {
+        let _ = self.inner.task_identity.set(task_identity);
     }
 
     /// Fire-and-forget: title `chat_id` if it's still untitled. Called by the run
@@ -139,6 +145,16 @@ impl TitleGenerator {
             }
         }
 
+        if let Some(task_identity) = self.inner.task_identity.get()
+            && task_identity
+                .view(chat_id)
+                .and_then(|view| view.current_binding)
+                .is_some()
+        {
+            // Provider first: a rejected native rename must not be presented
+            // as synchronized local metadata.
+            task_identity.set_provider_name(chat_id, &title).await?;
+        }
         self.inner.workspace.rename_chat(chat_id, &title)?;
         tracing::info!(chat = %chat_id, title = %title, "chat auto-titled");
         Ok(())
