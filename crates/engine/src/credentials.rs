@@ -6,11 +6,11 @@
 //! stored below the selected LUNA data root; its independent random key lives
 //! in the operating-system credential store.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
@@ -165,9 +165,7 @@ struct PlatformKeyStore {
 #[cfg(target_os = "macos")]
 impl PlatformKeyStore {
     fn for_data_dir(data_dir: &Path) -> Self {
-        let stable_path = data_dir
-            .canonicalize()
-            .unwrap_or_else(|_| data_dir.to_path_buf());
+        let stable_path = stable_path(data_dir);
         let digest = Sha256::digest(stable_path.to_string_lossy().as_bytes());
         Self {
             account: format!("vault-v1-{}", hex_prefix(&digest, 16)),
@@ -269,7 +267,14 @@ impl fmt::Debug for CredentialBroker {
 struct BrokerInner {
     vault_file: PathBuf,
     key_store: Arc<dyn VaultKeyStore>,
-    mutation: Mutex<()>,
+    transaction: Arc<Mutex<()>>,
+    test_key_store: Option<Arc<MemoryKeyStore>>,
+}
+
+struct VaultTransaction<'a> {
+    _process: MutexGuard<'a, ()>,
+    #[cfg(unix)]
+    _file: std::fs::File,
 }
 
 impl CredentialBroker {
@@ -277,6 +282,7 @@ impl CredentialBroker {
         Self::with_store(
             data_dir.join("credentials").join("environment-v1.vault"),
             Arc::new(PlatformKeyStore::for_data_dir(data_dir)),
+            None,
         )
     }
 
@@ -284,20 +290,51 @@ impl CredentialBroker {
     /// only in process memory and is never a production fallback.
     #[doc(hidden)]
     pub fn in_memory_for_tests(data_dir: &Path) -> Self {
+        let store = Arc::new(MemoryKeyStore::default());
         Self::with_store(
             data_dir.join("credentials").join("environment-v1.vault"),
-            Arc::new(MemoryKeyStore::default()),
+            store.clone(),
+            Some(store),
         )
     }
 
-    fn with_store(vault_file: PathBuf, key_store: Arc<dyn VaultKeyStore>) -> Self {
+    fn with_store(
+        vault_file: PathBuf,
+        key_store: Arc<dyn VaultKeyStore>,
+        test_key_store: Option<Arc<MemoryKeyStore>>,
+    ) -> Self {
+        let transaction = shared_transaction(&vault_file);
         Self {
             inner: Arc::new(BrokerInner {
                 vault_file,
                 key_store,
-                mutation: Mutex::new(()),
+                transaction,
+                test_key_store,
             }),
         }
+    }
+
+    /// Lock or unlock the isolated in-memory credential store. Returns false
+    /// for production brokers, which cannot be controlled by tests.
+    #[doc(hidden)]
+    pub fn set_in_memory_store_locked_for_tests(&self, locked: bool) -> bool {
+        let Some(store) = &self.inner.test_key_store else {
+            return false;
+        };
+        lock(&store.state).failure = locked.then_some(KeyStoreFailure::Locked);
+        true
+    }
+
+    /// A separately constructed broker over the same isolated key store and
+    /// vault. This exercises the shared per-vault transaction coordinator.
+    #[doc(hidden)]
+    pub fn independent_in_memory_handle_for_tests(&self) -> Option<Self> {
+        let store = self.inner.test_key_store.as_ref()?.clone();
+        Some(Self::with_store(
+            self.inner.vault_file.clone(),
+            store.clone(),
+            Some(store),
+        ))
     }
 
     /// Add or replace one LUNA-owned value. No remote ingress is accepted in
@@ -323,7 +360,7 @@ impl CredentialBroker {
                 "credential values cannot be empty",
             ));
         }
-        let _mutation = lock(&self.inner.mutation);
+        let _transaction = self.lock_transaction()?;
         let mut payload = self.load_or_empty_for_write()?;
         let now = now_ms();
         let existing_id = payload.entries.iter().find_map(|(id, entry)| {
@@ -366,7 +403,7 @@ impl CredentialBroker {
     }
 
     pub fn list_metadata(&self) -> Result<Vec<CredentialMetadata>, CredentialError> {
-        let _mutation = lock(&self.inner.mutation);
+        let _transaction = self.lock_transaction()?;
         let Some(payload) = self.load_existing()? else {
             return Ok(Vec::new());
         };
@@ -382,7 +419,7 @@ impl CredentialBroker {
         id: &str,
         exact_scope: &CredentialScope,
     ) -> Result<CredentialLease, CredentialError> {
-        let _mutation = lock(&self.inner.mutation);
+        let _transaction = self.lock_transaction()?;
         let payload = self.load_existing()?.ok_or(CredentialError::NotFound)?;
         let entry = payload.entries.get(id).ok_or(CredentialError::NotFound)?;
         if &entry.metadata.scope != exact_scope {
@@ -403,7 +440,7 @@ impl CredentialBroker {
         lease: &CredentialLease,
         exact_scope: &CredentialScope,
     ) -> Result<CredentialMetadata, CredentialError> {
-        let _mutation = lock(&self.inner.mutation);
+        let _transaction = self.lock_transaction()?;
         let mut payload = self.load_existing()?.ok_or(CredentialError::NotFound)?;
         let entry = payload
             .entries
@@ -420,12 +457,41 @@ impl CredentialBroker {
         Ok(metadata)
     }
 
+    /// Explicit local-owner recovery path used by logout when startup could
+    /// read metadata but could not unlock the vault to construct a lease.
+    pub(crate) fn forget_by_id(
+        &self,
+        id: &str,
+        exact_scope: &CredentialScope,
+    ) -> Result<CredentialMetadata, CredentialError> {
+        let _transaction = self.lock_transaction()?;
+        let mut payload = self.load_existing()?.ok_or(CredentialError::NotFound)?;
+        let entry = payload
+            .entries
+            .get_mut(id)
+            .ok_or(CredentialError::NotFound)?;
+        if &entry.metadata.scope != exact_scope {
+            return Err(CredentialError::ScopeDenied);
+        }
+        if entry.metadata.state == CredentialState::Forgotten && entry.value.is_none() {
+            return Ok(entry.metadata.clone());
+        }
+        entry.value = None;
+        entry.metadata.state = CredentialState::Forgotten;
+        entry.metadata.revision = entry.metadata.revision.saturating_add(1);
+        entry.metadata.updated_at = now_ms();
+        let metadata = entry.metadata.clone();
+        payload.revision = payload.revision.saturating_add(1);
+        self.persist(&payload)?;
+        Ok(metadata)
+    }
+
     pub(crate) fn materialize(
         &self,
         lease: &CredentialLease,
         exact_scope: &CredentialScope,
     ) -> Result<SecretMaterial, CredentialError> {
-        let _mutation = lock(&self.inner.mutation);
+        let _transaction = self.lock_transaction()?;
         let mut payload = self.load_existing()?.ok_or(CredentialError::NotFound)?;
         let entry = payload
             .entries
@@ -447,6 +513,48 @@ impl CredentialBroker {
 
     fn load_or_empty_for_write(&self) -> Result<VaultPayload, CredentialError> {
         Ok(self.load_existing()?.unwrap_or_else(VaultPayload::new))
+    }
+
+    fn lock_transaction(&self) -> Result<VaultTransaction<'_>, CredentialError> {
+        let process = lock(&self.inner.transaction);
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+            let parent = self
+                .inner
+                .vault_file
+                .parent()
+                .ok_or(CredentialError::StorageUnavailable)?;
+            std::fs::create_dir_all(parent).map_err(|_| CredentialError::StorageUnavailable)?;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| CredentialError::StorageUnavailable)?;
+            let lock_file = self.inner.vault_file.with_extension("lock");
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(lock_file)
+                .map_err(|_| CredentialError::StorageUnavailable)?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|_| CredentialError::StorageUnavailable)?;
+            // SAFETY: `file` remains owned by the guard for the full critical
+            // section, and flock does not access memory through this fd.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(CredentialError::StorageUnavailable);
+            }
+            Ok(VaultTransaction {
+                _process: process,
+                _file: file,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(VaultTransaction { _process: process })
+        }
     }
 
     fn load_existing(&self) -> Result<Option<VaultPayload>, CredentialError> {
@@ -646,6 +754,48 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+fn shared_transaction(vault_file: &Path) -> Arc<Mutex<()>> {
+    static TRANSACTIONS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let key = stable_path(vault_file);
+    let mut transactions = lock(TRANSACTIONS.get_or_init(|| Mutex::new(HashMap::new())));
+    transactions.retain(|_, transaction| transaction.strong_count() > 0);
+    if let Some(transaction) = transactions.get(&key).and_then(Weak::upgrade) {
+        return transaction;
+    }
+    let transaction = Arc::new(Mutex::new(()));
+    transactions.insert(key, Arc::downgrade(&transaction));
+    transaction
+}
+
+fn stable_path(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = existing.parent() else {
+            break;
+        };
+        existing = parent;
+    }
+    let mut key = existing
+        .canonicalize()
+        .unwrap_or_else(|_| existing.to_path_buf());
+    for name in missing.into_iter().rev() {
+        key.push(name);
+    }
+    key
+}
+
 fn hex_prefix(bytes: &[u8], bytes_to_use: usize) -> String {
     bytes
         .iter()
@@ -807,7 +957,8 @@ mod tests {
             lock(&store.state).failure = Some(failure);
             let broker = CredentialBroker::with_store(
                 root.path().join("credentials/environment-v1.vault"),
-                store,
+                store.clone(),
+                Some(store),
             );
             let error = broker
                 .store_local(
@@ -857,6 +1008,7 @@ mod tests {
         let broker = CredentialBroker::with_store(
             root.path().join("credentials/environment-v1.vault"),
             store.clone(),
+            Some(store.clone()),
         );
         store_sync(&broker, b"fixture-value");
         let before = std::fs::read(root.path().join("credentials/environment-v1.vault")).unwrap();
@@ -871,6 +1023,53 @@ mod tests {
             before
         );
         assert!(lock(&store.state).key.is_none());
+    }
+
+    #[test]
+    fn independent_brokers_share_one_transaction_and_preserve_both_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = root.path().join("credentials/environment-v1.vault");
+        let store = Arc::new(MemoryKeyStore::default());
+        let first = CredentialBroker::with_store(vault.clone(), store.clone(), Some(store.clone()));
+        let second =
+            CredentialBroker::with_store(vault.clone(), store.clone(), Some(store.clone()));
+        let readback = CredentialBroker::with_store(vault, store.clone(), Some(store));
+        assert!(Arc::ptr_eq(
+            &first.inner.transaction,
+            &second.inner.transaction
+        ));
+
+        let start = Arc::new(std::sync::Barrier::new(3));
+        let write =
+            |broker: CredentialBroker, start: Arc<std::sync::Barrier>, name: &'static str| {
+                std::thread::spawn(move || {
+                    start.wait();
+                    broker
+                        .store_local(
+                            SecretIngress::LocalEngine,
+                            CredentialScope {
+                                class: CredentialClass::Integration,
+                                owner: "fixture-owner".into(),
+                                project_id: None,
+                            },
+                            name,
+                            "Concurrent fixture",
+                            "Fixture integration",
+                            name.as_bytes(),
+                        )
+                        .unwrap();
+                })
+            };
+        let first_write = write(first, start.clone(), "first-secret");
+        let second_write = write(second, start.clone(), "second-secret");
+        start.wait();
+        first_write.join().unwrap();
+        second_write.join().unwrap();
+
+        let metadata = readback.list_metadata().unwrap();
+        assert_eq!(metadata.len(), 2);
+        assert!(metadata.iter().any(|entry| entry.name == "first-secret"));
+        assert!(metadata.iter().any(|entry| entry.name == "second-secret"));
     }
 
     #[test]
@@ -910,6 +1109,7 @@ mod tests {
         let broker = CredentialBroker::with_store(
             root.path().join("credentials/environment-v1.vault"),
             Arc::new(store),
+            None,
         );
         let (_, lease) = store_sync(&broker, b"isolated-keychain-fixture-value");
         assert_eq!(

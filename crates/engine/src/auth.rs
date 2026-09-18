@@ -32,7 +32,8 @@ use zeroize::Zeroize;
 
 use crate::EngineError;
 use crate::credentials::{
-    CredentialBroker, CredentialLease, CredentialMetadata, CredentialScope, SecretIngress,
+    CredentialBroker, CredentialError, CredentialLease, CredentialMetadata, CredentialScope,
+    SecretIngress,
 };
 use crate::http_error::describe_http_error;
 use zeron_rpc::TokenError;
@@ -76,12 +77,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 fn load_stored_session(
     path: &std::path::Path,
     credentials: &CredentialBroker,
-) -> (Option<StoredSession>, Option<String>) {
+    activate: bool,
+) -> (Option<StoredSession>, Option<String>, Option<String>) {
     let mut raw = match std::fs::read(path) {
         Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (None, None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (None, None, None);
+        }
         Err(_) => {
             return (
+                None,
                 None,
                 Some("LUNA sync session metadata could not be read.".into()),
             );
@@ -91,6 +96,10 @@ fn load_stored_session(
         && metadata.version == SESSION_VERSION
     {
         raw.zeroize();
+        let credential_id = metadata.credential_id.clone();
+        if !activate {
+            return (None, Some(credential_id), None);
+        }
         return match credentials.lease_by_id(&metadata.credential_id, &CredentialScope::luna_sync())
         {
             Ok(credential) => (
@@ -99,10 +108,12 @@ fn load_stored_session(
                     user: metadata.user,
                     org_id: metadata.org_id,
                 }),
+                Some(credential_id),
                 None,
             ),
             Err(error) => (
                 None,
+                Some(credential_id),
                 Some(format!(
                     "The saved LUNA sync credential is unavailable: {error}"
                 )),
@@ -116,6 +127,7 @@ fn load_stored_session(
     if legacy_plaintext {
         (
             None,
+            None,
             Some(
                 "A legacy plaintext LUNA sync session was found. It was not read or migrated; sign in again to create an encrypted session, or explicitly sign out to remove it."
                     .into(),
@@ -123,6 +135,7 @@ fn load_stored_session(
         )
     } else {
         (
+            None,
             None,
             Some("LUNA sync session metadata is invalid and was not used.".into()),
         )
@@ -349,6 +362,9 @@ struct AuthInner {
     /// `Some(client_id)` = WorkOS mode; `None` = dev mode.
     workos: Option<String>,
     credentials: CredentialBroker,
+    /// Credential id retained even when startup cannot unlock the vault. An
+    /// explicit logout keeps this reference until tombstoning really succeeds.
+    session_credential_id: Mutex<Option<String>>,
     startup_credential_error: Option<String>,
     /// Whether construction loaded a parseable WorkOS session. This is an
     /// immutable startup fact: refresh or sign-out must not rewrite it.
@@ -394,11 +410,8 @@ impl Auth {
             .clone()
             .filter(|s| !s.trim().is_empty());
         let session_file = config.data_dir.join("session.json");
-        let (stored, startup_credential_error) = if workos.is_some() {
-            load_stored_session(&session_file, &config.credential_broker)
-        } else {
-            (None, None)
-        };
+        let (stored, session_credential_id, startup_credential_error) =
+            load_stored_session(&session_file, &config.credential_broker, workos.is_some());
         let initial = match (&workos, &stored) {
             (None, _) => {
                 let identity = config
@@ -433,6 +446,7 @@ impl Auth {
                 config,
                 workos,
                 credentials,
+                session_credential_id: Mutex::new(session_credential_id),
                 startup_credential_error,
                 loaded_workos_session,
                 http,
@@ -692,20 +706,30 @@ impl Auth {
         let stored = lock(&self.inner.stored).take();
         *lock(&self.inner.access) = None;
         self.retry_refresh();
-        let revoke = stored.as_ref().map(|session| {
-            self.inner
-                .credentials
-                .forget(&session.credential, &CredentialScope::luna_sync())
-                .map(|_| ())
-                .map_err(EngineError::from)
-        });
-        let persist = self.persist(None);
         self.inner.state_tx.send_replace(AuthState::SignedOut);
         self.inner
             .token_tx
             .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
-        revoke.transpose()?;
-        persist
+
+        let credential_id = stored
+            .as_ref()
+            .map(|session| session.credential.id.clone())
+            .or_else(|| lock(&self.inner.session_credential_id).clone());
+        if let Some(credential_id) = credential_id.as_deref() {
+            match self
+                .inner
+                .credentials
+                .forget_by_id(credential_id, &CredentialScope::luna_sync())
+            {
+                Ok(_) | Err(CredentialError::NotFound) => {}
+                Err(error) => {
+                    *lock(&self.inner.session_credential_id) = Some(credential_id.to_string());
+                    return Err(error.into());
+                }
+            }
+        }
+        *lock(&self.inner.session_credential_id) = None;
+        self.persist(None)
     }
 
     // -- organizations ------------------------------------------------------
@@ -897,6 +921,7 @@ impl Auth {
                 .forget(&session.credential, &CredentialScope::luna_sync());
             return Err(error);
         }
+        *lock(&self.inner.session_credential_id) = Some(session.credential.id.clone());
         *lock(&self.inner.access) = Some(access);
         *lock(&self.inner.stored) = Some(session);
         self.retry_refresh();
@@ -1597,6 +1622,63 @@ mod tests {
         assert!(!error.contains("legacy-synthetic-secret"));
         assert_eq!(std::fs::read_to_string(session).unwrap(), legacy);
         assert!(!dir.path().join("credentials/environment-v1.vault").exists());
+    }
+
+    #[test]
+    fn logout_retains_the_reference_until_locked_vault_revocation_succeeds() {
+        for workos_enabled in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = AuthConfig::new("https://edge.invalid", dir.path());
+            config.use_in_memory_credentials_for_tests();
+            if workos_enabled {
+                config.workos_client_id = Some("client_test".into());
+            }
+            let broker = config.test_credential_broker();
+            let (_, lease) = broker
+                .store_local(
+                    SecretIngress::LocalEngine,
+                    CredentialScope::luna_sync(),
+                    SYNC_CREDENTIAL_NAME,
+                    "Synthetic retry fixture",
+                    "Fixture edge",
+                    b"synthetic-retry-secret",
+                )
+                .unwrap();
+            std::fs::write(
+                dir.path().join("session.json"),
+                serde_json::to_vec(&PersistedSession {
+                    version: SESSION_VERSION,
+                    credential_id: lease.id.clone(),
+                    user: AuthUser {
+                        id: "fixture-user".into(),
+                        email: "fixture@example.com".into(),
+                        name: None,
+                    },
+                    org_id: Some("fixture-org".into()),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(broker.set_in_memory_store_locked_for_tests(true));
+
+            let auth = Auth::new(config);
+            let error = auth.sign_out().unwrap_err().to_string();
+            assert!(error.contains("locked"), "{error}");
+            assert_eq!(auth.state(), AuthState::SignedOut);
+            assert!(dir.path().join("session.json").exists());
+
+            assert!(broker.set_in_memory_store_locked_for_tests(false));
+            auth.sign_out().unwrap();
+            assert!(!dir.path().join("session.json").exists());
+
+            let fresh = broker.independent_in_memory_handle_for_tests().unwrap();
+            assert_eq!(
+                fresh
+                    .materialize(&lease, &CredentialScope::luna_sync())
+                    .unwrap_err(),
+                CredentialError::Revoked
+            );
+        }
     }
 
     #[test]
