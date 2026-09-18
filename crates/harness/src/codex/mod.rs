@@ -72,6 +72,8 @@ use normalize::{
 pub const LUNA_NATIVE_THREAD_NAME_OPTION: &str = "lunaNativeThreadName";
 pub const LUNA_STRICT_RESUME_OPTION: &str = "lunaStrictResume";
 pub const LUNA_CODEX_HOME_OPTION: &str = "lunaCodexHome";
+pub const LUNA_CODEX_FILE_AUTH_OPTION: &str = "lunaCodexFileAuth";
+const CODEX_FILE_AUTH_CONFIG: &str = "cli_auth_credentials_store=\"file\"";
 
 /// Locate the device's installed Codex CLI: `CODEX_EXECUTABLE`, then our own
 /// PATH, then the login-shell PATH snapshot (the user's shell init shapes
@@ -102,10 +104,21 @@ pub fn resolve_codex_executable() -> Option<PathBuf> {
 /// `~/.codex` session; the caller owns stdio wiring and cancellation.
 pub fn login_command(codex_home: &std::path::Path) -> Result<Command, HarnessError> {
     let exe = CodexHarness::new().resolve_executable()?;
+    Ok(named_command(&exe, "login", codex_home))
+}
+
+fn named_command(exe: &std::path::Path, subcommand: &str, codex_home: &std::path::Path) -> Command {
     let mut cmd = Command::new(&exe);
     crate::compose_child_path(&mut cmd, &exe);
-    cmd.arg("login").env("CODEX_HOME", codex_home);
-    Ok(cmd)
+    // `-c` is a documented global override and must precede the subcommand.
+    // This is the boundary that keeps named account auth in private auth.json.
+    apply_file_auth_override(&mut cmd);
+    cmd.arg(subcommand).env("CODEX_HOME", codex_home);
+    cmd
+}
+
+fn apply_file_auth_override(cmd: &mut Command) {
+    cmd.arg("-c").arg(CODEX_FILE_AUTH_CONFIG);
 }
 
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
@@ -232,9 +245,13 @@ impl CodexHarness {
     async fn discover_models(
         &self,
         codex_home: Option<&std::path::Path>,
+        force_file_auth: bool,
     ) -> Result<Vec<Model>, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
+        if force_file_auth {
+            apply_file_auth_override(&mut cmd);
+        }
         cmd.arg("app-server");
         if let Some(codex_home) = codex_home {
             cmd.env("CODEX_HOME", codex_home);
@@ -565,7 +582,7 @@ impl Harness for CodexHarness {
     /// intentionally not cached so reopening the picker retries rollout state.
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         self.resolve_executable()?;
-        match self.discover_models(None).await {
+        match self.discover_models(None, false).await {
             Ok(models) if !models.is_empty() => Ok(models),
             Ok(_) => Ok(static_models()),
             Err(error) => {
@@ -601,6 +618,7 @@ impl Harness for CodexHarness {
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let codex_home = request.model_options.remove(LUNA_CODEX_HOME_OPTION);
+        let codex_file_auth = request.model_options.remove(LUNA_CODEX_FILE_AUTH_OPTION);
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
@@ -609,6 +627,11 @@ impl Harness for CodexHarness {
             request
                 .model_options
                 .insert(LUNA_CODEX_HOME_OPTION.into(), codex_home);
+        }
+        if let Some(codex_file_auth) = codex_file_auth {
+            request
+                .model_options
+                .insert(LUNA_CODEX_FILE_AUTH_OPTION.into(), codex_file_auth);
         }
         request.auto_approve = false;
         self.run_with_mode(request, controls, true).await
@@ -621,9 +644,13 @@ impl CodexHarness {
     pub async fn models_for_home(
         &self,
         codex_home: &std::path::Path,
+        force_file_auth: bool,
     ) -> Result<Vec<Model>, HarnessError> {
         self.resolve_executable()?;
-        match self.discover_models(Some(codex_home)).await {
+        match self
+            .discover_models(Some(codex_home), force_file_auth)
+            .await
+        {
             Ok(models) if !models.is_empty() => Ok(models),
             Ok(_) => Ok(static_models()),
             Err(error) => {
@@ -649,6 +676,14 @@ impl CodexHarness {
             request.sandbox = zeron_proto::SandboxLevel::ReadOnly;
         }
         let mut cmd = Command::new(&exe);
+        let force_file_auth = request
+            .model_options
+            .remove(LUNA_CODEX_FILE_AUTH_OPTION)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if force_file_auth {
+            apply_file_auth_override(&mut cmd);
+        }
         cmd.arg("app-server");
         if let Some(codex_home) = request
             .model_options
@@ -1826,6 +1861,40 @@ use crate::{Signal, send_signal, shutdown_child};
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_command_passes_file_auth_override_to_synthetic_child() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("fake-codex");
+        let capture = root.path().join("capture.txt");
+        let home = root.path().join("named-home");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s\\n' \"$CODEX_HOME\" \"$@\" > \"$ARGV_CAPTURE\"\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+
+        let mut command = named_command(&executable, "login", &home);
+        command.env("ARGV_CAPTURE", &capture);
+        let output = command.output().await.unwrap();
+        assert!(output.status.success());
+        let lines = std::fs::read_to_string(capture).unwrap();
+        assert_eq!(
+            lines.lines().collect::<Vec<_>>(),
+            vec![
+                home.to_str().unwrap(),
+                "-c",
+                "cli_auth_credentials_store=\"file\"",
+                "login"
+            ]
+        );
+    }
 
     #[test]
     fn approval_questions_are_typed_and_machine_scoped() {

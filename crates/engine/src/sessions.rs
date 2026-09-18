@@ -542,8 +542,7 @@ impl SessionsEngine {
             .any(|run| run.runtime_config.harness_id == harness)
         {
             return Err(EngineError::Other(
-                "A warm provider runtime did not retire before the account-change deadline."
-                    .into(),
+                "A warm provider runtime did not retire before the account-change deadline.".into(),
             ));
         }
         Ok(guard)
@@ -690,8 +689,8 @@ impl SessionsEngine {
         if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex)
             && let Some(accounts) = self.inner.agent_accounts.get()
         {
-            let execution = accounts
-                .resolve_execution(harness_id, request.provider_account_id.as_deref())?;
+            let execution =
+                accounts.resolve_execution(harness_id, request.provider_account_id.as_deref())?;
             request.provider_account_id = Some(execution.account_id);
             request.model_options.insert(
                 zeron_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
@@ -704,6 +703,12 @@ impl SessionsEngine {
                 request.model_options.insert(
                     zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
                     home.into(),
+                );
+            }
+            if execution.codex_file_auth {
+                request.model_options.insert(
+                    zeron_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
+                    true.into(),
                 );
             }
         }

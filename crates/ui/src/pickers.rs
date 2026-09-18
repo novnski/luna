@@ -1605,9 +1605,7 @@ impl Pickers {
                 if pickers.target_generation != generation {
                     return;
                 }
-                if harness == HarnessId::Codex
-                    && pickers.codex_model_account_id(cx) != account_id
-                {
+                if harness == HarnessId::Codex && pickers.codex_model_account_id(cx) != account_id {
                     return;
                 }
                 let loaded = match result {
@@ -3865,8 +3863,9 @@ impl Pickers {
                             let account_id = account.id.clone();
                             let is_selected = selected.as_deref() == Some(account.id.as_str());
                             let label: SharedString = account
-                                .email
+                                .label
                                 .clone()
+                                .or(account.email.clone())
                                 .or(account.display_name.clone())
                                 .unwrap_or_else(|| "Codex account".into())
                                 .into();
@@ -3878,7 +3877,11 @@ impl Pickers {
                                 .px(px(7.0))
                                 .py(px(3.0))
                                 .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(if is_selected { theme.text } else { theme.text_muted })
+                                .text_color(if is_selected {
+                                    theme.text
+                                } else {
+                                    theme.text_muted
+                                })
                                 .bg(if is_selected {
                                     theme.accent.opacity(0.14)
                                 } else {
@@ -3891,7 +3894,9 @@ impl Pickers {
                                             this.pick_provider_account(account_id.clone(), cx);
                                         }))
                                 })
-                                .when(!account.switchable && !account.active, |el| el.opacity(0.45))
+                                .when(!account.switchable && !account.active, |el| {
+                                    el.opacity(0.45)
+                                })
                                 .child(label)
                         }))
                         .into_any_element()

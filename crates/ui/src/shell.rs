@@ -12538,6 +12538,16 @@ mod shortcut_focus_regressions {
 /// Native visual QA uses the production shell with isolated fixture data.
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
+    pub fn fixture_accounts_settings(
+        &mut self,
+        snapshot: zeron_proto::AgentAccountsSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        let state = self.state.clone();
+        self.accounts_page = Some(cx.new(|cx| AccountsPage::new_fixture(state, snapshot, cx)));
+        self.open_settings(SettingsSection::Agents, cx);
+    }
+
     pub fn fixture_appshots_settings(&mut self, open: bool, cx: &mut Context<Self>) {
         if open {
             self.open_settings(SettingsSection::Appshots, cx);

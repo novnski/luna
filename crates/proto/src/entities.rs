@@ -812,6 +812,10 @@ pub enum AuthState {
 pub struct AgentAccount {
     pub id: String,
     pub harness: HarnessId,
+    /// LUNA-owned, user-editable label for an isolated provider account.
+    /// Provider identity fields remain separate and provider-authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub email: Option<String>,
     pub plan_label: Option<String>,
     pub active: bool,

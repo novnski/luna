@@ -378,6 +378,14 @@ struct AgentAccountParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RenameAgentAccountParams {
+    harness: HarnessId,
+    account_id: String,
+    label: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StartAgentLoginParams {
     harness: HarnessId,
 }
@@ -525,10 +533,7 @@ enum MutateParams {
     /// Engine-owned provider-account transition. Rejects active turns and
     /// retires an idle warm runtime before publishing the new chat binding.
     #[serde(rename_all = "camelCase")]
-    SetThreadProviderAccount {
-        chat_id: String,
-        account_id: String,
-    },
+    SetThreadProviderAccount { chat_id: String, account_id: String },
     /// Tombstone: removes the chats-map row; the session doc remains.
     #[serde(rename_all = "camelCase")]
     DeleteChat { chat_id: String },
@@ -1144,6 +1149,7 @@ fn local_only_credential_method(method: &str) -> bool {
             | methods::COMPLETE_SIGN_IN
             | methods::SIGN_OUT
             | methods::ACTIVATE_AGENT_ACCOUNT
+            | methods::RENAME_AGENT_ACCOUNT
             | methods::FORGET_AGENT_ACCOUNT
             | methods::START_AGENT_LOGIN
             | methods::COMPLETE_AGENT_LOGIN
@@ -1486,7 +1492,7 @@ impl RpcService for EngineRpc {
                         RpcError::Failed("Codex account did not resolve an execution home".into())
                     })?;
                     let models = zeron_harness::codex::CodexHarness::new()
-                        .models_for_home(&home)
+                        .models_for_home(&home, execution.codex_file_auth)
                         .await
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
                     return RpcReply::value(&models);
@@ -2526,6 +2532,15 @@ impl RpcService for EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&snapshot)
             }
+            methods::RENAME_AGENT_ACCOUNT => {
+                let p: RenameAgentAccountParams = parse_params(params)?;
+                let snapshot = self
+                    .agent_accounts
+                    .rename(p.harness, &p.account_id, &p.label)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&snapshot)
+            }
             methods::FORGET_AGENT_ACCOUNT => {
                 let p: AgentAccountParams = parse_params(params)?;
                 let _transition = self
@@ -2554,7 +2569,9 @@ impl RpcService for EngineRpc {
                 let harness = self
                     .agent_accounts
                     .login_harness(&p.login_id)
-                    .ok_or_else(|| RpcError::Failed("This sign-in attempt expired — start again.".into()))?;
+                    .ok_or_else(|| {
+                        RpcError::Failed("This sign-in attempt expired — start again.".into())
+                    })?;
                 let _transition = self
                     .sessions
                     .prepare_provider_account_change(harness)

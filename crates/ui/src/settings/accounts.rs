@@ -180,6 +180,12 @@ enum LoginFlow {
     },
 }
 
+struct RenameFlow {
+    account: AgentAccount,
+    submitting: bool,
+    error: Option<SharedString>,
+}
+
 impl LoginFlow {
     /// Provider-owned sign-in dialog title.
     fn title(&self) -> &'static str {
@@ -209,40 +215,21 @@ pub struct AccountsPage {
     /// Account id with an in-flight Switch/Forget.
     busy_account: Option<String>,
     login: Option<LoginFlow>,
+    rename: Option<RenameFlow>,
     error: Option<SharedString>,
     code_input: Entity<ComposerInput>,
+    label_input: Entity<ComposerInput>,
     load_task: Option<Task<()>>,
     action_task: Option<Task<()>>,
     poll_task: Option<Task<()>>,
     _observe: Subscription,
     _code_events: Subscription,
+    _label_events: Subscription,
 }
 
 impl AccountsPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let observe = cx.observe(&state, |_, _, cx| cx.notify());
-        let code_input = cx.new(|cx| ComposerInput::new("Paste the authorization code", cx));
-        let code_events = cx.subscribe(&code_input, |this: &mut Self, _, event, cx| {
-            if matches!(event, ComposerInputEvent::Submitted) {
-                this.submit_code(cx);
-            }
-        });
-        let mut page = Self {
-            state,
-            scroll: widgets::PageScroll::default(),
-            target_device: None,
-            device_menu: popover::Popup::default(),
-            snapshot: Loadable::Idle,
-            busy_account: None,
-            login: None,
-            error: None,
-            code_input,
-            load_task: None,
-            action_task: None,
-            poll_task: None,
-            _observe: observe,
-            _code_events: code_events,
-        };
+        let mut page = Self::build(state, Loadable::Idle, cx);
         // Force the usage probe on the visit's first list — a plain list
         // returns no usage windows on a cold engine cache, which rendered
         // every account as "Usage unavailable" until a manual Refresh. The
@@ -250,6 +237,56 @@ impl AccountsPage {
         // "Usage unavailable" is reserved for a probe that genuinely failed.
         page.load(force_usage_for(LoadTrigger::Mount), cx);
         page
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    pub fn new_fixture(
+        state: Entity<AppState>,
+        snapshot: AgentAccountsSnapshot,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Deliberately bypasses `load`: native visual QA cannot probe a real
+        // provider, usage endpoint, provider home, or Keychain.
+        Self::build(state, Loadable::Ready(snapshot), cx)
+    }
+
+    fn build(
+        state: Entity<AppState>,
+        snapshot: Loadable<AgentAccountsSnapshot>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let observe = cx.observe(&state, |_, _, cx| cx.notify());
+        let code_input = cx.new(|cx| ComposerInput::new("Paste the authorization code", cx));
+        let code_events = cx.subscribe(&code_input, |this: &mut Self, _, event, cx| {
+            if matches!(event, ComposerInputEvent::Submitted) {
+                this.submit_code(cx);
+            }
+        });
+        let label_input = cx.new(|cx| ComposerInput::new("Account label", cx));
+        let label_events = cx.subscribe(&label_input, |this: &mut Self, _, event, cx| {
+            if matches!(event, ComposerInputEvent::Submitted) {
+                this.submit_rename(cx);
+            }
+        });
+        Self {
+            state,
+            scroll: widgets::PageScroll::default(),
+            target_device: None,
+            device_menu: popover::Popup::default(),
+            snapshot,
+            busy_account: None,
+            login: None,
+            rename: None,
+            error: None,
+            code_input,
+            label_input,
+            load_task: None,
+            action_task: None,
+            poll_task: None,
+            _observe: observe,
+            _code_events: code_events,
+            _label_events: label_events,
+        }
     }
 
     /// Retarget the page at another device's logins: every accounts RPC is
@@ -273,6 +310,7 @@ impl AccountsPage {
         // login/action state and reload with a forced usage probe (the new
         // device's cache is cold).
         self.login = None;
+        self.rename = None;
         self.busy_account = None;
         self.error = None;
         self.load(force_usage_for(LoadTrigger::Mount), cx);
@@ -508,6 +546,84 @@ impl AccountsPage {
                 match result {
                     Ok(_) => page.load(force_usage_for(LoadTrigger::PostAction), cx),
                     Err(err) => page.error = Some(format!("{err}").into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn begin_rename(&mut self, account: AgentAccount, cx: &mut Context<Self>) {
+        let label = account
+            .label
+            .clone()
+            .unwrap_or_else(|| "Codex account".into());
+        self.label_input
+            .update(cx, |input, cx| input.set_text(&label, cx));
+        self.rename = Some(RenameFlow {
+            account,
+            submitting: false,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    fn cancel_rename(&mut self, cx: &mut Context<Self>) {
+        self.rename = None;
+        cx.notify();
+    }
+
+    fn submit_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let Some(rename) = self.rename.as_mut() else {
+            return;
+        };
+        if rename.submitting {
+            return;
+        }
+        let label = self.label_input.read(cx).text().trim().to_string();
+        if label.is_empty() || label.chars().count() > 64 {
+            rename.error = Some("Use a label between 1 and 64 characters.".into());
+            cx.notify();
+            return;
+        }
+        rename.submitting = true;
+        rename.error = None;
+        let account_id = rename.account.id.clone();
+        let harness = rename.account.harness;
+        let params = self.params(serde_json::json!({
+            "accountId": account_id,
+            "harness": harness,
+            "label": label,
+        }));
+        self.action_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(methods::RENAME_AGENT_ACCOUNT, params)
+                .await;
+            this.update(cx, |page, cx| {
+                match result {
+                    Ok(value) => match serde_json::from_value::<AgentAccountsSnapshot>(value) {
+                        Ok(snapshot) => {
+                            page.snapshot = Loadable::Ready(snapshot);
+                            page.rename = None;
+                        }
+                        Err(error) => {
+                            if let Some(rename) = page.rename.as_mut() {
+                                rename.submitting = false;
+                                rename.error = Some(error.to_string().into());
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        if let Some(rename) = page.rename.as_mut() {
+                            rename.submitting = false;
+                            rename.error = Some(error.to_string().into());
+                        }
+                    }
                 }
                 cx.notify();
             })
@@ -815,19 +931,25 @@ impl AccountsPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let is_busy = self.busy_account.as_deref() == Some(account.id.as_str());
-        let email: SharedString = account
+        let identity: SharedString = account
             .email
             .clone()
             .or_else(|| account.display_name.clone())
             .unwrap_or_else(|| "Unknown account".into())
             .into();
-        let initial: SharedString = email
+        let title: SharedString = account
+            .label
+            .clone()
+            .unwrap_or_else(|| identity.to_string())
+            .into();
+        let initial: SharedString = title
             .chars()
             .next()
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".into())
             .into();
         let action_account = account.clone();
+        let rename_account = account.clone();
 
         let badges = div()
             .flex()
@@ -857,22 +979,34 @@ impl AccountsPage {
         let action = match account_lifecycle_action(account) {
             Some(AccountLifecycleAction::DisconnectClaude) => Some((
                 methods::FORGET_AGENT_ACCOUNT,
-                if is_busy { "Disconnecting…" } else { "Disconnect" },
+                if is_busy {
+                    "Disconnecting…"
+                } else {
+                    "Disconnect"
+                },
                 "account-disconnect",
             )),
             Some(AccountLifecycleAction::ReconnectClaude) => Some((
                 methods::ACTIVATE_AGENT_ACCOUNT,
-                if is_busy { "Reconnecting…" } else { "Reconnect" },
+                if is_busy {
+                    "Reconnecting…"
+                } else {
+                    "Reconnect"
+                },
                 "account-reconnect",
             )),
             Some(AccountLifecycleAction::SelectCodexDefault) => Some((
                 methods::ACTIVATE_AGENT_ACCOUNT,
-                if is_busy { "Selecting…" } else { "Use by default" },
+                if is_busy {
+                    "Selecting…"
+                } else {
+                    "Use by default"
+                },
                 "account-select-default",
             )),
             None => None,
         };
-        let actions = action.map(|(method, label, id)| {
+        let lifecycle_action = action.map(|(method, label, id)| {
             div().child(
                 crate::popover::btn_primary(theme, label)
                     .id((id, ix))
@@ -886,6 +1020,18 @@ impl AccountsPage {
                     })),
             )
         });
+        let rename_action = (account.harness == HarnessId::Codex && account.id != "codex-native")
+            .then(|| {
+                crate::popover::btn_ghost(theme, "Rename", "account-rename")
+                    .id(("account-rename", ix))
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .rounded(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.begin_rename(rename_account.clone(), cx);
+                    }))
+            });
 
         div()
             .px(px(20.0))
@@ -919,7 +1065,17 @@ impl AccountsPage {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(widgets::row_title(theme, email))
+                    .child(widgets::row_title(theme, title))
+                    .when(account.label.is_some(), |el| {
+                        el.child(
+                            div()
+                                .mt(px(2.0))
+                                .truncate()
+                                .text_size(crate::typography::ui_rems(11.5))
+                                .text_color(theme.text_muted.opacity(0.7))
+                                .child(identity),
+                        )
+                    })
                     .map(|el| {
                         // Meters XOR the quiet fallback line — never both
                         // (zeron: `usage ? meters : "Usage unavailable"…`).
@@ -953,7 +1109,15 @@ impl AccountsPage {
                     .justify_between()
                     .gap(px(8.0))
                     .child(badges)
-                    .children(actions),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .children(rename_action)
+                            .children(lifecycle_action),
+                    ),
             )
             .into_any_element()
     }
@@ -1178,6 +1342,77 @@ impl AccountsPage {
         Some(popover::modal("add-account-dialog", viewport, card))
     }
 
+    fn render_rename_dialog(
+        &mut self,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let theme = Theme::of(cx).for_popup();
+        let rename = self.rename.as_ref()?;
+        let submitting = rename.submitting;
+        let error = rename.error.clone();
+        let identity: SharedString = rename
+            .account
+            .email
+            .clone()
+            .or_else(|| rename.account.display_name.clone())
+            .unwrap_or_else(|| "Provider identity unavailable".into())
+            .into();
+        let card = popover::dialog_card(&theme)
+            .child(popover::dialog_title(&theme, "Rename Codex account"))
+            .child(
+                div().mt(px(8.0)).child(popover::dialog_body(
+                    &theme,
+                    "This label is stored by LUNA for your account picker. It does not change the OpenAI account name or email.",
+                )),
+            )
+            .child(
+                div()
+                    .mt(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .text_color(theme.text_muted)
+                    .child(identity),
+            )
+            .child(
+                div().mt(px(12.0)).child(
+                    popover::dialog_field(self.label_input.clone().into_any_element())
+                        .text_size(crate::typography::ui_rems(13.0)),
+                ),
+            )
+            .when_some(error, |el, message| {
+                el.child(
+                    div()
+                        .mt(px(8.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.danger_muted)
+                        .child(message),
+                )
+            })
+            .child(
+                div()
+                    .mt(px(16.0))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .child(
+                        popover::btn_ghost(&theme, "Cancel", "rename-account-cancel")
+                            .id("rename-account-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_rename(cx))),
+                    )
+                    .child(
+                        popover::btn_primary(
+                            &theme,
+                            if submitting { "Saving…" } else { "Save" },
+                        )
+                        .id("rename-account-save")
+                        .when(submitting, |el| el.opacity(0.5))
+                        .on_click(cx.listener(|this, _, _, cx| this.submit_rename(cx))),
+                    ),
+            )
+            .into_any_element();
+        Some(popover::modal("rename-account-dialog", viewport, card))
+    }
+
     /// A ghost account row (zeron settings.agents.tsx `SkeletonRow`): avatar,
     /// email line, two usage-meter ghosts, a badge — same geometry as the real
     /// row so loaded data lands without a layout jump. `dim` fades row two.
@@ -1277,7 +1512,11 @@ impl Render for AccountsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let now = Utc::now();
-        let dialog = self.render_login_dialog(window.viewport_size(), cx);
+        let dialog = if self.login.is_some() {
+            self.render_login_dialog(window.viewport_size(), cx)
+        } else {
+            self.render_rename_dialog(window.viewport_size(), cx)
+        };
         let refreshing = matches!(self.snapshot, Loadable::Loading);
         let account_count = self
             .snapshot
@@ -1468,11 +1707,7 @@ impl Render for AccountsPage {
                                             .id(add_id)
                                             .hover(|s| widgets::ghost_hover(&theme, s))
                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.request_login(
-                                                    harness,
-                                                    replacing_existing,
-                                                    cx,
-                                                );
+                                                this.request_login(harness, replacing_existing, cx);
                                             }))
                                             .child(
                                                 crate::icons::icon(crate::icons::ADD_CIRCLE)
@@ -1589,6 +1824,7 @@ mod tests {
         AgentAccount {
             id: "fixture".into(),
             harness,
+            label: None,
             email: None,
             plan_label: None,
             active,
@@ -1695,6 +1931,7 @@ mod tests {
         let account = |id: &str, harness: HarnessId, active: bool| AgentAccount {
             id: id.into(),
             harness,
+            label: None,
             email: None,
             plan_label: None,
             active,

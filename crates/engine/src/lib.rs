@@ -239,6 +239,48 @@ impl EngineCore {
         edge: Option<EdgeConfig>,
         lock: InstanceLock,
     ) -> Result<Self, EngineError> {
+        Self::assemble_with_profile_locked_and_accounts(
+            profile,
+            registry,
+            default_harness,
+            edge,
+            lock,
+            None,
+        )
+    }
+
+    /// Hermetic assembly seam for tests and native UI fixtures. Passing an
+    /// explicit provider-account config prevents any fallback to the user's
+    /// real provider homes.
+    #[doc(hidden)]
+    pub fn assemble_with_profile_and_agent_accounts_config(
+        profile: EngineProfile,
+        registry: Arc<HarnessRegistry>,
+        default_harness: HarnessId,
+        edge: Option<EdgeConfig>,
+        agent_accounts_config: AgentAccountsConfig,
+    ) -> Result<Self, EngineError> {
+        let data_dir = profile.device_root();
+        std::fs::create_dir_all(data_dir)?;
+        let lock = InstanceLock::acquire(data_dir)?;
+        Self::assemble_with_profile_locked_and_accounts(
+            profile,
+            registry,
+            default_harness,
+            edge,
+            lock,
+            Some(agent_accounts_config),
+        )
+    }
+
+    fn assemble_with_profile_locked_and_accounts(
+        profile: EngineProfile,
+        registry: Arc<HarnessRegistry>,
+        default_harness: HarnessId,
+        edge: Option<EdgeConfig>,
+        lock: InstanceLock,
+        agent_accounts_config: Option<AgentAccountsConfig>,
+    ) -> Result<Self, EngineError> {
         let data_dir = profile.device_root();
         std::fs::create_dir_all(data_dir)?;
         let legacy_uploads_root = profile.claim_legacy_uploads_root()?;
@@ -269,7 +311,8 @@ impl EngineCore {
                 edge: edge.clone(),
             },
         )?;
-        let agent_accounts_config = AgentAccountsConfig::detect(data_dir);
+        let agent_accounts_config =
+            agent_accounts_config.unwrap_or_else(|| AgentAccountsConfig::detect(data_dir));
         let task_identity = TaskIdentityService::open(
             store,
             workspace.clone(),
