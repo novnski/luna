@@ -367,9 +367,12 @@ impl TaskIdentityService {
         for event in &log.events {
             projection.apply(event)?;
         }
-        let home = stable_path(codex.codex_home());
-        let provider_home_identity = digest(&home.to_string_lossy());
-        let short = provider_home_identity[..16].to_string();
+        // Binding identity follows the canonical shared session store. A
+        // selected Codex auth overlay is intentionally absent here: changing
+        // credentials must not manufacture a new task/history namespace or
+        // weaken the wrong-store guard.
+        let (provider_home_identity, provider_instance_id, provider_profile_id) =
+            codex_session_store_identity(device_id, codex.codex_home());
         Ok(Self {
             inner: Arc::new(Inner {
                 store,
@@ -380,8 +383,8 @@ impl TaskIdentityService {
                 device_id: device_id.to_string(),
                 codex,
                 provider_home_identity,
-                provider_instance_id: format!("codex:{device_id}:{short}"),
-                provider_profile_id: format!("codex-home:{short}"),
+                provider_instance_id,
+                provider_profile_id,
             }),
         })
     }
@@ -1674,6 +1677,16 @@ impl TaskIdentityService {
     }
 }
 
+fn codex_session_store_identity(device_id: &str, canonical_home: &Path) -> (String, String, String) {
+    let home_identity = digest(&stable_path(canonical_home).to_string_lossy());
+    let short = home_identity[..16].to_string();
+    (
+        home_identity,
+        format!("codex:{device_id}:{short}"),
+        format!("codex-home:{short}"),
+    )
+}
+
 struct ProviderIdentity {
     instance_id: String,
     profile_id: Option<String>,
@@ -1859,5 +1872,21 @@ mod tests {
         assert_eq!(provider_title(Some("Fix tests")), "[LUNA] Fix tests");
         assert_eq!(clean_provider_title(Some("[LUNA] Fix tests")), "Fix tests");
         assert_eq!(clean_provider_title(Some("Native title")), "Native title");
+    }
+
+    #[test]
+    fn codex_binding_identity_tracks_canonical_store_not_auth_overlay() {
+        let canonical = Path::new("/tmp/luna-canonical-codex-home");
+        let first = codex_session_store_identity("device-a", canonical);
+        // Two auth overlays use the same canonical continuation store, so the
+        // binding tuple is identical. Auth-instance ids live in AgentAccounts.
+        let second = codex_session_store_identity("device-a", canonical);
+        assert_eq!(first, second);
+
+        let wrong_store =
+            codex_session_store_identity("device-a", Path::new("/tmp/other-codex-home"));
+        assert_ne!(first.0, wrong_store.0);
+        assert_ne!(first.1, wrong_store.1);
+        assert_ne!(first.2, wrong_store.2);
     }
 }

@@ -25,6 +25,8 @@ pub mod doc_host;
 mod http_error;
 pub mod instance_lock;
 pub mod local_import;
+#[cfg(target_os = "macos")]
+mod macos_keychain;
 pub mod permissions;
 pub mod profile;
 pub mod registry;
@@ -42,7 +44,9 @@ pub mod uploads;
 pub mod workspace_files;
 pub mod workspace_host;
 
-pub use agent_accounts::{AgentAccounts, AgentAccountsConfig};
+pub use agent_accounts::{
+    AgentAccounts, AgentAccountsConfig, CLAUDE_NATIVE_ACCOUNT_ID, CODEX_NATIVE_ACCOUNT_ID,
+};
 pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership};
 pub use change_requests::{ChangeRequestCacheKey, CheckoutChangeRequests};
 pub use credentials::{
@@ -327,6 +331,7 @@ impl EngineCore {
             )
         });
         let agent_accounts = AgentAccounts::new(agent_accounts_config);
+        sessions.set_agent_accounts(agent_accounts.clone());
         let titles = TitleGenerator::new(workspace.clone(), registry.clone(), repos.clone());
         titles.set_task_identity(task_identity.clone());
         sessions.set_titles(titles);

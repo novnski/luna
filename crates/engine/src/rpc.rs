@@ -117,6 +117,8 @@ struct AdoptProviderTaskParams {
 #[serde(rename_all = "camelCase")]
 struct ListModelsParams {
     harness: HarnessId,
+    #[serde(default)]
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -363,6 +365,8 @@ struct ResizeTerminalParams {
 struct ListAgentAccountsParams {
     #[serde(default)]
     force_usage: Option<bool>,
+    #[serde(default)]
+    harness: Option<HarnessId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -517,6 +521,13 @@ enum MutateParams {
         mode: PermissionMode,
         #[serde(default)]
         actor: Option<String>,
+    },
+    /// Engine-owned provider-account transition. Rejects active turns and
+    /// retires an idle warm runtime before publishing the new chat binding.
+    #[serde(rename_all = "camelCase")]
+    SetThreadProviderAccount {
+        chat_id: String,
+        account_id: String,
     },
     /// Tombstone: removes the chats-map row; the session doc remains.
     #[serde(rename_all = "camelCase")]
@@ -991,6 +1002,14 @@ impl EngineRpc {
                 .set_permission_mode(&chat_id, mode, actor)
                 .await
                 .map_err(failed),
+            MutateParams::SetThreadProviderAccount {
+                chat_id,
+                account_id,
+            } => self
+                .sessions
+                .set_provider_account(&chat_id, &account_id)
+                .await
+                .map_err(failed),
             MutateParams::DeleteChat { chat_id } => {
                 self.workspace.delete_chat(&chat_id).map_err(failed)?;
                 self.task_identity
@@ -1415,6 +1434,7 @@ impl RpcService for EngineRpc {
                 let config = p.config.or_else(|| {
                     Some(ChatConfig {
                         harness: HarnessId::Codex,
+                        provider_account_id: None,
                         model: None,
                         reasoning: None,
                         model_options: serde_json::Map::new(),
@@ -1457,6 +1477,20 @@ impl RpcService for EngineRpc {
             }
             methods::LIST_MODELS => {
                 let p: ListModelsParams = parse_params(params)?;
+                if p.harness == HarnessId::Codex {
+                    let execution = self
+                        .agent_accounts
+                        .resolve_execution(HarnessId::Codex, p.account_id.as_deref())
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    let home = execution.codex_home.ok_or_else(|| {
+                        RpcError::Failed("Codex account did not resolve an execution home".into())
+                    })?;
+                    let models = zeron_harness::codex::CodexHarness::new()
+                        .models_for_home(&home)
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    return RpcReply::value(&models);
+                }
                 let harness = self
                     .registry
                     .resolve(p.harness)
@@ -2463,15 +2497,28 @@ impl RpcService for EngineRpc {
             }
             methods::LIST_AGENT_ACCOUNTS => {
                 let p: ListAgentAccountsParams = parse_params(params)?;
-                let snapshot = self
-                    .agent_accounts
-                    .list(p.force_usage.unwrap_or(false))
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let snapshot = match p.harness {
+                    Some(harness) => {
+                        self.agent_accounts
+                            .list_harness(harness, p.force_usage.unwrap_or(false))
+                            .await
+                    }
+                    None => {
+                        self.agent_accounts
+                            .list(p.force_usage.unwrap_or(false))
+                            .await
+                    }
+                }
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&snapshot)
             }
             methods::ACTIVATE_AGENT_ACCOUNT => {
                 let p: AgentAccountParams = parse_params(params)?;
+                let _transition = self
+                    .sessions
+                    .prepare_provider_account_change(p.harness)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
                 let snapshot = self
                     .agent_accounts
                     .activate(p.harness, &p.account_id)
@@ -2481,6 +2528,11 @@ impl RpcService for EngineRpc {
             }
             methods::FORGET_AGENT_ACCOUNT => {
                 let p: AgentAccountParams = parse_params(params)?;
+                let _transition = self
+                    .sessions
+                    .prepare_provider_account_change(p.harness)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
                 let snapshot = self
                     .agent_accounts
                     .forget(p.harness, &p.account_id)
@@ -2499,6 +2551,15 @@ impl RpcService for EngineRpc {
             }
             methods::COMPLETE_AGENT_LOGIN => {
                 let p: CompleteAgentLoginParams = parse_params(params)?;
+                let harness = self
+                    .agent_accounts
+                    .login_harness(&p.login_id)
+                    .ok_or_else(|| RpcError::Failed("This sign-in attempt expired — start again.".into()))?;
+                let _transition = self
+                    .sessions
+                    .prepare_provider_account_change(harness)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
                 let snapshot = self
                     .agent_accounts
                     .complete_login(&p.login_id, &p.code)

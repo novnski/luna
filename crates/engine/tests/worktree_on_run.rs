@@ -110,6 +110,7 @@ fn run_payload(message_id: &str, repo_path: &str) -> SessionCommandPayload {
         request: RunRequest {
             prompt: "isolated please".into(),
             harness: None,
+            provider_account_id: None,
             model: None,
             reasoning: None,
             model_options: Default::default(),

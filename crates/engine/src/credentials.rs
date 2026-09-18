@@ -184,7 +184,10 @@ impl PlatformKeyStore {
 #[cfg(target_os = "macos")]
 impl VaultKeyStore for PlatformKeyStore {
     fn load(&self) -> Result<Option<Vec<u8>>, KeyStoreFailure> {
-        match security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, &self.account) {
+        match crate::macos_keychain::get_generic_password_noninteractive(
+            KEYCHAIN_SERVICE,
+            &self.account,
+        ) {
             Ok(key) => Ok(Some(key)),
             // errSecItemNotFound.
             Err(error) if error.code() == -25300 => Ok(None),
@@ -1092,6 +1095,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    #[ignore = "opt-in real macOS login-Keychain integration test"]
     fn macos_keychain_backs_an_isolated_fixture_vault() {
         struct Cleanup(String);
         impl Drop for Cleanup {

@@ -205,6 +205,7 @@ fn request(cwd: &Path, prompt: &str, resume: Option<&str>) -> RunRequest {
     RunRequest {
         prompt: prompt.into(),
         harness: None,
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: serde_json::Map::new(),

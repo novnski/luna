@@ -9,6 +9,7 @@ fn run_request_attachments_survive_command_round_trip() {
     let request = zeron_proto::RunRequest {
         prompt: "p".into(),
         harness: None,
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: Default::default(),

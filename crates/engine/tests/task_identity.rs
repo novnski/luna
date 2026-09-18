@@ -105,6 +105,7 @@ fn mock_request(prompt: &str, resume: Option<&str>) -> RunRequest {
     RunRequest {
         prompt: prompt.into(),
         harness: Some(HarnessId::Mock),
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: Default::default(),

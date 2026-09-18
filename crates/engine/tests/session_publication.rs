@@ -248,6 +248,7 @@ async fn turn(core: &EngineCore, cwd: &std::path::Path, live: bool, second: bool
             RunRequest {
                 prompt: prompt.into(),
                 harness: None,
+                provider_account_id: None,
                 model: live
                     .then(|| std::env::var("SESSION_SYNC_MODEL").unwrap_or("gpt-6-astra".into())),
                 reasoning: Some(ReasoningLevel::Medium),

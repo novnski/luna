@@ -14,8 +14,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL;
 
 use zeron_engine::{
-    AgentAccounts, AgentAccountsConfig, EngineCore, HarnessRegistry, Repos, Uploads,
-    worktree_branch_from_title,
+    AgentAccounts, AgentAccountsConfig, CLAUDE_NATIVE_ACCOUNT_ID, CODEX_NATIVE_ACCOUNT_ID,
+    EngineCore, HarnessRegistry, Repos, Uploads, worktree_branch_from_title,
 };
 use zeron_harness::mock::MockHarness;
 use zeron_proto::{
@@ -166,11 +166,11 @@ async fn wait_for<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
 }
 
 // ---------------------------------------------------------------------------
-// Agent accounts — provider-native discovery without LUNA copies
+// Agent accounts — native discovery, metadata-only lifecycle, no token copies
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn claude_provider_login_is_discovered_without_copy_or_switch() {
+async fn claude_provider_login_is_discovered_with_stable_native_identity() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
 
@@ -192,7 +192,7 @@ async fn claude_provider_login_is_discovered_without_copy_or_switch() {
     assert!(!alice.switchable);
     assert!(snapshot.warnings.is_empty());
     let alice_id = alice.id.clone();
-    assert_eq!(alice_id.len(), 16, "redacted identity id is 16 hex chars");
+    assert_eq!(alice_id, CLAUDE_NATIVE_ACCOUNT_ID);
     assert!(!config.data_dir.join("agent-accounts/claude-code").exists());
 
     // Bob logs in via the CLI (live files replaced) — next list shows only Bob.
@@ -204,20 +204,19 @@ async fn claude_provider_login_is_discovered_without_copy_or_switch() {
     );
 
     let before = std::fs::read(config.claude_config_dir.join(".credentials.json")).unwrap();
-    let refused = accounts.activate(HarnessId::ClaudeCode, &alice_id).await;
-    assert!(
-        refused.is_err(),
-        "provider copy activation must stay disabled"
-    );
+    accounts
+        .activate(HarnessId::ClaudeCode, &alice_id)
+        .await
+        .expect("reconnect same native account");
     assert_eq!(
         std::fs::read(config.claude_config_dir.join(".credentials.json")).unwrap(),
         before,
-        "rejected switching must not touch provider-native credentials"
+        "reconnect must not touch provider-native credentials"
     );
 }
 
 #[tokio::test]
-async fn rejected_claude_switch_leaves_live_provider_and_mcp_credentials_untouched() {
+async fn claude_reconnect_leaves_live_provider_and_mcp_credentials_untouched() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
     let creds_file = config.claude_config_dir.join(".credentials.json");
@@ -267,12 +266,10 @@ async fn rejected_claude_switch_leaves_live_provider_and_mcp_credentials_untouch
     .expect("bob mcp creds");
     accounts.list(false).await.expect("list bob");
 
-    assert!(
-        accounts
-            .activate(HarnessId::ClaudeCode, &alice_id)
-            .await
-            .is_err()
-    );
+    accounts
+        .activate(HarnessId::ClaudeCode, &alice_id)
+        .await
+        .expect("metadata-only reconnect");
 
     let creds: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&creds_file).expect("creds readable"))
@@ -284,7 +281,7 @@ async fn rejected_claude_switch_leaves_live_provider_and_mcp_credentials_untouch
     );
     assert_eq!(
         creds["mcpOAuth"]["github"]["accessToken"], "live-github",
-        "rejected switching must leave live MCP OAuth untouched"
+        "reconnect must leave live MCP OAuth untouched"
     );
     assert_eq!(creds["pluginSecrets"]["live"], true);
     assert!(
@@ -294,7 +291,7 @@ async fn rejected_claude_switch_leaves_live_provider_and_mcp_credentials_untouch
 }
 
 #[tokio::test]
-async fn rejected_claude_switch_never_rewrites_live_shared_credentials() {
+async fn claude_reconnect_never_rewrites_live_shared_credentials() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
     let creds_file = config.claude_config_dir.join(".credentials.json");
@@ -320,12 +317,10 @@ async fn rejected_claude_switch_never_rewrites_live_shared_credentials() {
     .expect("bob mcp creds");
     accounts.list(false).await.expect("list bob");
 
-    assert!(
-        accounts
-            .activate(HarnessId::ClaudeCode, &alice_id)
-            .await
-            .is_err()
-    );
+    accounts
+        .activate(HarnessId::ClaudeCode, &alice_id)
+        .await
+        .expect("metadata-only reconnect");
 
     let creds: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&creds_file).expect("creds readable"))
@@ -351,9 +346,10 @@ async fn codex_discovery_is_native_only_and_api_keys_are_redacted() {
     assert!(carol.active);
     assert!(!carol.switchable);
     let carol_id = carol.id.clone();
+    assert_eq!(carol_id, CODEX_NATIVE_ACCOUNT_ID);
 
-    // A provider-native change becomes the only visible login. LUNA refuses
-    // activation of its old metadata id and leaves auth.json untouched.
+    // A provider-native change keeps the stable default id. Selecting that id
+    // never rewrites auth.json or resurrects stale identity metadata.
     write_codex_login(&config, "dave@example.com", "acct-dave");
     let before = std::fs::read(config.codex_home.join("auth.json")).unwrap();
     let snapshot = accounts.list(false).await.expect("list dave");
@@ -361,12 +357,10 @@ async fn codex_discovery_is_native_only_and_api_keys_are_redacted() {
         account_emails(&snapshot, HarnessId::Codex),
         vec![("dave@example.com".to_string(), true)]
     );
-    assert!(
-        accounts
-            .activate(HarnessId::Codex, &carol_id)
-            .await
-            .is_err()
-    );
+    accounts
+        .activate(HarnessId::Codex, &carol_id)
+        .await
+        .expect("select native Codex account");
     assert_eq!(
         std::fs::read(config.codex_home.join("auth.json")).unwrap(),
         before
@@ -399,7 +393,7 @@ async fn codex_discovery_is_native_only_and_api_keys_are_redacted() {
 }
 
 #[tokio::test]
-async fn forget_refuses_provider_and_legacy_credential_deletion() {
+async fn disconnect_preserves_provider_and_legacy_credentials() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (accounts, config) = test_accounts(tmp.path());
     write_claude_login(&config, "alice@example.com", "uuid-alice", "token-alice");
@@ -419,12 +413,21 @@ async fn forget_refuses_provider_and_legacy_credential_deletion() {
             .await
             .is_err()
     );
-    // The live login can't be forgotten (it would just be re-detected).
+    let before = std::fs::read(config.claude_config_dir.join(".credentials.json")).unwrap();
+    let disconnected = accounts
+        .forget(HarnessId::ClaudeCode, &alice_id)
+        .await
+        .expect("disconnect in LUNA");
     assert!(
-        accounts
-            .forget(HarnessId::ClaudeCode, &alice_id)
-            .await
-            .is_err()
+        disconnected
+            .accounts
+            .iter()
+            .any(|account| account.id == alice_id && !account.active)
+    );
+    assert_eq!(
+        std::fs::read(config.claude_config_dir.join(".credentials.json")).unwrap(),
+        before,
+        "disconnect must not mutate the native provider login"
     );
 
     let legacy_dir = config.data_dir.join("agent-accounts/claude-code");
@@ -649,6 +652,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
     let request = zeron_proto::RunRequest {
         prompt: "please fix the login flow".into(),
         harness: None,
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: serde_json::Map::new(),
@@ -698,6 +702,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
     let request = zeron_proto::RunRequest {
         prompt: "another request".into(),
         harness: None,
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: serde_json::Map::new(),
@@ -843,14 +848,9 @@ async fn rpc_dispatch_for_m5c_methods() {
             .is_err()
     );
 
-    // Agent accounts: snapshot shape (this machine's real CLI state may or may
-    // not include logins — assert the envelope, not the contents).
-    let snapshot = client
-        .call(methods::LIST_AGENT_ACCOUNTS, serde_json::json!({}))
-        .await
-        .expect("ListAgentAccounts");
-    assert!(snapshot["accounts"].is_array());
-    assert!(snapshot["warnings"].is_array());
+    // Account RPC behavior is covered above with explicit temp homes. Never
+    // enumerate the normally assembled service here: on macOS its intentional
+    // Claude fallback can ask Keychain for the user's real native login.
     let credential_metadata = client
         .call(methods::LIST_CREDENTIAL_METADATA, serde_json::json!({}))
         .await

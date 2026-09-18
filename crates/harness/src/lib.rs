@@ -24,6 +24,12 @@ use zeron_proto::{
     UserInputAnswer, UserInputQuestion,
 };
 
+/// Engine-only runtime-signature option. Account-aware adapters remove it
+/// before interpreting provider model options; its sole purpose is to make a
+/// changed native authentication identity retire an otherwise-compatible warm
+/// runtime.
+pub const LUNA_PROVIDER_AUTH_INSTANCE_OPTION: &str = "lunaProviderAuthInstance";
+
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {
     #[error("harness binary not found: {0}")]

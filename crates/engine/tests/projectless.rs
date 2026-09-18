@@ -174,6 +174,7 @@ async fn exercise_projectless(command_first: bool) {
                     request: RunRequest {
                         prompt: "hello from no project".into(),
                         harness: None,
+                        provider_account_id: None,
                         model: None,
                         reasoning: None,
                         model_options: Default::default(),

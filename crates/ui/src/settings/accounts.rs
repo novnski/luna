@@ -1,6 +1,6 @@
 //! Settings → Agents / accounts (feature-inventory §1.9): provider cards
 //! (Claude Code, Codex, Cursor) with account rows — email, plan badge, Active, usage
-//! meters (indigo → amber ≥80% → red ≥95%, reset time), Switch / Forget — plus
+//! meters (indigo → amber ≥80% → red ≥95%, reset time), lifecycle controls — plus
 //! the add-account dialogs (paste-code and browser-poll flows) and
 //! account-shaped loading skeletons. Zeron retargets devices from the settings
 //! sidebar (`targetDeviceId` passthrough kept plumbed, unused single-device).
@@ -17,8 +17,8 @@ use gpui::{
 use std::time::Duration;
 
 use zeron_proto::{
-    AgentAccount, AgentAccountsSnapshot, AgentLoginMode, AgentLoginPoll, AgentLoginStart,
-    AgentLoginStatus, HarnessId,
+    AgentAccount, AgentAccountsSnapshot, AgentAuthenticationState, AgentLoginMode, AgentLoginPoll,
+    AgentLoginStart, AgentLoginStatus, HarnessId,
 };
 use zeron_rpc::methods;
 
@@ -43,6 +43,22 @@ pub enum UsageLevel {
     Warn,
     /// ≥ 95% — red.
     Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountLifecycleAction {
+    DisconnectClaude,
+    ReconnectClaude,
+    SelectCodexDefault,
+}
+
+fn account_lifecycle_action(account: &AgentAccount) -> Option<AccountLifecycleAction> {
+    match (account.harness, account.active, account.switchable) {
+        (HarnessId::ClaudeCode, true, _) => Some(AccountLifecycleAction::DisconnectClaude),
+        (HarnessId::ClaudeCode, false, true) => Some(AccountLifecycleAction::ReconnectClaude),
+        (HarnessId::Codex, false, true) => Some(AccountLifecycleAction::SelectCodexDefault),
+        _ => None,
+    }
 }
 
 /// Threshold classification of a usage fraction. Pure.
@@ -143,6 +159,9 @@ pub fn provider_accounts(
 // ---------------------------------------------------------------------------
 
 enum LoginFlow {
+    /// Claude's native login is shared with other local clients. Replacing it
+    /// requires an explicit disclosure before any provider flow starts.
+    Disclosure { harness: HarnessId },
     /// StartAgentLogin in flight.
     Starting { harness: HarnessId },
     /// Claude-style: open the URL, paste the code back.
@@ -165,7 +184,8 @@ impl LoginFlow {
     /// Provider-owned sign-in dialog title.
     fn title(&self) -> &'static str {
         let harness = match self {
-            LoginFlow::Starting { harness }
+            LoginFlow::Disclosure { harness }
+            | LoginFlow::Starting { harness }
             | LoginFlow::PasteCode { harness, .. }
             | LoginFlow::Browser { harness, .. } => *harness,
         };
@@ -498,6 +518,21 @@ impl AccountsPage {
 
     // ---- add-account flows ----
 
+    fn request_login(
+        &mut self,
+        harness: HarnessId,
+        replacing_existing: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if harness == HarnessId::ClaudeCode && replacing_existing {
+            self.login = Some(LoginFlow::Disclosure { harness });
+            self.error = None;
+            cx.notify();
+        } else {
+            self.start_login(harness, cx);
+        }
+    }
+
     fn start_login(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
@@ -792,8 +827,7 @@ impl AccountsPage {
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".into())
             .into();
-        let switch_account = account.clone();
-        let forget_account = account.clone();
+        let action_account = account.clone();
 
         let badges = div()
             .flex()
@@ -803,59 +837,54 @@ impl AccountsPage {
             .when(account.active, |el| {
                 el.child(widgets::badge_active(theme, "Active"))
             })
+            .when(
+                account.harness == HarnessId::ClaudeCode && !account.active,
+                |el| el.child(widgets::badge(theme, "Disconnected")),
+            )
+            .when(
+                account.authentication == AgentAuthenticationState::Expired,
+                |el| el.child(widgets::badge(theme, "Expired")),
+            )
+            .when(
+                account.authentication == AgentAuthenticationState::Unavailable
+                    && !(account.harness == HarnessId::ClaudeCode && !account.active),
+                |el| el.child(widgets::badge(theme, "Unavailable")),
+            )
             .when_some(account.plan_label.clone(), |el, plan| {
                 el.child(widgets::badge(theme, plan))
             });
 
-        // Actions only on INACTIVE accounts (zeron `{!account.active && …}`):
-        // an icon-only Forget (trash, hover → foreground) then Switch, which
-        // reads "Switching…" while the activate round-trips.
-        let actions: Option<gpui::Div> = (!account.active).then(|| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .id(("account-forget", ix))
-                        .rounded(px(6.0))
-                        .px(px(6.0))
-                        .py(px(4.0))
-                        .text_color(theme.text_muted)
-                        .cursor_pointer()
-                        .when(is_busy, |el| el.opacity(0.5))
-                        .hover(|s| s.bg(crate::theme::ink(0.06)).text_color(theme.text))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.account_action(methods::FORGET_AGENT_ACCOUNT, &forget_account, cx);
-                        }))
-                        .child(
-                            crate::icons::icon(crate::icons::TRASH_BIN_MINIMALISTIC)
-                                .size(px(14.0))
-                                .text_color(theme.text_muted),
-                        ),
-                )
-                .when(account.switchable, |el| {
-                    el.child(
-                        crate::popover::btn_primary(
-                            theme,
-                            if is_busy { "Switching…" } else { "Switch" },
-                        )
-                        .id(("account-switch", ix))
-                        .px(px(8.0))
-                        .py(px(4.0))
-                        .rounded(px(6.0))
-                        .text_size(crate::typography::ui_rems(11.5))
-                        .when(is_busy, |el| el.opacity(0.5))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.account_action(
-                                methods::ACTIVATE_AGENT_ACCOUNT,
-                                &switch_account,
-                                cx,
-                            );
-                        })),
-                    )
-                })
+        let action = match account_lifecycle_action(account) {
+            Some(AccountLifecycleAction::DisconnectClaude) => Some((
+                methods::FORGET_AGENT_ACCOUNT,
+                if is_busy { "Disconnecting…" } else { "Disconnect" },
+                "account-disconnect",
+            )),
+            Some(AccountLifecycleAction::ReconnectClaude) => Some((
+                methods::ACTIVATE_AGENT_ACCOUNT,
+                if is_busy { "Reconnecting…" } else { "Reconnect" },
+                "account-reconnect",
+            )),
+            Some(AccountLifecycleAction::SelectCodexDefault) => Some((
+                methods::ACTIVATE_AGENT_ACCOUNT,
+                if is_busy { "Selecting…" } else { "Use by default" },
+                "account-select-default",
+            )),
+            None => None,
+        };
+        let actions = action.map(|(method, label, id)| {
+            div().child(
+                crate::popover::btn_primary(theme, label)
+                    .id((id, ix))
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .rounded(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .when(is_busy, |el| el.opacity(0.5))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.account_action(method, &action_account, cx);
+                    })),
+            )
         });
 
         div()
@@ -957,6 +986,37 @@ impl AccountsPage {
                     .child(SharedString::from(label))
             };
         let body: AnyElement = match login {
+            LoginFlow::Disclosure { harness } => {
+                let harness = *harness;
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(div().mt(px(8.0)).child(popover::dialog_body(
+                        &theme,
+                        "Claude Code has one native login on this device. Signing in to another account replaces that shared provider login and can affect other Claude Code clients. LUNA will keep local chats and session ids, but it does not isolate or copy Claude credentials.",
+                    )))
+                    .child(
+                        div()
+                            .mt(px(16.0))
+                            .flex()
+                            .flex_row()
+                            .justify_end()
+                            .gap(px(8.0))
+                            .child(
+                                popover::btn_ghost(&theme, "Cancel", "login-disclosure-cancel")
+                                    .id("login-disclosure-cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| this.cancel_login(cx))),
+                            )
+                            .child(
+                                popover::btn_primary(&theme, "Continue",)
+                                    .id("login-disclosure-continue")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.start_login(harness, cx);
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }
             LoginFlow::Starting { .. } => div()
                 .mt(px(8.0))
                 .child(popover::skeleton_rows(
@@ -981,7 +1041,8 @@ impl AccountsPage {
                         &theme,
                         "A browser window opened. Sign in to Claude Code, approve access, then \
                          paste the code Anthropic shows you below. Claude Code saves the login \
-                         in its own credential store; LUNA keeps no copy.",
+                         in its own shared credential store; LUNA keeps no copy. Completing this \
+                         replaces the native login for other local Claude Code clients too.",
                     )))
                     .child(url_link(
                         "login-open-url",
@@ -1048,7 +1109,8 @@ impl AccountsPage {
                     }
                     _ => {
                         "Finish signing in to OpenAI in your browser. The Codex CLI saves the \
-                         login in its provider-native home; LUNA keeps no copy."
+                         login in a private auth overlay; the canonical Codex sessions and config \
+                         remain shared, and LUNA keeps no token copy."
                     }
                 };
                 div()
@@ -1348,6 +1410,13 @@ impl Render for AccountsPage {
                             })
                             .collect();
                         let add_id: SharedString = format!("add-account-{name}").into();
+                        let replacing_existing = !accounts.is_empty();
+                        let sign_in_label = match (harness, replacing_existing) {
+                            (HarnessId::ClaudeCode, true) => "Sign in another",
+                            (HarnessId::Codex, true) => "Add account",
+                            (HarnessId::Cursor, _) => "Connect",
+                            _ => "Sign in",
+                        };
                         let card = widgets::section_card(&theme).mt(px(8.0));
                         let empty_copy = match harness {
                             // Cursor's app login is SEPARATE from `cursor-agent
@@ -1399,14 +1468,18 @@ impl Render for AccountsPage {
                                             .id(add_id)
                                             .hover(|s| widgets::ghost_hover(&theme, s))
                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.start_login(harness, cx);
+                                                this.request_login(
+                                                    harness,
+                                                    replacing_existing,
+                                                    cx,
+                                                );
                                             }))
                                             .child(
                                                 crate::icons::icon(crate::icons::ADD_CIRCLE)
                                                     .size(px(16.0))
                                                     .text_color(theme.text_muted),
                                             )
-                                            .child(SharedString::from("Sign in")),
+                                            .child(SharedString::from(sign_in_label)),
                                     ),
                             )
                             .children(
@@ -1511,6 +1584,43 @@ impl Render for AccountsPage {
 mod tests {
     use super::*;
     use chrono::TimeDelta;
+
+    fn lifecycle_account(harness: HarnessId, active: bool, switchable: bool) -> AgentAccount {
+        AgentAccount {
+            id: "fixture".into(),
+            harness,
+            email: None,
+            plan_label: None,
+            active,
+            authentication: AgentAuthenticationState::Authenticated,
+            usage_windows: vec![],
+            display_name: None,
+            organization: None,
+            auth_kind: None,
+            switchable,
+            saved_at: None,
+        }
+    }
+
+    #[test]
+    fn lifecycle_controls_match_provider_contracts() {
+        assert_eq!(
+            account_lifecycle_action(&lifecycle_account(HarnessId::ClaudeCode, true, false)),
+            Some(AccountLifecycleAction::DisconnectClaude)
+        );
+        assert_eq!(
+            account_lifecycle_action(&lifecycle_account(HarnessId::ClaudeCode, false, true)),
+            Some(AccountLifecycleAction::ReconnectClaude)
+        );
+        assert_eq!(
+            account_lifecycle_action(&lifecycle_account(HarnessId::Codex, false, true)),
+            Some(AccountLifecycleAction::SelectCodexDefault)
+        );
+        assert_eq!(
+            account_lifecycle_action(&lifecycle_account(HarnessId::Codex, true, false)),
+            None
+        );
+    }
 
     #[test]
     fn first_load_of_a_visit_forces_the_usage_probe() {

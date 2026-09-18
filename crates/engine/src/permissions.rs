@@ -332,6 +332,7 @@ pub fn resolve_preview_for(
     let mut request = RunRequest {
         prompt: String::new(),
         harness: Some(harness),
+        provider_account_id: None,
         model: model.map(str::to_owned),
         reasoning: None,
         model_options: Default::default(),
@@ -357,6 +358,7 @@ mod tests {
         RunRequest {
             prompt: "safe test".into(),
             harness: Some(HarnessId::Codex),
+            provider_account_id: None,
             model: None,
             reasoning: None,
             model_options: Default::default(),

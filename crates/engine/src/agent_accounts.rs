@@ -1,23 +1,26 @@
 //! AgentAccounts — metadata-only discovery and provider-owned sign-in for the
 //! Claude Code / Codex / Cursor accounts on this device.
 //!
-//! Each provider stores exactly one live login:
+//! Provider-native authentication remains authoritative:
 //!
 //! - **Claude Code** — credentials in `~/.claude/.credentials.json`
 //!   (`$CLAUDE_CONFIG_DIR` relocates the dir) or, on macOS, the Keychain item
 //!   `Claude Code-credentials`; the account identity (`oauthAccount`, `userID`)
 //!   lives in `~/.claude.json`.
-//! - **Codex** — `$CODEX_HOME/auth.json` (default `~/.codex`): a ChatGPT OAuth
-//!   token set (identity inside the `id_token` JWT) or a raw API key.
+//! - **Codex** — the default account uses `$CODEX_HOME/auth.json` (default
+//!   `~/.codex`). Named accounts use LUNA-owned T3-style auth overlays: only
+//!   `auth.json` and `models_cache.json` are private while the canonical
+//!   session/config home is shared through symlinks.
 //! - **Cursor** — `~/.cursor/sdk/auth.json`: the Cursor SDK's credential store
 //!   (`StoredSdkCredentials`) holding the named, expiring user API key its
 //!   browser login mints. Deliberately SEPARATE from `cursor-agent login`'s
 //!   whole-account session tokens, which zeron never reads.
 //!
-//! Provider-native homes are authoritative. LUNA detects the active identity
-//! and may run an explicit provider sign-in, but never snapshots, imports,
-//! activates, migrates, or deletes provider credential material. Historical
-//! plaintext slot files are only detected and reported; they are not opened.
+//! LUNA persists only lifecycle metadata (Claude enabled/disabled, Codex named
+//! account labels and the selected default). It never puts provider tokens in
+//! the sync vault, copies a whole provider home, edits provider databases, or
+//! deletes provider credential material. Historical plaintext slot files are
+//! only detected and reported; they are not opened.
 //!
 //! Usage probes: all three providers expose the rate-limit view their own CLIs render
 //! (`/usage` in Claude Code, `/status` in Codex; Cursor's key has no quota view,
@@ -81,6 +84,23 @@ const USAGE_TTL: Duration = Duration::from_secs(60);
 /// An abandoned login flow (dialog dismissed without Cancel) is reaped past this.
 const FLOW_TTL: Duration = Duration::from_secs(15 * 60);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
+pub const CLAUDE_NATIVE_ACCOUNT_ID: &str = "claude-native";
+pub const CODEX_NATIVE_ACCOUNT_ID: &str = "codex-native";
+const PROVIDER_ACCOUNT_STATE_VERSION: u32 = 1;
+const CODEX_SHARED_DIRECTORIES: &[&str] = &[
+    "sessions",
+    "archived_sessions",
+    "sqlite",
+    "shell_snapshots",
+    "worktrees",
+    "skills",
+    "plugins",
+    "cache",
+    "logs",
+    "mcp-oauth-locks",
+];
+const CODEX_PRIVATE_ENTRIES: &[&str] = &["auth.json", "models_cache.json"];
+const CODEX_SHADOW_LOCAL_ENTRIES: &[&str] = &["log", "memories", "tmp"];
 
 /// Filesystem knobs — env-resolved in production ([`AgentAccountsConfig::detect`]),
 /// explicit in tests.
@@ -135,6 +155,18 @@ impl AgentAccountsConfig {
     fn root_dir(&self) -> PathBuf {
         self.data_dir.join("agent-accounts")
     }
+
+    fn state_file(&self) -> PathBuf {
+        self.data_dir.join("provider-account-state-v1.json")
+    }
+
+    fn codex_shadow_root(&self) -> PathBuf {
+        self.data_dir.join("provider-auth").join("codex")
+    }
+
+    fn codex_shadow_home(&self, account_id: &str) -> PathBuf {
+        self.codex_shadow_root().join(account_id)
+    }
 }
 
 // ── slot storage ────────────────────────────────────────────────────────────
@@ -176,6 +208,67 @@ struct Detected {
     credentials: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexAccountRecord {
+    id: String,
+    account_key: String,
+    profile: SlotProfile,
+    created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderAccountState {
+    schema_version: u32,
+    #[serde(default = "enabled_by_default")]
+    claude_enabled: bool,
+    #[serde(default = "native_codex_account")]
+    default_codex_account_id: String,
+    #[serde(default)]
+    codex_accounts: Vec<CodexAccountRecord>,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+fn native_codex_account() -> String {
+    CODEX_NATIVE_ACCOUNT_ID.to_string()
+}
+
+fn safe_account_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+impl Default for ProviderAccountState {
+    fn default() -> Self {
+        Self {
+            schema_version: PROVIDER_ACCOUNT_STATE_VERSION,
+            claude_enabled: true,
+            default_codex_account_id: native_codex_account(),
+            codex_accounts: Vec::new(),
+        }
+    }
+}
+
+/// Engine-only execution identity. `auth_instance_id` deliberately does not
+/// participate in L06's provider binding: Codex continuations stay keyed to
+/// the canonical session store while this selects only the authentication
+/// overlay used to launch the runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderExecutionAccount {
+    pub account_id: String,
+    pub auth_instance_id: String,
+    pub codex_home: Option<PathBuf>,
+}
+
 // ── login flows ─────────────────────────────────────────────────────────────
 
 enum LoginFlow {
@@ -186,6 +279,9 @@ enum LoginFlow {
     /// A provider-owned login child polled to completion.
     Spawned {
         harness: HarnessId,
+        /// Named Codex account being created. Other spawned providers do not
+        /// have LUNA-owned account metadata.
+        account_id: Option<String>,
         /// The login child; monitored (try_wait) + killable from cancel.
         child: Arc<Mutex<Option<zeron_harness::process::Child>>>,
         /// Provider credential dir watched for completion.
@@ -248,6 +344,7 @@ struct Inner {
     flows: Mutex<HashMap<String, LoginFlow>>,
     /// `"{harness}:{accountKey}"` → cached usage windows.
     usage_cache: Mutex<HashMap<String, CachedUsage>>,
+    state: Mutex<ProviderAccountState>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -265,33 +362,223 @@ impl AgentAccounts {
             .timeout(HTTP_TIMEOUT)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
+        let state = load_account_state(&config);
         Self {
             inner: Arc::new(Inner {
                 config,
                 http,
                 flows: Mutex::new(HashMap::new()),
                 usage_cache: Mutex::new(HashMap::new()),
+                state: Mutex::new(state),
             }),
         }
+    }
+
+    pub fn resolve_execution(
+        &self,
+        harness: HarnessId,
+        requested_account_id: Option<&str>,
+    ) -> Result<ProviderExecutionAccount, EngineError> {
+        let state = lock(&self.inner.state).clone();
+        match harness {
+            HarnessId::ClaudeCode => {
+                if requested_account_id.is_some_and(|id| id != CLAUDE_NATIVE_ACCOUNT_ID) {
+                    return Err(EngineError::Other(
+                        "Claude Code supports one provider-native account on this device.".into(),
+                    ));
+                }
+                if !state.claude_enabled {
+                    return Err(EngineError::Other(
+                        "Claude Code is disconnected in LUNA. Reconnect it from Accounts before sending."
+                            .into(),
+                    ));
+                }
+                let config = read_json(&self.inner.config.claude_config_file).ok_or_else(|| {
+                    EngineError::Other(
+                        "Claude Code has no detectable provider-native account on this device."
+                            .into(),
+                    )
+                })?;
+                let oauth = config.get("oauthAccount").ok_or_else(|| {
+                    EngineError::Other(
+                        "Claude Code has no detectable provider-native account on this device."
+                            .into(),
+                    )
+                })?;
+                let account_key = str_field(oauth, "accountUuid")
+                    .or_else(|| str_field(oauth, "emailAddress"))
+                    .ok_or_else(|| {
+                        EngineError::Other(
+                            "Claude Code's native account identity is unavailable.".into(),
+                        )
+                    })?;
+                Ok(ProviderExecutionAccount {
+                    account_id: CLAUDE_NATIVE_ACCOUNT_ID.into(),
+                    auth_instance_id: format!(
+                        "claude-auth:{}",
+                        &crate::repos::hex(&Sha256::digest(account_key.as_bytes()))[..16]
+                    ),
+                    codex_home: None,
+                })
+            }
+            HarnessId::Codex => {
+                let account_id = requested_account_id
+                    .filter(|id| !id.trim().is_empty())
+                    .unwrap_or(&state.default_codex_account_id);
+                let home = self.codex_home_for_account_with_state(&state, account_id)?;
+                let detected = read_json(&home.join("auth.json"))
+                    .and_then(parse_codex_auth)
+                    .ok_or_else(|| {
+                        EngineError::Other(
+                            "The selected Codex account no longer has a usable provider login."
+                                .into(),
+                        )
+                    })?;
+                Ok(ProviderExecutionAccount {
+                    account_id: account_id.to_string(),
+                    auth_instance_id: format!(
+                        "codex-auth:{account_id}:{}",
+                        &crate::repos::hex(&Sha256::digest(detected.account_key.as_bytes()))[..16]
+                    ),
+                    codex_home: Some(home),
+                })
+            }
+            _ => Ok(ProviderExecutionAccount {
+                account_id: requested_account_id.unwrap_or_default().to_string(),
+                auth_instance_id: format!("{}:native", harness_slug(harness)),
+                codex_home: None,
+            }),
+        }
+    }
+
+    pub fn codex_home_for_account(&self, account_id: &str) -> Result<PathBuf, EngineError> {
+        let state = lock(&self.inner.state).clone();
+        self.codex_home_for_account_with_state(&state, account_id)
+    }
+
+    fn codex_home_for_account_with_state(
+        &self,
+        state: &ProviderAccountState,
+        account_id: &str,
+    ) -> Result<PathBuf, EngineError> {
+        if account_id == CODEX_NATIVE_ACCOUNT_ID {
+            if self.detect_codex().is_none() {
+                return Err(EngineError::Other(
+                    "The default Codex account is not signed in on this device.".into(),
+                ));
+            }
+            return Ok(self.inner.config.codex_home.clone());
+        }
+        if !safe_account_id(account_id) {
+            return Err(EngineError::Other("Invalid Codex account identity.".into()));
+        }
+        if !state.codex_accounts.iter().any(|record| record.id == account_id) {
+            return Err(EngineError::Other(format!(
+                "Unknown Codex account selection: {account_id}"
+            )));
+        }
+        let home = self.inner.config.codex_shadow_home(account_id);
+        materialize_codex_shadow_home(&self.inner.config.codex_home, &home)?;
+        if read_json(&home.join("auth.json"))
+            .and_then(parse_codex_auth)
+            .is_none()
+        {
+            return Err(EngineError::Other(
+                "That named Codex account no longer has a usable provider login.".into(),
+            ));
+        }
+        Ok(home)
+    }
+
+    pub fn invalidate_caches(&self, harness: HarnessId) {
+        let prefix = format!("{}:", harness_slug(harness));
+        lock(&self.inner.usage_cache).retain(|key, _| !key.starts_with(&prefix));
+    }
+
+    fn update_state(&self, update: impl FnOnce(&mut ProviderAccountState)) -> Result<(), EngineError> {
+        let mut state = lock(&self.inner.state);
+        let mut next = state.clone();
+        update(&mut next);
+        persist_account_state(&self.inner.config, &next)?;
+        *state = next;
+        Ok(())
+    }
+
+    fn finish_codex_login(
+        &self,
+        account_id: Option<&str>,
+        detected: &Detected,
+    ) -> Result<(), EngineError> {
+        let account_id = account_id.ok_or_else(|| {
+            EngineError::Other("Codex named-account login lost its account identity.".into())
+        })?;
+        let native_available = self.detect_codex().is_some();
+        self.update_state(|state| {
+            state.codex_accounts.retain(|record| record.id != account_id);
+            state.codex_accounts.push(CodexAccountRecord {
+                id: account_id.to_string(),
+                account_key: detected.account_key.clone(),
+                profile: detected.profile.clone(),
+                created_at: now_ms(),
+            });
+            if !native_available {
+                state.default_codex_account_id = account_id.to_string();
+            }
+        })?;
+        self.invalidate_caches(HarnessId::Codex);
+        Ok(())
     }
 
     // ── list ────────────────────────────────────────────────────────────────
 
     /// Detect provider-native live logins and assemble a metadata-only view.
     pub async fn list(&self, force_usage: bool) -> Result<AgentAccountsSnapshot, EngineError> {
+        self.list_filtered(force_usage, None).await
+    }
+
+    /// Provider-scoped listing for surfaces such as the Codex model picker.
+    /// This boundary matters on macOS: asking only for Codex must never probe
+    /// Claude's Keychain-backed native login as a side effect.
+    pub async fn list_harness(
+        &self,
+        harness: HarnessId,
+        force_usage: bool,
+    ) -> Result<AgentAccountsSnapshot, EngineError> {
+        self.list_filtered(force_usage, Some(harness)).await
+    }
+
+    async fn list_filtered(
+        &self,
+        force_usage: bool,
+        only_harness: Option<HarnessId>,
+    ) -> Result<AgentAccountsSnapshot, EngineError> {
         if force_usage {
-            lock(&self.inner.usage_cache).clear();
+            if let Some(harness) = only_harness {
+                self.invalidate_caches(harness);
+            } else {
+                lock(&self.inner.usage_cache).clear();
+            }
         }
+        let includes = |harness| only_harness.is_none_or(|only| only == harness);
+        let state = lock(&self.inner.state).clone();
         let mut warnings: Vec<AgentAccountWarning> = Vec::new();
-        let (claude, claude_warning) = self.detect_claude().await;
+        let (claude, claude_warning) = if includes(HarnessId::ClaudeCode) {
+            self.detect_claude().await
+        } else {
+            (None, None)
+        };
         if let Some(message) = claude_warning {
             warnings.push(AgentAccountWarning {
                 harness: HarnessId::ClaudeCode,
                 message,
             });
         }
-        let codex = self.detect_codex();
-        let cursor = self.detect_cursor();
+        let codex = includes(HarnessId::Codex)
+            .then(|| self.detect_codex())
+            .flatten();
+        let cursor = includes(HarnessId::Cursor)
+            .then(|| self.detect_cursor())
+            .flatten();
         if cursor.is_some() {
             // The SDK's minted keys expire (90-day default) — an expired live
             // key fails every run with an auth error, so say so up front.
@@ -304,47 +591,114 @@ impl AgentAccounts {
             }
         }
         let mut accounts: Vec<AgentAccount> = Vec::new();
-        for (harness, detected) in [
-            (HarnessId::ClaudeCode, claude),
-            (HarnessId::Codex, codex),
-            (HarnessId::Cursor, cursor),
-        ] {
-            if let Some(detected) = detected {
-                let slot = Slot {
-                    id: slot_id_for(harness, &detected.account_key),
-                    account_key: detected.account_key.clone(),
-                    profile: detected.profile.clone(),
-                    credentials: detected
-                        .credentials
-                        .clone()
-                        .unwrap_or_else(|| serde_json::json!({})),
-                    claude_config: None,
-                };
-                let usage = self.usage_for(harness, &slot, true, force_usage).await;
-                accounts.push(AgentAccount {
-                    id: slot.id,
-                    harness,
-                    email: Some(detected.profile.email.clone()),
-                    authentication: if detected.credentials.is_none() {
-                        AgentAuthenticationState::Unavailable
-                    } else if harness == HarnessId::Cursor && !self.cursor_live_usable() {
-                        AgentAuthenticationState::Expired
-                    } else {
-                        AgentAuthenticationState::Authenticated
-                    },
-                    plan_label: usage
-                        .as_ref()
-                        .and_then(|usage| usage.plan_label.clone())
-                        .or_else(|| detected.profile.plan.clone()),
-                    active: true,
-                    usage_windows: usage.map(|usage| usage.windows).unwrap_or_default(),
-                    display_name: detected.profile.display_name,
-                    organization: detected.profile.organization,
-                    auth_kind: Some(detected.profile.auth_kind),
-                    switchable: false,
-                    saved_at: None,
+        if let Some(detected) = claude {
+            let slot = slot_from_detected(
+                CLAUDE_NATIVE_ACCOUNT_ID,
+                &detected,
+            );
+            let usage = self
+                .usage_for(
+                    HarnessId::ClaudeCode,
+                    &slot,
+                    state.claude_enabled,
+                    force_usage && state.claude_enabled,
+                )
+                .await;
+            accounts.push(account_from_slot(
+                HarnessId::ClaudeCode,
+                slot,
+                usage,
+                state.claude_enabled,
+                !state.claude_enabled,
+                (!state.claude_enabled).then_some(AgentAuthenticationState::Unavailable),
+                None,
+            ));
+            if !state.claude_enabled {
+                warnings.push(AgentAccountWarning {
+                    harness: HarnessId::ClaudeCode,
+                    message: "Claude Code is disconnected in LUNA. Its provider login and history were left untouched; reconnect explicitly to use it again."
+                        .into(),
                 });
             }
+        }
+
+        if let Some(detected) = codex {
+            let slot = slot_from_detected(CODEX_NATIVE_ACCOUNT_ID, &detected);
+            let active = state.default_codex_account_id == CODEX_NATIVE_ACCOUNT_ID;
+            let usage = self
+                .usage_for(HarnessId::Codex, &slot, active, force_usage)
+                .await;
+            accounts.push(account_from_slot(
+                HarnessId::Codex,
+                slot,
+                usage,
+                active,
+                !active,
+                None,
+                None,
+            ));
+        }
+
+        for record in state
+            .codex_accounts
+            .iter()
+            .filter(|_| includes(HarnessId::Codex))
+        {
+            let home = self.inner.config.codex_shadow_home(&record.id);
+            let detected = read_json(&home.join("auth.json")).and_then(parse_codex_auth);
+            let active = state.default_codex_account_id == record.id;
+            let slot = match &detected {
+                Some(detected) => slot_from_detected(&record.id, detected),
+                None => Slot {
+                    id: record.id.clone(),
+                    account_key: record.account_key.clone(),
+                    profile: record.profile.clone(),
+                    credentials: serde_json::json!({}),
+                    claude_config: None,
+                },
+            };
+            let usage = if detected.is_some() {
+                self.usage_for(HarnessId::Codex, &slot, active, force_usage)
+                    .await
+            } else {
+                None
+            };
+            accounts.push(account_from_slot(
+                HarnessId::Codex,
+                slot,
+                usage,
+                active,
+                !active && detected.is_some(),
+                detected
+                    .is_none()
+                    .then_some(AgentAuthenticationState::Unavailable),
+                Some(record.created_at),
+            ));
+        }
+
+        if let Some(detected) = cursor {
+            let slot = slot_from_detected(
+                &slot_id_for(HarnessId::Cursor, &detected.account_key),
+                &detected,
+            );
+            let usage = self
+                .usage_for(HarnessId::Cursor, &slot, true, force_usage)
+                .await;
+            accounts.push(account_from_slot(
+                HarnessId::Cursor,
+                slot,
+                usage,
+                true,
+                false,
+                (!self.cursor_live_usable()).then_some(AgentAuthenticationState::Expired),
+                None,
+            ));
+        }
+
+        for harness in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Cursor]
+            .into_iter()
+            .filter(|harness| includes(*harness))
+        {
             if self.legacy_slots_present(harness) {
                 warnings.push(AgentAccountWarning {
                     harness,
@@ -365,18 +719,35 @@ impl AgentAccounts {
 
     // ── swap ────────────────────────────────────────────────────────────────
 
-    /// LUNA-owned provider account copies are disabled. Provider-native login
-    /// controls remain the only account-switching authority.
     pub async fn activate(
         &self,
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
-        let _ = (harness, account_id);
-        Err(EngineError::Other(
-            "Provider accounts are provider-owned. Switch accounts with the provider's supported login interface, then refresh LUNA."
-                .into(),
-        ))
+        match harness {
+            HarnessId::ClaudeCode if account_id == CLAUDE_NATIVE_ACCOUNT_ID => {
+                if self.detect_claude().await.0.is_none() {
+                    return Err(EngineError::Other(
+                        "Claude Code has no provider-native login to reconnect; sign in first."
+                            .into(),
+                    ));
+                }
+                self.update_state(|state| state.claude_enabled = true)?;
+            }
+            HarnessId::Codex => {
+                self.codex_home_for_account(account_id)?;
+                self.update_state(|state| {
+                    state.default_codex_account_id = account_id.to_string();
+                })?;
+            }
+            _ => {
+                return Err(EngineError::Other(
+                    "This provider does not support a LUNA account selection action.".into(),
+                ));
+            }
+        }
+        self.invalidate_caches(harness);
+        self.list(false).await
     }
 
     async fn activate_claude(&self, slot: &Slot) -> Result<(), EngineError> {
@@ -428,7 +799,12 @@ impl AgentAccounts {
         // credential store. Slot owns the account login; live owns MCP/plugin
         // OAuth that lives in the same blob. A wholesale replace would restore
         // stale (or empty) mcpOAuth and force every MCP to re-auth.
-        let (live, _) = self.read_claude_credentials().await;
+        let (live, read_warning) = self.read_claude_credentials().await;
+        if let Some(read_warning) = read_warning {
+            return Err(EngineError::Other(format!(
+                "Claude Code's existing credentials could not be read without user interaction, so LUNA did not replace them or risk losing shared MCP authentication. {read_warning}"
+            )));
+        }
         let credentials = compose_claude_credentials(&slot.credentials, live.as_ref());
         self.write_claude_credentials(&credentials).await?;
 
@@ -444,11 +820,15 @@ impl AgentAccounts {
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
-        let _ = (harness, account_id);
-        Err(EngineError::Other(
-            "Provider credentials are provider-owned. LUNA will not delete provider logins or legacy credential copies through this action."
-                .into(),
-        ))
+        if harness != HarnessId::ClaudeCode || account_id != CLAUDE_NATIVE_ACCOUNT_ID {
+            return Err(EngineError::Other(
+                "LUNA will not delete provider credentials or Codex account overlays through this action."
+                    .into(),
+            ));
+        }
+        self.update_state(|state| state.claude_enabled = false)?;
+        self.invalidate_caches(HarnessId::ClaudeCode);
+        self.list(false).await
     }
 
     // ── add-account OAuth flows ─────────────────────────────────────────────
@@ -522,10 +902,12 @@ impl AgentAccounts {
     async fn start_codex_login(&self) -> Result<AgentLoginStart, EngineError> {
         self.reap_spawned_flows(HarnessId::Codex);
         let login_id = new_id();
-        // Explicit user action invokes Codex's own login against its native
-        // home. LUNA watches completion but never copies the resulting auth.
-        let home = self.inner.config.codex_home.clone();
-        std::fs::create_dir_all(&home)?;
+        let account_id = new_id();
+        // A named login gets a private auth overlay over the canonical Codex
+        // session/config home. The provider CLI writes its own auth.json; LUNA
+        // never sees or copies the token value into metadata.
+        let home = self.inner.config.codex_shadow_home(&account_id);
+        materialize_codex_shadow_home(&self.inner.config.codex_home, &home)?;
         let baseline_fingerprint = file_fingerprint(&home.join("auth.json"));
         // Resolve through the harness itself (`CODEX_EXECUTABLE`, PATH, the
         // login-shell snapshot, install dirs — the Windows npm payload
@@ -579,6 +961,7 @@ impl AgentAccounts {
             login_id.clone(),
             LoginFlow::Spawned {
                 harness: HarnessId::Codex,
+                account_id: Some(account_id),
                 child,
                 home,
                 baseline_fingerprint,
@@ -680,6 +1063,7 @@ impl AgentAccounts {
             login_id.clone(),
             LoginFlow::Spawned {
                 harness: HarnessId::Cursor,
+                account_id: None,
                 child,
                 home,
                 baseline_fingerprint,
@@ -849,8 +1233,19 @@ impl AgentAccounts {
             claude_config: Some(serde_json::json!({ "oauthAccount": oauth_account })),
         };
         self.activate_claude(&provider_login).await?;
+        self.update_state(|state| state.claude_enabled = true)?;
+        self.invalidate_caches(HarnessId::ClaudeCode);
         lock(&self.inner.flows).remove(login_id);
         self.list(false).await
+    }
+
+    pub fn login_harness(&self, login_id: &str) -> Option<HarnessId> {
+        match lock(&self.inner.flows).get(login_id) {
+            Some(LoginFlow::Claude { .. }) => Some(HarnessId::ClaudeCode),
+            Some(LoginFlow::Spawned { harness, .. })
+            | Some(LoginFlow::Task { harness, .. }) => Some(*harness),
+            None => None,
+        }
     }
 
     pub async fn poll_login(&self, login_id: &str) -> Result<AgentLoginPoll, EngineError> {
@@ -858,7 +1253,7 @@ impl AgentAccounts {
         if let Some(poll) = self.poll_task_login(login_id) {
             return Ok(poll);
         }
-        let (harness, home, baseline_fingerprint, exit, output) =
+        let (harness, account_id, home, baseline_fingerprint, exit, output) =
             match lock(&self.inner.flows).get(login_id) {
                 None => {
                     return Err(EngineError::Other(
@@ -875,6 +1270,7 @@ impl AgentAccounts {
                 Some(LoginFlow::Task { .. }) => unreachable!("task logins poll above"),
                 Some(LoginFlow::Spawned {
                     harness,
+                    account_id,
                     home,
                     baseline_fingerprint,
                     exit,
@@ -882,6 +1278,7 @@ impl AgentAccounts {
                     ..
                 }) => (
                     *harness,
+                    account_id.clone(),
                     home.clone(),
                     *baseline_fingerprint,
                     exit.clone(),
@@ -895,6 +1292,12 @@ impl AgentAccounts {
             _ => None,
         });
         if detected.is_some() && file_fingerprint(&auth_file) != baseline_fingerprint {
+            if harness == HarnessId::Codex {
+                self.finish_codex_login(
+                    account_id.as_deref(),
+                    detected.as_ref().expect("checked above"),
+                )?;
+            }
             self.cancel_login(login_id);
             return Ok(AgentLoginPoll {
                 status: AgentLoginStatus::Done,
@@ -906,6 +1309,12 @@ impl AgentAccounts {
         if let Some(code) = exited {
             self.cancel_login(login_id);
             let message = if code == Some(0) && detected.is_some() {
+                if harness == HarnessId::Codex {
+                    self.finish_codex_login(
+                        account_id.as_deref(),
+                        detected.as_ref().expect("checked above"),
+                    )?;
+                }
                 return Ok(AgentLoginPoll {
                     status: AgentLoginStatus::Done,
                     message: None,
@@ -1278,8 +1687,9 @@ impl AgentAccounts {
 //
 // Claude Code stores its credentials in the login Keychain under the service
 // `Claude Code-credentials`, account = the current username. Native Security
-// Framework calls avoid placing credentials in process arguments. Calls are
-// moved to a blocking task and the UI wait is bounded at 15 seconds.
+// Framework calls avoid placing credentials in process arguments. Background
+// reads explicitly disallow authentication UI; a timeout alone cannot cancel
+// a blocking Security Framework call and is not a no-popup guarantee.
 #[cfg(target_os = "macos")]
 mod keychain {
     use super::*;
@@ -1293,8 +1703,11 @@ mod keychain {
     pub(super) async fn read_credentials() -> (Option<serde_json::Value>, Option<String>) {
         let account = account();
         let read = tokio::task::spawn_blocking(move || {
-            security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, &account)
-                .map_err(|error| error.code())
+            crate::macos_keychain::get_generic_password_noninteractive(
+                KEYCHAIN_SERVICE,
+                &account,
+            )
+            .map_err(|error| error.code())
         });
         let mut bytes = match tokio::time::timeout(EXEC_TIMEOUT, read).await {
             Ok(Ok(Ok(bytes))) => bytes,
@@ -1303,7 +1716,7 @@ mod keychain {
                 return (
                     None,
                     Some(
-                        "A Claude Code login may exist, but macOS Keychain access is unavailable or locked. Unlock Keychain and refresh to verify authentication."
+                        "A Claude Code login may exist, but its macOS Keychain entry is unavailable without user interaction. LUNA will not open an authentication prompt during discovery."
                             .into(),
                     ),
                 );
@@ -1358,6 +1771,192 @@ fn harness_slug(harness: HarnessId) -> &'static str {
         HarnessId::Antigravity => "antigravity",
         HarnessId::Mock => "mock",
     }
+}
+
+fn slot_from_detected(id: &str, detected: &Detected) -> Slot {
+    Slot {
+        id: id.to_string(),
+        account_key: detected.account_key.clone(),
+        profile: detected.profile.clone(),
+        credentials: detected
+            .credentials
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({})),
+        claude_config: None,
+    }
+}
+
+fn account_from_slot(
+    harness: HarnessId,
+    slot: Slot,
+    usage: Option<UsageSnapshot>,
+    active: bool,
+    switchable: bool,
+    authentication: Option<AgentAuthenticationState>,
+    saved_at: Option<i64>,
+) -> AgentAccount {
+    let credentials_available = slot
+        .credentials
+        .as_object()
+        .is_some_and(|credentials| !credentials.is_empty());
+    AgentAccount {
+        id: slot.id,
+        harness,
+        email: Some(slot.profile.email.clone()),
+        authentication: authentication.unwrap_or(if credentials_available {
+            AgentAuthenticationState::Authenticated
+        } else {
+            AgentAuthenticationState::Unavailable
+        }),
+        plan_label: usage
+            .as_ref()
+            .and_then(|usage| usage.plan_label.clone())
+            .or(slot.profile.plan),
+        active,
+        usage_windows: usage.map(|usage| usage.windows).unwrap_or_default(),
+        display_name: slot.profile.display_name,
+        organization: slot.profile.organization,
+        auth_kind: Some(slot.profile.auth_kind),
+        switchable,
+        saved_at,
+    }
+}
+
+fn load_account_state(config: &AgentAccountsConfig) -> ProviderAccountState {
+    let file = config.state_file();
+    let Ok(bytes) = std::fs::read(&file) else {
+        return ProviderAccountState::default();
+    };
+    match serde_json::from_slice::<ProviderAccountState>(&bytes) {
+        Ok(mut state) if state.schema_version == PROVIDER_ACCOUNT_STATE_VERSION => {
+            state.codex_accounts.retain(|record| safe_account_id(&record.id));
+            if state.default_codex_account_id != CODEX_NATIVE_ACCOUNT_ID
+                && !state
+                    .codex_accounts
+                    .iter()
+                    .any(|record| record.id == state.default_codex_account_id)
+            {
+                state.default_codex_account_id = native_codex_account();
+            }
+            state
+        }
+        Ok(state) => {
+            tracing::warn!(
+                version = state.schema_version,
+                path = %file.display(),
+                "ignoring unsupported provider-account metadata"
+            );
+            ProviderAccountState::default()
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %file.display(), "provider-account metadata is unreadable");
+            ProviderAccountState::default()
+        }
+    }
+}
+
+fn persist_account_state(
+    config: &AgentAccountsConfig,
+    state: &ProviderAccountState,
+) -> Result<(), EngineError> {
+    std::fs::create_dir_all(&config.data_dir)?;
+    let bytes = serde_json::to_vec_pretty(state)
+        .map_err(|error| EngineError::Other(format!("account metadata encode failed: {error}")))?;
+    write_file_atomic(&config.state_file(), &bytes, true)
+}
+
+fn materialize_codex_shadow_home(shared: &Path, shadow: &Path) -> Result<(), EngineError> {
+    if shared == shadow {
+        return Err(EngineError::Other(
+            "Codex auth overlay must differ from the canonical session home.".into(),
+        ));
+    }
+    std::fs::create_dir_all(shared)?;
+    std::fs::create_dir_all(shadow)?;
+    for directory in CODEX_SHARED_DIRECTORIES {
+        std::fs::create_dir_all(shared.join(directory))?;
+    }
+
+    for private in CODEX_PRIVATE_ENTRIES {
+        let path = shadow.join(private);
+        if path.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink()) {
+            if *private == "auth.json" {
+                return Err(EngineError::Other(format!(
+                    "Codex shadow auth must be a private file, not a symlink: {}",
+                    path.display()
+                )));
+            }
+            std::fs::remove_file(&path)?;
+        }
+    }
+
+    let mut entries = CODEX_SHARED_DIRECTORIES
+        .iter()
+        .map(|entry| (*entry).to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    for entry in std::fs::read_dir(shared)? {
+        let name = entry?.file_name().to_string_lossy().to_string();
+        if !CODEX_PRIVATE_ENTRIES.contains(&name.as_str())
+            && !CODEX_SHADOW_LOCAL_ENTRIES.contains(&name.as_str())
+        {
+            entries.insert(name);
+        }
+    }
+    for entry in entries {
+        ensure_codex_shared_link(shared, shadow, &entry)?;
+    }
+    Ok(())
+}
+
+fn ensure_codex_shared_link(shared: &Path, shadow: &Path, entry: &str) -> Result<(), EngineError> {
+    let target = shared.join(entry);
+    let link = shadow.join(entry);
+    match link.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = std::fs::read_link(&link)?;
+            let current = if current.is_absolute() {
+                current
+            } else {
+                shadow.join(current)
+            };
+            if current == target {
+                return Ok(());
+            }
+            std::fs::remove_file(&link)?;
+        }
+        Ok(_) if entry == "mcp-oauth-locks" => {
+            if link.is_dir() {
+                std::fs::remove_dir_all(&link)?;
+            } else {
+                std::fs::remove_file(&link)?;
+            }
+        }
+        Ok(_) => {
+            return Err(EngineError::Other(format!(
+                "Cannot share Codex home entry `{entry}` because {} already exists and is not a symlink.",
+                link.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    create_symlink(&target, &link)
+}
+
+#[cfg(unix)]
+fn create_symlink(target: &Path, link: &Path) -> Result<(), EngineError> {
+    std::os::unix::fs::symlink(target, link)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn create_symlink(target: &Path, link: &Path) -> Result<(), EngineError> {
+    if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, link)?;
+    } else {
+        std::os::windows::fs::symlink_file(target, link)?;
+    }
+    Ok(())
 }
 
 fn read_json(file: &Path) -> Option<serde_json::Value> {
@@ -1841,6 +2440,264 @@ fn write_file_atomic(file: &Path, bytes: &[u8], secret: bool) -> Result<(), Engi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_config(root: &Path) -> AgentAccountsConfig {
+        AgentAccountsConfig {
+            data_dir: root.join("luna"),
+            claude_config_dir: root.join("claude"),
+            claude_config_file: root.join("claude.json"),
+            codex_home: root.join("codex"),
+            cursor_sdk_auth_file: root.join("cursor-auth.json"),
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_disconnect_persists_without_touching_native_login() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        std::fs::create_dir_all(&config.claude_config_dir).unwrap();
+        std::fs::write(
+            &config.claude_config_file,
+            serde_json::json!({
+                "oauthAccount": {
+                    "accountUuid": "synthetic-account",
+                    "emailAddress": "claude@example.test"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let credentials = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "synthetic-access-token",
+                "refreshToken": "synthetic-refresh-token"
+            }
+        });
+        std::fs::write(config.claude_creds_file(), credentials.to_string()).unwrap();
+
+        let accounts = AgentAccounts::new(config.clone());
+        accounts
+            .forget(HarnessId::ClaudeCode, CLAUDE_NATIVE_ACCOUNT_ID)
+            .await
+            .unwrap();
+        assert_eq!(
+            read_json(&config.claude_creds_file()).unwrap(),
+            credentials,
+            "disconnect must not log out, delete, or rewrite provider credentials"
+        );
+        assert!(
+            accounts
+                .resolve_execution(HarnessId::ClaudeCode, None)
+                .unwrap_err()
+                .to_string()
+                .contains("disconnected")
+        );
+
+        let reloaded = AgentAccounts::new(config.clone());
+        assert!(
+            reloaded
+                .resolve_execution(HarnessId::ClaudeCode, None)
+                .is_err(),
+            "native rediscovery must not reconnect a LUNA-disabled account"
+        );
+        reloaded
+            .activate(HarnessId::ClaudeCode, CLAUDE_NATIVE_ACCOUNT_ID)
+            .await
+            .unwrap();
+        assert_eq!(
+            reloaded
+                .resolve_execution(HarnessId::ClaudeCode, None)
+                .unwrap()
+                .account_id,
+            CLAUDE_NATIVE_ACCOUNT_ID
+        );
+        let metadata = std::fs::read_to_string(config.state_file()).unwrap();
+        assert!(!metadata.contains("synthetic-access-token"));
+        assert!(!metadata.contains("synthetic-refresh-token"));
+    }
+
+    #[tokio::test]
+    async fn codex_scoped_listing_excludes_other_provider_discovery() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        std::fs::create_dir_all(&config.codex_home).unwrap();
+        std::fs::write(
+            config.codex_auth_file(),
+            serde_json::json!({"OPENAI_API_KEY": "synthetic-codex-key"}).to_string(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(&config.claude_config_dir).unwrap();
+        std::fs::write(
+            &config.claude_config_file,
+            serde_json::json!({
+                "oauthAccount": {
+                    "accountUuid": "synthetic-claude",
+                    "emailAddress": "claude@example.test"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // Keep the fixture hermetic even if this contract regresses: the file
+        // wins over macOS Keychain in Claude discovery.
+        std::fs::write(
+            config.claude_creds_file(),
+            serde_json::json!({"claudeAiOauth": {"accessToken": "fixture-only"}}).to_string(),
+        )
+        .unwrap();
+
+        let snapshot = AgentAccounts::new(config)
+            .list_harness(HarnessId::Codex, false)
+            .await
+            .unwrap();
+        assert!(!snapshot.accounts.is_empty());
+        assert!(
+            snapshot
+                .accounts
+                .iter()
+                .all(|account| account.harness == HarnessId::Codex)
+        );
+        assert!(
+            snapshot
+                .warnings
+                .iter()
+                .all(|warning| warning.harness == HarnessId::Codex)
+        );
+    }
+
+    #[test]
+    fn native_identity_changes_rotate_execution_auth_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        std::fs::create_dir_all(&config.codex_home).unwrap();
+        std::fs::write(
+            config.codex_auth_file(),
+            serde_json::json!({"OPENAI_API_KEY": "synthetic-codex-a"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &config.claude_config_file,
+            serde_json::json!({
+                "oauthAccount": {
+                    "accountUuid": "synthetic-claude-a",
+                    "emailAddress": "a@example.test"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let accounts = AgentAccounts::new(config.clone());
+        let codex_a = accounts
+            .resolve_execution(HarnessId::Codex, Some(CODEX_NATIVE_ACCOUNT_ID))
+            .unwrap();
+        let claude_a = accounts
+            .resolve_execution(HarnessId::ClaudeCode, None)
+            .unwrap();
+
+        std::fs::write(
+            config.codex_auth_file(),
+            serde_json::json!({"OPENAI_API_KEY": "synthetic-codex-b"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            &config.claude_config_file,
+            serde_json::json!({
+                "oauthAccount": {
+                    "accountUuid": "synthetic-claude-b",
+                    "emailAddress": "b@example.test"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let codex_b = accounts
+            .resolve_execution(HarnessId::Codex, Some(CODEX_NATIVE_ACCOUNT_ID))
+            .unwrap();
+        let claude_b = accounts
+            .resolve_execution(HarnessId::ClaudeCode, None)
+            .unwrap();
+        assert_eq!(codex_a.account_id, codex_b.account_id);
+        assert_ne!(codex_a.auth_instance_id, codex_b.auth_instance_id);
+        assert_eq!(claude_a.account_id, claude_b.account_id);
+        assert_ne!(claude_a.auth_instance_id, claude_b.auth_instance_id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_named_accounts_share_sessions_but_keep_auth_private() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        std::fs::create_dir_all(&config.codex_home).unwrap();
+        std::fs::write(
+            config.codex_auth_file(),
+            serde_json::json!({"OPENAI_API_KEY": "synthetic-native-key"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(config.codex_home.join("config.toml"), "model = 'test'").unwrap();
+        std::fs::write(config.codex_home.join("models_cache.json"), "{}").unwrap();
+
+        let account_id = "named-synthetic";
+        let shadow = config.codex_shadow_home(account_id);
+        materialize_codex_shadow_home(&config.codex_home, &shadow).unwrap();
+        assert!(shadow.join("sessions").symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(shadow.join("config.toml").symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(!shadow.join("models_cache.json").exists());
+        assert!(!shadow.join("auth.json").exists());
+        std::fs::write(
+            shadow.join("auth.json"),
+            serde_json::json!({"OPENAI_API_KEY": "synthetic-named-key"}).to_string(),
+        )
+        .unwrap();
+        assert!(!shadow.join("auth.json").symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            read_json(&config.codex_auth_file()).unwrap()["OPENAI_API_KEY"],
+            "synthetic-native-key"
+        );
+
+        let accounts = AgentAccounts::new(config.clone());
+        accounts
+            .update_state(|state| {
+                state.codex_accounts.push(CodexAccountRecord {
+                    id: account_id.into(),
+                    account_key: "synthetic-key-id".into(),
+                    profile: SlotProfile {
+                        email: "Named test account".into(),
+                        display_name: None,
+                        organization: None,
+                        plan: Some("API key".into()),
+                        auth_kind: AgentAuthKind::ApiKey,
+                    },
+                    created_at: 1,
+                });
+            })
+            .unwrap();
+        let native = accounts
+            .resolve_execution(HarnessId::Codex, Some(CODEX_NATIVE_ACCOUNT_ID))
+            .unwrap();
+        let named = accounts
+            .resolve_execution(HarnessId::Codex, Some(account_id))
+            .unwrap();
+        assert_eq!(native.codex_home.as_deref(), Some(config.codex_home.as_path()));
+        assert_eq!(named.codex_home.as_deref(), Some(shadow.as_path()));
+        assert_ne!(native.auth_instance_id, named.auth_instance_id);
+        let metadata = std::fs::read_to_string(config.state_file()).unwrap();
+        assert!(!metadata.contains("synthetic-native-key"));
+        assert!(!metadata.contains("synthetic-named-key"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_shadow_rejects_symlinked_private_auth() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        std::fs::create_dir_all(&config.codex_home).unwrap();
+        std::fs::write(config.codex_auth_file(), "{}").unwrap();
+        let shadow = config.codex_shadow_home("bad-auth");
+        std::fs::create_dir_all(&shadow).unwrap();
+        std::os::unix::fs::symlink(config.codex_auth_file(), shadow.join("auth.json")).unwrap();
+        let error = materialize_codex_shadow_home(&config.codex_home, &shadow).unwrap_err();
+        assert!(error.to_string().contains("private file"));
+    }
 
     #[test]
     fn plan_labels() {

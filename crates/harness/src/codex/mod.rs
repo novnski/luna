@@ -71,6 +71,7 @@ use normalize::{
 /// forwarded as model configuration.
 pub const LUNA_NATIVE_THREAD_NAME_OPTION: &str = "lunaNativeThreadName";
 pub const LUNA_STRICT_RESUME_OPTION: &str = "lunaStrictResume";
+pub const LUNA_CODEX_HOME_OPTION: &str = "lunaCodexHome";
 
 /// Locate the device's installed Codex CLI: `CODEX_EXECUTABLE`, then our own
 /// PATH, then the login-shell PATH snapshot (the user's shell init shapes
@@ -228,10 +229,16 @@ impl CodexHarness {
     /// applies the signed-in account's rollout/visibility policy, so hidden or
     /// unavailable models (including staged Astra rollouts) never leak into a
     /// successful picker response.
-    async fn discover_models(&self) -> Result<Vec<Model>, HarnessError> {
+    async fn discover_models(
+        &self,
+        codex_home: Option<&std::path::Path>,
+    ) -> Result<Vec<Model>, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
+        if let Some(codex_home) = codex_home {
+            cmd.env("CODEX_HOME", codex_home);
+        }
         crate::compose_child_path(&mut cmd, &exe);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -558,7 +565,7 @@ impl Harness for CodexHarness {
     /// intentionally not cached so reopening the picker retries rollout state.
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         self.resolve_executable()?;
-        match self.discover_models().await {
+        match self.discover_models(None).await {
             Ok(models) if !models.is_empty() => Ok(models),
             Ok(_) => Ok(static_models()),
             Err(error) => {
@@ -593,16 +600,42 @@ impl Harness for CodexHarness {
         mut request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let codex_home = request.model_options.remove(LUNA_CODEX_HOME_OPTION);
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
         request.model_options.clear();
+        if let Some(codex_home) = codex_home {
+            request
+                .model_options
+                .insert(LUNA_CODEX_HOME_OPTION.into(), codex_home);
+        }
         request.auto_approve = false;
         self.run_with_mode(request, controls, true).await
     }
 }
 
 impl CodexHarness {
+    /// Account-scoped model discovery. The home is resolved by the engine from
+    /// a trusted account id; it is never accepted directly from the UI.
+    pub async fn models_for_home(
+        &self,
+        codex_home: &std::path::Path,
+    ) -> Result<Vec<Model>, HarnessError> {
+        self.resolve_executable()?;
+        match self.discover_models(Some(codex_home)).await {
+            Ok(models) if !models.is_empty() => Ok(models),
+            Ok(_) => Ok(static_models()),
+            Err(error) => {
+                tracing::debug!(
+                    target: "zeron_harness::codex",
+                    "account-scoped model/list discovery failed; using fallback catalog: {error}"
+                );
+                Ok(static_models())
+            }
+        }
+    }
+
     async fn run_with_mode(
         &self,
         mut request: RunRequest,
@@ -617,6 +650,16 @@ impl CodexHarness {
         }
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
+        if let Some(codex_home) = request
+            .model_options
+            .remove(LUNA_CODEX_HOME_OPTION)
+            .and_then(|value| value.as_str().map(std::path::PathBuf::from))
+        {
+            cmd.env("CODEX_HOME", codex_home);
+        }
+        request
+            .model_options
+            .remove(crate::LUNA_PROVIDER_AUTH_INSTANCE_OPTION);
         crate::compose_child_path(&mut cmd, &exe);
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);

@@ -801,6 +801,7 @@ mod tests {
             source_context: None,
             config: Some(ChatConfig {
                 harness: HarnessId::Mock,
+                provider_account_id: None,
                 model: Some("mock-1".into()),
                 reasoning: None,
                 model_options: Default::default(),
@@ -870,6 +871,7 @@ mod tests {
         );
         let config = ChatConfig {
             harness: HarnessId::ClaudeCode,
+            provider_account_id: None,
             model: Some("claude-fable-5".into()),
             reasoning: Some(zeron_proto::ReasoningLevel::XHigh),
             model_options: options,

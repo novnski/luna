@@ -89,6 +89,11 @@ impl Space {
 #[serde(rename_all = "camelCase")]
 pub struct ChatConfig {
     pub harness: HarnessId,
+    /// Provider authentication instance selected for this chat. The value is
+    /// LUNA metadata only (for example `codex-native` or a named overlay id),
+    /// never a credential or provider-home path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     #[serde(default)]

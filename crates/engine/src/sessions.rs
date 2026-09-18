@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use chrono::Utc;
 use futures::StreamExt;
-use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast, mpsc, oneshot, watch};
 
 use zeron_doc::{
     DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter, SessionDoc,
@@ -176,6 +176,7 @@ struct HarnessSessionRef {
 #[derive(Debug, Clone, PartialEq)]
 struct RuntimeConfig {
     harness_id: HarnessId,
+    provider_account_id: Option<String>,
     model: Option<String>,
     reasoning: Option<zeron_proto::ReasoningLevel>,
     model_options: serde_json::Map<String, serde_json::Value>,
@@ -190,6 +191,7 @@ impl RuntimeConfig {
     fn from_request(harness_id: HarnessId, request: &RunRequest) -> Self {
         Self {
             harness_id,
+            provider_account_id: request.provider_account_id.clone(),
             model: request.model.clone(),
             reasoning: request.reasoning,
             model_options: request.model_options.clone(),
@@ -264,6 +266,11 @@ struct Inner {
     titles: OnceLock<crate::titles::TitleGenerator>,
     /// Stable task/provider bindings (wired at engine assembly; absent in bare tests).
     task_identity: OnceLock<crate::task_identity::TaskIdentityService>,
+    /// Local provider-auth selection and lifecycle state. L06 keeps using its
+    /// canonical session-home identity; this service only resolves execution auth.
+    agent_accounts: OnceLock<crate::agent_accounts::AgentAccounts>,
+    /// Serializes provider-account changes with runtime routing/startup.
+    account_transition: Arc<AsyncMutex<()>>,
     generated_images: OnceLock<(crate::uploads::Uploads, std::path::PathBuf)>,
     /// Fired with `(chat_id, cwd)` when a user prompt starts a turn (fresh
     /// dispatch or accepted steer) — the diff sync snapshots the checkout tree
@@ -305,6 +312,8 @@ impl SessionsEngine {
                 harness_sessions: Mutex::new(HashMap::new()),
                 titles: OnceLock::new(),
                 task_identity: OnceLock::new(),
+                agent_accounts: OnceLock::new(),
+                account_transition: Arc::new(AsyncMutex::new(())),
                 generated_images: OnceLock::new(),
                 turn_listener: OnceLock::new(),
             }),
@@ -345,6 +354,10 @@ impl SessionsEngine {
 
     pub fn set_task_identity(&self, task_identity: crate::task_identity::TaskIdentityService) {
         let _ = self.inner.task_identity.set(task_identity);
+    }
+
+    pub fn set_agent_accounts(&self, accounts: crate::agent_accounts::AgentAccounts) {
+        let _ = self.inner.agent_accounts.set(accounts);
     }
 
     /// Wire the turn-start listener (called once at engine assembly).
@@ -500,6 +513,96 @@ impl SessionsEngine {
         Ok(())
     }
 
+    /// Establish a provider-wide lifecycle boundary. Active turns are never
+    /// interrupted for an account change; the caller must stop them first.
+    /// Idle warm runtimes are retired while dispatch is excluded, and the
+    /// returned guard keeps that exclusion in force through the metadata or
+    /// provider-login mutation performed by the RPC layer.
+    pub async fn prepare_provider_account_change(
+        &self,
+        harness: HarnessId,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        let guard = self.inner.account_transition.clone().lock_owned().await;
+        let chats = lock(&self.inner.runs)
+            .iter()
+            .filter(|(_, run)| run.runtime_config.harness_id == harness)
+            .map(|(chat_id, _)| chat_id.clone())
+            .collect::<Vec<_>>();
+        if chats.iter().any(|chat_id| self.turn_in_flight(chat_id)) {
+            return Err(EngineError::Other(
+                "An active provider turn is still running. Stop it before changing the account."
+                    .into(),
+            ));
+        }
+        for chat_id in &chats {
+            self.interrupt(chat_id).await?;
+        }
+        if lock(&self.inner.runs)
+            .values()
+            .any(|run| run.runtime_config.harness_id == harness)
+        {
+            return Err(EngineError::Other(
+                "A warm provider runtime did not retire before the account-change deadline."
+                    .into(),
+            ));
+        }
+        Ok(guard)
+    }
+
+    /// Change one chat's auth instance without changing global provider login
+    /// or its canonical provider-session binding. The next send launches a
+    /// fresh authenticated runtime and resumes the same managed session/cwd.
+    pub async fn set_provider_account(
+        &self,
+        chat_id: &str,
+        account_id: &str,
+    ) -> Result<(), EngineError> {
+        let _account_transition = self.inner.account_transition.lock().await;
+        let gate = self.transition_gate(chat_id);
+        let _chat_transition = gate.lock().await;
+        let workspace = self
+            .inner
+            .workspace()
+            .ok_or_else(|| EngineError::Other("workspace host not wired".into()))?;
+        let Some(chat) = workspace.chat(chat_id)? else {
+            return Err(EngineError::Other("chat not found".into()));
+        };
+        let Some(mut config) = chat.config else {
+            return Err(EngineError::Other(
+                "chat has no provider configuration".into(),
+            ));
+        };
+        if config.harness != HarnessId::Codex {
+            return Err(EngineError::Other(
+                "Chat-level account selection is currently supported for Codex only.".into(),
+            ));
+        }
+        let accounts = self
+            .inner
+            .agent_accounts
+            .get()
+            .ok_or_else(|| EngineError::Other("provider accounts are not wired".into()))?;
+        let resolved = accounts.resolve_execution(config.harness, Some(account_id))?;
+        if config.provider_account_id.as_deref() == Some(resolved.account_id.as_str()) {
+            return Ok(());
+        }
+        if self.turn_in_flight(chat_id) {
+            return Err(EngineError::Other(
+                "This chat has an active turn. Stop it before switching accounts.".into(),
+            ));
+        }
+        self.interrupt(chat_id).await?;
+        if lock(&self.inner.runs).contains_key(chat_id) {
+            return Err(EngineError::Other(
+                "The warm runtime did not retire before the account-change deadline.".into(),
+            ));
+        }
+        config.provider_account_id = Some(resolved.account_id);
+        workspace.set_chat_config(chat_id, &config)?;
+        accounts.invalidate_caches(config.harness);
+        Ok(())
+    }
+
     /// Any run currently working or blocked on input — the auto-updater's
     /// "don't restart from under a session" gate.
     pub fn any_active(&self) -> bool {
@@ -576,11 +679,34 @@ impl SessionsEngine {
         mut message_id: Option<String>,
         startup_retry: bool,
     ) -> Result<String, EngineError> {
+        // Provider selection and runtime routing/startup are one boundary: an
+        // account mutation cannot race a warm steer or a fresh process spawn.
+        let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
         // Project-less chats store cwd `~` (the creating device can't know the
         // host's home); expand it here, on the host, where the run spawns.
         request.cwd = expand_home(&request.cwd);
+        if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex)
+            && let Some(accounts) = self.inner.agent_accounts.get()
+        {
+            let execution = accounts
+                .resolve_execution(harness_id, request.provider_account_id.as_deref())?;
+            request.provider_account_id = Some(execution.account_id);
+            request.model_options.insert(
+                zeron_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
+                execution.auth_instance_id.into(),
+            );
+            if let Some(home) = execution.codex_home {
+                let home = home.to_str().ok_or_else(|| {
+                    EngineError::Other("Codex account home is not valid UTF-8".into())
+                })?;
+                request.model_options.insert(
+                    zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+                    home.into(),
+                );
+            }
+        }
         if !crate::permissions::provider_can_run(harness_id) {
             return Err(EngineError::Other(format!(
                 "{} permission enforcement is unavailable; choose a provider with a verified LUNA permission contract",
@@ -1098,6 +1224,7 @@ impl SessionsEngine {
                         Some(RunRequest {
                             prompt: String::new(),
                             harness: None,
+                            provider_account_id: None,
                             model: None,
                             reasoning: None,
                             model_options: Default::default(),
@@ -2862,10 +2989,11 @@ async fn drive_run(
 #[cfg(test)]
 mod tests {
     use super::{
-        PendingInput, RuntimeConfig, approval_answer, expire_pending_approval, subagent_doc_id,
-        take_pending_ordinary_input,
+        PendingInput, RunHandle, RuntimeConfig, SessionsEngine, approval_answer,
+        expire_pending_approval, lock, subagent_doc_id, take_pending_ordinary_input,
     };
-    use zeron_proto::{HarnessId, RunRequest, SandboxLevel};
+    use std::sync::{Arc, Mutex};
+    use zeron_proto::{HarnessId, RunRequest, SandboxLevel, Session, SessionStatus};
 
     #[test]
     fn typed_approval_answers_fail_closed_for_unenforceable_task_allowance() {
@@ -3023,6 +3151,7 @@ mod tests {
         RunRequest {
             prompt: "first".into(),
             harness: None,
+            provider_account_id: None,
             model: Some("grok-4.6".into()),
             reasoning: Some(zeron_proto::ReasoningLevel::High),
             model_options: serde_json::Map::new(),
@@ -3057,8 +3186,73 @@ mod tests {
         assert!(!config.can_route(HarnessId::Grok, &follow_up));
         follow_up.reasoning = initial.reasoning;
 
+        follow_up.provider_account_id = Some("codex-account-b".into());
+        assert!(
+            !config.can_route(HarnessId::Grok, &follow_up),
+            "an auth-instance change must retire the warm runtime"
+        );
+        follow_up.provider_account_id = initial.provider_account_id.clone();
+
+        follow_up.model_options.insert(
+            zeron_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
+            "rotated-native-identity".into(),
+        );
+        assert!(
+            !config.can_route(HarnessId::Grok, &follow_up),
+            "an externally replaced native login must invalidate the warm runtime"
+        );
+        follow_up.model_options = initial.model_options.clone();
+
         follow_up.attachments.push("/tmp/image.png".into());
         assert!(!config.can_route(HarnessId::Grok, &follow_up));
+    }
+
+    #[tokio::test]
+    async fn provider_account_change_rejects_an_active_turn_without_interrupting_it() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "device-test".into(),
+            Arc::new(crate::run_journal::RunJournal::open(root.path()).unwrap()),
+            Arc::new(crate::registry::HarnessRegistry::new()),
+        );
+        let mut request = request();
+        request.provider_account_id = Some("codex-native".into());
+        let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
+        let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+        let (engine_tx, _engine_rx) = tokio::sync::mpsc::unbounded_channel();
+        lock(&sessions.inner.runs).insert(
+            "chat-active".into(),
+            RunHandle {
+                run_id: "run-active".into(),
+                steerable: true,
+                runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request),
+                steer_tx,
+                interrupt_token: zeron_harness::CancellationToken::new(),
+                cancel,
+                engine_tx,
+                pending_inputs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            },
+        );
+        let now = chrono::Utc::now();
+        lock(&sessions.inner.statuses).insert(
+            "chat-active".into(),
+            Session {
+                last_completed_turn: None,
+                chat_id: "chat-active".into(),
+                device_id: "device-test".into(),
+                status: SessionStatus::Working,
+                started_at: Some(now),
+                updated_at: now,
+            },
+        );
+
+        let error = sessions
+            .prepare_provider_account_change(HarnessId::Codex)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Stop it"));
+        assert!(lock(&sessions.inner.runs).contains_key("chat-active"));
     }
 
     #[test]

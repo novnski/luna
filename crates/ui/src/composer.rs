@@ -6521,6 +6521,7 @@ impl Composer {
                     request: RunRequest {
                         prompt: content.clone(),
                         harness: resolved.harness,
+                        provider_account_id: resolved.provider_account_id.clone(),
                         model: resolved.model.clone(),
                         reasoning: resolved.reasoning,
                         model_options: resolved.model_options.clone(),

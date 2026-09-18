@@ -3653,6 +3653,7 @@ mod tests {
         state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
         let config = zeron_proto::ChatConfig {
             harness: HarnessId::ClaudeCode,
+            provider_account_id: None,
             model: Some("claude-fable-5".into()),
             reasoning: Some(zeron_proto::ReasoningLevel::XHigh),
             model_options: serde_json::Map::new(),
@@ -3682,6 +3683,7 @@ mod tests {
             "missing",
             zeron_proto::ChatConfig {
                 harness: HarnessId::ClaudeCode,
+                provider_account_id: None,
                 model: None,
                 reasoning: None,
                 model_options: serde_json::Map::new(),

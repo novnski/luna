@@ -39,6 +39,7 @@ async fn main() {
                  get_command_or_subagent_output and tell me its result."
             .into(),
         harness: None,
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: serde_json::Map::new(),

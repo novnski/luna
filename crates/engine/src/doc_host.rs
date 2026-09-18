@@ -4183,6 +4183,7 @@ impl DocHost {
                 {
                     let config = zeron_proto::ChatConfig {
                         harness,
+                        provider_account_id: request.provider_account_id.clone(),
                         model: request.model.clone(),
                         reasoning: request.reasoning,
                         model_options: request.model_options.clone(),
@@ -4575,6 +4576,9 @@ impl DocHost {
         Some(zeron_proto::RunRequest {
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),
+            provider_account_id: config
+                .as_ref()
+                .and_then(|c| c.provider_account_id.clone()),
             model: config.as_ref().and_then(|c| c.model.clone()),
             reasoning: config.as_ref().and_then(|c| c.reasoning),
             model_options: config

@@ -29,6 +29,7 @@ fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
         prompt: prompt.into(),
         harness: None,
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: Default::default(),
@@ -1646,6 +1647,7 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
                 Some(&core.device_id),
                 Some(zeron_proto::ChatConfig {
                     harness: HarnessId::Mock,
+                    provider_account_id: None,
                     model: None,
                     reasoning: None,
                     model_options: Default::default(),
@@ -2558,6 +2560,7 @@ async fn real_claude_sees_uploaded_image_inline() {
     let request = RunRequest {
         prompt,
         harness: None,
+        provider_account_id: None,
         model: Some("haiku".into()),
         reasoning: None,
         model_options: Default::default(),

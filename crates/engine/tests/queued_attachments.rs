@@ -122,6 +122,7 @@ fn run_payload(message_id: &str, pending_ref: &str) -> SessionCommandPayload {
                 "look at this\n\nAttached images (local files — open them to view):\n- {pending_ref}"
             ),
             harness: None,
+            provider_account_id: None,
             model: None,
             reasoning: None,
             model_options: Default::default(),

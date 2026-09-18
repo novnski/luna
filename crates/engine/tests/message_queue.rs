@@ -1474,6 +1474,7 @@ async fn queued_turn_uses_current_config_at_turn_end_and_send_now() {
         let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
         let mut config = zeron_proto::ChatConfig {
             harness: HarnessId::Mock,
+            provider_account_id: None,
             model: Some("old-model".into()),
             reasoning: Some(ReasoningLevel::Medium),
             model_options: Default::default(),

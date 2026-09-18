@@ -130,6 +130,7 @@ mod tests {
             source_context: None,
             config: Some(zeron_proto::ChatConfig {
                 harness,
+                provider_account_id: None,
                 model: None,
                 reasoning: None,
                 model_options: Default::default(),

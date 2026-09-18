@@ -423,10 +423,13 @@ impl Harness for ClaudeHarness {
 impl ClaudeHarness {
     async fn run_with_mode(
         &self,
-        request: RunRequest,
+        mut request: RunRequest,
         controls: RunControls,
         title_only: bool,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        request
+            .model_options
+            .remove(crate::LUNA_PROVIDER_AUTH_INSTANCE_OPTION);
         let exe = self.resolve_executable()?;
         let mut cmd = self.build_command(&exe, &request);
         if title_only {

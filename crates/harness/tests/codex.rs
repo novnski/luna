@@ -45,6 +45,7 @@ fn request(prompt: &str) -> RunRequest {
     RunRequest {
         prompt: prompt.into(),
         harness: None,
+        provider_account_id: None,
         model: Some("gpt-5.6-sol".into()),
         reasoning: Some(ReasoningLevel::Ultra),
         model_options: serde_json::Map::new(),

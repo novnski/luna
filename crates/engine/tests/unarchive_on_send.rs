@@ -102,6 +102,7 @@ fn run_payload(message_id: &str) -> SessionCommandPayload {
         request: RunRequest {
             prompt: "back from the archive".into(),
             harness: None,
+            provider_account_id: None,
             model: None,
             reasoning: None,
             model_options: Default::default(),

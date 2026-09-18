@@ -209,6 +209,7 @@ impl TitleGenerator {
             let request = RunRequest {
                 prompt: title_prompt.clone(),
                 harness: Some(harness_id),
+                provider_account_id: None,
                 model: model.clone(),
                 reasoning: Some(ReasoningLevel::Minimal),
                 model_options: serde_json::Map::new(),
@@ -378,6 +379,7 @@ mod tests {
         let request = RunRequest {
             prompt: "Title only".into(),
             harness: None,
+            provider_account_id: None,
             model: None,
             reasoning: None,
             model_options: Default::default(),

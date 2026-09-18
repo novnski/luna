@@ -55,6 +55,7 @@ async fn check_persistence(
     let request = RunRequest {
         prompt: format!("scenario:{scenario}"),
         harness: None,
+        provider_account_id: None,
         model: None,
         reasoning: None,
         model_options: Default::default(),

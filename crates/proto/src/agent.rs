@@ -274,6 +274,10 @@ pub struct RunRequest {
     /// engine default. Additive + serde-defaulted for wire compat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<HarnessId>,
+    /// Chat-selected provider authentication metadata. The engine resolves it
+    /// to a local execution home; clients never send a filesystem path or token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     /// Harness-specific option selections (option id -> choice id), JSON round-tripped.
@@ -725,6 +729,7 @@ mod tests {
         // Old-wire JSON without the field parses (additive compat)…
         let old = r#"{"prompt":"p","model":null,"reasoning":null,"cwd":".","sandbox":"workspace-write","resume":null}"#;
         let req: RunRequest = serde_json::from_str(old).unwrap();
+        assert!(req.provider_account_id.is_none());
         assert!(req.attachments.is_empty());
         assert_eq!(req.permission_mode, PermissionMode::Ask);
         assert!(req.permission_policy.is_none());

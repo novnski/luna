@@ -22,8 +22,8 @@ use gpui::{
 
 use zeron_engine::registry::HarnessDescriptor;
 use zeron_proto::{
-    ChatConfig, FolderListing, HarnessId, Model, PermissionMode, ReasoningLevel, RepoRef,
-    SandboxLevel, Space,
+    AgentAccountsSnapshot, ChatConfig, FolderListing, HarnessId, Model, PermissionMode,
+    ReasoningLevel, RepoRef, SandboxLevel, Space,
 };
 use zeron_rpc::methods;
 
@@ -119,6 +119,7 @@ pub fn bump_harness_catalog(cx: &mut App) {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DraftConfig {
     pub harness: Option<HarnessId>,
+    pub provider_account_id: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     /// The picked ref (base branch in NewWorktree mode; a worktree's branch
@@ -163,6 +164,7 @@ pub enum CheckoutPlan {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedRunConfig {
     pub harness: Option<HarnessId>,
+    pub provider_account_id: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     pub model_options: serde_json::Map<String, serde_json::Value>,
@@ -175,6 +177,7 @@ impl ResolvedRunConfig {
     pub fn chat_config(&self) -> Option<ChatConfig> {
         Some(ChatConfig {
             harness: self.harness?,
+            provider_account_id: self.provider_account_id.clone(),
             model: self.model.clone(),
             reasoning: self.reasoning,
             model_options: self.model_options.clone(),
@@ -634,6 +637,7 @@ pub struct Pickers {
     setting_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     setting_scroll: gpui::ScrollHandle,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
+    accounts: Loadable<AgentAccountsSnapshot>,
     models: HashMap<HarnessId, Loadable<Vec<Model>>>,
     refs: Loadable<Vec<RepoRef>>,
     /// Space id the `refs` slot belongs to (invalidated on space change).
@@ -670,6 +674,7 @@ pub struct Pickers {
     /// no synthetic pointer, but synthetic keys do arrive).
     boot_focus_pending: bool,
     load_task: Option<Task<()>>,
+    accounts_task: Option<Task<()>>,
     /// Own slot: the refs load runs concurrently with the eager
     /// harness/model loads — sharing `load_task` would abort one mid-flight.
     refs_task: Option<Task<()>>,
@@ -678,6 +683,7 @@ pub struct Pickers {
     switch_task: Option<Task<()>>,
     /// Last mid-session switch failure (shown in the ref popover).
     switch_error: Option<String>,
+    account_error: Option<String>,
     full_confirmation: Option<String>,
     mutate_task: Option<Task<()>>,
     _search_events: Subscription,
@@ -736,6 +742,7 @@ impl Pickers {
             if selected != this.draft_owner {
                 this.draft_owner = selected;
                 this.config.harness = None;
+                this.config.provider_account_id = None;
                 this.config.model = None;
                 this.config.reasoning = None;
                 this.config.permission_mode = None;
@@ -753,6 +760,7 @@ impl Pickers {
                 this.setting_bounds = None;
                 this.refs_task = None;
                 this.load_task = None;
+                this.accounts_task = None;
                 this.config.branch = None;
                 this.config.checkout = CheckoutKind::default();
                 this.refs = Loadable::Idle;
@@ -760,6 +768,7 @@ impl Pickers {
                 // Catalogs are per-DEVICE (fetched from the space's host):
                 // a space switch may land on another device, so refetch.
                 this.harnesses = Loadable::Idle;
+                this.accounts = Loadable::Idle;
                 this.models.clear();
                 this.catalog_rev += 1;
             }
@@ -823,6 +832,7 @@ impl Pickers {
             setting_bounds: None,
             setting_scroll: gpui::ScrollHandle::new(),
             harnesses: Loadable::Idle,
+            accounts: Loadable::Idle,
             models: HashMap::new(),
             refs: Loadable::Idle,
             refs_space: None,
@@ -837,10 +847,12 @@ impl Pickers {
             focus: cx.focus_handle(),
             boot_focus_pending: boot_open.is_some(),
             load_task: None,
+            accounts_task: None,
             refs_task: None,
             switching: None,
             switch_task: None,
             switch_error: None,
+            account_error: None,
             full_confirmation: None,
             mutate_task: None,
             _search_events: search_events,
@@ -914,6 +926,28 @@ impl Pickers {
         self.harnesses
             .ready()
             .and_then(|list| offered_harnesses(list).first().map(|d| d.id))
+    }
+
+    fn effective_provider_account_id(&self, cx: &App) -> Option<String> {
+        self.config.provider_account_id.clone().or_else(|| {
+            self.state
+                .read(cx)
+                .selected_chat_row()
+                .and_then(|chat| chat.config.as_ref())
+                .and_then(|config| config.provider_account_id.clone())
+        })
+    }
+
+    fn codex_model_account_id(&self, cx: &App) -> Option<String> {
+        self.effective_provider_account_id(cx).or_else(|| {
+            self.accounts.ready().and_then(|snapshot| {
+                snapshot
+                    .accounts
+                    .iter()
+                    .find(|account| account.harness == HarnessId::Codex && account.active)
+                    .map(|account| account.id.clone())
+            })
+        })
     }
 
     fn permission_choice_state(&self, cx: &App) -> PermissionChoiceState {
@@ -1152,6 +1186,7 @@ impl Pickers {
         };
         ResolvedRunConfig {
             harness: self.effective_harness(cx),
+            provider_account_id: self.effective_provider_account_id(cx),
             model: self
                 .selected_model(cx)
                 .map(|m| m.id.clone())
@@ -1347,6 +1382,7 @@ impl Pickers {
                 // possibly from another viewer) — every open revalidates,
                 // keeping current rows visible until the fresh catalog lands.
                 self.ensure_harnesses(true, cx);
+                self.ensure_accounts(true, cx);
                 // Model discovery can recover after a slow/plugin-heavy ACP
                 // cold start. Revalidate on every open instead of pinning a
                 // timeout/fallback result until the application restarts.
@@ -1359,6 +1395,60 @@ impl Pickers {
     }
 
     // ---- loads ----
+
+    fn ensure_accounts(&mut self, force: bool, cx: &mut Context<Self>) {
+        let reload = match self.accounts {
+            Loadable::Idle => true,
+            Loadable::Loading => false,
+            Loadable::Ready(_) | Loadable::Error(_) => force,
+        };
+        if !reload {
+            return;
+        }
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        let target = self.space_target(cx);
+        let generation = self.target_generation;
+        if !matches!(self.accounts, Loadable::Ready(_)) {
+            self.accounts = Loadable::Loading;
+        }
+        self.accounts_task = Some(cx.spawn(async move |this, cx| {
+            let mut params = serde_json::json!({
+                "forceUsage": false,
+                "harness": HarnessId::Codex,
+            });
+            if let (Some(target), Some(object)) = (&target, params.as_object_mut()) {
+                object.insert(
+                    "targetDeviceId".into(),
+                    serde_json::Value::String(target.clone()),
+                );
+            }
+            let result = engine
+                .client()
+                .call(methods::LIST_AGENT_ACCOUNTS, params)
+                .await;
+            this.update(cx, |pickers, cx| {
+                if pickers.target_generation != generation {
+                    return;
+                }
+                let previous_codex = pickers.codex_model_account_id(cx);
+                pickers.accounts = match result {
+                    Ok(value) => serde_json::from_value::<AgentAccountsSnapshot>(value)
+                        .map(Loadable::Ready)
+                        .unwrap_or_else(|error| Loadable::Error(error.to_string())),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+                if pickers.codex_model_account_id(cx) != previous_codex {
+                    pickers.models.remove(&HarnessId::Codex);
+                    pickers.catalog_rev += 1;
+                    pickers.ensure_models(HarnessId::Codex, true, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
 
     fn ensure_harnesses(&mut self, force: bool, cx: &mut Context<Self>) {
         // Non-forced (the render loop's eager kick) only loads from Idle: an
@@ -1459,12 +1549,21 @@ impl Pickers {
         };
         let target = self.space_target(cx);
         let generation = self.target_generation;
+        let account_id = (harness == HarnessId::Codex)
+            .then(|| self.codex_model_account_id(cx))
+            .flatten();
         if !matches!(self.models.get(&harness), Some(Loadable::Ready(_))) {
             self.models.insert(harness, Loadable::Loading);
             self.catalog_rev += 1;
         }
         cx.spawn(async move |this, cx| {
             let mut params = serde_json::json!({ "harness": harness });
+            if let (Some(account_id), Some(object)) = (&account_id, params.as_object_mut()) {
+                object.insert(
+                    "accountId".into(),
+                    serde_json::Value::String(account_id.clone()),
+                );
+            }
             if let (Some(target), Some(object)) = (&target, params.as_object_mut()) {
                 object.insert(
                     "targetDeviceId".into(),
@@ -1504,6 +1603,11 @@ impl Pickers {
             }
             this.update(cx, |pickers, cx| {
                 if pickers.target_generation != generation {
+                    return;
+                }
+                if harness == HarnessId::Codex
+                    && pickers.codex_model_account_id(cx) != account_id
+                {
                     return;
                 }
                 let loaded = match result {
@@ -1720,6 +1824,7 @@ impl Pickers {
             // defaults fallback; foreign model, reasoning, and permission
             // picks must not linger across providers.
             self.config.model = None;
+            self.config.provider_account_id = None;
             self.config.reasoning = None;
             self.config.permission_mode = None;
             self.full_confirmation = None;
@@ -1731,6 +1836,57 @@ impl Pickers {
         self.ensure_models(harness, false, cx);
         // Re-anchor the keyboard highlight onto the new harness's selected row.
         self.active = self.selected_model_index(cx);
+        cx.notify();
+    }
+
+    fn pick_provider_account(&mut self, account_id: String, cx: &mut Context<Self>) {
+        self.account_error = None;
+        if self.state.read(cx).selected_chat.is_none() {
+            self.config.provider_account_id = Some(account_id);
+            self.models.remove(&HarnessId::Codex);
+            self.catalog_rev += 1;
+            self.ensure_models(HarnessId::Codex, true, cx);
+            cx.notify();
+            return;
+        }
+        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let params = serde_json::json!({
+                "op": "setThreadProviderAccount",
+                "chatId": chat_id,
+                "accountId": account_id,
+            });
+            let result = engine.client().call(methods::MUTATE, params).await;
+            this.update(cx, |pickers, cx| {
+                match result {
+                    Ok(_) => {
+                        if let Some(mut config) = pickers
+                            .state
+                            .read(cx)
+                            .selected_chat_row()
+                            .and_then(|chat| chat.config.clone())
+                        {
+                            config.provider_account_id = Some(account_id.clone());
+                            pickers.state.update(cx, |state, cx| {
+                                state.apply_chat_config(&chat_id, config);
+                                cx.notify();
+                            });
+                        }
+                        pickers.models.remove(&HarnessId::Codex);
+                        pickers.catalog_rev += 1;
+                        pickers.ensure_models(HarnessId::Codex, true, cx);
+                    }
+                    Err(error) => pickers.account_error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
         cx.notify();
     }
 
@@ -3679,6 +3835,118 @@ impl Pickers {
             .into_any_element()
     }
 
+    fn render_codex_account_strip(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.effective_harness(cx) != Some(HarnessId::Codex) {
+            return None;
+        }
+        let theme = Theme::of(cx).for_popup();
+        let selected = self.codex_model_account_id(cx);
+        let content: AnyElement = match &self.accounts {
+            Loadable::Ready(snapshot) => {
+                let accounts = snapshot
+                    .accounts
+                    .iter()
+                    .filter(|account| account.harness == HarnessId::Codex)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if accounts.is_empty() {
+                    div()
+                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_color(theme.text_muted)
+                        .child("No Codex login — use Settings → Accounts")
+                        .into_any_element()
+                } else {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(5.0))
+                        .children(accounts.into_iter().enumerate().map(|(ix, account)| {
+                            let account_id = account.id.clone();
+                            let is_selected = selected.as_deref() == Some(account.id.as_str());
+                            let label: SharedString = account
+                                .email
+                                .clone()
+                                .or(account.display_name.clone())
+                                .unwrap_or_else(|| "Codex account".into())
+                                .into();
+                            div()
+                                .id(("codex-account", ix))
+                                .max_w(px(150.0))
+                                .truncate()
+                                .rounded(px(6.0))
+                                .px(px(7.0))
+                                .py(px(3.0))
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(if is_selected { theme.text } else { theme.text_muted })
+                                .bg(if is_selected {
+                                    theme.accent.opacity(0.14)
+                                } else {
+                                    crate::theme::ink(0.04)
+                                })
+                                .when(account.switchable || account.active, |el| {
+                                    el.cursor_pointer()
+                                        .hover(|s| s.bg(crate::theme::ink(0.08)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.pick_provider_account(account_id.clone(), cx);
+                                        }))
+                                })
+                                .when(!account.switchable && !account.active, |el| el.opacity(0.45))
+                                .child(label)
+                        }))
+                        .into_any_element()
+                }
+            }
+            Loadable::Error(error) => div()
+                .text_size(crate::typography::ui_rems(11.5))
+                .text_color(theme.danger_muted)
+                .child(SharedString::from(error.clone()))
+                .into_any_element(),
+            Loadable::Idle | Loadable::Loading => div()
+                .text_size(crate::typography::ui_rems(11.5))
+                .text_color(theme.text_muted)
+                .child("Loading accounts…")
+                .into_any_element(),
+        };
+        let error = self.account_error.clone();
+        Some(
+            div()
+                .flex_none()
+                .min_h(px(40.0))
+                .px(px(popover::CARD_INSET))
+                .py(px(7.0))
+                .border_b_1()
+                .border_color(crate::theme::hairline(0.08))
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(crate::typography::ui_rems(10.5))
+                                .text_color(theme.text_muted)
+                                .child("Account"),
+                        )
+                        .child(content),
+                )
+                .when_some(error, |el, error| {
+                    el.child(
+                        div()
+                            .text_size(crate::typography::ui_rems(10.5))
+                            .text_color(theme.danger_muted)
+                            .child(SharedString::from(error)),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
     /// The combined harness + model switcher (zeron harness-model-picker.tsx):
     /// a vertical harness rail of square brand-icon tabs on the left, the
     /// viewed harness's models on the right. On an existing chat the other
@@ -3743,6 +4011,9 @@ impl Pickers {
 
         let locked = self.harness_locked(cx);
         let effective = self.effective_harness(cx);
+        if effective == Some(HarnessId::Codex) {
+            self.ensure_accounts(false, cx);
+        }
         let model_scroll = self.model_scroll.clone();
         let query = self.search.read(cx).text().trim().to_string();
         let searching = !query.is_empty();
@@ -4014,10 +4285,12 @@ impl Pickers {
                 .into_any_element()
         });
 
+        let account_strip = self.render_codex_account_strip(cx);
         div()
             .flex()
             .flex_col()
             .child(tabs)
+            .children(account_strip)
             .child(search_row)
             .child(list_host)
             .children(tray)
@@ -6542,12 +6815,14 @@ mod tests {
         let mut resolved = ResolvedRunConfig::default();
         assert!(resolved.chat_config().is_none());
         resolved.harness = Some(HarnessId::ClaudeCode);
+        resolved.provider_account_id = Some("claude-native".into());
         resolved.model = Some("opus".into());
         resolved.reasoning = Some(ReasoningLevel::High);
         resolved.permission_mode = PermissionMode::Full;
         resolved.effective_permission_mode = PermissionMode::Ask;
         let config = resolved.chat_config().expect("harness set");
         assert_eq!(config.harness, HarnessId::ClaudeCode);
+        assert_eq!(config.provider_account_id.as_deref(), Some("claude-native"));
         assert_eq!(config.model.as_deref(), Some("opus"));
         assert_eq!(config.sandbox, SandboxLevel::WorkspaceWrite);
         assert_eq!(config.permission_mode, PermissionMode::Full);

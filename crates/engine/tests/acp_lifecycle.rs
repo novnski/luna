@@ -55,6 +55,7 @@ async fn quiet_acp_prompt_stays_working_until_response() {
             request: RunRequest {
                 prompt: "tools".into(),
                 harness: None,
+                provider_account_id: None,
                 model: None,
                 reasoning: None,
                 model_options: Default::default(),

@@ -245,6 +245,7 @@ async fn rows_dark_command_delivers_over_the_peer_relay_exactly_once() {
         request: RunRequest {
             prompt: "over the relay".into(),
             harness: None,
+            provider_account_id: None,
             model: None,
             reasoning: None,
             model_options: Default::default(),
