@@ -26,6 +26,8 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             known_limitations: vec![
                 "Mode changes apply at the next safe turn boundary by reconstructing the app-server session."
                     .into(),
+                "Automatic review can be unavailable when account or organization policy disables it; provider startup then fails closed."
+                    .into(),
             ],
         },
         HarnessId::ClaudeCode => ProviderPermissionCapabilities {
@@ -38,6 +40,8 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             network_control: "Claude permission mode and restricted workspace rules".into(),
             known_limitations: vec![
                 "Escalations returned by native auto review still require the user.".into(),
+                "Auto requires Claude Code 2.1.218 or later plus an eligible account, provider, and model (Fable, Opus 4.6+, or Sonnet 4.6+)."
+                    .into(),
             ],
         },
         HarnessId::Opencode => ProviderPermissionCapabilities {
@@ -51,7 +55,7 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             approval_kinds: vec![Command, FileChange, Network, ExternalPath, Tool],
             network_control: "session-scoped OpenCode permission rules".into(),
             known_limitations: vec![
-                "Approve for me safely degrades to Ask because OpenCode exposes no automatic reviewer."
+                "OpenCode --auto blanket-approves requests that are not denied; it is not an automatic reviewer, so Approve for me is unavailable."
                     .into(),
                 "Allow for task is exposed only on verified 1.x process-scoped permission replies; 2.x disables it."
                     .into(),
@@ -66,7 +70,7 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             approval_kinds: vec![],
             network_control: "unverified".into(),
             known_limitations: vec![
-                "The pinned Cursor SDK exposes no verified sandbox or approval contract; LUNA does not start it under a claimed permission mode."
+                "Cursor 3.6+ documents Auto-review, but the pinned @cursor/sdk 1.0.28 integration exposes no run-mode or sandbox contract; LUNA cannot select it truthfully."
                     .into(),
             ],
         },
@@ -83,7 +87,7 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             approval_kinds: vec![],
             network_control: "concrete ACP agent contract unverified".into(),
             known_limitations: vec![
-                "ACP permission choices do not prove that this concrete agent enforces a workspace sandbox."
+                "ACP permission requests are optional user decisions, not proof that a concrete agent enforces a sandbox or native automatic reviewer."
                     .into(),
             ],
         },
@@ -98,6 +102,47 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             known_limitations: vec!["Test harness only.".into()],
         },
     }
+}
+
+/// Claude's classifier-backed Auto mode is model-gated by the provider. The
+/// curated catalog uses concrete ids; the bare `opus`/`sonnet` aliases resolve
+/// to current eligible models in the installed CLI. Unknown/default models are
+/// not assumed eligible.
+pub fn claude_auto_model_supported(model: Option<&str>) -> bool {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return false;
+    };
+    let model = model.to_ascii_lowercase();
+    if model.contains("fable") || matches!(model.as_str(), "opus" | "sonnet") {
+        return true;
+    }
+    ["opus", "sonnet"].into_iter().any(|family| {
+        let Some((_, suffix)) = model.split_once(&format!("{family}-")) else {
+            return false;
+        };
+        let mut version = suffix.split(|ch: char| !ch.is_ascii_digit());
+        let major = version.next().and_then(|part| part.parse::<u32>().ok());
+        let minor = version.next().and_then(|part| part.parse::<u32>().ok());
+        matches!((major, minor), (Some(major), _) if major > 4)
+            || matches!((major, minor), (Some(4), Some(minor)) if minor >= 6)
+    })
+}
+
+/// Provider capability at the selected model boundary. Provider-level health
+/// can describe conditional Auto support, while an actual run/picker must not
+/// advertise Auto for a model the native reviewer excludes.
+pub fn provider_capabilities_for(
+    harness: HarnessId,
+    model: Option<&str>,
+) -> ProviderPermissionCapabilities {
+    let mut capabilities = provider_capabilities(harness);
+    if harness == HarnessId::ClaudeCode && !claude_auto_model_supported(model) {
+        capabilities
+            .supported_modes
+            .retain(|mode| *mode != PermissionMode::Auto);
+        capabilities.supports_automatic_reviewer = false;
+    }
+    capabilities
 }
 
 pub fn machine_name() -> String {
@@ -167,7 +212,7 @@ fn mapping(harness: HarnessId, mode: PermissionMode) -> String {
 /// Resolve and stamp a run request. `sandbox` and `auto_approve` are derived
 /// outputs only; ambiguous legacy inputs cannot grant Full.
 pub fn resolve_run_policy(harness: HarnessId, request: &mut RunRequest) -> PermissionPolicy {
-    let capabilities = provider_capabilities(harness);
+    let capabilities = provider_capabilities_for(harness, request.model.as_deref());
     let requested = request.permission_mode;
     let mut effective = requested;
     let mut ceiling_source = None;
@@ -261,6 +306,13 @@ pub fn resolve_run_policy(harness: HarnessId, request: &mut RunRequest) -> Permi
     policy
 }
 
+/// Auto/Full are the only selectable product modes. If either resolves all the
+/// way down to internal Ask, running it would put an Ask policy behind an Auto
+/// or Full label. Legacy callers that explicitly carry Ask remain safe.
+pub fn hidden_ask_fallback(policy: &PermissionPolicy) -> bool {
+    policy.requested_mode != PermissionMode::Ask && policy.effective_mode == PermissionMode::Ask
+}
+
 pub fn provider_can_run(harness: HarnessId) -> bool {
     !provider_capabilities(harness).supported_modes.is_empty()
 }
@@ -269,10 +321,18 @@ pub fn provider_can_run(harness: HarnessId) -> bool {
 /// remains authoritative, so a remote/environment ceiling can only make the
 /// final result safer.
 pub fn resolve_preview(harness: HarnessId, requested: PermissionMode) -> PermissionPolicy {
+    resolve_preview_for(harness, None, requested)
+}
+
+pub fn resolve_preview_for(
+    harness: HarnessId,
+    model: Option<&str>,
+    requested: PermissionMode,
+) -> PermissionPolicy {
     let mut request = RunRequest {
         prompt: String::new(),
         harness: Some(harness),
-        model: None,
+        model: model.map(str::to_owned),
         reasoning: None,
         model_options: Default::default(),
         cwd: ".".into(),
@@ -329,10 +389,36 @@ mod tests {
         let policy = resolve_run_policy(HarnessId::Opencode, &mut request);
         assert_eq!(policy.requested_mode, PermissionMode::Auto);
         assert_eq!(policy.effective_mode, PermissionMode::Ask);
+        assert!(hidden_ask_fallback(&policy));
         assert_eq!(
             policy.degradation_reason,
             Some(PermissionDegradationReason::ProviderUnsupported)
         );
+    }
+
+    #[test]
+    fn claude_auto_is_model_gated_and_hidden_ask_is_never_selectable() {
+        assert!(claude_auto_model_supported(Some("claude-fable-5-1")));
+        assert!(claude_auto_model_supported(Some("claude-opus-4-7")));
+        assert!(claude_auto_model_supported(Some("claude-sonnet-5")));
+        assert!(!claude_auto_model_supported(Some("claude-haiku-4-5")));
+        assert!(!claude_auto_model_supported(None));
+
+        let eligible = resolve_preview_for(
+            HarnessId::ClaudeCode,
+            Some("claude-opus-4-7"),
+            PermissionMode::Auto,
+        );
+        assert_eq!(eligible.effective_mode, PermissionMode::Auto);
+        assert!(!hidden_ask_fallback(&eligible));
+
+        let ineligible = resolve_preview_for(
+            HarnessId::ClaudeCode,
+            Some("claude-haiku-4-5"),
+            PermissionMode::Auto,
+        );
+        assert_eq!(ineligible.effective_mode, PermissionMode::Ask);
+        assert!(hidden_ask_fallback(&ineligible));
     }
 
     #[test]
@@ -342,6 +428,7 @@ mod tests {
         request.environment_permission_ceiling = Some(PermissionMode::Ask);
         let policy = resolve_run_policy(HarnessId::Codex, &mut request);
         assert_eq!(policy.effective_mode, PermissionMode::Ask);
+        assert!(hidden_ask_fallback(&policy));
         assert_eq!(policy.network_policy, PermissionNetworkPolicy::Restricted);
         assert_ne!(request.sandbox, SandboxLevel::DangerFullAccess);
     }

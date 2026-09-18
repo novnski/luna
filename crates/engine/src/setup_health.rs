@@ -576,17 +576,26 @@ fn permission_capability_detail(harness: HarnessId) -> String {
             .cloned()
             .unwrap_or_else(|| "No verified permission enforcement contract.".into());
     }
-    let modes = capabilities
-        .supported_modes
-        .iter()
-        .map(|mode| match mode {
-            zeron_proto::PermissionMode::Ask => "Ask",
-            zeron_proto::PermissionMode::Auto => "Auto",
-            zeron_proto::PermissionMode::Full => "Full",
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("Verified provider permission modes: {modes}.")
+    let modes = [
+        zeron_proto::PermissionMode::Auto,
+        zeron_proto::PermissionMode::Full,
+    ]
+    .into_iter()
+    .filter(|mode| capabilities.supports(*mode))
+    .map(|mode| match mode {
+        zeron_proto::PermissionMode::Auto => "Auto",
+        zeron_proto::PermissionMode::Full => "Full",
+        zeron_proto::PermissionMode::Ask => unreachable!(),
+    })
+    .collect::<Vec<_>>()
+    .join(", ");
+    if modes.is_empty() {
+        "Verified selectable permission modes: none. Legacy Ask remains internal only.".into()
+    } else {
+        format!(
+            "Verified selectable provider permission modes: {modes}. Legacy Ask remains internal only."
+        )
+    }
 }
 
 fn workspace_problem(
@@ -721,19 +730,18 @@ mod tests {
     fn approval_modes_report_only_verified_provider_contracts() {
         assert_eq!(
             permission_capability_detail(HarnessId::Codex),
-            "Verified provider permission modes: Ask, Auto, Full."
+            "Verified selectable provider permission modes: Auto, Full. Legacy Ask remains internal only."
         );
         assert_eq!(
             permission_capability_detail(HarnessId::Opencode),
-            "Verified provider permission modes: Ask, Full."
+            "Verified selectable provider permission modes: Full. Legacy Ask remains internal only."
         );
         assert!(
-            permission_capability_detail(HarnessId::Cursor)
-                .contains("no verified sandbox or approval contract")
+            permission_capability_detail(HarnessId::Cursor).contains("pinned @cursor/sdk 1.0.28")
         );
         assert!(
             permission_capability_detail(HarnessId::Grok)
-                .contains("do not prove that this concrete agent enforces")
+                .contains("not proof that a concrete agent enforces")
         );
     }
 

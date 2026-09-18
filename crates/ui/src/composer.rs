@@ -6155,6 +6155,12 @@ impl Composer {
             cx.notify();
             return;
         };
+        if let Some(reason) = self.pickers.read(cx).permission_run_block_reason(cx) {
+            self.failure = Some(reason.into());
+            self.failure_key = None;
+            cx.notify();
+            return;
+        }
         // Chat id: existing selection, or client-minted for the new-chat canvas
         // (the chat then appears from the doc host once the doc materializes).
         let (chat_id, is_new) = match self.state.read(cx).selected_chat.clone() {

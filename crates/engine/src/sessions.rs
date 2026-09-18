@@ -424,7 +424,14 @@ impl SessionsEngine {
             ));
         };
         let harness = config.harness;
-        let policy = crate::permissions::resolve_preview(harness, mode);
+        let policy =
+            crate::permissions::resolve_preview_for(harness, config.model.as_deref(), mode);
+        if crate::permissions::hidden_ask_fallback(&policy) {
+            return Err(EngineError::Other(
+                "this provider, model, or execution ceiling cannot enforce Approve for me or Full access; choose an available mode"
+                    .into(),
+            ));
+        }
         let previous = config.effective_permission_mode;
         let ceiling_source = config.permission_ceiling_source;
         let degradation_reason = config.permission_degradation_reason;
@@ -569,7 +576,13 @@ impl SessionsEngine {
                 format!("{harness_id:?}").to_lowercase()
             )));
         }
-        crate::permissions::resolve_run_policy(harness_id, &mut request);
+        let permission_policy = crate::permissions::resolve_run_policy(harness_id, &mut request);
+        if crate::permissions::hidden_ask_fallback(&permission_policy) {
+            return Err(EngineError::Other(
+                "requested permission mode would fall back to hidden Ask; choose an available Approve for me or Full access mode"
+                    .into(),
+            ));
+        }
         // Every dispatched prompt is a turn — routed steer or fresh run alike.
         self.note_turn_start(chat_id, &request.cwd);
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {

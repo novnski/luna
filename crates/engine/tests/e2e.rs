@@ -1802,6 +1802,27 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
     }
 }
 
+#[tokio::test]
+async fn unsupported_auto_never_runs_as_hidden_ask() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(
+        dir.path(),
+        Arc::new(MockHarness {
+            script: mock_script(),
+        }),
+    );
+    let mut request = run_request("must not run");
+    request.harness = Some(HarnessId::Opencode);
+    request.permission_mode = zeron_proto::PermissionMode::Auto;
+    let error = core
+        .sessions
+        .dispatch(CHAT, HarnessId::Opencode, request, None)
+        .await
+        .expect_err("OpenCode Auto must not degrade to hidden Ask");
+    assert!(error.to_string().contains("hidden Ask"), "{error}");
+    assert!(core.sessions.session_status(CHAT).is_none());
+}
+
 /// Resilience: a RespondInput whose id matches no pending request is REJECTED
 /// with a resolution (never silently dropped), the question stays live (the
 /// panel persists), and a subsequent correct answer still resumes the run —

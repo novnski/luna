@@ -189,20 +189,45 @@ impl ResolvedRunConfig {
     }
 }
 
-fn default_permission_mode(harness: HarnessId) -> PermissionMode {
-    let capabilities = zeron_engine::provider_capabilities(harness);
+const PERMISSION_OPTIONS: [(PermissionMode, &str, &str); 2] = [
+    (
+        PermissionMode::Auto,
+        "Approve for me",
+        "Keep workspace limits and use the provider's native reviewer; it may still ask you.",
+    ),
+    (
+        PermissionMode::Full,
+        "Full access",
+        "Skip this execution provider's approval prompts; app, OS, and external controls still apply.",
+    ),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionChoiceState {
+    Selected(PermissionMode),
+    /// Existing conservative state retained for old/ambiguous records. It is
+    /// intentionally not a selectable menu row.
+    LegacyAsk,
+    /// A new draft whose provider/model has no safe automatic-review default.
+    Unselected,
+}
+
+fn default_permission_mode(harness: HarnessId, model: Option<&str>) -> Option<PermissionMode> {
+    let capabilities = zeron_engine::provider_capabilities_for(harness, model);
     if capabilities.supports(PermissionMode::Auto) {
-        PermissionMode::Auto
+        Some(PermissionMode::Auto)
     } else {
-        PermissionMode::Ask
+        None
     }
 }
 
+#[cfg(test)]
 fn provider_effective_permission_mode(
     harness: HarnessId,
+    model: Option<&str>,
     requested: PermissionMode,
 ) -> PermissionMode {
-    let capabilities = zeron_engine::provider_capabilities(harness);
+    let capabilities = zeron_engine::provider_capabilities_for(harness, model);
     [
         PermissionMode::Full,
         PermissionMode::Auto,
@@ -225,6 +250,7 @@ fn permission_preview(
     authoritative_effective: Option<PermissionMode>,
     target_is_local: bool,
     harness: HarnessId,
+    model: Option<&str>,
     requested: PermissionMode,
 ) -> EffectivePermissionPreview {
     if let Some(effective) = authoritative_effective {
@@ -234,7 +260,7 @@ fn permission_preview(
         return EffectivePermissionPreview::Pending;
     }
     EffectivePermissionPreview::Known(
-        zeron_engine::permissions::resolve_preview(harness, requested).effective_mode,
+        zeron_engine::permissions::resolve_preview_for(harness, model, requested).effective_mode,
     )
 }
 
@@ -892,9 +918,17 @@ impl Pickers {
             .and_then(|list| offered_harnesses(list).first().map(|d| d.id))
     }
 
-    fn requested_permission_mode(&self, cx: &App) -> PermissionMode {
+    fn permission_choice_state(&self, cx: &App) -> PermissionChoiceState {
         if let Some(mode) = self.config.permission_mode {
-            return mode;
+            return if mode == PermissionMode::Ask {
+                if self.state.read(cx).selected_chat.is_some() {
+                    PermissionChoiceState::LegacyAsk
+                } else {
+                    PermissionChoiceState::Unselected
+                }
+            } else {
+                PermissionChoiceState::Selected(mode)
+            };
         }
         if let Some(mode) = self
             .state
@@ -903,16 +937,84 @@ impl Pickers {
             .and_then(|chat| chat.config.as_ref())
             .map(|config| config.permission_mode)
         {
-            return mode;
+            return if mode == PermissionMode::Ask {
+                PermissionChoiceState::LegacyAsk
+            } else {
+                PermissionChoiceState::Selected(mode)
+            };
         }
         let Some(harness) = self.effective_harness(cx) else {
-            return PermissionMode::Ask;
+            return PermissionChoiceState::Unselected;
         };
-        self.defaults
+        if let Some(mode) = self
+            .defaults
             .permission_by_harness
             .get(&harness)
             .copied()
-            .unwrap_or_else(|| default_permission_mode(harness))
+            .filter(|mode| *mode != PermissionMode::Ask)
+        {
+            return PermissionChoiceState::Selected(mode);
+        }
+        default_permission_mode(harness, self.permission_model_id(cx))
+            .map(PermissionChoiceState::Selected)
+            .unwrap_or(PermissionChoiceState::Unselected)
+    }
+
+    fn requested_permission_mode(&self, cx: &App) -> PermissionMode {
+        match self.permission_choice_state(cx) {
+            PermissionChoiceState::Selected(mode) => mode,
+            PermissionChoiceState::LegacyAsk | PermissionChoiceState::Unselected => {
+                PermissionMode::Ask
+            }
+        }
+    }
+
+    fn permission_target_is_local(&self, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        let target = state.effective_device_id();
+        target.is_some() && target.as_deref() == state.local_device_id.as_deref()
+    }
+
+    fn permission_unavailable_reason(&self, cx: &App, mode: PermissionMode) -> Option<String> {
+        let harness = self.effective_harness(cx)?;
+        let model = self.permission_model_id(cx);
+        let capabilities = zeron_engine::provider_capabilities_for(harness, model);
+        if !capabilities.supports(mode) {
+            return Some(match (harness, mode) {
+                (HarnessId::ClaudeCode, PermissionMode::Auto) => {
+                    "Unavailable: this Claude model/account has no verified Auto reviewer.".into()
+                }
+                (HarnessId::Opencode, PermissionMode::Auto) => {
+                    "Unavailable: OpenCode auto-approve is not a reviewer.".into()
+                }
+                (HarnessId::Cursor, PermissionMode::Auto) => {
+                    "Unavailable: the pinned Cursor SDK cannot select Auto-review.".into()
+                }
+                (_, PermissionMode::Auto) => {
+                    "Unavailable: this provider has no verified automatic reviewer.".into()
+                }
+                _ => "Unavailable: this provider cannot enforce Full access.".into(),
+            });
+        }
+        if self.permission_target_is_local(cx) {
+            let policy = zeron_engine::permissions::resolve_preview_for(harness, model, mode);
+            if zeron_engine::permissions::hidden_ask_fallback(&policy) {
+                return Some("Unavailable: this machine is limited to legacy Ask.".into());
+            }
+        }
+        None
+    }
+
+    pub fn permission_run_block_reason(&self, cx: &App) -> Option<String> {
+        match self.permission_choice_state(cx) {
+            // Existing Ask remains a conservative, runnable compatibility
+            // state. The menu offers no way to newly select it.
+            PermissionChoiceState::LegacyAsk => None,
+            PermissionChoiceState::Unselected => {
+                Some("Choose an available permission mode before starting this task.".into())
+            }
+            PermissionChoiceState::Selected(mode) => self.permission_unavailable_reason(cx, mode),
+        }
     }
 
     fn effective_permission_preview(
@@ -923,6 +1025,7 @@ impl Pickers {
         let Some(harness) = self.effective_harness(cx) else {
             return EffectivePermissionPreview::Pending;
         };
+        let model = self.permission_model_id(cx);
         let state = self.state.read(cx);
         let authoritative_effective = state
             .selected_chat_row()
@@ -931,7 +1034,13 @@ impl Pickers {
         let target = state.effective_device_id();
         let target_is_local =
             target.is_some() && target.as_deref() == state.local_device_id.as_deref();
-        permission_preview(authoritative_effective, target_is_local, harness, requested)
+        permission_preview(
+            authoritative_effective,
+            target_is_local,
+            harness,
+            model,
+            requested,
+        )
     }
 
     /// Effective model id: the draft pick, the selected chat's config, or (on
@@ -945,6 +1054,14 @@ impl Pickers {
         }
         let harness = self.effective_harness(cx)?;
         self.defaults.model_for(harness).map(|m| m.id.as_str())
+    }
+
+    /// The concrete model boundary used for permission capability checks. A
+    /// fresh draft has no remembered model id yet, but once its catalog loads
+    /// the first/default row is the same concrete model `resolved()` will send.
+    fn permission_model_id<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        self.effective_model_id(cx)
+            .or_else(|| self.selected_model(cx).map(|model| model.id.as_str()))
     }
 
     /// Effective reasoning — always concrete once the model is known: the
@@ -1170,10 +1287,12 @@ impl Pickers {
             },
             PickerKind::Branch => self.selected_ref_index(cx),
             PickerKind::HarnessModel => self.selected_model_index(cx),
-            PickerKind::Permission => match self.requested_permission_mode(cx) {
-                PermissionMode::Ask => 0,
-                PermissionMode::Auto => 1,
-                PermissionMode::Full => 2,
+            PickerKind::Permission => match self.permission_choice_state(cx) {
+                PermissionChoiceState::Selected(PermissionMode::Full) => 1,
+                PermissionChoiceState::Selected(PermissionMode::Auto)
+                | PermissionChoiceState::Selected(PermissionMode::Ask)
+                | PermissionChoiceState::LegacyAsk
+                | PermissionChoiceState::Unselected => 0,
             },
             PickerKind::Space => self.selected_space_index(cx),
             PickerKind::Device => self.selected_device_index(cx),
@@ -1674,11 +1793,13 @@ impl Pickers {
     }
 
     fn pick_permission(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
+        if !matches!(mode, PermissionMode::Auto | PermissionMode::Full) {
+            return;
+        }
         let Some(harness) = self.effective_harness(cx) else {
             return;
         };
-        let capabilities = zeron_engine::provider_capabilities(harness);
-        if !capabilities.supports(mode) {
+        if self.permission_unavailable_reason(cx, mode).is_some() {
             return;
         }
         let (machine_id, _) = self.permission_machine(cx);
@@ -2556,7 +2677,7 @@ impl Pickers {
                     Some(PickerKind::HarnessModel) => {
                         self.model_rows_len(cx) + self.setting_groups(cx).len()
                     }
-                    Some(PickerKind::Permission) => 3,
+                    Some(PickerKind::Permission) => PERMISSION_OPTIONS.len(),
                     Some(PickerKind::Space) => self.filtered_space_rows(cx).len() + 1,
                     Some(PickerKind::Device) => self.filtered_device_rows(cx).len(),
                     None => 0,
@@ -2580,11 +2701,10 @@ impl Pickers {
                 if self.open_kind() == Some(PickerKind::HarnessModel) {
                     self.activate_model_row(cx);
                 } else if self.open_kind() == Some(PickerKind::Permission) {
-                    let mode = match self.active {
-                        0 => PermissionMode::Ask,
-                        1 => PermissionMode::Auto,
-                        _ => PermissionMode::Full,
-                    };
+                    let mode = PERMISSION_OPTIONS
+                        .get(self.active)
+                        .map(|(mode, _, _)| *mode)
+                        .unwrap_or(PermissionMode::Auto);
                     self.pick_permission(mode, cx);
                 } else if self.open_kind() == Some(PickerKind::Checkout) {
                     let kind = if self.active == 0 {
@@ -3413,30 +3533,9 @@ impl Pickers {
 
     fn render_permission_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
-        let requested = self.requested_permission_mode(cx);
-        let harness = self.effective_harness(cx);
-        let capabilities = harness
-            .map(zeron_engine::provider_capabilities)
-            .unwrap_or_default();
+        let choice = self.permission_choice_state(cx);
         let (machine_id, machine_name) = self.permission_machine(cx);
         let confirming_full = self.full_confirmation.as_deref() == Some(machine_id.as_str());
-        let rows = [
-            (
-                PermissionMode::Ask,
-                "Ask for approval",
-                "Work inside the workspace; ask before going beyond it.",
-            ),
-            (
-                PermissionMode::Auto,
-                "Approve for me",
-                "Use the same workspace limits and review routine requests automatically.",
-            ),
-            (
-                PermissionMode::Full,
-                "Full access",
-                "Run commands and edit any accessible file without approval prompts.",
-            ),
-        ];
         div()
             .flex()
             .flex_col()
@@ -3451,78 +3550,72 @@ impl Pickers {
                     .text_color(theme.text_muted)
                     .child("Permission mode"),
             )
-            .children(
-                rows.into_iter()
-                    .enumerate()
-                    .map(|(ix, (mode, label, description))| {
-                        let supported = capabilities.supports(mode);
-                        let selected = requested == mode;
-                        let warning = mode == PermissionMode::Full;
-                        let description: SharedString = if !supported {
-                            match mode {
-                                PermissionMode::Auto => {
-                                    "Unavailable: this provider has no automatic reviewer.".into()
-                                }
-                                _ => "Unavailable: this provider cannot enforce this mode.".into(),
-                            }
-                        } else if warning && confirming_full {
-                            format!("Select again to remove the sandbox on {machine_name}.").into()
-                        } else {
-                            description.into()
-                        };
-                        popover::menu_row_nav(
-                            &theme,
-                            selected,
-                            ix == self.active,
-                            format!("permission-row-{ix}"),
-                        )
-                        .id(("permission-row", ix))
-                        .when(!supported, |row| row.opacity(0.48))
-                        .when(warning && supported, |row| row.text_color(theme.warning))
-                        .when(supported, |row| {
-                            row.cursor_pointer()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.pick_permission(mode, cx);
-                                }))
-                        })
-                        .child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .child(label)
-                                        .when(selected, |row| {
-                                            row.child(
-                                                crate::icons::icon(crate::icons::CHECK)
-                                                    .size(px(14.0))
-                                                    .text_color(if warning {
-                                                        theme.warning
-                                                    } else {
-                                                        theme.text
-                                                    }),
-                                            )
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(crate::typography::ui_rems(10.0))
-                                        .text_color(if warning && supported {
-                                            theme.warning.opacity(0.72)
-                                        } else {
-                                            theme.text_faint
-                                        })
-                                        .child(description),
-                                ),
-                        )
-                    }),
-            )
+            .children(PERMISSION_OPTIONS.into_iter().enumerate().map(
+                |(ix, (mode, label, description))| {
+                    let unavailable = self.permission_unavailable_reason(cx, mode);
+                    let supported = unavailable.is_none();
+                    let selected = choice == PermissionChoiceState::Selected(mode);
+                    let warning = mode == PermissionMode::Full;
+                    let description: SharedString = if let Some(reason) = unavailable {
+                        reason.into()
+                    } else if warning && confirming_full {
+                        format!("Select again to remove the sandbox on {machine_name}.").into()
+                    } else {
+                        description.into()
+                    };
+                    popover::menu_row_nav(
+                        &theme,
+                        selected,
+                        ix == self.active,
+                        format!("permission-row-{ix}"),
+                    )
+                    .id(("permission-row", ix))
+                    .when(!supported, |row| row.opacity(0.48))
+                    .when(warning && supported, |row| row.text_color(theme.warning))
+                    .when(supported, |row| {
+                        row.cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.pick_permission(mode, cx);
+                            }))
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(label)
+                                    .when(selected, |row| {
+                                        row.child(
+                                            crate::icons::icon(crate::icons::CHECK)
+                                                .size(px(14.0))
+                                                .text_color(if warning {
+                                                    theme.warning
+                                                } else {
+                                                    theme.text
+                                                }),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(10.0))
+                                    .text_color(if warning && supported {
+                                        theme.warning.opacity(0.72)
+                                    } else {
+                                        theme.text_faint
+                                    })
+                                    .child(description),
+                            ),
+                    )
+                },
+            ))
             .into_any_element()
     }
 
@@ -5126,27 +5219,45 @@ impl Render for Pickers {
                 closing,
             )
         };
+        let permission_choice = self.permission_choice_state(cx);
         let requested_permission = self.requested_permission_mode(cx);
         let effective_permission = self.effective_permission_preview(cx, requested_permission);
-        let permission_label: SharedString = match effective_permission {
-            EffectivePermissionPreview::Known(PermissionMode::Ask) => "Ask",
-            EffectivePermissionPreview::Known(PermissionMode::Auto) => "Auto",
-            EffectivePermissionPreview::Known(PermissionMode::Full) => "Full",
-            EffectivePermissionPreview::Pending => "Pending",
+        let permission_label: SharedString = match permission_choice {
+            PermissionChoiceState::Unselected => "Choose",
+            PermissionChoiceState::LegacyAsk => "Limited",
+            PermissionChoiceState::Selected(_) => match effective_permission {
+                EffectivePermissionPreview::Known(PermissionMode::Ask) => "Limited",
+                EffectivePermissionPreview::Known(PermissionMode::Auto) => "Auto",
+                EffectivePermissionPreview::Known(PermissionMode::Full) => "Full",
+                EffectivePermissionPreview::Pending => "Pending",
+            },
         }
         .into();
-        let permission_suffix = match effective_permission {
-            EffectivePermissionPreview::Known(effective) if requested_permission == effective => {
-                None
-            }
-            EffectivePermissionPreview::Known(_) | EffectivePermissionPreview::Pending => Some((
-                SharedString::from(match requested_permission {
-                    PermissionMode::Ask => "Requested Ask",
-                    PermissionMode::Auto => "Requested Auto",
-                    PermissionMode::Full => "Requested Full",
-                }),
+        let permission_suffix = match permission_choice {
+            PermissionChoiceState::Unselected => Some((
+                SharedString::from("Select Auto or Full"),
                 Some(theme.warning.opacity(0.82)),
             )),
+            PermissionChoiceState::LegacyAsk => {
+                Some((SharedString::from("Legacy Ask"), Some(theme.text_faint)))
+            }
+            PermissionChoiceState::Selected(_) => match effective_permission {
+                EffectivePermissionPreview::Known(effective)
+                    if requested_permission == effective =>
+                {
+                    None
+                }
+                EffectivePermissionPreview::Known(_) | EffectivePermissionPreview::Pending => {
+                    Some((
+                        SharedString::from(match requested_permission {
+                            PermissionMode::Ask => "Legacy Ask",
+                            PermissionMode::Auto => "Requested Auto",
+                            PermissionMode::Full => "Requested Full",
+                        }),
+                        Some(theme.warning.opacity(0.82)),
+                    ))
+                }
+            },
         };
         let effective_full =
             effective_permission == EffectivePermissionPreview::Known(PermissionMode::Full);
@@ -5214,20 +5325,33 @@ mod tests {
 
     #[test]
     fn permission_defaults_and_degradation_follow_provider_capabilities() {
-        assert_eq!(
-            default_permission_mode(HarnessId::Codex),
-            PermissionMode::Auto
+        assert_eq!(PERMISSION_OPTIONS.len(), 2);
+        assert_eq!(PERMISSION_OPTIONS[0].0, PermissionMode::Auto);
+        assert_eq!(PERMISSION_OPTIONS[1].0, PermissionMode::Full);
+        assert!(
+            PERMISSION_OPTIONS
+                .iter()
+                .all(|(mode, _, _)| *mode != PermissionMode::Ask)
         );
         assert_eq!(
-            default_permission_mode(HarnessId::Opencode),
+            default_permission_mode(HarnessId::Codex, None),
+            Some(PermissionMode::Auto)
+        );
+        assert_eq!(
+            default_permission_mode(HarnessId::ClaudeCode, Some("claude-fable-5-1")),
+            Some(PermissionMode::Auto)
+        );
+        assert_eq!(
+            default_permission_mode(HarnessId::ClaudeCode, Some("claude-haiku-4-5")),
+            None
+        );
+        assert_eq!(default_permission_mode(HarnessId::Opencode, None), None);
+        assert_eq!(
+            provider_effective_permission_mode(HarnessId::Opencode, None, PermissionMode::Auto),
             PermissionMode::Ask
         );
         assert_eq!(
-            provider_effective_permission_mode(HarnessId::Opencode, PermissionMode::Auto),
-            PermissionMode::Ask
-        );
-        assert_eq!(
-            provider_effective_permission_mode(HarnessId::Cursor, PermissionMode::Full),
+            provider_effective_permission_mode(HarnessId::Cursor, None, PermissionMode::Full),
             PermissionMode::Ask
         );
         assert_eq!(
@@ -5235,13 +5359,14 @@ mod tests {
                 Some(PermissionMode::Ask),
                 false,
                 HarnessId::Codex,
+                None,
                 PermissionMode::Full,
             ),
             EffectivePermissionPreview::Known(PermissionMode::Ask),
             "existing tasks display the execution host's authoritative effective mode"
         );
         assert_eq!(
-            permission_preview(None, false, HarnessId::Codex, PermissionMode::Full,),
+            permission_preview(None, false, HarnessId::Codex, None, PermissionMode::Full,),
             EffectivePermissionPreview::Pending,
             "a remote draft must not infer Full from provider capability alone"
         );
@@ -5276,7 +5401,53 @@ mod tests {
 
             assert_eq!(pickers.config.permission_mode, None);
             assert_eq!(pickers.full_confirmation, None);
+            assert_eq!(
+                pickers.permission_choice_state(cx),
+                PermissionChoiceState::Unselected
+            );
             assert_eq!(pickers.requested_permission_mode(cx), PermissionMode::Ask);
+            assert!(pickers.permission_run_block_reason(cx).is_some());
+        });
+    }
+
+    #[gpui::test]
+    fn claude_auto_selection_is_blocked_for_an_ineligible_model(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let pickers = cx.new(|cx| Pickers::new(state, cx));
+        pickers.update(cx, |pickers, cx| {
+            pickers.config.harness = Some(HarnessId::ClaudeCode);
+            pickers.config.model = Some("claude-haiku-4-5".into());
+            pickers.config.permission_mode = Some(PermissionMode::Auto);
+            assert!(
+                pickers
+                    .permission_run_block_reason(cx)
+                    .is_some_and(|reason| reason.contains("Claude model/account"))
+            );
+
+            pickers.config.model = Some("claude-fable-5-1".into());
+            assert_eq!(pickers.permission_run_block_reason(cx), None);
+
+            // A fresh draft has no explicit/remembered model id. Once the
+            // catalog is ready, permission defaults must follow the same
+            // default model that `resolved()` will send.
+            pickers.config.model = None;
+            pickers.config.permission_mode = None;
+            pickers
+                .defaults
+                .permission_by_harness
+                .remove(&HarnessId::ClaudeCode);
+            pickers.models.insert(
+                HarnessId::ClaudeCode,
+                Loadable::Ready(vec![
+                    bare_model("claude-fable-5-1", "Fable 5.1"),
+                    bare_model("claude-haiku-4-5", "Haiku 4.5"),
+                ]),
+            );
+            assert_eq!(
+                pickers.permission_choice_state(cx),
+                PermissionChoiceState::Selected(PermissionMode::Auto)
+            );
+            assert_eq!(pickers.permission_run_block_reason(cx), None);
         });
     }
 

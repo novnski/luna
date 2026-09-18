@@ -224,10 +224,19 @@ mod tests {
         defaults
             .permission_by_harness
             .insert(HarnessId::Codex, PermissionMode::Full);
+        // Legacy Ask remains decodable/persisted for rollback safety even
+        // though the picker no longer offers it as a new choice.
+        defaults
+            .permission_by_harness
+            .insert(HarnessId::Opencode, PermissionMode::Ask);
         defaults.confirmed_full_machines.push("device-local".into());
         defaults.save(dir.path()).unwrap();
         let loaded = ComposerDefaults::load(dir.path());
         assert_eq!(loaded, defaults);
+        assert_eq!(
+            loaded.permission_by_harness.get(&HarnessId::Opencode),
+            Some(&PermissionMode::Ask)
+        );
         assert_eq!(
             loaded.model_for(HarnessId::ClaudeCode).map(|m| &*m.label),
             Some("Fable 5")
