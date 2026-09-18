@@ -98,7 +98,8 @@ pub struct ChatConfig {
     /// cannot silently migrate to Full.
     #[serde(default)]
     pub permission_mode: PermissionMode,
-    /// Last engine-resolved mode for diagnostics and restart readback.
+    /// Policy the execution host has safely applied (or made authoritative by
+    /// retiring the prior runtime), for diagnostics and restart readback.
     #[serde(default)]
     pub effective_permission_mode: PermissionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]

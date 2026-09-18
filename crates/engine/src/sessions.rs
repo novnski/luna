@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use chrono::Utc;
 use futures::StreamExt;
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot, watch};
 
 use zeron_doc::{
     DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter, SessionDoc,
@@ -30,8 +30,8 @@ use zeron_doc::{
 };
 use zeron_harness::{CancellationToken, Harness, RunControls, SteerMessage};
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, RunRequest, Session, SessionStatus, UserInputAnswer,
-    UserInputQuestion,
+    AgentEvent, ChatConfig, DoneStatus, HarnessId, PermissionAuditEntry, PermissionMode,
+    PermissionPolicy, RunRequest, Session, SessionStatus, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::doc_host::{ChatDocHandle, DocHost};
@@ -122,6 +122,43 @@ fn take_pending_ordinary_input(
     pending_inputs.remove(request_id)
 }
 
+fn push_permission_audit(config: &mut ChatConfig, entry: PermissionAuditEntry) {
+    config.permission_audit.push(entry);
+    if config.permission_audit.len() > 100 {
+        let excess = config.permission_audit.len() - 100;
+        config.permission_audit.drain(..excess);
+    }
+}
+
+fn apply_permission_policy(config: &mut ChatConfig, policy: &PermissionPolicy, actor: String) {
+    let previous = config.effective_permission_mode;
+    config.effective_permission_mode = policy.effective_mode;
+    config.permission_ceiling_source = policy.ceiling_source;
+    config.permission_degradation_reason = policy.degradation_reason;
+    let already_recorded = config.permission_audit.last().is_some_and(|entry| {
+        entry.requested_mode == policy.requested_mode
+            && entry.effective_mode == policy.effective_mode
+            && entry.provider_mapping == policy.provider_mapping
+            && entry.ceiling_source == policy.ceiling_source
+    });
+    if !already_recorded {
+        push_permission_audit(
+            config,
+            PermissionAuditEntry {
+                actor,
+                machine: policy.machine_name.clone(),
+                requested_mode: policy.requested_mode,
+                effective_mode: policy.effective_mode,
+                previous_mode: Some(previous),
+                provider_mapping: policy.provider_mapping.clone(),
+                ceiling_source: policy.ceiling_source,
+                reason: policy.degradation_reason,
+                timestamp_ms: now_ms(),
+            },
+        );
+    }
+}
+
 /// A harness-native session id plus the cwd it was created under. Harness
 /// session stores are cwd-scoped (claude keys conversations by project
 /// directory — zeron sessions.ts:563 "harness session stores are keyed by
@@ -207,6 +244,10 @@ struct Inner {
     doc_host: Mutex<Option<DocHost>>,
     /// chat_id → live run.
     runs: Mutex<HashMap<String, RunHandle>>,
+    /// Serializes runtime replacement/start with permission-mode mutation for
+    /// one chat. Without this, an async idle retirement can cancel a fresh run
+    /// that started after the mutation returned.
+    transition_gates: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// chat_id → broadcast hub (retained across runs so subscribers survive turns).
     hubs: Mutex<HashMap<String, broadcast::Sender<JournaledEvent>>>,
     statuses: Mutex<HashMap<String, Session>>,
@@ -254,6 +295,7 @@ impl SessionsEngine {
                 registry,
                 doc_host: Mutex::new(None),
                 runs: Mutex::new(HashMap::new()),
+                transition_gates: Mutex::new(HashMap::new()),
                 hubs: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
                 sessions_tx,
@@ -349,6 +391,97 @@ impl SessionsEngine {
             .is_some_and(is_active)
     }
 
+    fn transition_gate(&self, chat_id: &str) -> Arc<AsyncMutex<()>> {
+        lock(&self.inner.transition_gates)
+            .entry(chat_id.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
+    /// Stage a requested permission change and apply it only when the current
+    /// provider runtime is no longer active. A live turn keeps its effective
+    /// policy and diagnostics until a later dispatch actually starts under the
+    /// requested policy. An idle/parked runtime is retired under the same gate
+    /// used by dispatch, then the new effective policy is published.
+    pub async fn set_permission_mode(
+        &self,
+        chat_id: &str,
+        mode: PermissionMode,
+        actor: Option<String>,
+    ) -> Result<(), EngineError> {
+        let gate = self.transition_gate(chat_id);
+        let _transition = gate.lock().await;
+        let workspace = self
+            .inner
+            .workspace()
+            .ok_or_else(|| EngineError::Other("workspace host not wired".into()))?;
+        let Some(chat) = workspace.chat(chat_id)? else {
+            return Err(EngineError::Other("chat not found".into()));
+        };
+        let Some(mut config) = chat.config else {
+            return Err(EngineError::Other(
+                "chat has no provider configuration".into(),
+            ));
+        };
+        let harness = config.harness;
+        let policy = crate::permissions::resolve_preview(harness, mode);
+        let previous = config.effective_permission_mode;
+        let ceiling_source = config.permission_ceiling_source;
+        let degradation_reason = config.permission_degradation_reason;
+        config.permission_mode = mode;
+        push_permission_audit(
+            &mut config,
+            PermissionAuditEntry {
+                actor: actor.unwrap_or_else(|| "local-user".into()),
+                machine: policy.machine_name.clone(),
+                requested_mode: mode,
+                // This entry records the request, not an application event.
+                // Keep the policy the running provider is actually enforcing.
+                effective_mode: previous,
+                previous_mode: Some(previous),
+                provider_mapping: format!("pending: {}", policy.provider_mapping),
+                ceiling_source,
+                reason: degradation_reason,
+                timestamp_ms: now_ms(),
+            },
+        );
+        workspace.set_chat_config(chat_id, &config)?;
+
+        if self.turn_in_flight(chat_id) {
+            return Ok(());
+        }
+
+        // A parked child still owns the old runtime signature. Retire it while
+        // dispatch is excluded by `_transition`, so a new run cannot slip in
+        // and be cancelled by a delayed retirement task.
+        self.interrupt(chat_id).await?;
+        if lock(&self.inner.runs).contains_key(chat_id) {
+            return Err(EngineError::Other(
+                "permission runtime did not retire before the deadline".into(),
+            ));
+        }
+
+        let Some(chat) = workspace.chat(chat_id)? else {
+            return Err(EngineError::Other("chat not found after retirement".into()));
+        };
+        let Some(mut config) = chat.config else {
+            return Err(EngineError::Other(
+                "chat lost provider configuration during retirement".into(),
+            ));
+        };
+        // Preserve a newer synced request if another writer replaced the row.
+        if config.permission_mode != mode || config.harness != harness {
+            return Ok(());
+        }
+        apply_permission_policy(
+            &mut config,
+            &policy,
+            format!("engine:{}", self.inner.device_id),
+        );
+        workspace.set_chat_config(chat_id, &config)?;
+        Ok(())
+    }
+
     /// Any run currently working or blocked on input — the auto-updater's
     /// "don't restart from under a session" gate.
     pub fn any_active(&self) -> bool {
@@ -425,6 +558,8 @@ impl SessionsEngine {
         mut message_id: Option<String>,
         startup_retry: bool,
     ) -> Result<String, EngineError> {
+        let transition_gate = self.transition_gate(chat_id);
+        let _transition = transition_gate.lock().await;
         // Project-less chats store cwd `~` (the creating device can't know the
         // host's home); expand it here, on the host, where the run spawns.
         request.cwd = expand_home(&request.cwd);
@@ -434,45 +569,7 @@ impl SessionsEngine {
                 format!("{harness_id:?}").to_lowercase()
             )));
         }
-        let permission_policy = crate::permissions::resolve_run_policy(harness_id, &mut request);
-        if let Some(workspace) = self.inner.workspace()
-            && let Ok(Some(chat)) = workspace.chat(chat_id)
-            && let Some(mut config) = chat.config
-        {
-            let previous = config.effective_permission_mode;
-            config.permission_mode = permission_policy.requested_mode;
-            config.effective_permission_mode = permission_policy.effective_mode;
-            config.permission_ceiling_source = permission_policy.ceiling_source;
-            config.permission_degradation_reason = permission_policy.degradation_reason;
-            let already_recorded = config.permission_audit.last().is_some_and(|entry| {
-                entry.requested_mode == permission_policy.requested_mode
-                    && entry.effective_mode == permission_policy.effective_mode
-                    && entry.provider_mapping == permission_policy.provider_mapping
-                    && entry.ceiling_source == permission_policy.ceiling_source
-            });
-            if !already_recorded {
-                config
-                    .permission_audit
-                    .push(zeron_proto::PermissionAuditEntry {
-                        actor: format!("engine:{}", self.inner.device_id),
-                        machine: permission_policy.machine_name.clone(),
-                        requested_mode: permission_policy.requested_mode,
-                        effective_mode: permission_policy.effective_mode,
-                        previous_mode: Some(previous),
-                        provider_mapping: permission_policy.provider_mapping.clone(),
-                        ceiling_source: permission_policy.ceiling_source,
-                        reason: permission_policy.degradation_reason,
-                        timestamp_ms: now_ms(),
-                    });
-                if config.permission_audit.len() > 100 {
-                    let excess = config.permission_audit.len() - 100;
-                    config.permission_audit.drain(..excess);
-                }
-            }
-            if let Err(error) = workspace.set_chat_config(chat_id, &config) {
-                tracing::warn!(chat = %chat_id, %error, "permission audit persistence failed");
-            }
-        }
+        crate::permissions::resolve_run_policy(harness_id, &mut request);
         // Every dispatched prompt is a turn — routed steer or fresh run alike.
         self.note_turn_start(chat_id, &request.cwd);
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
@@ -546,6 +643,11 @@ impl SessionsEngine {
             // the routed run died with the message reclaimed, or configuration
             // changed beyond what the text-only mailbox can carry: replace it.
             self.interrupt(chat_id).await?;
+            if lock(&self.inner.runs).contains_key(chat_id) {
+                return Err(EngineError::Other(
+                    "previous runtime did not retire before replacement startup".into(),
+                ));
+            }
         }
 
         let harness = self.inner.registry.resolve(harness_id)?;
@@ -1634,6 +1736,7 @@ async fn drive_run(
     let harness_id = harness.id();
     let user_prompt = request.prompt.clone();
     let run_cwd = request.cwd.clone();
+    let permission_policy = request.permission_policy.clone();
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
     }
@@ -2368,6 +2471,24 @@ async fn drive_run(
                 session_id, cwd, ..
             } => {
                 saw_session_started = true;
+                if let Some(policy) = permission_policy.as_ref()
+                    && let Some(workspace) = inner.workspace()
+                    && let Ok(Some(chat)) = workspace.chat(&chat_id)
+                    && let Some(mut config) = chat.config
+                    && config.harness == harness_id
+                {
+                    // SessionStarted is the first authoritative proof that the
+                    // replacement provider accepted this runtime policy. Keep
+                    // any newer requested mode, but publish what is active.
+                    apply_permission_policy(
+                        &mut config,
+                        policy,
+                        format!("engine:{}", inner.device_id),
+                    );
+                    if let Err(error) = workspace.set_chat_config(&chat_id, &config) {
+                        tracing::warn!(chat = %chat_id, %error, "applied permission policy persistence failed");
+                    }
+                }
                 // The event's own cwd (where the harness actually created the
                 // session) scopes the stored id, not the request's.
                 inner.remember_harness_session(&chat_id, session_id, cwd);

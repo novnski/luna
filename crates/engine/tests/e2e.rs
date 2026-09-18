@@ -1547,6 +1547,261 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_permission_change_keeps_active_effective_until_replacement_starts() {
+    struct PermissionTransitionHarness {
+        seen: Arc<std::sync::Mutex<Vec<RunRequest>>>,
+        start: Arc<tokio::sync::Semaphore>,
+        finish: Arc<tokio::sync::Semaphore>,
+    }
+
+    #[async_trait]
+    impl Harness for PermissionTransitionHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Permission transition"
+        }
+        fn supports_steering(&self) -> bool {
+            true
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::StepBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            let run_number = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(request);
+                seen.len()
+            };
+            let (tx, rx) = tokio::sync::mpsc::channel(8);
+            let start = self.start.clone();
+            let finish = self.finish.clone();
+            let interrupt = controls.interrupt.clone();
+            tokio::spawn(async move {
+                let permit = start.acquire().await.unwrap();
+                permit.forget();
+                let _ = tx
+                    .send(Ok(AgentEvent::SessionStarted {
+                        harness: HarnessId::Mock,
+                        model: "mock-1".into(),
+                        tools: vec![],
+                        cwd: "/tmp".into(),
+                        session_id: format!("permission-{run_number}"),
+                        assistant_message_id: format!("permission-answer-{run_number}"),
+                    }))
+                    .await;
+                let permit = finish.acquire().await.unwrap();
+                permit.forget();
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+                interrupt.cancelled().await;
+                let _ = tx.send(Ok(done(DoneStatus::Interrupted))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+
+    for (case, initial, requested) in [
+        (
+            "restrict",
+            zeron_proto::PermissionMode::Full,
+            zeron_proto::PermissionMode::Ask,
+        ),
+        (
+            "escalate",
+            zeron_proto::PermissionMode::Ask,
+            zeron_proto::PermissionMode::Full,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let seen: Arc<std::sync::Mutex<Vec<RunRequest>>> = Default::default();
+        let start = Arc::new(tokio::sync::Semaphore::new(0));
+        let finish = Arc::new(tokio::sync::Semaphore::new(0));
+        let core = assemble(
+            dir.path(),
+            Arc::new(PermissionTransitionHarness {
+                seen: seen.clone(),
+                start: start.clone(),
+                finish: finish.clone(),
+            }),
+        );
+        core.workspace
+            .create_chat(
+                CHAT,
+                None,
+                Some(&core.device_id),
+                Some(zeron_proto::ChatConfig {
+                    harness: HarnessId::Mock,
+                    model: None,
+                    reasoning: None,
+                    model_options: Default::default(),
+                    sandbox: if initial == zeron_proto::PermissionMode::Full {
+                        SandboxLevel::DangerFullAccess
+                    } else {
+                        SandboxLevel::WorkspaceWrite
+                    },
+                    permission_mode: initial,
+                    effective_permission_mode: initial,
+                    permission_ceiling_source: None,
+                    permission_degradation_reason: None,
+                    permission_audit: Vec::new(),
+                }),
+                Some("/tmp".into()),
+            )
+            .unwrap();
+        core.workspace.rename_chat(CHAT, "Pre-titled").unwrap();
+        let client = zeron_rpc::memory_client(core.rpc_service());
+
+        let mut first = run_request(&format!("{case}-first"));
+        first.permission_mode = initial;
+        core.sessions
+            .dispatch(CHAT, HarnessId::Mock, first, None)
+            .await
+            .unwrap();
+        wait_for(
+            || seen.lock().unwrap().len() == 1,
+            "first permission runtime invocation",
+        )
+        .await;
+        start.add_permits(1);
+        wait_for(
+            || {
+                core.workspace
+                    .chat_harness_session(CHAT)
+                    .is_some_and(|(id, _)| id == "permission-1")
+            },
+            "first permission runtime start",
+        )
+        .await;
+
+        client
+            .call(
+                zeron_rpc::methods::MUTATE,
+                serde_json::json!({
+                    "op": "setThreadPermissionMode",
+                    "chatId": CHAT,
+                    "mode": requested,
+                    "actor": "permission-transition-test",
+                }),
+            )
+            .await
+            .unwrap();
+        let staged = core.workspace.chat(CHAT).unwrap().unwrap().config.unwrap();
+        assert_eq!(staged.permission_mode, requested, "{case}: request staged");
+        assert_eq!(
+            staged.effective_permission_mode, initial,
+            "{case}: active provider policy stays authoritative"
+        );
+        assert!(
+            staged
+                .permission_audit
+                .last()
+                .is_some_and(|entry| entry.provider_mapping.starts_with("pending:")),
+            "{case}: request is audited as pending"
+        );
+
+        finish.add_permits(1);
+        wait_for(
+            || core.sessions.session_status(CHAT).map(|s| s.status) == Some(SessionStatus::Idle),
+            "first permission turn boundary",
+        )
+        .await;
+
+        let mut second = run_request(&format!("{case}-second"));
+        second.permission_mode = requested;
+        core.sessions
+            .dispatch(CHAT, HarnessId::Mock, second, None)
+            .await
+            .unwrap();
+        wait_for(
+            || seen.lock().unwrap().len() == 2,
+            "replacement permission runtime invocation",
+        )
+        .await;
+        let starting = core.workspace.chat(CHAT).unwrap().unwrap().config.unwrap();
+        assert_eq!(starting.permission_mode, requested);
+        assert_eq!(
+            starting.effective_permission_mode, initial,
+            "{case}: constructing a replacement is not proof it started"
+        );
+        let applied_request = seen.lock().unwrap()[1].clone();
+        assert_eq!(
+            applied_request
+                .permission_policy
+                .as_ref()
+                .map(|policy| policy.effective_mode),
+            Some(requested),
+            "{case}: replacement provider receives the requested policy"
+        );
+
+        start.add_permits(1);
+        wait_for(
+            || {
+                core.workspace
+                    .chat(CHAT)
+                    .unwrap()
+                    .and_then(|chat| chat.config)
+                    .is_some_and(|config| config.effective_permission_mode == requested)
+            },
+            "replacement permission policy publication",
+        )
+        .await;
+        let applied = core.workspace.chat(CHAT).unwrap().unwrap().config.unwrap();
+        assert_eq!(applied.permission_mode, requested);
+        assert_eq!(applied.effective_permission_mode, requested);
+        assert!(
+            applied
+                .permission_audit
+                .last()
+                .is_some_and(|entry| !entry.provider_mapping.starts_with("pending:")),
+            "{case}: SessionStarted records the applied policy"
+        );
+
+        finish.add_permits(1);
+        wait_for(
+            || core.sessions.session_status(CHAT).map(|s| s.status) == Some(SessionStatus::Idle),
+            "replacement permission turn boundary",
+        )
+        .await;
+
+        // Idle changes retire the parked runtime under the dispatch gate and
+        // may publish immediately: no provider is left enforcing the old mode.
+        client
+            .call(
+                zeron_rpc::methods::MUTATE,
+                serde_json::json!({
+                    "op": "setThreadPermissionMode",
+                    "chatId": CHAT,
+                    "mode": initial,
+                    "actor": "permission-transition-test-idle",
+                }),
+            )
+            .await
+            .unwrap();
+        let idle_applied = core.workspace.chat(CHAT).unwrap().unwrap().config.unwrap();
+        assert_eq!(idle_applied.permission_mode, initial);
+        assert_eq!(
+            idle_applied.effective_permission_mode, initial,
+            "{case}: idle retirement is an immediate safe apply boundary"
+        );
+        core.shutdown().await;
+    }
+}
+
 /// Resilience: a RespondInput whose id matches no pending request is REJECTED
 /// with a resolution (never silently dropped), the question stays live (the
 /// panel persists), and a subsequent correct answer still resumes the run —
