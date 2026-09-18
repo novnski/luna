@@ -795,6 +795,33 @@ async fn adoption_transitions_ownership_normalizes_lifecycle_and_recovers_materi
             .contains("not fully materialized")
     );
 
+    let foreign_home = fixture._temp.path().join("foreign-recovery-codex-home");
+    assert!(!foreign_home.exists());
+    let foreign = fixture.reopen(&foreign_home);
+    let foreign_error = foreign
+        .recover_pending_materializations()
+        .await
+        .unwrap_err();
+    assert!(
+        foreign_error
+            .to_string()
+            .contains("provider home/profile or execution environment changed")
+    );
+    assert!(
+        !foreign_home.exists(),
+        "foreign provider process must not start before ownership validation"
+    );
+    assert_eq!(
+        foreign
+            .view(&recovery_id)
+            .unwrap()
+            .current_binding
+            .unwrap()
+            .reconciliation
+            .state,
+        ReconciliationState::ExternalChange
+    );
+
     let replayed = fixture.reopen(&fixture.codex_home);
     replayed.recover_pending_materializations().await.unwrap();
     let recovered_chat = fixture.workspace.chat(&recovery_id).unwrap().unwrap();

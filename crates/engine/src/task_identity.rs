@@ -1331,6 +1331,30 @@ impl TaskIdentityService {
                 "pending adoption no longer matches its provider binding".into(),
             ));
         }
+        let current = self.provider_identity(HarnessId::Codex);
+        if binding.provider_instance_id != current.instance_id
+            || binding.provider_profile_id != current.profile_id
+            || binding.provider_home_identity != current.home_identity
+            || binding.environment_id != self.inner.device_id
+            || binding.environment_id != view.workspace.environment_id
+            || binding.workspace_id != view.workspace.workspace_id
+            || binding.worktree_id != view.workspace.worktree_id
+        {
+            self.record_reconciliation(
+                &binding.binding_id,
+                ReconciliationRecord {
+                    state: ReconciliationState::ExternalChange,
+                    reason: "current provider home/profile or execution environment does not own the pending adoption; recovery refused before provider access"
+                        .into(),
+                    observed_at_ms: now_ms(),
+                    provider: binding.reconciliation.provider.clone(),
+                },
+            )?;
+            return Err(EngineError::Other(
+                "provider home/profile or execution environment changed; pending adoption remains safely blocked for explicit repair"
+                    .into(),
+            ));
+        }
         let observed = tokio::time::timeout(
             PROVIDER_TIMEOUT,
             self.inner.codex.observe_thread(&binding.provider_task_id),
