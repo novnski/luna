@@ -594,6 +594,18 @@ impl SessionsEngine {
                     .into(),
             ));
         }
+        if let Some(explicit_resume) = request.resume.as_deref()
+            && let Some(task_identity) = self.inner.task_identity.get()
+        {
+            // Caller-supplied ids must pass the managed ownership boundary
+            // before a warm route can steer an already-running provider.
+            task_identity.validate_explicit_resume(
+                chat_id,
+                harness_id,
+                &request.cwd,
+                explicit_resume,
+            )?;
+        }
         // Every dispatched prompt is a turn — routed steer or fresh run alike.
         self.note_turn_start(chat_id, &request.cwd);
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
@@ -687,23 +699,35 @@ impl SessionsEngine {
         // problem now (`session/load` falls back to `session/new` internally),
         // and starting the retry fresh silently dropped a good conversation.
         let mut resume_injected = false;
-        if request.resume.is_none() {
-            let managed = if let Some(task_identity) = self.inner.task_identity.get() {
-                task_identity
-                    .prepare_resume(chat_id, harness_id, &request.cwd)
-                    .await?
-            } else {
-                None
-            };
-            let managed_resume = managed.is_some();
-            request.resume = managed.or_else(|| self.inner.resume_for(chat_id, &request.cwd));
-            resume_injected = request.resume.is_some();
-            if managed_resume {
+        let explicit_resume = request.resume.clone();
+        let managed = if let Some(task_identity) = self.inner.task_identity.get() {
+            task_identity
+                .prepare_resume(chat_id, harness_id, &request.cwd)
+                .await?
+        } else {
+            None
+        };
+        if let Some(expected) = managed {
+            if let Some(explicit) = explicit_resume.as_deref()
+                && explicit != expected
+            {
+                return Err(EngineError::Other(format!(
+                    "explicit resume id does not match the managed provider binding for task {chat_id}"
+                )));
+            }
+            if explicit_resume.is_none() {
+                request.resume = Some(expected);
+                resume_injected = true;
+            }
+            if harness_id == HarnessId::Codex {
                 request.model_options.insert(
                     zeron_harness::codex::LUNA_STRICT_RESUME_OPTION.into(),
                     true.into(),
                 );
             }
+        } else if request.resume.is_none() {
+            request.resume = self.inner.resume_for(chat_id, &request.cwd);
+            resume_injected = request.resume.is_some();
         }
         if harness_id == HarnessId::Codex
             && let Some(workspace) = self.inner.workspace()

@@ -908,12 +908,8 @@ impl EngineRpc {
                 Ok(())
             }
             MutateParams::RenameChat { chat_id, title } => {
-                if self
-                    .task_identity
-                    .view(&chat_id)
-                    .and_then(|view| view.current_binding)
-                    .is_some()
-                {
+                let native_codex = self.task_identity.has_native_codex_binding(&chat_id);
+                if native_codex {
                     self.task_identity
                         .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
                         .await
@@ -926,7 +922,7 @@ impl EngineRpc {
                 self.workspace
                     .rename_chat(&chat_id, &title)
                     .map_err(failed)?;
-                if self.task_identity.view(&chat_id).is_some() {
+                if native_codex {
                     self.task_identity
                         .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
                         .await
@@ -959,12 +955,8 @@ impl EngineRpc {
                 .map_err(failed)
                 .map(drop),
             MutateParams::SetChatArchived { chat_id, archived } => {
-                if self
-                    .task_identity
-                    .view(&chat_id)
-                    .and_then(|view| view.current_binding)
-                    .is_some()
-                {
+                let native_codex = self.task_identity.has_native_codex_binding(&chat_id);
+                if native_codex {
                     self.task_identity
                         .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
                         .await
@@ -977,7 +969,7 @@ impl EngineRpc {
                 self.workspace
                     .set_chat_archived(&chat_id, archived)
                     .map_err(failed)?;
-                if self.task_identity.view(&chat_id).is_some() {
+                if native_codex {
                     self.task_identity
                         .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
                         .await

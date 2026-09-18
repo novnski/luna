@@ -101,8 +101,42 @@ fn fake_codex() -> PathBuf {
     path
 }
 
+fn mock_request(prompt: &str, resume: Option<&str>) -> RunRequest {
+    RunRequest {
+        prompt: prompt.into(),
+        harness: Some(HarnessId::Mock),
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        cwd: "/tmp".into(),
+        sandbox: SandboxLevel::WorkspaceWrite,
+        auto_approve: false,
+        permission_mode: zeron_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        resume: resume.map(str::to_string),
+        attachments: Vec::new(),
+        worktree: None,
+    }
+}
+
+async fn wait_for_done(
+    events: &mut tokio::sync::broadcast::Receiver<zeron_engine::JournaledEvent>,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if matches!(events.recv().await.unwrap().event, AgentEvent::Done { .. }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("run completed");
+}
+
 #[tokio::test]
-async fn engine_persists_the_binding_before_session_started_is_published() {
+async fn non_codex_managed_tasks_continue_and_keep_local_metadata_behavior() {
     let temp = tempfile::tempdir().unwrap();
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(MockHarness {
@@ -161,23 +195,7 @@ async fn engine_persists_the_binding_before_session_started_is_published() {
         .queue_command(
             &task_id,
             SessionCommandPayload::Run {
-                request: RunRequest {
-                    prompt: "fixture".into(),
-                    harness: Some(HarnessId::Mock),
-                    model: None,
-                    reasoning: None,
-                    model_options: Default::default(),
-                    cwd: "/tmp".into(),
-                    sandbox: SandboxLevel::WorkspaceWrite,
-                    auto_approve: false,
-                    permission_mode: zeron_proto::PermissionMode::Ask,
-                    parent_permission_ceiling: None,
-                    environment_permission_ceiling: None,
-                    permission_policy: None,
-                    resume: None,
-                    attachments: Vec::new(),
-                    worktree: None,
-                },
+                request: mock_request("fixture", None),
                 message_id: "message-1".into(),
             },
         )
@@ -201,6 +219,87 @@ async fn engine_persists_the_binding_before_session_started_is_published() {
         .expect("binding is durable before publication");
     assert_eq!(binding.provider_task_id, "provider-session-before-visible");
     assert_eq!(binding.provider_id, HarnessId::Mock);
+    assert_eq!(
+        binding.reconciliation.state,
+        ReconciliationState::Unsupported,
+        "only native reconciliation is unsupported"
+    );
+    wait_for_done(&mut events).await;
+
+    for mutation in [
+        serde_json::json!({
+            "op": "renameChat",
+            "chatId": &task_id,
+            "title": "Local metadata still works"
+        }),
+        serde_json::json!({
+            "op": "setChatArchived",
+            "chatId": &task_id,
+            "archived": true
+        }),
+    ] {
+        core.rpc_service()
+            .handle(methods::MUTATE, mutation)
+            .await
+            .unwrap();
+    }
+    let chat = core.workspace.chat(&task_id).unwrap().unwrap();
+    assert_eq!(chat.title.as_deref(), Some("Local metadata still works"));
+    assert!(chat.archived);
+
+    core.sessions
+        .dispatch(
+            &task_id,
+            HarnessId::Mock,
+            mock_request("engine-injected continuation", None),
+            Some("message-2".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        core.sessions
+            .last_request(&task_id)
+            .unwrap()
+            .resume
+            .as_deref(),
+        Some("provider-session-before-visible")
+    );
+    wait_for_done(&mut events).await;
+
+    let mismatch = core
+        .sessions
+        .dispatch(
+            &task_id,
+            HarnessId::Mock,
+            mock_request("must not reach provider", Some("foreign-session")),
+            Some("message-3".into()),
+        )
+        .await
+        .unwrap_err();
+    assert!(mismatch.to_string().contains("does not match"));
+    assert_eq!(
+        core.sessions.last_request(&task_id).unwrap().prompt,
+        "engine-injected continuation",
+        "rejected explicit resume never reached the harness"
+    );
+
+    core.sessions
+        .dispatch(
+            &task_id,
+            HarnessId::Mock,
+            mock_request(
+                "correct explicit continuation",
+                Some("provider-session-before-visible"),
+            ),
+            Some("message-4".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        core.sessions.last_request(&task_id).unwrap().prompt,
+        "correct explicit continuation"
+    );
+    wait_for_done(&mut events).await;
     core.shutdown().await;
 }
 
@@ -527,5 +626,186 @@ async fn import_is_deduplicated_bound_before_chat_visibility_and_tombstoned() {
 
     let replayed = fixture.reopen(&fixture.codex_home);
     assert!(replayed.view(&task_id).unwrap().task.tombstoned);
+    fixture.workspace.shutdown();
+}
+
+#[tokio::test]
+async fn adoption_transitions_ownership_normalizes_lifecycle_and_recovers_materialization() {
+    let fixture = Fixture::new();
+
+    let provider_owned_preview = fixture
+        .service
+        .preview_import(
+            HarnessId::Codex,
+            "qa-plain",
+            ImportOwnership::ProviderOwned,
+            None,
+            Some(&fixture.device_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider_owned_preview.proposed_title, "Foo");
+    let provider_owned = fixture
+        .service
+        .adopt_preview(&provider_owned_preview.preview_id, None)
+        .await
+        .unwrap();
+    let task_id = provider_owned.task.task_id.clone();
+    assert_eq!(
+        provider_owned.task.origin,
+        zeron_proto::TaskOrigin::ProviderImported
+    );
+    assert_eq!(
+        provider_owned.current_binding.unwrap().origin,
+        BindingOrigin::ProviderImported
+    );
+    assert!(
+        fixture
+            .service
+            .prepare_resume(&task_id, HarnessId::Codex, "/tmp")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("read-only")
+    );
+
+    let adoption_preview = fixture
+        .service
+        .preview_import(
+            HarnessId::Codex,
+            "qa-plain",
+            ImportOwnership::LunaAdopted,
+            None,
+            Some(&fixture.device_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        adoption_preview.existing_task_id.as_deref(),
+        Some(task_id.as_str())
+    );
+    let adopted = fixture
+        .service
+        .adopt_preview(&adoption_preview.preview_id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        adopted.task.origin,
+        zeron_proto::TaskOrigin::ProviderAdopted
+    );
+    let binding = adopted.current_binding.unwrap();
+    assert_eq!(binding.origin, BindingOrigin::ProviderAdopted);
+    assert_eq!(binding.generation, 2);
+    assert_eq!(
+        fixture
+            .workspace
+            .chat(&task_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Foo")
+    );
+    assert_eq!(
+        fixture
+            .service
+            .prepare_resume(&task_id, HarnessId::Codex, "/tmp")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("qa-plain")
+    );
+    assert_eq!(
+        fixture
+            .service
+            .view(&task_id)
+            .unwrap()
+            .current_binding
+            .unwrap()
+            .reconciliation
+            .state,
+        ReconciliationState::Current
+    );
+
+    let archived_preview = fixture
+        .service
+        .preview_import(
+            HarnessId::Codex,
+            "qa-archived",
+            ImportOwnership::LunaAdopted,
+            None,
+            Some(&fixture.device_id),
+        )
+        .await
+        .unwrap();
+    let archived = fixture
+        .service
+        .adopt_preview(&archived_preview.preview_id, None)
+        .await
+        .unwrap();
+    let archived_id = archived.task.task_id;
+    let archived_chat = fixture.workspace.chat(&archived_id).unwrap().unwrap();
+    assert_eq!(archived_chat.title.as_deref(), Some("Archived fixture"));
+    assert!(
+        archived_chat.archived,
+        "native archived state is materialized locally"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .prepare_resume(&archived_id, HarnessId::Codex, "/tmp")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("qa-archived")
+    );
+
+    let before_recovery = fixture.service.managed_task_ids();
+    let recovery_preview = fixture
+        .service
+        .preview_import(
+            HarnessId::Codex,
+            "qa-recovery",
+            ImportOwnership::LunaAdopted,
+            None,
+            Some(&fixture.device_id),
+        )
+        .await
+        .unwrap();
+    let interrupted = fixture
+        .service
+        .adopt_preview(&recovery_preview.preview_id, None)
+        .await
+        .unwrap_err();
+    assert!(interrupted.to_string().contains("one-shot rename failure"));
+    let recovery_id = fixture
+        .service
+        .managed_task_ids()
+        .into_iter()
+        .find(|id| !before_recovery.contains(id))
+        .expect("durable task identity survived interrupted materialization");
+    assert!(fixture.workspace.chat(&recovery_id).unwrap().is_none());
+    assert!(
+        fixture
+            .service
+            .prepare_resume(&recovery_id, HarnessId::Codex, "/tmp")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not fully materialized")
+    );
+
+    let replayed = fixture.reopen(&fixture.codex_home);
+    replayed.recover_pending_materializations().await.unwrap();
+    let recovered_chat = fixture.workspace.chat(&recovery_id).unwrap().unwrap();
+    assert_eq!(recovered_chat.title.as_deref(), Some("Recovery fixture"));
+    assert_eq!(
+        replayed
+            .prepare_resume(&recovery_id, HarnessId::Codex, "/tmp")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("qa-recovery")
+    );
     fixture.workspace.shutdown();
 }

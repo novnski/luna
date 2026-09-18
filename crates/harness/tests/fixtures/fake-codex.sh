@@ -8,6 +8,7 @@
 emit() { printf '%s\n' "$1"; }
 rid() { printf '%s' "$1" | sed 's/.*"id":\([0-9]*\).*/\1/'; }
 has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
+[ -z "$CODEX_HOME" ] || mkdir -p "$CODEX_HOME"
 
 fail_turn() { # $1 = request id, $2 = message
   emit "{\"id\":$1,\"result\":{\"turn\":{\"id\":\"t-bad\"}}}"
@@ -37,7 +38,16 @@ if has "$line" '"method":"thread/read"'; then
   status=idle
   name='[LUNA QA] Imported fixture'
   if [ "$thread_id" = 'qa-active' ]; then status=active; fi
-  if [ "$thread_id" = 'qa-archived' ]; then name='[LUNA QA] Archived fixture'; fi
+  if [ "$thread_id" = 'qa-plain' ]; then name='Foo'; fi
+  if [ "$thread_id" = 'qa-recovery' ]; then name='Recovery fixture'; fi
+  if [ "$thread_id" = 'qa-archived' ]; then name='Archived fixture'; fi
+  case "$thread_id" in
+    qa-plain|qa-recovery|qa-archived)
+      if [ -f "$CODEX_HOME/fake-name-$thread_id" ]; then
+        name=$(sed -n '1p' "$CODEX_HOME/fake-name-$thread_id")
+      fi
+      ;;
+  esac
   emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"$name\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"$status\"},\"updatedAt\":1770000000,\"cliVersion\":\"0.154.0\",\"projectId\":null,\"ephemeral\":false}}}"
   exec sleep 30
 fi
@@ -46,12 +56,32 @@ if has "$line" '"method":"thread/list"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"qa-archived\"}],\"nextCursor\":null}}"
   elif has "$line" '"archived":false' && has "$line" 'Imported fixture'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"qa-import\"}],\"nextCursor\":null}}"
+  elif has "$line" '"archived":false' && has "$line" 'Foo'; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"qa-plain\"}],\"nextCursor\":null}}"
+  elif has "$line" '"archived":false' && has "$line" 'Recovery fixture'; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"qa-recovery\"}],\"nextCursor\":null}}"
   else
     emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[],\"nextCursor\":null}}"
   fi
   exec sleep 30
 fi
-if has "$line" '"method":"thread/name/set"' || has "$line" '"method":"thread/archive"' || has "$line" '"method":"thread/unarchive"'; then
+if has "$line" '"method":"thread/name/set"'; then
+  thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  name=$(printf '%s' "$line" | sed 's/.*"name":"\([^"]*\)".*/\1/')
+  if [ "$thread_id" = 'qa-recovery' ] && [ ! -f "$CODEX_HOME/fake-rename-failed-$thread_id" ]; then
+    : > "$CODEX_HOME/fake-rename-failed-$thread_id"
+    emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32603,\"message\":\"injected one-shot rename failure\"}}"
+    exit 0
+  fi
+  case "$thread_id" in
+    qa-plain|qa-recovery|qa-archived)
+      printf '%s\n' "$name" > "$CODEX_HOME/fake-name-$thread_id"
+      ;;
+  esac
+  emit "{\"id\":$(rid "$line"),\"result\":{}}"
+  exec sleep 30
+fi
+if has "$line" '"method":"thread/archive"' || has "$line" '"method":"thread/unarchive"'; then
   emit "{\"id\":$(rid "$line"),\"result\":{}}"
   exec sleep 30
 fi

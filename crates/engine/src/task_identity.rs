@@ -36,6 +36,20 @@ struct TaskIdentityLog {
     events: Vec<TaskIdentityEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskMaterializationIntent {
+    task_id: String,
+    space_id: Option<String>,
+    device_id: String,
+    config: Option<ChatConfig>,
+    cwd: String,
+    title: String,
+    archived: Option<bool>,
+    ownership: ImportOwnership,
+    approved_provider: ProviderTaskObservation,
+}
+
 impl Default for TaskIdentityLog {
     fn default() -> Self {
         Self {
@@ -66,6 +80,17 @@ enum TaskIdentityEvent {
         replacement_id: String,
         at_ms: i64,
     },
+    TaskOwnershipAdopted {
+        task_id: String,
+        at_ms: i64,
+    },
+    MaterializationPlanned {
+        intent: TaskMaterializationIntent,
+    },
+    MaterializationCompleted {
+        task_id: String,
+        at_ms: i64,
+    },
     TaskTombstoned {
         task_id: String,
         external_import_key: Option<String>,
@@ -82,6 +107,7 @@ struct Projection {
     live_provider_bindings: HashMap<String, String>,
     external_imports: HashMap<String, String>,
     import_tombstones: HashMap<String, String>,
+    pending_materializations: HashMap<String, TaskMaterializationIntent>,
 }
 
 impl Projection {
@@ -191,6 +217,41 @@ impl Projection {
                     provider: binding.reconciliation.provider.clone(),
                 };
             }
+            TaskIdentityEvent::TaskOwnershipAdopted { task_id, .. } => {
+                let task = self.tasks.get_mut(task_id).ok_or_else(|| {
+                    EngineError::Other(format!(
+                        "ownership transition references unknown task {task_id}"
+                    ))
+                })?;
+                if !matches!(
+                    task.origin,
+                    TaskOrigin::ProviderImported | TaskOrigin::ProviderAdopted
+                ) {
+                    return Err(EngineError::Other(format!(
+                        "task {task_id} is not a provider import"
+                    )));
+                }
+                task.origin = TaskOrigin::ProviderAdopted;
+            }
+            TaskIdentityEvent::MaterializationPlanned { intent } => {
+                let task = self.tasks.get(&intent.task_id).ok_or_else(|| {
+                    EngineError::Other(format!(
+                        "materialization references unknown task {}",
+                        intent.task_id
+                    ))
+                })?;
+                if task.tombstoned {
+                    return Err(EngineError::Other(format!(
+                        "tombstoned task {} cannot be materialized",
+                        intent.task_id
+                    )));
+                }
+                self.pending_materializations
+                    .insert(intent.task_id.clone(), intent.clone());
+            }
+            TaskIdentityEvent::MaterializationCompleted { task_id, .. } => {
+                self.pending_materializations.remove(task_id);
+            }
             TaskIdentityEvent::TaskTombstoned {
                 task_id,
                 external_import_key,
@@ -201,6 +262,7 @@ impl Projection {
                 })?;
                 task.tombstoned = true;
                 task.current_binding_id = None;
+                self.pending_materializations.remove(task_id);
                 if let Some(key) = external_import_key {
                     self.external_imports.remove(key);
                     self.import_tombstones.insert(key.clone(), task_id.clone());
@@ -327,7 +389,13 @@ impl TaskIdentityService {
     pub fn start_startup_reconciliation(&self) {
         let this = self.clone();
         tokio::spawn(async move {
+            if let Err(error) = this.recover_pending_materializations().await {
+                tracing::warn!(%error, "startup task materialization recovery remains pending");
+            }
             for task_id in this.managed_task_ids() {
+                if this.has_pending_materialization(&task_id) {
+                    continue;
+                }
                 if let Err(error) = this.reconcile_task(&task_id, false).await {
                     tracing::warn!(task = %task_id, %error, "startup task reconciliation failed");
                 }
@@ -352,8 +420,21 @@ impl TaskIdentityService {
         lock(&self.inner.state).projection.view(task_id)
     }
 
+    pub fn has_native_codex_binding(&self, task_id: &str) -> bool {
+        self.view(task_id)
+            .and_then(|view| view.current_binding)
+            .is_some_and(|binding| binding.provider_id == HarnessId::Codex)
+    }
+
     pub fn event_count(&self) -> usize {
         lock(&self.inner.state).log.events.len()
+    }
+
+    fn has_pending_materialization(&self, task_id: &str) -> bool {
+        lock(&self.inner.state)
+            .projection
+            .pending_materializations
+            .contains_key(task_id)
     }
 
     pub fn register_new_task(
@@ -524,6 +605,61 @@ impl TaskIdentityService {
         Ok(Some(binding))
     }
 
+    pub fn validate_explicit_resume(
+        &self,
+        task_id: &str,
+        provider_id: HarnessId,
+        cwd: &str,
+        provider_task_id: &str,
+    ) -> Result<(), EngineError> {
+        let Some(view) = self.view(task_id) else {
+            return Ok(()); // legacy caller-owned resume
+        };
+        if view.task.tombstoned {
+            return Err(EngineError::Other(format!("task {task_id} is tombstoned")));
+        }
+        if self.has_pending_materialization(task_id) {
+            return Err(EngineError::Other(
+                "provider adoption is not fully materialized; restart recovery or retry it before running"
+                    .into(),
+            ));
+        }
+        let binding = view
+            .current_binding
+            .ok_or_else(|| EngineError::Other("managed task has no provider binding".into()))?;
+        if binding.provider_id != provider_id {
+            return Err(EngineError::Other(format!(
+                "task is bound to {:?}, not {provider_id:?}",
+                binding.provider_id
+            )));
+        }
+        let current_identity = self.provider_identity(provider_id);
+        if binding.provider_instance_id != current_identity.instance_id
+            || binding.provider_profile_id != current_identity.profile_id
+            || binding.provider_home_identity != current_identity.home_identity
+        {
+            return Err(EngineError::Other(
+                "provider profile/home changed; explicit resume refused".into(),
+            ));
+        }
+        if binding.origin == BindingOrigin::ProviderImported {
+            return Err(EngineError::Other(
+                "provider-owned imports are read-only until explicitly adopted".into(),
+            ));
+        }
+        if normalized(cwd) != normalized(&view.workspace.current_path) {
+            return Err(EngineError::Other(
+                "task workspace changed; explicit resume refused".into(),
+            ));
+        }
+        if binding.provider_task_id != provider_task_id {
+            return Err(EngineError::Other(format!(
+                "explicit resume id does not match the managed provider binding for task {task_id}"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn prepare_resume(
         &self,
         task_id: &str,
@@ -533,6 +669,15 @@ impl TaskIdentityService {
         let Some(view) = self.view(task_id) else {
             return Ok(None);
         };
+        if view.task.tombstoned {
+            return Err(EngineError::Other(format!("task {task_id} is tombstoned")));
+        }
+        if self.has_pending_materialization(task_id) {
+            return Err(EngineError::Other(
+                "provider adoption is not fully materialized; restart recovery or retry it before running"
+                    .into(),
+            ));
+        }
         let Some(binding) = view.current_binding else {
             return Ok(None);
         };
@@ -576,6 +721,13 @@ impl TaskIdentityService {
                 "task workspace changed; an explicit binding generation is required".into(),
             ));
         }
+        if provider_id != HarnessId::Codex {
+            // L06 has no provider-native reconciliation contract for this
+            // harness. Keep the binding for ordinary engine-owned continuation
+            // without treating the honest `unsupported` native state as a
+            // failure of the provider's existing resume mechanism.
+            return Ok(Some(binding.provider_task_id));
+        }
         let reconciled = self.reconcile_task(task_id, false).await?;
         let binding = reconciled
             .current_binding
@@ -609,6 +761,18 @@ impl TaskIdentityService {
             .current_binding
             .clone()
             .ok_or_else(|| EngineError::Other(format!("task {task_id} has no provider binding")))?;
+        if self.has_pending_materialization(task_id) {
+            self.record_reconciliation(
+                &binding.binding_id,
+                ReconciliationRecord {
+                    state: ReconciliationState::Stale,
+                    reason: "approved provider import is awaiting local materialization".into(),
+                    observed_at_ms: now_ms(),
+                    provider: binding.reconciliation.provider.clone(),
+                },
+            )?;
+            return Ok(self.view(task_id).expect("task survives reconciliation"));
+        }
         if binding.provider_id != HarnessId::Codex {
             let record = ReconciliationRecord {
                 state: ReconciliationState::Unsupported,
@@ -955,8 +1119,52 @@ impl TaskIdentityService {
                 .cloned()
         };
         let task_id = existing.unwrap_or_else(new_id);
-        if self.view(&task_id).is_none() {
-            let at = now_ms();
+        let existing_view = self.view(&task_id);
+        let existing_chat = self.inner.workspace.chat(&task_id)?;
+        let transition_to_adopted = existing_view
+            .as_ref()
+            .and_then(|view| view.current_binding.as_ref())
+            .is_some_and(|binding| {
+                pending.preview.ownership == ImportOwnership::LunaAdopted
+                    && binding.origin == BindingOrigin::ProviderImported
+            });
+        let adopted_state_complete = existing_view
+            .as_ref()
+            .and_then(|view| view.current_binding.as_ref())
+            .is_some_and(|binding| binding.origin == BindingOrigin::ProviderAdopted)
+            && existing_chat.as_ref().is_some_and(|chat| {
+                chat.title.as_deref() == Some(pending.preview.proposed_title.as_str())
+                    && pending
+                        .preview
+                        .provider_task
+                        .archived
+                        .is_none_or(|archived| chat.archived == archived)
+            })
+            && pending.preview.provider_task.name.as_deref()
+                == Some(provider_title(Some(&pending.preview.proposed_title)).as_str())
+            && self.inner.workspace.chat_harness_session(&task_id)
+                == Some((
+                    pending.preview.provider_task.provider_task_id.clone(),
+                    Some(pending.preview.provider_task.cwd.clone()),
+                ));
+        let already_complete = existing_view.is_some()
+            && existing_chat.is_some()
+            && !transition_to_adopted
+            && !self.has_pending_materialization(&task_id)
+            && match pending.preview.ownership {
+                ImportOwnership::ProviderOwned => true,
+                ImportOwnership::LunaAdopted => adopted_state_complete,
+            };
+        if already_complete {
+            lock(&self.inner.previews).remove(preview_id);
+            return self
+                .view(&task_id)
+                .ok_or_else(|| EngineError::Other("imported task projection is missing".into()));
+        }
+
+        let mut events = Vec::new();
+        let at = now_ms();
+        if existing_view.is_none() {
             let task_origin = match pending.preview.ownership {
                 ImportOwnership::ProviderOwned => TaskOrigin::ProviderImported,
                 ImportOwnership::LunaAdopted => TaskOrigin::ProviderAdopted,
@@ -1006,40 +1214,219 @@ impl TaskIdentityService {
                 created_at_ms: at,
                 last_observed_at_ms: at,
             };
-            // One durable write owns task + binding + import key. The workspace
-            // row is deliberately created only after this succeeds.
-            self.commit(vec![
+            events.extend([
                 TaskIdentityEvent::WorkspaceObserved {
                     workspace: pending.preview.workspace.clone(),
                 },
                 TaskIdentityEvent::TaskRegistered { task },
                 TaskIdentityEvent::BindingCreated { binding },
-            ])?;
+            ]);
+        } else if transition_to_adopted {
+            let current = existing_view
+                .as_ref()
+                .and_then(|view| view.current_binding.as_ref())
+                .expect("transition requires a binding");
+            let mut replacement = current.clone();
+            replacement.binding_id = new_id();
+            replacement.generation += 1;
+            replacement.origin = BindingOrigin::ProviderAdopted;
+            replacement.provenance = format!("explicit provider adoption preview {preview_id}");
+            replacement.reconciliation = ReconciliationRecord {
+                state: ReconciliationState::Current,
+                reason: "provider observation matched the approved adoption preview".into(),
+                observed_at_ms: at,
+                provider: Some(pending.preview.provider_task.clone()),
+            };
+            replacement.replaced_by_binding_id = None;
+            replacement.created_at_ms = at;
+            replacement.last_observed_at_ms = at;
+            events.extend([
+                TaskIdentityEvent::TaskOwnershipAdopted {
+                    task_id: task_id.clone(),
+                    at_ms: at,
+                },
+                TaskIdentityEvent::BindingReplaced {
+                    binding_id: current.binding_id.clone(),
+                    replacement_id: replacement.binding_id.clone(),
+                    at_ms: at,
+                },
+                TaskIdentityEvent::BindingCreated {
+                    binding: replacement,
+                },
+            ]);
         }
-        if self.inner.workspace.chat(&task_id)?.is_none() {
-            self.inner.workspace.create_chat(
-                &task_id,
-                pending.space_id.as_deref(),
-                Some(&pending.device_id),
-                config,
-                Some(pending.preview.provider_task.cwd.clone()),
-            )?;
-            if !pending.preview.proposed_title.is_empty() {
-                self.inner
-                    .workspace
-                    .rename_chat(&task_id, &pending.preview.proposed_title)?;
-            }
-            if pending.preview.ownership == ImportOwnership::LunaAdopted {
-                self.inner.workspace.set_chat_harness_session(
-                    &task_id,
-                    &pending.preview.provider_task.provider_task_id,
-                    &pending.preview.provider_task.cwd,
-                );
-            }
+
+        // A fresh approved preview may supersede an older pending intent after
+        // an external provider change. Recovery itself never rewrites intent;
+        // only this explicit approval path can do so.
+        events.push(TaskIdentityEvent::MaterializationPlanned {
+            intent: TaskMaterializationIntent {
+                task_id: task_id.clone(),
+                space_id: pending.space_id.clone(),
+                device_id: pending.device_id.clone(),
+                config: config.or_else(|| existing_chat.and_then(|chat| chat.config)),
+                cwd: pending.preview.provider_task.cwd.clone(),
+                title: pending.preview.proposed_title.clone(),
+                archived: pending.preview.provider_task.archived,
+                ownership: pending.preview.ownership,
+                approved_provider: pending.preview.provider_task.clone(),
+            },
+        });
+        if !events.is_empty() {
+            // The task, binding ownership, import key, and enough intent to
+            // finish chat materialization survive as one durable decision.
+            self.commit(events)?;
         }
         lock(&self.inner.previews).remove(preview_id);
+        self.materialize_pending_task(&task_id).await?;
         self.view(&task_id)
             .ok_or_else(|| EngineError::Other("imported task projection is missing".into()))
+    }
+
+    pub async fn recover_pending_materializations(&self) -> Result<(), EngineError> {
+        let mut task_ids = lock(&self.inner.state)
+            .projection
+            .pending_materializations
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        task_ids.sort();
+        let mut first_error = None;
+        for task_id in task_ids {
+            if let Err(error) = self.materialize_pending_task(&task_id).await {
+                tracing::warn!(task = %task_id, %error, "task materialization remains pending");
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    async fn materialize_pending_task(&self, task_id: &str) -> Result<(), EngineError> {
+        let intent = lock(&self.inner.state)
+            .projection
+            .pending_materializations
+            .get(task_id)
+            .cloned();
+        let Some(intent) = intent else {
+            return Ok(());
+        };
+        let view = self
+            .view(task_id)
+            .ok_or_else(|| EngineError::Other(format!("unknown pending task {task_id}")))?;
+        if view.task.tombstoned {
+            return Err(EngineError::Other(format!("task {task_id} is tombstoned")));
+        }
+        let binding = view
+            .current_binding
+            .ok_or_else(|| EngineError::Other("pending task has no provider binding".into()))?;
+        if binding.provider_id != HarnessId::Codex
+            || binding.provider_task_id != intent.approved_provider.provider_task_id
+        {
+            return Err(EngineError::Other(
+                "pending adoption no longer matches its provider binding".into(),
+            ));
+        }
+        let observed = tokio::time::timeout(
+            PROVIDER_TIMEOUT,
+            self.inner.codex.observe_thread(&binding.provider_task_id),
+        )
+        .await
+        .map_err(|_| EngineError::Other("pending adoption provider read timed out".into()))??
+        .ok_or_else(|| EngineError::Other("pending adoption provider task is missing".into()))?;
+        let mut provider = provider_observation(observed);
+        let desired_name = provider_title(Some(&intent.title));
+        if !materialization_observation_matches(&intent, &provider, &desired_name) {
+            self.record_reconciliation(
+                &binding.binding_id,
+                ReconciliationRecord {
+                    state: ReconciliationState::ExternalChange,
+                    reason: "provider task changed after the approved adoption preview".into(),
+                    observed_at_ms: now_ms(),
+                    provider: Some(provider),
+                },
+            )?;
+            return Err(EngineError::Other(
+                "provider task changed after approval; materialization remains safely blocked"
+                    .into(),
+            ));
+        }
+        if intent.ownership == ImportOwnership::LunaAdopted
+            && provider.name.as_deref() != Some(desired_name.as_str())
+        {
+            tokio::time::timeout(
+                PROVIDER_TIMEOUT,
+                self.inner
+                    .codex
+                    .set_name(&binding.provider_task_id, &desired_name),
+            )
+            .await
+            .map_err(|_| EngineError::Other("provider adoption name update timed out".into()))??;
+            provider.name = Some(desired_name);
+        }
+
+        if self.inner.workspace.chat(task_id)?.is_none() {
+            self.inner.workspace.create_chat(
+                task_id,
+                intent.space_id.as_deref(),
+                Some(&intent.device_id),
+                intent.config.clone(),
+                Some(intent.cwd.clone()),
+            )?;
+        }
+        let chat = self
+            .inner
+            .workspace
+            .chat(task_id)?
+            .ok_or_else(|| EngineError::Other("materialized chat is missing".into()))?;
+        if let Some(title) = chat.title.as_deref()
+            && title != intent.title
+        {
+            return Err(EngineError::Other(
+                "local task title changed during adoption recovery; refusing to overwrite it"
+                    .into(),
+            ));
+        }
+        if !intent.title.is_empty() {
+            self.inner.workspace.rename_chat(task_id, &intent.title)?;
+        }
+        if let Some(archived) = intent.archived {
+            self.inner.workspace.set_chat_archived(task_id, archived)?;
+        }
+        if intent.ownership == ImportOwnership::LunaAdopted {
+            self.inner.workspace.set_chat_harness_session(
+                task_id,
+                &binding.provider_task_id,
+                &intent.cwd,
+            );
+            if self.inner.workspace.chat_harness_session(task_id)
+                != Some((binding.provider_task_id.clone(), Some(intent.cwd.clone())))
+            {
+                return Err(EngineError::Other(
+                    "adopted provider session was not persisted on the local task".into(),
+                ));
+            }
+        }
+        let at = now_ms();
+        self.commit(vec![
+            TaskIdentityEvent::BindingReconciled {
+                binding_id: binding.binding_id,
+                reconciliation: ReconciliationRecord {
+                    state: ReconciliationState::Current,
+                    reason: "approved provider import is fully materialized".into(),
+                    observed_at_ms: at,
+                    provider: Some(provider),
+                },
+            },
+            TaskIdentityEvent::MaterializationCompleted {
+                task_id: task_id.to_string(),
+                at_ms: at,
+            },
+        ])
     }
 
     pub fn tombstone_task(&self, task_id: &str) -> Result<(), EngineError> {
@@ -1113,6 +1500,11 @@ impl TaskIdentityService {
     }
 
     fn mutable_codex_binding(&self, task_id: &str) -> Result<ExecutionBinding, EngineError> {
+        if self.has_pending_materialization(task_id) {
+            return Err(EngineError::Other(
+                "provider adoption is not fully materialized".into(),
+            ));
+        }
         let binding = self
             .view(task_id)
             .and_then(|view| view.current_binding)
@@ -1344,8 +1736,52 @@ fn preview_fingerprint(preview: &ProviderImportPreview) -> String {
     )
 }
 
+fn materialization_observation_matches(
+    intent: &TaskMaterializationIntent,
+    observed: &ProviderTaskObservation,
+    desired_name: &str,
+) -> bool {
+    let approved = &intent.approved_provider;
+    let title_matches = observed.name == approved.name
+        || (intent.ownership == ImportOwnership::LunaAdopted
+            && observed.name.as_deref() == Some(desired_name));
+    approved.provider_task_id == observed.provider_task_id
+        && normalized(&approved.cwd) == normalized(&observed.cwd)
+        && approved.project_id == observed.project_id
+        && approved.ephemeral == observed.ephemeral
+        && approved.archived == observed.archived
+        && observed.status != "active"
+        && observed.status != "systemError"
+        && observed.status != "unknown"
+        && title_matches
+}
+
 fn stable_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    // A configured provider home may not exist until the first app-server
+    // launch. Canonicalize its nearest existing ancestor so symlinked roots
+    // such as macOS `/var` do not change identity after that first launch.
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    while !ancestor.exists() {
+        let Some(name) = ancestor.file_name() else {
+            return path.to_path_buf();
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            return path.to_path_buf();
+        };
+        ancestor = parent;
+    }
+    let Ok(mut stable) = ancestor.canonicalize() else {
+        return path.to_path_buf();
+    };
+    for component in missing.into_iter().rev() {
+        stable.push(component);
+    }
+    stable
 }
 
 fn normalized(path: &str) -> String {
