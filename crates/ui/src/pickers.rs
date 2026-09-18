@@ -579,10 +579,8 @@ pub enum PickerKind {
 }
 
 pub(crate) struct ReturnComposerFocus;
-pub(crate) struct OpenSetup;
 
 impl gpui::EventEmitter<ReturnComposerFocus> for Pickers {}
-impl gpui::EventEmitter<OpenSetup> for Pickers {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ModelSetting {
@@ -3781,19 +3779,6 @@ impl Pickers {
                             "Enable an installed agent in Settings → Agents, \
                              or install an agent CLI.",
                         )),
-                )
-                .child(
-                    crate::settings::widgets::ghost_action(&theme)
-                        .id("model-open-setup")
-                        .role(gpui::Role::Button)
-                        .tab_index(0)
-                        .focus_visible({
-                            let accent = theme.accent;
-                            move |style| style.border_2().border_color(accent)
-                        })
-                        .hover(|style| crate::settings::widgets::ghost_hover(&theme, style))
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(OpenSetup)))
-                        .child(SharedString::from("Open Setup")),
                 )
                 .into_any_element();
         }
