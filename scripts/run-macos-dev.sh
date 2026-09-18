@@ -37,16 +37,10 @@ sed -e "s/__UPSTREAM_VERSION__/$UPSTREAM_VERSION/g" \
 plutil -replace LSEnvironment.LUNA_DATA_DIR -string "$DATA_DIR" "$CONTENTS/Info.plist"
 plutil -replace LSEnvironment.LUNA_IPC_PORT -string "$IPC_PORT" "$CONTENTS/Info.plist"
 
-if [[ ! -f "$CONTENTS/Resources/luna.icns" ]]; then
-  ICONSET="$DEV_ROOT/luna-dev.iconset"
-  mkdir -p "$ICONSET"
-  for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$ROOT/dist/macos/icon-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    retina=$((size * 2))
-    sips -z "$retina" "$retina" "$ROOT/dist/macos/icon-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/luna.icns"
-fi
+# Rebuild on every assembly so a previously built development bundle cannot
+# retain stale icon artwork.
+iconutil -c icns "$ROOT/dist/macos/luna.iconset" \
+  -o "$CONTENTS/Resources/luna.icns"
 
 # A real Apple Development identity gives TCC a stable signing requirement
 # across rebuilds. Set LUNA_DEV_CODESIGN_IDENTITY explicitly when more than
