@@ -117,6 +117,10 @@ fn run_payload(message_id: &str, repo_path: &str) -> SessionCommandPayload {
             cwd: repo_path.into(),
             sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: true,
+            permission_mode: zeron_proto::PermissionMode::Ask,
+            parent_permission_ceiling: None,
+            environment_permission_ceiling: None,
+            permission_policy: None,
             attachments: Vec::new(),
             resume: None,
             worktree: Some(WorktreeSpec {

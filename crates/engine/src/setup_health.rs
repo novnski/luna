@@ -541,8 +541,15 @@ fn capabilities(
         ),
         capability(
             SetupCapabilityKind::ApprovalModes,
-            SetupCapabilityState::Unsupported,
-            "Permission modes arrive in L04.",
+            if crate::permissions::provider_capabilities(descriptor.id)
+                .supported_modes
+                .is_empty()
+            {
+                SetupCapabilityState::Unsupported
+            } else {
+                SetupCapabilityState::Supported
+            },
+            &permission_capability_detail(descriptor.id),
         ),
         capability(
             SetupCapabilityKind::NativeSessionIdentity,
@@ -558,6 +565,28 @@ fn capabilities(
             },
         ),
     ]
+}
+
+fn permission_capability_detail(harness: HarnessId) -> String {
+    let capabilities = crate::permissions::provider_capabilities(harness);
+    if capabilities.supported_modes.is_empty() {
+        return capabilities
+            .known_limitations
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "No verified permission enforcement contract.".into());
+    }
+    let modes = capabilities
+        .supported_modes
+        .iter()
+        .map(|mode| match mode {
+            zeron_proto::PermissionMode::Ask => "Ask",
+            zeron_proto::PermissionMode::Auto => "Auto",
+            zeron_proto::PermissionMode::Full => "Full",
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Verified provider permission modes: {modes}.")
 }
 
 fn workspace_problem(
@@ -685,6 +714,26 @@ mod tests {
                 EvidenceState::Unknown,
             ),
             ProviderReadinessState::Unknown
+        );
+    }
+
+    #[test]
+    fn approval_modes_report_only_verified_provider_contracts() {
+        assert_eq!(
+            permission_capability_detail(HarnessId::Codex),
+            "Verified provider permission modes: Ask, Auto, Full."
+        );
+        assert_eq!(
+            permission_capability_detail(HarnessId::Opencode),
+            "Verified provider permission modes: Ask, Full."
+        );
+        assert!(
+            permission_capability_detail(HarnessId::Cursor)
+                .contains("no verified sandbox or approval contract")
+        );
+        assert!(
+            permission_capability_detail(HarnessId::Grok)
+                .contains("do not prove that this concrete agent enforces")
         );
     }
 

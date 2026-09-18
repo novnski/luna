@@ -22,7 +22,8 @@ use gpui::{
 
 use zeron_engine::registry::HarnessDescriptor;
 use zeron_proto::{
-    ChatConfig, FolderListing, HarnessId, Model, ReasoningLevel, RepoRef, SandboxLevel, Space,
+    ChatConfig, FolderListing, HarnessId, Model, PermissionMode, ReasoningLevel, RepoRef,
+    SandboxLevel, Space,
 };
 use zeron_rpc::methods;
 
@@ -125,6 +126,7 @@ pub struct DraftConfig {
     pub branch: Option<String>,
     /// Where the new session runs (the t3code env-mode).
     pub checkout: CheckoutKind,
+    pub permission_mode: Option<PermissionMode>,
 }
 
 /// Where a new session runs (t3code's env-mode: `local | worktree`). "Current
@@ -164,6 +166,8 @@ pub struct ResolvedRunConfig {
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     pub model_options: serde_json::Map<String, serde_json::Value>,
+    pub permission_mode: PermissionMode,
+    pub effective_permission_mode: PermissionMode,
 }
 
 impl ResolvedRunConfig {
@@ -175,8 +179,38 @@ impl ResolvedRunConfig {
             reasoning: self.reasoning,
             model_options: self.model_options.clone(),
             sandbox: SandboxLevel::WorkspaceWrite,
+            permission_mode: self.permission_mode,
+            effective_permission_mode: self.effective_permission_mode,
+            permission_ceiling_source: None,
+            permission_degradation_reason: (self.permission_mode != self.effective_permission_mode)
+                .then_some(zeron_proto::PermissionDegradationReason::ProviderUnsupported),
+            permission_audit: Vec::new(),
         })
     }
+}
+
+fn default_permission_mode(harness: HarnessId) -> PermissionMode {
+    let capabilities = zeron_engine::provider_capabilities(harness);
+    if capabilities.supports(PermissionMode::Auto) {
+        PermissionMode::Auto
+    } else {
+        PermissionMode::Ask
+    }
+}
+
+fn provider_effective_permission_mode(
+    harness: HarnessId,
+    requested: PermissionMode,
+) -> PermissionMode {
+    let capabilities = zeron_engine::provider_capabilities(harness);
+    [
+        PermissionMode::Full,
+        PermissionMode::Auto,
+        PermissionMode::Ask,
+    ]
+    .into_iter()
+    .find(|mode| *mode <= requested && capabilities.supports(*mode))
+    .unwrap_or(PermissionMode::Ask)
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +511,7 @@ pub enum PickerKind {
     /// (reasoning ladder + model options) at the bottom — one trigger, one
     /// card (the separate Traits popover folded in here).
     HarnessModel,
+    Permission,
     /// New-session canvas only: which project the session mints into. A pick
     /// re-keys everything project-derived (refs, harness/model catalogs) via
     /// the state observer.
@@ -588,6 +623,7 @@ pub struct Pickers {
     switch_task: Option<Task<()>>,
     /// Last mid-session switch failure (shown in the ref popover).
     switch_error: Option<String>,
+    full_confirmation: Option<String>,
     mutate_task: Option<Task<()>>,
     _search_events: Subscription,
     _state_observe: Subscription,
@@ -647,6 +683,7 @@ impl Pickers {
                 this.config.harness = None;
                 this.config.model = None;
                 this.config.reasoning = None;
+                this.config.permission_mode = None;
                 this.switch_error = None;
             }
             // A space switch invalidates the branch draft + cache — the folder
@@ -690,6 +727,7 @@ impl Pickers {
             Some("checkout") => Some(PickerKind::Checkout),
             Some("project") => Some(PickerKind::Space),
             Some("device") => Some(PickerKind::Device),
+            Some("permission") => Some(PickerKind::Permission),
             _ => None,
         };
         let mut open = popover::Popup::default();
@@ -748,6 +786,7 @@ impl Pickers {
             switching: None,
             switch_task: None,
             switch_error: None,
+            full_confirmation: None,
             mutate_task: None,
             _search_events: search_events,
             _state_observe: state_observe,
@@ -820,6 +859,40 @@ impl Pickers {
         self.harnesses
             .ready()
             .and_then(|list| offered_harnesses(list).first().map(|d| d.id))
+    }
+
+    fn requested_permission_mode(&self, cx: &App) -> PermissionMode {
+        if let Some(mode) = self.config.permission_mode {
+            return mode;
+        }
+        if let Some(mode) = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| chat.config.as_ref())
+            .map(|config| config.permission_mode)
+        {
+            return mode;
+        }
+        let Some(harness) = self.effective_harness(cx) else {
+            return PermissionMode::Ask;
+        };
+        self.defaults
+            .permission_by_harness
+            .get(&harness)
+            .copied()
+            .unwrap_or_else(|| default_permission_mode(harness))
+    }
+
+    fn preview_effective_permission_mode(
+        &self,
+        cx: &App,
+        requested: PermissionMode,
+    ) -> PermissionMode {
+        let Some(harness) = self.effective_harness(cx) else {
+            return PermissionMode::Ask;
+        };
+        provider_effective_permission_mode(harness, requested)
     }
 
     /// Effective model id: the draft pick, the selected chat's config, or (on
@@ -915,6 +988,7 @@ impl Pickers {
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
+        let permission_mode = self.requested_permission_mode(cx);
         ResolvedRunConfig {
             harness: self.effective_harness(cx),
             model: self
@@ -924,6 +998,8 @@ impl Pickers {
                 .or_else(|| self.effective_model_id(cx).map(str::to_string)),
             reasoning: self.effective_reasoning(cx),
             model_options: self.explicit_options(cx),
+            permission_mode,
+            effective_permission_mode: self.preview_effective_permission_mode(cx, permission_mode),
         }
     }
 
@@ -1048,6 +1124,11 @@ impl Pickers {
             },
             PickerKind::Branch => self.selected_ref_index(cx),
             PickerKind::HarnessModel => self.selected_model_index(cx),
+            PickerKind::Permission => match self.requested_permission_mode(cx) {
+                PermissionMode::Ask => 0,
+                PermissionMode::Auto => 1,
+                PermissionMode::Full => 2,
+            },
             PickerKind::Space => self.selected_space_index(cx),
             PickerKind::Device => self.selected_device_index(cx),
         };
@@ -1109,7 +1190,7 @@ impl Pickers {
                 self.prefetch_models(true, cx);
             }
             // Projects and devices are already synced state — nothing to load.
-            PickerKind::Space | PickerKind::Device => {}
+            PickerKind::Space | PickerKind::Device | PickerKind::Permission => {}
         }
         cx.notify();
     }
@@ -1473,9 +1554,12 @@ impl Pickers {
         }
         if self.config.harness != Some(harness) {
             // The remembered model for this harness takes over via the
-            // defaults fallback; a foreign pick must not linger.
+            // defaults fallback; foreign model, reasoning, and permission
+            // picks must not linger across providers.
             self.config.model = None;
             self.config.reasoning = None;
+            self.config.permission_mode = None;
+            self.full_confirmation = None;
         }
         self.config.harness = Some(harness);
         self.defaults.harness = Some(harness);
@@ -1524,6 +1608,98 @@ impl Pickers {
             self.save_defaults();
         }
         cx.notify();
+    }
+
+    fn permission_machine(&self, cx: &App) -> (String, String) {
+        let state = self.state.read(cx);
+        let id = state.effective_device_id();
+        let name = id
+            .as_ref()
+            .and_then(|id| {
+                state
+                    .devices
+                    .iter()
+                    .find(|device| device.id.as_str() == id.as_str())
+            })
+            .map(|device| device.name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "this machine".into());
+        (id.unwrap_or_else(|| name.clone()), name)
+    }
+
+    fn pick_permission(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
+        let Some(harness) = self.effective_harness(cx) else {
+            return;
+        };
+        let capabilities = zeron_engine::provider_capabilities(harness);
+        if !capabilities.supports(mode) {
+            return;
+        }
+        let (machine_id, _) = self.permission_machine(cx);
+        if mode == PermissionMode::Full
+            && !self.defaults.confirmed_full_machines.contains(&machine_id)
+        {
+            if self.full_confirmation.as_deref() != Some(machine_id.as_str()) {
+                self.full_confirmation = Some(machine_id);
+                cx.notify();
+                return;
+            }
+            self.defaults.confirmed_full_machines.push(machine_id);
+        }
+        self.full_confirmation = None;
+        self.defaults.permission_by_harness.insert(harness, mode);
+        self.save_defaults();
+        if self.state.read(cx).selected_chat.is_some() {
+            self.update_chat_permission(mode, cx);
+        } else {
+            self.config.permission_mode = Some(mode);
+        }
+        self.animate_close(cx);
+        cx.notify();
+    }
+
+    fn update_chat_permission(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
+        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        let Some(mut config) = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| chat.config.clone())
+            .or_else(|| self.resolved(cx).chat_config())
+        else {
+            return;
+        };
+        let policy = zeron_engine::permissions::resolve_preview(config.harness, mode);
+        config.permission_mode = mode;
+        config.effective_permission_mode = policy.effective_mode;
+        config.permission_ceiling_source = policy.ceiling_source;
+        config.permission_degradation_reason = policy.degradation_reason;
+        self.state.update(cx, |state, cx| {
+            state.apply_chat_config(&chat_id, config);
+            cx.notify();
+        });
+        let actor = self
+            .state
+            .read(cx)
+            .local_device_id
+            .clone()
+            .unwrap_or_else(|| "local-user".into());
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        self.mutate_task = Some(cx.spawn(async move |_, _| {
+            let params = serde_json::json!({
+                "op": "setThreadPermissionMode",
+                "chatId": chat_id,
+                "mode": mode,
+                "actor": actor,
+            });
+            if let Err(error) = engine.client().call(methods::MUTATE, params).await {
+                tracing::warn!(%error, "setThreadPermissionMode mutate failed");
+            }
+        }));
     }
 
     fn pick_option(
@@ -1583,6 +1759,7 @@ impl Pickers {
             .and_then(|c| c.config.as_ref())
         {
             config.sandbox = existing.sandbox;
+            config.permission_audit = existing.permission_audit.clone();
         }
         change(&mut config);
         // Reasoning must stay concrete for whatever model the row now names —
@@ -2334,6 +2511,7 @@ impl Pickers {
                     Some(PickerKind::HarnessModel) => {
                         self.model_rows_len(cx) + self.setting_groups(cx).len()
                     }
+                    Some(PickerKind::Permission) => 3,
                     Some(PickerKind::Space) => self.filtered_space_rows(cx).len() + 1,
                     Some(PickerKind::Device) => self.filtered_device_rows(cx).len(),
                     None => 0,
@@ -2356,6 +2534,13 @@ impl Pickers {
             MenuKey::Enter | MenuKey::ModEnter => {
                 if self.open_kind() == Some(PickerKind::HarnessModel) {
                     self.activate_model_row(cx);
+                } else if self.open_kind() == Some(PickerKind::Permission) {
+                    let mode = match self.active {
+                        0 => PermissionMode::Ask,
+                        1 => PermissionMode::Auto,
+                        _ => PermissionMode::Full,
+                    };
+                    self.pick_permission(mode, cx);
                 } else if self.open_kind() == Some(PickerKind::Checkout) {
                     let kind = if self.active == 0 {
                         CheckoutKind::Local
@@ -2395,6 +2580,7 @@ impl Pickers {
             PickerKind::Branch => "picker-branch",
             PickerKind::Checkout => "picker-checkout",
             PickerKind::HarnessModel => "picker-model",
+            PickerKind::Permission => "picker-permission",
             PickerKind::Space => "picker-space",
             PickerKind::Device => "picker-device",
         };
@@ -2997,7 +3183,7 @@ impl Pickers {
                             this.ensure_harnesses(false, cx);
                         }
                         // Projects/devices load nothing; no retry surface exists.
-                        PickerKind::Space | PickerKind::Device => {}
+                        PickerKind::Space | PickerKind::Device | PickerKind::Permission => {}
                     }))
                     .child(SharedString::from("Retry")),
             )
@@ -3178,6 +3364,121 @@ impl Pickers {
             );
         }
         popover.into_any_element()
+    }
+
+    fn render_permission_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let requested = self.requested_permission_mode(cx);
+        let harness = self.effective_harness(cx);
+        let capabilities = harness
+            .map(zeron_engine::provider_capabilities)
+            .unwrap_or_default();
+        let (machine_id, machine_name) = self.permission_machine(cx);
+        let confirming_full = self.full_confirmation.as_deref() == Some(machine_id.as_str());
+        let rows = [
+            (
+                PermissionMode::Ask,
+                "Ask for approval",
+                "Work inside the workspace; ask before going beyond it.",
+            ),
+            (
+                PermissionMode::Auto,
+                "Approve for me",
+                "Use the same workspace limits and review routine requests automatically.",
+            ),
+            (
+                PermissionMode::Full,
+                "Full access",
+                "Run commands and edit any accessible file without approval prompts.",
+            ),
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .p(px(4.0))
+            .child(
+                div()
+                    .px(px(10.0))
+                    .pt(px(8.0))
+                    .pb(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.text_muted)
+                    .child("Permission mode"),
+            )
+            .children(
+                rows.into_iter()
+                    .enumerate()
+                    .map(|(ix, (mode, label, description))| {
+                        let supported = capabilities.supports(mode);
+                        let selected = requested == mode;
+                        let warning = mode == PermissionMode::Full;
+                        let description: SharedString = if !supported {
+                            match mode {
+                                PermissionMode::Auto => {
+                                    "Unavailable: this provider has no automatic reviewer.".into()
+                                }
+                                _ => "Unavailable: this provider cannot enforce this mode.".into(),
+                            }
+                        } else if warning && confirming_full {
+                            format!("Select again to remove the sandbox on {machine_name}.").into()
+                        } else {
+                            description.into()
+                        };
+                        popover::menu_row_nav(
+                            &theme,
+                            selected,
+                            ix == self.active,
+                            format!("permission-row-{ix}"),
+                        )
+                        .id(("permission-row", ix))
+                        .when(!supported, |row| row.opacity(0.48))
+                        .when(warning && supported, |row| row.text_color(theme.warning))
+                        .when(supported, |row| {
+                            row.cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.pick_permission(mode, cx);
+                                }))
+                        })
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(label)
+                                        .when(selected, |row| {
+                                            row.child(
+                                                crate::icons::icon(crate::icons::CHECK)
+                                                    .size(px(14.0))
+                                                    .text_color(if warning {
+                                                        theme.warning
+                                                    } else {
+                                                        theme.text
+                                                    }),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .text_color(if warning && supported {
+                                            theme.warning.opacity(0.72)
+                                        } else {
+                                            theme.text_faint
+                                        })
+                                        .child(description),
+                                ),
+                        )
+                    }),
+            )
+            .into_any_element()
     }
 
     /// The checkout-kind dropdown (t3code BranchToolbarEnvModeSelector): two
@@ -4700,6 +5001,13 @@ impl Render for Pickers {
                     self.popover_frame_flush(304.0, content, cx),
                 ))
             }
+            Some(PickerKind::Permission) => {
+                let content = self.render_permission_popover(cx);
+                Some((
+                    PickerKind::Permission,
+                    self.popover_frame(340.0, content, cx),
+                ))
+            }
             None => None,
         };
 
@@ -4773,6 +5081,65 @@ impl Render for Pickers {
                 closing,
             )
         };
+        let requested_permission = self.requested_permission_mode(cx);
+        let effective_permission = self.preview_effective_permission_mode(cx, requested_permission);
+        let permission_label: SharedString = match effective_permission {
+            PermissionMode::Ask => "Ask",
+            PermissionMode::Auto => "Auto",
+            PermissionMode::Full => "Full",
+        }
+        .into();
+        let permission_suffix = (requested_permission != effective_permission).then(|| {
+            (
+                SharedString::from(match requested_permission {
+                    PermissionMode::Ask => "Requested Ask",
+                    PermissionMode::Auto => "Requested Auto",
+                    PermissionMode::Full => "Requested Full",
+                }),
+                Some(theme.warning.opacity(0.82)),
+            )
+        });
+        let permission_chip = self.trigger_chip(
+            PickerKind::Permission,
+            permission_label,
+            true,
+            Some((
+                if effective_permission == PermissionMode::Full {
+                    crate::icons::DANGER_TRIANGLE
+                } else {
+                    crate::icons::KEY_MINIMALISTIC
+                },
+                (effective_permission == PermissionMode::Full).then_some(theme.warning),
+            )),
+            false,
+            false,
+            permission_suffix,
+            &theme,
+            cx,
+        );
+        let permission_chip = if new_chat {
+            if overlay
+                .as_ref()
+                .is_some_and(|(kind, _)| *kind == PickerKind::Permission)
+                && let Some((_, content)) = overlay.take()
+            {
+                permission_chip.child(popover::anchored_menu_below_end(
+                    "permission-popover",
+                    content,
+                    closing,
+                ))
+            } else {
+                permission_chip
+            }
+        } else {
+            attach_overlay_end(
+                permission_chip,
+                &mut overlay,
+                PickerKind::Permission,
+                "permission-popover",
+                closing,
+            )
+        };
         div()
             .flex()
             .flex_row()
@@ -4785,6 +5152,7 @@ impl Render for Pickers {
             .min_w_0()
             .gap(px(4.0))
             .child(model_chip)
+            .child(permission_chip)
     }
 }
 
@@ -4792,6 +5160,43 @@ impl Render for Pickers {
 mod tests {
     use super::*;
     use zeron_proto::{FolderEntry, Model, ModelOption, ModelOptionChoice};
+
+    #[test]
+    fn permission_defaults_and_degradation_follow_provider_capabilities() {
+        assert_eq!(
+            default_permission_mode(HarnessId::Codex),
+            PermissionMode::Auto
+        );
+        assert_eq!(
+            default_permission_mode(HarnessId::Opencode),
+            PermissionMode::Ask
+        );
+        assert_eq!(
+            provider_effective_permission_mode(HarnessId::Opencode, PermissionMode::Auto),
+            PermissionMode::Ask
+        );
+        assert_eq!(
+            provider_effective_permission_mode(HarnessId::Cursor, PermissionMode::Full),
+            PermissionMode::Ask
+        );
+    }
+
+    #[gpui::test]
+    fn switching_provider_drops_foreign_permission_draft(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let pickers = cx.new(|cx| Pickers::new(state, cx));
+        pickers.update(cx, |pickers, cx| {
+            pickers.config.harness = Some(HarnessId::ClaudeCode);
+            pickers.config.permission_mode = Some(PermissionMode::Auto);
+            pickers.full_confirmation = Some("device-a".into());
+
+            pickers.pick_harness(HarnessId::Opencode, cx);
+
+            assert_eq!(pickers.config.permission_mode, None);
+            assert_eq!(pickers.full_confirmation, None);
+            assert_eq!(pickers.requested_permission_mode(cx), PermissionMode::Ask);
+        });
+    }
 
     #[gpui::test]
     fn workspace_footer_pair_keeps_its_leading_edge_and_gap(cx: &mut gpui::TestAppContext) {
@@ -5901,10 +6306,14 @@ mod tests {
         resolved.harness = Some(HarnessId::ClaudeCode);
         resolved.model = Some("opus".into());
         resolved.reasoning = Some(ReasoningLevel::High);
+        resolved.permission_mode = PermissionMode::Full;
+        resolved.effective_permission_mode = PermissionMode::Ask;
         let config = resolved.chat_config().expect("harness set");
         assert_eq!(config.harness, HarnessId::ClaudeCode);
         assert_eq!(config.model.as_deref(), Some("opus"));
         assert_eq!(config.sandbox, SandboxLevel::WorkspaceWrite);
+        assert_eq!(config.permission_mode, PermissionMode::Full);
+        assert_eq!(config.effective_permission_mode, PermissionMode::Ask);
     }
 
     #[test]

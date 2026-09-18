@@ -581,6 +581,7 @@ fn status_str(status: SessionStatus) -> &'static str {
     match status {
         SessionStatus::Idle => "idle",
         SessionStatus::Working => "working",
+        SessionStatus::AwaitingApproval => "awaitingApproval",
         SessionStatus::AwaitingInput => "awaitingInput",
         SessionStatus::Errored => "errored",
     }
@@ -804,6 +805,11 @@ mod tests {
                 reasoning: None,
                 model_options: Default::default(),
                 sandbox: SandboxLevel::WorkspaceWrite,
+                permission_mode: zeron_proto::PermissionMode::Ask,
+                effective_permission_mode: zeron_proto::PermissionMode::Ask,
+                permission_ceiling_source: None,
+                permission_degradation_reason: None,
+                permission_audit: Vec::new(),
             }),
             last_message_preview: None,
             last_message_at: None,
@@ -868,6 +874,11 @@ mod tests {
             reasoning: Some(zeron_proto::ReasoningLevel::XHigh),
             model_options: options,
             sandbox: SandboxLevel::WorkspaceWrite,
+            permission_mode: zeron_proto::PermissionMode::Ask,
+            effective_permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_ceiling_source: None,
+            permission_degradation_reason: None,
+            permission_audit: Vec::new(),
         };
         assert!(ws.set_chat_config("chat-1", &config).unwrap());
         let row = ws.chat("chat-1").unwrap().expect("row exists");

@@ -18,9 +18,9 @@
 //! - `session/prompt` owns the turn: its response's `stopReason` ends the
 //!   turn (`cancelled` → Interrupted, `refusal` → Errored, else Completed).
 //! - `session/update` notifications normalize per [`normalize::map_update`].
-//! - Permission requests auto-accept with the agent's preferred allow option
-//!   (zeron sessions run unattended); question-shaped requests block on the
-//!   engine's input bridge.
+//! - Permission requests never auto-accept. Tool-shaped requests become typed
+//!   approvals through the engine input bridge; question-shaped requests use
+//!   the same bridge for their provider-supplied choices.
 //! - Steering: agents advertising `_session/steering` get mid-turn injection;
 //!   others queue steers and deliver them as the next `session/prompt` at the
 //!   turn boundary. The session stays parked between turns while the
@@ -54,7 +54,7 @@ use zeron_proto::{
 use crate::jsonrpc::{Incoming, RpcClient};
 use crate::process::{Child, Command, Stdio};
 use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child};
-use normalize::{map_update, parse_commands, preferred_allow_option};
+use normalize::{map_update, parse_commands};
 use subagent::SubagentTracker;
 use subagent_devin::DevinTracker;
 
@@ -2079,32 +2079,11 @@ fn config_option_sets(
             ("select", Some("model")) => model
                 .and_then(|m| pick_model_value(m, &available, context_1m))
                 .map(Value::String),
-            // Unattended parity with the retired custom adapters (claude
-            // bypassPermissions / codex approvalPolicy never): pick the
-            // no-prompts mode when the agent offers one. claude-agent-acp
-            // calls it `bypassPermissions`, codex-acp `agent-full-access`
-            // (approvalPolicy "never" + danger-full-access sandbox), Devin
-            // `bypass`. Cursor instead exposes agent/plan/ask — those arrive
-            // as a Traits "Mode" option and win when the run selected one.
-            ("select", Some("mode")) => model_options
-                .get("mode")
-                .and_then(Value::as_str)
-                .filter(|c| available.contains(c))
-                .map(|c| Value::String(c.to_owned()))
-                .or_else(|| {
-                    [
-                        "bypassPermissions",
-                        "bypass_permissions",
-                        "bypass",
-                        "yolo",
-                        "agent-full-access",
-                        "danger-full-access",
-                        "full-access",
-                    ]
-                    .into_iter()
-                    .find(|v| available.contains(v))
-                    .map(|v| Value::String(v.to_owned()))
-                }),
+            // ACP provider modes are not mapped to the canonical permission
+            // contract yet. Never infer or select a bypass/full-access mode
+            // from provider naming; the engine blocks these providers until
+            // an exact, verified mapping exists.
+            ("select", Some("mode")) => None,
             ("select", Some("thought_level")) => efforts
                 .iter()
                 .find(|c| available.contains(*c))
@@ -2267,32 +2246,19 @@ fn prompt_turn(
     })
 }
 
-/// Answer a server→client request. Permission requests are auto-accepted with
-/// the agent's preferred allow option — parity with the claude harness's
-/// bypassPermissions and the codex harness's approvalPolicy "never" (zeron
-/// sessions run unattended). Everything else (fs, terminal, elicitation) was
-/// declined at initialize, so a stray request gets method-not-found rather
-/// than wedging the agent.
+/// Answer a server→client request outside an active run. Permission requests
+/// fail closed because there is no user-owned approval bridge available yet.
+/// Everything else (fs, terminal, elicitation) was declined at initialize, so
+/// a stray request gets method-not-found rather than wedging the agent.
 fn handle_server_request(
     client: &RpcClient,
     id: Value,
     method: &str,
-    params: &Value,
+    _params: &Value,
 ) -> Vec<AgentEvent> {
     match method {
         "session/request_permission" => {
-            let options: Vec<Value> = params
-                .get("options")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            match preferred_allow_option(&options) {
-                Some(option_id) => client.respond(
-                    &id,
-                    json!({ "outcome": { "outcome": "selected", "optionId": option_id } }),
-                ),
-                None => client.respond(&id, json!({ "outcome": { "outcome": "cancelled" } })),
-            }
+            client.respond(&id, json!({ "outcome": { "outcome": "cancelled" } }));
             Vec::new()
         }
         _ => {
@@ -2309,11 +2275,11 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
-/// A permission request is a QUESTION (not a tool permission) when any of
+/// A permission request is a QUESTION (not a tool approval) when any of
 /// its options lacks an allow/reject kind — that's how the agent relays
 /// user-facing choices (Claude's AskUserQuestion arrives this way through
 /// the adapter). Every option carrying an allow/reject kind means a real
-/// tool permission, which auto-accepts (unattended parity); kinds may
+/// tool approval, which must be surfaced to the user; kinds may
 /// legitimately repeat — codex sends two `allow_always` options ("Allow for
 /// Session" and a prefix-rule amendment) on every exec approval.
 fn is_user_question(options: &[Value]) -> bool {
@@ -2325,17 +2291,18 @@ fn is_user_question(options: &[Value]) -> bool {
     })
 }
 
-/// The live-run request handler: tool permissions auto-accept like
-/// [`handle_server_request`], but question-shaped requests block on the
-/// engine's input bridge (in a subtask so the message loop keeps flowing)
-/// and answer with the option whose name matches the chosen label. A dropped
-/// resolver degrades to `cancelled` — never a silent allow.
+/// The live-run request handler routes both typed tool approvals and
+/// question-shaped requests through the engine's input bridge (in a subtask
+/// so the message loop keeps flowing). A dropped resolver or timeout degrades
+/// to `cancelled` — never a silent allow.
 fn handle_server_request_live(
     client: &RpcClient,
     id: Value,
     method: &str,
     params: &Value,
     request_input: &std::sync::Arc<RequestInputFn>,
+    harness: HarnessId,
+    permission_policy: &zeron_proto::PermissionPolicy,
 ) -> Vec<AgentEvent> {
     if method != "session/request_permission" {
         return handle_server_request(client, id, method, params);
@@ -2345,46 +2312,94 @@ fn handle_server_request_live(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if !is_user_question(&options) {
-        return handle_server_request(client, id, method, params);
-    }
-    let names: Vec<String> = options
-        .iter()
-        .map(|o| {
-            o.get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned()
-        })
-        .collect();
+    let user_question = is_user_question(&options);
+    let names: Vec<String> = if user_question {
+        options
+            .iter()
+            .map(|o| {
+                o.get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
+    } else {
+        vec!["Deny".into(), "Allow once".into(), "Cancel".into()]
+    };
+    let summary = params
+        .get("toolCall")
+        .and_then(|t| t.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("The agent requests permission.")
+        .to_owned();
     let question = UserInputQuestion {
         id: new_message_id(),
-        header: "Agent question".into(),
-        question: params
-            .get("toolCall")
-            .and_then(|t| t.get("title"))
-            .and_then(Value::as_str)
-            .unwrap_or("The agent needs your input.")
-            .to_owned(),
+        header: if user_question {
+            "Agent question".into()
+        } else {
+            "Approve tool".into()
+        },
+        question: if user_question {
+            summary.clone()
+        } else {
+            format!("{summary} Target: {}.", permission_policy.machine_name)
+        },
         options: names.clone(),
         multi_select: false,
+        approval: (!user_question).then(|| zeron_proto::ApprovalRequest {
+            provider_request_id: id.to_string(),
+            provider: harness,
+            turn_id: None,
+            machine_name: permission_policy.machine_name.clone(),
+            action_kind: zeron_proto::ApprovalActionKind::Tool,
+            summary: summary.clone(),
+            requested_scope: permission_policy.scope,
+            expires_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64
+                + 120_000,
+            // ACP's `allow_always` lifetime is provider-defined. Until each
+            // concrete adapter is verified, fail closed to one-shot approval.
+            supports_task_allowance: false,
+        }),
     };
     let client = client.clone();
     let request_input = std::sync::Arc::clone(request_input);
     tokio::spawn(async move {
-        let answers = (request_input)(vec![question.clone()])
-            .await
-            .unwrap_or_default();
-        let picked = answers
+        let answers = tokio::time::timeout(
+            Duration::from_secs(120),
+            (request_input)(vec![question.clone()]),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+        let selected_label = answers
             .iter()
             .find(|a| a.question_id == question.id)
-            .and_then(|a| a.labels.first())
-            .and_then(|label| {
+            .and_then(|a| a.labels.first());
+        let picked = if user_question {
+            selected_label.and_then(|label| {
                 options
                     .iter()
                     .find(|o| o.get("name").and_then(Value::as_str) == Some(label.as_str()))
             })
-            .and_then(|o| o.get("optionId").and_then(Value::as_str));
+        } else if selected_label.is_some_and(|label| label == "Allow once") {
+            options
+                .iter()
+                .find(|option| option.get("kind").and_then(Value::as_str) == Some("allow_once"))
+        } else if selected_label.is_some_and(|label| label == "Deny") {
+            options.iter().find(|option| {
+                matches!(
+                    option.get("kind").and_then(Value::as_str),
+                    Some("reject_once" | "reject_always")
+                )
+            })
+        } else {
+            None
+        }
+        .and_then(|o| o.get("optionId").and_then(Value::as_str));
         match picked {
             Some(option_id) => client.respond(
                 &id,
@@ -2699,6 +2714,7 @@ async fn run_session(session: Session) {
         interrupt,
     } = controls;
     let request_input = std::sync::Arc::new(request_input);
+    let permission_policy = request.permission_policy.clone().unwrap_or_default();
 
     // ---- handshake + session (interruptible) ------------------------------
     let setup = async {
@@ -3131,6 +3147,8 @@ async fn run_session(session: Session) {
                                 &method,
                                 &params,
                                 &request_input,
+                                harness,
+                                &permission_policy,
                             ) {
                                 if !send(&event_tx, ev).await {
                                     consumer_gone = true;
@@ -3303,6 +3321,8 @@ async fn run_session(session: Session) {
                         &method,
                         &params,
                         &request_input,
+                        harness,
+                        &permission_policy,
                     ) {
                         if !send(&event_tx, ev).await {
                             break 'main;
@@ -3412,6 +3432,8 @@ async fn run_session(session: Session) {
                                         &method,
                                         &params,
                                         &request_input,
+                                        harness,
+                                        &permission_policy,
                                     ) {
                                         if !send(&event_tx, ev).await {
                                             consumer_gone = true;
@@ -4464,7 +4486,8 @@ mod tests {
     #[test]
     fn codex_exec_approval_options_are_not_a_question() {
         // codex-acp's real exec-approval shape: two allow_always entries (the
-        // session allow + a prefix-rule amendment). Must auto-accept.
+        // session allow + a prefix-rule amendment). This remains a typed tool
+        // approval rather than being mistaken for a user-authored question.
         let options = vec![
             json!({ "optionId": "allow_once", "name": "Allow Once", "kind": "allow_once" }),
             json!({ "optionId": "allow_always", "name": "Allow for Session", "kind": "allow_always" }),
@@ -4486,7 +4509,7 @@ mod tests {
     }
 
     #[test]
-    fn mode_config_option_prefers_a_no_prompt_mode_per_adapter_naming() {
+    fn mode_config_option_never_infers_a_provider_bypass() {
         let codex = json!({
             "sessionId": "s-1",
             "configOptions": [{
@@ -4502,10 +4525,7 @@ mod tests {
             }],
         });
         let no_opts = serde_json::Map::new();
-        assert_eq!(
-            config_option_sets(&codex, None, &[], &no_opts),
-            vec![("mode".to_owned(), json!({ "value": "agent-full-access" }))]
-        );
+        assert!(config_option_sets(&codex, None, &[], &no_opts).is_empty());
     }
 
     fn antigravity_signed_in_catalog() -> Value {

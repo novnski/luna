@@ -226,7 +226,7 @@ case "$promptline" in
 *scenario:permission*)
   emit "{\"id\":77,\"method\":\"session/request_permission\",\"params\":{\"sessionId\":\"$SID\",\"toolCall\":{\"toolCallId\":\"t1\"},\"options\":[{\"optionId\":\"once\",\"name\":\"Allow once\",\"kind\":\"allow_once\"},{\"optionId\":\"always\",\"name\":\"Always allow\",\"kind\":\"allow_always\"},{\"optionId\":\"no\",\"name\":\"Reject\",\"kind\":\"reject_once\"}]}}"
   read -r ans || exit 1
-  { has "$ans" '"id":77' && has "$ans" '"outcome":"selected"' && has "$ans" '"optionId":"always"'; } ||
+  { has "$ans" '"id":77' && has "$ans" '"outcome":"selected"' && has "$ans" '"optionId":"once"'; } ||
     { emit "{\"id\":$pid,\"result\":{\"stopReason\":\"refusal\"}}"; exit 0; }
   update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"approved"}}'
   emit "{\"id\":$pid,\"result\":{\"stopReason\":\"end_turn\"}}"

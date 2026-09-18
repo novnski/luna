@@ -31,6 +31,7 @@ pub enum ConnectionStatus {
 pub enum Indicator {
     None,
     Working,
+    AwaitingApproval,
     AwaitingInput,
     Errored,
 }
@@ -48,7 +49,7 @@ pub fn effective_indicator(session: Option<&Session>, now: DateTime<Utc>) -> Ind
     match session.status {
         SessionStatus::Idle => Indicator::None,
         SessionStatus::Errored => Indicator::Errored,
-        SessionStatus::Working | SessionStatus::AwaitingInput => {
+        SessionStatus::Working | SessionStatus::AwaitingApproval | SessionStatus::AwaitingInput => {
             let age_ms = now
                 .signed_duration_since(session.updated_at)
                 .num_milliseconds();
@@ -56,6 +57,8 @@ pub fn effective_indicator(session: Option<&Session>, now: DateTime<Utc>) -> Ind
                 Indicator::None
             } else if session.status == SessionStatus::Working {
                 Indicator::Working
+            } else if session.status == SessionStatus::AwaitingApproval {
+                Indicator::AwaitingApproval
             } else {
                 Indicator::AwaitingInput
             }
@@ -74,11 +77,12 @@ pub fn display_status(chat: &Chat, session: Option<&Session>, now: DateTime<Utc>
 /// Attention bucket for the sidebar's Active list — lower is more urgent.
 pub fn attention_rank(status: ChatIndicator) -> u8 {
     match status {
-        ChatIndicator::AwaitingInput => 0,
-        ChatIndicator::Errored => 1,
-        ChatIndicator::Working => 2,
-        ChatIndicator::Completed => 3,
-        ChatIndicator::Idle => 4,
+        ChatIndicator::AwaitingApproval => 0,
+        ChatIndicator::AwaitingInput => 1,
+        ChatIndicator::Errored => 2,
+        ChatIndicator::Working => 3,
+        ChatIndicator::Completed => 4,
+        ChatIndicator::Idle => 5,
     }
 }
 

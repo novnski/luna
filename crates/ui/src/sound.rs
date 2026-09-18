@@ -340,7 +340,10 @@ impl SessionNotificationState {
         if self.indicator == Indicator::Errored && prev.indicator != Indicator::Errored {
             return Some(Sound::Attention);
         }
-        if self.indicator == Indicator::AwaitingInput && prev.indicator != Indicator::AwaitingInput
+        if matches!(
+            self.indicator,
+            Indicator::AwaitingApproval | Indicator::AwaitingInput
+        ) && self.indicator != prev.indicator
         {
             return Some(Sound::Request);
         }

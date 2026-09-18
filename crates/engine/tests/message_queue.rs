@@ -103,6 +103,7 @@ impl Harness for HeldHarness {
                 question: "which one?".into(),
                 options: vec!["a".into(), "b".into()],
                 multi_select: false,
+                approval: None,
             }]);
         }
         let mut finish = self.finish.subscribe();
@@ -1477,6 +1478,11 @@ async fn queued_turn_uses_current_config_at_turn_end_and_send_now() {
             reasoning: Some(ReasoningLevel::Medium),
             model_options: Default::default(),
             sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            permission_mode: zeron_proto::PermissionMode::Ask,
+            effective_permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_ceiling_source: None,
+            permission_degradation_reason: None,
+            permission_audit: Vec::new(),
         };
         core.workspace.set_chat_config(CHAT, &config).unwrap();
         core.doc_host

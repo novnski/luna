@@ -5891,7 +5891,7 @@ impl Composer {
             retain_live_interrupts(&mut self.interrupting, |chat_id| {
                 matches!(
                     state.indicator_for(chat_id, now),
-                    Indicator::Working | Indicator::AwaitingInput
+                    Indicator::Working | Indicator::AwaitingApproval | Indicator::AwaitingInput
                 )
             });
             self.queue_removing
@@ -6055,7 +6055,7 @@ impl Composer {
         };
         matches!(
             s.indicator_for(chat_id, chrono::Utc::now()),
-            Indicator::Working | Indicator::AwaitingInput
+            Indicator::Working | Indicator::AwaitingApproval | Indicator::AwaitingInput
         )
     }
 
@@ -6715,6 +6715,10 @@ impl Composer {
                         cwd,
                         sandbox: SandboxLevel::WorkspaceWrite,
                         auto_approve: false,
+                        permission_mode: resolved.permission_mode,
+                        parent_permission_ceiling: None,
+                        environment_permission_ceiling: None,
+                        permission_policy: None,
                         resume: None,
                         attachments: attachment_paths,
                         worktree: run_worktree,
@@ -6946,9 +6950,31 @@ impl Composer {
             return;
         };
         let request_id = wizard.request_id.clone();
-        let command = SessionCommandPayload::RespondInput {
-            request_id: request_id.clone(),
-            answers,
+        let approval = wizard
+            .questions
+            .iter()
+            .find(|question| question.approval.is_some());
+        let command = if let Some(question) = approval {
+            let selected = answers
+                .iter()
+                .find(|answer| answer.question_id == question.id)
+                .and_then(|answer| answer.labels.first())
+                .map(String::as_str);
+            let decision = match selected {
+                Some("Allow once") => zeron_proto::ApprovalDecision::AllowOnce,
+                Some("Allow for task") => zeron_proto::ApprovalDecision::AllowTask,
+                Some("Cancel") => zeron_proto::ApprovalDecision::Cancel,
+                _ => zeron_proto::ApprovalDecision::Deny,
+            };
+            SessionCommandPayload::RespondApproval {
+                request_id: request_id.clone(),
+                decision,
+            }
+        } else {
+            SessionCommandPayload::RespondInput {
+                request_id: request_id.clone(),
+                answers,
+            }
         };
         let failure_chat = chat_id.clone();
         let params = match serde_json::to_value(&command) {
@@ -8954,6 +8980,7 @@ mod tests {
             question: format!("Question {id}"),
             options: options.iter().map(|s| s.to_string()).collect(),
             multi_select: multi,
+            approval: None,
         }
     }
 

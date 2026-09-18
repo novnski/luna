@@ -6,7 +6,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{HarnessId, ReasoningLevel, SandboxLevel};
+use crate::{
+    HarnessId, PermissionCeilingSource, PermissionDegradationReason, PermissionMode,
+    ReasoningLevel, SandboxLevel,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +94,36 @@ pub struct ChatConfig {
     #[serde(default)]
     pub model_options: serde_json::Map<String, serde_json::Value>,
     pub sandbox: SandboxLevel,
+    /// Requested user mode. Defaults to Ask so old sandbox/auto-approve data
+    /// cannot silently migrate to Full.
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
+    /// Last engine-resolved mode for diagnostics and restart readback.
+    #[serde(default)]
+    pub effective_permission_mode: PermissionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_ceiling_source: Option<PermissionCeilingSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_degradation_reason: Option<PermissionDegradationReason>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_audit: Vec<PermissionAuditEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionAuditEntry {
+    pub actor: String,
+    pub machine: String,
+    pub requested_mode: PermissionMode,
+    pub effective_mode: PermissionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_mode: Option<PermissionMode>,
+    pub provider_mapping: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_source: Option<PermissionCeilingSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PermissionDegradationReason>,
+    pub timestamp_ms: i64,
 }
 
 /// Immutable-at-run-start repository context owned by one conversation.
@@ -184,6 +217,7 @@ impl Chat {
 #[serde(rename_all = "camelCase")]
 pub enum ChatIndicator {
     Working,
+    AwaitingApproval,
     AwaitingInput,
     Errored,
     /// Finished running (or errored out) but not seen yet on any device.
@@ -196,6 +230,7 @@ pub enum ChatIndicator {
 pub fn chat_indicator(chat: &Chat, live: Option<&Session>) -> ChatIndicator {
     match live.map(|s| s.status) {
         Some(SessionStatus::Working) => ChatIndicator::Working,
+        Some(SessionStatus::AwaitingApproval) => ChatIndicator::AwaitingApproval,
         Some(SessionStatus::AwaitingInput) => ChatIndicator::AwaitingInput,
         Some(SessionStatus::Errored) if chat.unseen() => ChatIndicator::Errored,
         _ if chat.unseen() => ChatIndicator::Completed,
@@ -208,6 +243,7 @@ pub fn chat_indicator(chat: &Chat, live: Option<&Session>) -> ChatIndicator {
 pub enum SessionStatus {
     Idle,
     Working,
+    AwaitingApproval,
     AwaitingInput,
     Errored,
 }
@@ -957,6 +993,20 @@ pub struct ChatConnectivity {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn legacy_chat_config_defaults_to_safe_ask_never_full() {
+        let legacy = serde_json::json!({
+            "harness": "codex",
+            "model": null,
+            "reasoning": null,
+            "sandbox": "danger-full-access"
+        });
+        let config: ChatConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(config.permission_mode, PermissionMode::Ask);
+        assert_eq!(config.effective_permission_mode, PermissionMode::Ask);
+        assert!(config.permission_audit.is_empty());
+    }
 
     #[test]
     fn checkout_change_request_status_round_trips_all_states_as_camel_case() {

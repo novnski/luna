@@ -1084,7 +1084,10 @@ fn resolve_shell_escape(
         ShellEscapeOutcome::Blocked
     } else if !escape_stops_active_agent || !matches!(route, Route::Chat) || interrupting {
         ShellEscapeOutcome::Ignored
-    } else if matches!(indicator, Indicator::Working | Indicator::AwaitingInput) {
+    } else if matches!(
+        indicator,
+        Indicator::Working | Indicator::AwaitingApproval | Indicator::AwaitingInput
+    ) {
         selected_chat
             .map(|chat_id| ShellEscapeOutcome::InterruptChat(chat_id.to_owned()))
             .unwrap_or(ShellEscapeOutcome::Ignored)
@@ -5595,6 +5598,7 @@ impl Shell {
         } else {
             match status {
                 zeron_proto::ChatIndicator::Working => Some("Working"),
+                zeron_proto::ChatIndicator::AwaitingApproval => Some("Approval"),
                 zeron_proto::ChatIndicator::AwaitingInput => Some("Input"),
                 zeron_proto::ChatIndicator::Errored => Some("Failed"),
                 zeron_proto::ChatIndicator::Completed => Some("Done"),
@@ -8023,6 +8027,7 @@ impl Shell {
             // streaming reply (user request) — the strip stays empty (its
             // reserved height still steadies the composer).
             Indicator::Working => strip.into_any_element(),
+            Indicator::AwaitingApproval => strip.into_any_element(),
             // No label: the QuestionPanel right below IS the awaiting-input
             // surface — a strip caption above it was redundant (user request).
             Indicator::AwaitingInput => strip.into_any_element(),

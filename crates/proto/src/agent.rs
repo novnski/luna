@@ -51,6 +51,179 @@ pub enum SandboxLevel {
     DangerFullAccess,
 }
 
+/// User-facing execution permission ladder. Ordering is intentionally the
+/// privilege ordering so policy ceilings can clamp with `min`.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionMode {
+    #[default]
+    Ask,
+    Auto,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionScope {
+    Workspace,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalReviewer {
+    User,
+    Automatic,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionEscalation {
+    Ask,
+    Deny,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionNetworkPolicy {
+    #[default]
+    ProviderDefault,
+    Restricted,
+    Unrestricted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionCeilingSource {
+    ParentThread,
+    Machine,
+    Environment,
+    Provider,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionDegradationReason {
+    ParentCeiling,
+    MachineCeiling,
+    EnvironmentCeiling,
+    ProviderUnsupported,
+    LegacyAmbiguous,
+}
+
+/// Engine-resolved execution policy. Adapters consume this value; the legacy
+/// `sandbox`/`autoApprove` fields remain only for backwards wire compatibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionPolicy {
+    pub requested_mode: PermissionMode,
+    pub effective_mode: PermissionMode,
+    pub scope: PermissionScope,
+    pub reviewer: ApprovalReviewer,
+    pub escalation: PermissionEscalation,
+    #[serde(default)]
+    pub network_policy: PermissionNetworkPolicy,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<String>,
+    pub machine_name: String,
+    pub provider_mapping: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_source: Option<PermissionCeilingSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degradation_reason: Option<PermissionDegradationReason>,
+}
+
+impl Default for PermissionPolicy {
+    fn default() -> Self {
+        Self {
+            requested_mode: PermissionMode::Ask,
+            effective_mode: PermissionMode::Ask,
+            scope: PermissionScope::Workspace,
+            reviewer: ApprovalReviewer::User,
+            escalation: PermissionEscalation::Ask,
+            network_policy: PermissionNetworkPolicy::ProviderDefault,
+            workspace_roots: Vec::new(),
+            machine_name: String::new(),
+            provider_mapping: "legacy-safe-ask".into(),
+            ceiling_source: None,
+            degradation_reason: Some(PermissionDegradationReason::LegacyAmbiguous),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderPermissionCapabilities {
+    pub supported_modes: Vec<PermissionMode>,
+    pub supports_workspace_sandbox: bool,
+    pub supports_automatic_reviewer: bool,
+    pub supports_live_mode_change: bool,
+    pub supports_task_allowance: bool,
+    pub approval_kinds: Vec<ApprovalActionKind>,
+    pub network_control: String,
+    pub known_limitations: Vec<String>,
+}
+
+impl ProviderPermissionCapabilities {
+    pub fn supports(&self, mode: PermissionMode) -> bool {
+        self.supported_modes.contains(&mode)
+    }
+}
+
+impl Default for ProviderPermissionCapabilities {
+    fn default() -> Self {
+        Self {
+            supported_modes: Vec::new(),
+            supports_workspace_sandbox: false,
+            supports_automatic_reviewer: false,
+            supports_live_mode_change: false,
+            supports_task_allowance: false,
+            approval_kinds: Vec::new(),
+            network_control: "unverified".into(),
+            known_limitations: vec!["Permission capabilities were not declared.".into()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalActionKind {
+    Command,
+    FileChange,
+    Network,
+    ExternalPath,
+    Tool,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequest {
+    pub provider_request_id: String,
+    pub provider: HarnessId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    pub machine_name: String,
+    pub action_kind: ApprovalActionKind,
+    pub summary: String,
+    pub requested_scope: PermissionScope,
+    pub expires_at_ms: i64,
+    pub supports_task_allowance: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalDecision {
+    AllowOnce,
+    AllowTask,
+    Deny,
+    Cancel,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SteeringMode {
@@ -110,6 +283,19 @@ pub struct RunRequest {
     pub sandbox: SandboxLevel,
     #[serde(default)]
     pub auto_approve: bool,
+    /// Canonical requested mode. Missing legacy records decode to Ask; legacy
+    /// sandbox/autoApprove combinations are never interpreted as Full.
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
+    /// Child work can request less privilege but never exceed this mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_permission_ceiling: Option<PermissionMode>,
+    /// Optional environment-specific ceiling carried over RPC/remote paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_permission_ceiling: Option<PermissionMode>,
+    /// Filled authoritatively by the engine immediately before dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_policy: Option<PermissionPolicy>,
     /// Harness-native session id to resume, if any.
     pub resume: Option<String>,
     /// Absolute paths of image attachments already staged on the run device
@@ -311,6 +497,11 @@ pub struct UserInputQuestion {
     pub options: Vec<String>,
     #[serde(default)]
     pub multi_select: bool,
+    /// Present only for a provider permission request. Keeping this on the
+    /// existing input part gives approvals the established inline UI while
+    /// preserving a typed, fail-closed response path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -529,6 +720,9 @@ mod tests {
         let old = r#"{"prompt":"p","model":null,"reasoning":null,"cwd":".","sandbox":"workspace-write","resume":null}"#;
         let req: RunRequest = serde_json::from_str(old).unwrap();
         assert!(req.attachments.is_empty());
+        assert_eq!(req.permission_mode, PermissionMode::Ask);
+        assert!(req.permission_policy.is_none());
+        assert!(!req.auto_approve);
         // …and an empty list serializes away (old readers never see it).
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("attachments").is_none());

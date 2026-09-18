@@ -55,7 +55,54 @@ pub enum SteerOutcome {
     NotSteerable,
 }
 
-type PendingInputs = Arc<Mutex<HashMap<String, oneshot::Sender<Vec<UserInputAnswer>>>>>;
+struct PendingInput {
+    questions: Vec<UserInputQuestion>,
+    resolver: oneshot::Sender<Vec<UserInputAnswer>>,
+}
+
+type PendingInputs = Arc<Mutex<HashMap<String, PendingInput>>>;
+
+fn schedule_approval_expiry(
+    pending: PendingInputs,
+    engine_tx: mpsc::UnboundedSender<AgentEvent>,
+    request_id: String,
+    questions: &[UserInputQuestion],
+) {
+    let Some(expires_at_ms) = questions
+        .iter()
+        .filter_map(|question| {
+            question
+                .approval
+                .as_ref()
+                .map(|approval| approval.expires_at_ms)
+        })
+        .min()
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let delay_ms = expires_at_ms.saturating_sub(now_ms()).max(0) as u64;
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        expire_pending_approval(&pending, &engine_tx, &request_id);
+    });
+}
+
+fn expire_pending_approval(
+    pending: &PendingInputs,
+    engine_tx: &mpsc::UnboundedSender<AgentEvent>,
+    request_id: &str,
+) -> bool {
+    let Some(pending) = lock(pending).remove(request_id) else {
+        return false;
+    };
+    // Empty answers are the provider-neutral fail-closed response. Each
+    // adapter maps it to deny/cancel on its native wire.
+    let _ = pending.resolver.send(Vec::new());
+    let _ = engine_tx.send(AgentEvent::InputResolved {
+        request_id: request_id.to_string(),
+    });
+    true
+}
 
 /// A harness-native session id plus the cwd it was created under. Harness
 /// session stores are cwd-scoped (claude keys conversations by project
@@ -80,6 +127,7 @@ struct RuntimeConfig {
     cwd: String,
     sandbox: zeron_proto::SandboxLevel,
     auto_approve: bool,
+    permission_policy: Option<zeron_proto::PermissionPolicy>,
     worktree: Option<zeron_proto::WorktreeSpec>,
 }
 
@@ -93,6 +141,7 @@ impl RuntimeConfig {
             cwd: request.cwd.clone(),
             sandbox: request.sandbox,
             auto_approve: request.auto_approve,
+            permission_policy: request.permission_policy.clone(),
             worktree: request.worktree.clone(),
         }
     }
@@ -361,6 +410,51 @@ impl SessionsEngine {
         // Project-less chats store cwd `~` (the creating device can't know the
         // host's home); expand it here, on the host, where the run spawns.
         request.cwd = expand_home(&request.cwd);
+        if !crate::permissions::provider_can_run(harness_id) {
+            return Err(EngineError::Other(format!(
+                "{} permission enforcement is unavailable; choose a provider with a verified LUNA permission contract",
+                format!("{harness_id:?}").to_lowercase()
+            )));
+        }
+        let permission_policy = crate::permissions::resolve_run_policy(harness_id, &mut request);
+        if let Some(workspace) = self.inner.workspace()
+            && let Ok(Some(chat)) = workspace.chat(chat_id)
+            && let Some(mut config) = chat.config
+        {
+            let previous = config.effective_permission_mode;
+            config.permission_mode = permission_policy.requested_mode;
+            config.effective_permission_mode = permission_policy.effective_mode;
+            config.permission_ceiling_source = permission_policy.ceiling_source;
+            config.permission_degradation_reason = permission_policy.degradation_reason;
+            let already_recorded = config.permission_audit.last().is_some_and(|entry| {
+                entry.requested_mode == permission_policy.requested_mode
+                    && entry.effective_mode == permission_policy.effective_mode
+                    && entry.provider_mapping == permission_policy.provider_mapping
+                    && entry.ceiling_source == permission_policy.ceiling_source
+            });
+            if !already_recorded {
+                config
+                    .permission_audit
+                    .push(zeron_proto::PermissionAuditEntry {
+                        actor: format!("engine:{}", self.inner.device_id),
+                        machine: permission_policy.machine_name.clone(),
+                        requested_mode: permission_policy.requested_mode,
+                        effective_mode: permission_policy.effective_mode,
+                        previous_mode: Some(previous),
+                        provider_mapping: permission_policy.provider_mapping.clone(),
+                        ceiling_source: permission_policy.ceiling_source,
+                        reason: permission_policy.degradation_reason,
+                        timestamp_ms: now_ms(),
+                    });
+                if config.permission_audit.len() > 100 {
+                    let excess = config.permission_audit.len() - 100;
+                    config.permission_audit.drain(..excess);
+                }
+            }
+            if let Err(error) = workspace.set_chat_config(chat_id, &config) {
+                tracing::warn!(chat = %chat_id, %error, "permission audit persistence failed");
+            }
+        }
         // Every dispatched prompt is a turn — routed steer or fresh run alike.
         self.note_turn_start(chat_id, &request.cwd);
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
@@ -469,11 +563,23 @@ impl SessionsEngine {
             Box::new(move |questions: Vec<UserInputQuestion>| {
                 let (tx, rx) = oneshot::channel();
                 let request_id = new_id();
-                lock(&pending).insert(request_id.clone(), tx);
+                lock(&pending).insert(
+                    request_id.clone(),
+                    PendingInput {
+                        questions: questions.clone(),
+                        resolver: tx,
+                    },
+                );
                 let _ = engine_tx.send(AgentEvent::InputRequested {
-                    request_id,
-                    questions,
+                    request_id: request_id.clone(),
+                    questions: questions.clone(),
                 });
+                schedule_approval_expiry(
+                    pending.clone(),
+                    engine_tx.clone(),
+                    request_id,
+                    &questions,
+                );
                 rx
             })
         };
@@ -615,9 +721,12 @@ impl SessionsEngine {
         };
         // Unpark any blocked question FIRST (mirrors zeron: harness teardown can await a
         // parked question callback — a run stuck on a question would deadlock the stop).
-        let parked: Vec<_> = lock(&pending).drain().map(|(_, tx)| tx).collect();
-        for tx in parked {
-            let _ = tx.send(Vec::new());
+        let parked: Vec<_> = lock(&pending)
+            .drain()
+            .map(|(_, pending)| pending.resolver)
+            .collect();
+        for resolver in parked {
+            let _ = resolver.send(Vec::new());
         }
         // Harness-level interrupt (protocol + child teardown) …
         token.cancel();
@@ -648,10 +757,51 @@ impl SessionsEngine {
         let Some((pending, engine_tx)) = target else {
             return Ok(false);
         };
-        let Some(resolver) = lock(&pending).remove(request_id) else {
+        let Some(pending) = lock(&pending).remove(request_id) else {
             return Ok(false);
         };
-        let _ = resolver.send(answers);
+        let _ = pending.resolver.send(answers);
+        let _ = engine_tx.send(AgentEvent::InputResolved {
+            request_id: request_id.to_string(),
+        });
+        Ok(true)
+    }
+
+    pub fn respond_approval(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        decision: zeron_proto::ApprovalDecision,
+    ) -> Result<bool, EngineError> {
+        let target = lock(&self.inner.runs)
+            .get(chat_id)
+            .map(|handle| (handle.pending_inputs.clone(), handle.engine_tx.clone()));
+        let Some((pending_inputs, engine_tx)) = target else {
+            return Ok(false);
+        };
+        let (pending, answer) = {
+            let mut pending_inputs = lock(&pending_inputs);
+            let Some(pending) = pending_inputs.get(request_id) else {
+                return Ok(false);
+            };
+            let Some(question) = pending
+                .questions
+                .iter()
+                .find(|question| question.approval.is_some())
+            else {
+                // A malformed approval response must not consume an ordinary
+                // user question with the same request id.
+                return Ok(false);
+            };
+            let Some(answer) = approval_answer(question, decision) else {
+                return Ok(false);
+            };
+            let Some(pending) = pending_inputs.remove(request_id) else {
+                return Ok(false);
+            };
+            (pending, answer)
+        };
+        let _ = pending.resolver.send(vec![answer]);
         let _ = engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_string(),
         });
@@ -757,6 +907,10 @@ impl SessionsEngine {
                             cwd,
                             sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
                             auto_approve: false,
+                            permission_mode: zeron_proto::PermissionMode::Ask,
+                            parent_permission_ceiling: None,
+                            environment_permission_ceiling: None,
+                            permission_policy: None,
                             attachments: Vec::new(),
                             resume: None,
                             worktree: None,
@@ -811,6 +965,30 @@ impl SessionsEngine {
     fn set_status(&self, chat_id: &str, status: SessionStatus, fresh_start: bool) {
         self.inner.set_status(chat_id, status, fresh_start);
     }
+}
+
+fn approval_answer(
+    question: &UserInputQuestion,
+    decision: zeron_proto::ApprovalDecision,
+) -> Option<UserInputAnswer> {
+    let approval = question.approval.as_ref()?;
+    let decision = match decision {
+        _ if approval.expires_at_ms <= now_ms() => zeron_proto::ApprovalDecision::Deny,
+        zeron_proto::ApprovalDecision::AllowTask if !approval.supports_task_allowance => {
+            zeron_proto::ApprovalDecision::Deny
+        }
+        decision => decision,
+    };
+    let label = match decision {
+        zeron_proto::ApprovalDecision::AllowOnce => "Allow once",
+        zeron_proto::ApprovalDecision::AllowTask => "Allow for task",
+        zeron_proto::ApprovalDecision::Deny => "Deny",
+        zeron_proto::ApprovalDecision::Cancel => "Cancel",
+    };
+    Some(UserInputAnswer {
+        question_id: question.id.clone(),
+        labels: vec![label.into()],
+    })
 }
 
 impl Inner {
@@ -986,7 +1164,9 @@ impl Inner {
             // resurrect a stale elapsed.
             let was_active = matches!(
                 entry.status,
-                SessionStatus::Working | SessionStatus::AwaitingInput
+                SessionStatus::Working
+                    | SessionStatus::AwaitingApproval
+                    | SessionStatus::AwaitingInput
             );
             if let Some(turn) = completed_turn {
                 entry.last_completed_turn = Some(turn);
@@ -997,7 +1177,9 @@ impl Inner {
                 SessionStatus::Working if fresh_start || !was_active => {
                     entry.started_at = Some(now);
                 }
-                SessionStatus::Working | SessionStatus::AwaitingInput => {}
+                SessionStatus::Working
+                | SessionStatus::AwaitingApproval
+                | SessionStatus::AwaitingInput => {}
                 SessionStatus::Idle | SessionStatus::Errored => {
                     entry.started_at = None;
                 }
@@ -1139,7 +1321,7 @@ impl Inner {
 fn is_active(session: &Session) -> bool {
     matches!(
         session.status,
-        SessionStatus::Working | SessionStatus::AwaitingInput
+        SessionStatus::Working | SessionStatus::AwaitingApproval | SessionStatus::AwaitingInput
     )
 }
 
@@ -2015,8 +2197,8 @@ async fn drive_run(
                         let resolver = lock(&inner.runs)
                             .get(&chat_id)
                             .and_then(|h| lock(&h.pending_inputs).remove(request_id));
-                        if let Some(tx) = resolver {
-                            let _ = tx.send(Vec::new());
+                        if let Some(pending) = resolver {
+                            let _ = pending.resolver.send(Vec::new());
                         }
                         tracing::debug!(chat = %chat_id, "parked session: post-turn input request auto-declined");
                         continue;
@@ -2178,10 +2360,18 @@ async fn drive_run(
             } => {
                 inner.remember_harness_session(&chat_id, session_id, &run_cwd);
             }
-            AgentEvent::InputRequested { .. } => {
+            AgentEvent::InputRequested { questions, .. } => {
                 // Known-id guaranteed: the unknown-id twin was dropped above,
                 // before the parked gate.
-                inner.set_status(&chat_id, SessionStatus::AwaitingInput, false);
+                inner.set_status(
+                    &chat_id,
+                    if questions.iter().any(|question| question.approval.is_some()) {
+                        SessionStatus::AwaitingApproval
+                    } else {
+                        SessionStatus::AwaitingInput
+                    },
+                    false,
+                );
             }
             AgentEvent::InputResolved { .. } => {
                 inner.set_status(&chat_id, SessionStatus::Working, false);
@@ -2216,8 +2406,8 @@ async fn drive_run(
                 .filter(|h| h.run_id == run_id)
                 .map(|h| h.pending_inputs.clone());
             if let Some(pending) = pending {
-                for (_, tx) in lock(&pending).drain() {
-                    let _ = tx.send(Vec::new());
+                for (_, pending) in lock(&pending).drain() {
+                    let _ = pending.resolver.send(Vec::new());
                 }
             }
             let message_status = match status {
@@ -2383,8 +2573,67 @@ async fn drive_run(
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeConfig, subagent_doc_id};
+    use super::{
+        PendingInput, RuntimeConfig, approval_answer, expire_pending_approval, subagent_doc_id,
+    };
     use zeron_proto::{HarnessId, RunRequest, SandboxLevel};
+
+    #[test]
+    fn typed_approval_answers_fail_closed_for_unenforceable_task_allowance() {
+        let question = zeron_proto::UserInputQuestion {
+            id: "approval-1".into(),
+            header: "Permission".into(),
+            question: "Allow?".into(),
+            options: vec!["Deny".into(), "Allow once".into()],
+            multi_select: false,
+            approval: Some(zeron_proto::ApprovalRequest {
+                provider_request_id: "provider-1".into(),
+                provider: HarnessId::ClaudeCode,
+                turn_id: Some("turn-1".into()),
+                machine_name: "test-machine".into(),
+                action_kind: zeron_proto::ApprovalActionKind::Command,
+                summary: "echo ok".into(),
+                requested_scope: zeron_proto::PermissionScope::Workspace,
+                expires_at_ms: i64::MAX,
+                supports_task_allowance: false,
+            }),
+        };
+        let answer = approval_answer(&question, zeron_proto::ApprovalDecision::AllowTask).unwrap();
+        assert_eq!(answer.labels, vec!["Deny"]);
+        assert!(
+            approval_answer(
+                &zeron_proto::UserInputQuestion {
+                    approval: None,
+                    ..question
+                },
+                zeron_proto::ApprovalDecision::AllowOnce
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_approval_resolves_once_with_a_fail_closed_answer() {
+        let pending = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let (resolver, answer) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert(
+            "approval-1".into(),
+            PendingInput {
+                questions: Vec::new(),
+                resolver,
+            },
+        );
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        assert!(expire_pending_approval(&pending, &event_tx, "approval-1"));
+        assert!(answer.await.unwrap().is_empty());
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(zeron_proto::AgentEvent::InputResolved { request_id })
+                if request_id == "approval-1"
+        ));
+        assert!(!expire_pending_approval(&pending, &event_tx, "approval-1"));
+    }
 
     #[tokio::test]
     async fn generated_image_failure_is_sanitized_even_inside_subagents() {
@@ -2458,6 +2707,10 @@ mod tests {
             cwd: "/tmp".into(),
             sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: true,
+            permission_mode: zeron_proto::PermissionMode::Ask,
+            parent_permission_ceiling: None,
+            environment_permission_ceiling: None,
+            permission_policy: None,
             resume: None,
             attachments: Vec::new(),
             worktree: None,

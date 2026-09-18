@@ -3657,6 +3657,11 @@ mod tests {
             reasoning: Some(zeron_proto::ReasoningLevel::XHigh),
             model_options: serde_json::Map::new(),
             sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            permission_mode: zeron_proto::PermissionMode::Ask,
+            effective_permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_ceiling_source: None,
+            permission_degradation_reason: None,
+            permission_audit: Vec::new(),
         };
         state.apply_chat_config("a", config.clone());
         assert_eq!(
@@ -3681,6 +3686,11 @@ mod tests {
                 reasoning: None,
                 model_options: serde_json::Map::new(),
                 sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+                permission_mode: zeron_proto::PermissionMode::Ask,
+                effective_permission_mode: zeron_proto::PermissionMode::Ask,
+                permission_ceiling_source: None,
+                permission_degradation_reason: None,
+                permission_audit: Vec::new(),
             },
         );
     }

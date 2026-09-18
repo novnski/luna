@@ -46,6 +46,10 @@ fn request(prompt: &str) -> RunRequest {
         cwd: String::new(),
         sandbox: SandboxLevel::DangerFullAccess,
         auto_approve: true,
+        permission_mode: zeron_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
         attachments: Vec::new(),
         worktree: None,
         resume: None,
@@ -305,7 +309,20 @@ async fn ask_user_question_round_trips_through_the_control_channel() {
         steering: steer_rx,
         interrupt: token.clone(),
     };
-    let events = run_to_end(&harness(), request("scenario:askuser"), controls).await;
+    let mut req = request("scenario:askuser");
+    req.permission_mode = zeron_proto::PermissionMode::Full;
+    req.auto_approve = true;
+    req.permission_policy = Some(zeron_proto::PermissionPolicy {
+        requested_mode: zeron_proto::PermissionMode::Full,
+        effective_mode: zeron_proto::PermissionMode::Full,
+        scope: zeron_proto::PermissionScope::Full,
+        reviewer: zeron_proto::ApprovalReviewer::None,
+        escalation: zeron_proto::PermissionEscalation::None,
+        machine_name: "test-machine".into(),
+        provider_mapping: "test full".into(),
+        ..Default::default()
+    });
+    let events = run_to_end(&harness(), req, controls).await;
 
     let asked = asked.lock().unwrap();
     assert_eq!(asked.len(), 1);

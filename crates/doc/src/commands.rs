@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{RunRequest, UserInputAnswer};
+use zeron_proto::{ApprovalDecision, RunRequest, UserInputAnswer};
 
 use crate::constants::COMMAND_DEFAULT_TTL_MS;
 
@@ -21,6 +21,7 @@ pub enum SessionCommandKind {
     Steer,
     Interrupt,
     RespondInput,
+    RespondApproval,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +55,11 @@ pub enum SessionCommandPayload {
         request_id: String,
         answers: Vec<UserInputAnswer>,
     },
+    #[serde(rename_all = "camelCase")]
+    RespondApproval {
+        request_id: String,
+        decision: ApprovalDecision,
+    },
 }
 
 impl SessionCommandPayload {
@@ -63,6 +69,7 @@ impl SessionCommandPayload {
             SessionCommandPayload::Steer { .. } => SessionCommandKind::Steer,
             SessionCommandPayload::Interrupt {} => SessionCommandKind::Interrupt,
             SessionCommandPayload::RespondInput { .. } => SessionCommandKind::RespondInput,
+            SessionCommandPayload::RespondApproval { .. } => SessionCommandKind::RespondApproval,
         }
     }
 }
@@ -301,6 +308,21 @@ mod tests {
         assert!(!can_composer_cancel(&applied, "device-a"));
     }
 
+    #[test]
+    fn typed_approval_response_round_trips() {
+        let payload = SessionCommandPayload::RespondApproval {
+            request_id: "approval-1".into(),
+            decision: ApprovalDecision::AllowOnce,
+        };
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value["kind"], "respondApproval");
+        assert_eq!(value["decision"], "allowOnce");
+        assert_eq!(
+            serde_json::from_value::<SessionCommandPayload>(value).unwrap(),
+            payload
+        );
+    }
+
     fn run_request() -> RunRequest {
         RunRequest {
             prompt: "hello".into(),
@@ -311,6 +333,10 @@ mod tests {
             cwd: "/tmp".into(),
             sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
             auto_approve: false,
+            permission_mode: zeron_proto::PermissionMode::Ask,
+            parent_permission_ceiling: None,
+            environment_permission_ceiling: None,
+            permission_policy: None,
             attachments: Vec::new(),
             worktree: None,
             resume: None,

@@ -35,6 +35,10 @@ fn run_request(prompt: &str) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
+        permission_mode: zeron_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
         attachments: Vec::new(),
         worktree: None,
         resume: None,
@@ -810,9 +814,9 @@ async fn retry_reissues_a_swallowed_send() {
     .await;
     wait_for(
         || {
-            entries_now(&core)
-                .iter()
-                .any(|e| e.role == MessageRole::Assistant && e.status == Some(MessageStatus::Complete))
+            entries_now(&core).iter().any(|e| {
+                e.role == MessageRole::Assistant && e.status == Some(MessageStatus::Complete)
+            })
         },
         "re-issued send runs to completion",
     )
@@ -1065,6 +1069,7 @@ async fn respond_input_resolves_pending_question() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    approval: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -1218,6 +1223,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    approval: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -1409,6 +1415,7 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
                         question: "Which one?".into(),
                         options: vec!["a".into(), "b".into()],
                         multi_select: false,
+                        approval: None,
                     }])
                     .await;
                     interrupt.cancelled().await;
@@ -1556,6 +1563,7 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    approval: None,
                 };
                 // The pre-fix Claude/Codex shape: surface the question under
                 // the harness's own id BEFORE asking through the bridge.
@@ -1916,6 +1924,10 @@ async fn real_claude_sees_uploaded_image_inline() {
         cwd: cwd.to_string_lossy().to_string(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: false,
+        permission_mode: zeron_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
         attachments: vec![path],
         resume: None,
         worktree: None,
@@ -2019,11 +2031,9 @@ async fn empty_reasoning_deltas_are_heartbeats_not_journal_noise() {
     );
     wait_for(
         || {
-            entries(&core)
-                .iter()
-                .any(|e| {
-                    e.role == MessageRole::Assistant && e.status == Some(MessageStatus::Complete)
-                })
+            entries(&core).iter().any(|e| {
+                e.role == MessageRole::Assistant && e.status == Some(MessageStatus::Complete)
+            })
         },
         "run completes",
     )

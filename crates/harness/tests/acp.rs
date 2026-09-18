@@ -43,6 +43,10 @@ fn request(prompt: &str) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
+        permission_mode: zeron_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
         attachments: Vec::new(),
         worktree: None,
         resume: None,
@@ -250,10 +254,28 @@ async fn resumed_first_class_model_is_switched_before_prompt() {
 }
 
 #[tokio::test]
-async fn permission_requests_auto_accept_the_preferred_allow_option() {
-    let (controls, _steer, _token) = controls();
+async fn permission_requests_require_typed_one_shot_approval() {
+    let (steer_tx, steer_rx) = mpsc::channel(8);
+    let token = CancellationToken::new();
+    let controls = RunControls {
+        request_input: Box::new(move |questions| {
+            assert_eq!(questions.len(), 1);
+            let question = &questions[0];
+            assert!(question.approval.is_some());
+            assert!(!question.approval.as_ref().unwrap().supports_task_allowance);
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(vec![UserInputAnswer {
+                question_id: question.id.clone(),
+                labels: vec!["Allow once".into()],
+            }]);
+            rx
+        }),
+        steering: steer_rx,
+        interrupt: token.clone(),
+    };
     let events = run_to_end(&harness(), request("scenario:permission"), controls).await;
-    // The fixture answers refusal unless the harness selected "always".
+    drop(steer_tx);
+    // The fixture answers refusal unless the harness selected `allow_once`.
     assert!(events.contains(&AgentEvent::TextDelta {
         text: "approved".into()
     }));

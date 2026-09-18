@@ -10,10 +10,9 @@
 //!   transport the Claude Agent SDK's `query()` drives, and was re-validated
 //!   live against 2.1.228: `can_use_tool` control requests arrive and
 //!   allow/deny responses are honored). The alternative channel — an MCP
-//!   permission tool — needs a server process and was rejected. Tool calls
-//!   auto-allow (zeron sessions run unattended, parity with the ACP
-//!   harness's preferred-allow behavior); `AskUserQuestion` round-trips
-//!   through [`RunControls::request_input`].
+//!   permission tool — needs a server process and was rejected. Native
+//!   acceptEdits/auto/bypassPermissions modes are selected from the resolved
+//!   policy; escalations in Ask/Auto round-trip through the typed input bridge.
 //! - DONE is the CLI's own `result` frame, eagerly: background work (a
 //!   spawned subagent) never holds the turn. The CLI natively runs a second
 //!   wake turn when a background task finishes — a fresh `init` (same
@@ -187,15 +186,12 @@ impl ClaudeHarness {
         if let Some(effort) = to_effort(request.reasoning, request.model.as_deref()) {
             cmd.args(["--effort", effort]);
         }
-        if request.auto_approve {
-            cmd.args([
-                "--permission-mode",
-                "bypassPermissions",
-                "--dangerously-skip-permissions",
-            ]);
-        } else {
-            cmd.args(["--permission-mode", "default"]);
-        }
+        let effective_mode = request
+            .permission_policy
+            .as_ref()
+            .map(|policy| policy.effective_mode)
+            .unwrap_or(zeron_proto::PermissionMode::Ask);
+        cmd.args(claude_permission_args(effective_mode));
         if let Some(resume) = &request.resume {
             cmd.arg(format!("--resume={resume}"));
         }
@@ -300,6 +296,18 @@ impl ClaudeHarness {
             Ok(inner) => inner,
             Err(_) => Err(HarnessError::Protocol("command discovery timed out".into())),
         }
+    }
+}
+
+fn claude_permission_args(mode: zeron_proto::PermissionMode) -> &'static [&'static str] {
+    match mode {
+        zeron_proto::PermissionMode::Ask => &["--restricted", "--permission-mode", "acceptEdits"],
+        zeron_proto::PermissionMode::Auto => &["--restricted", "--permission-mode", "auto"],
+        zeron_proto::PermissionMode::Full => &[
+            "--permission-mode",
+            "bypassPermissions",
+            "--dangerously-skip-permissions",
+        ],
     }
 }
 
@@ -487,6 +495,12 @@ impl ClaudeHarness {
             event_tx,
             controls,
             reasoning: request.reasoning,
+            permission_mode: request
+                .permission_policy
+                .as_ref()
+                .map(|policy| policy.effective_mode)
+                .unwrap_or(zeron_proto::PermissionMode::Ask),
+            permission_policy: request.permission_policy.clone().unwrap_or_default(),
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
@@ -611,6 +625,8 @@ struct Session {
     event_tx: mpsc::Sender<Result<AgentEvent, HarnessError>>,
     controls: RunControls,
     reasoning: Option<ReasoningLevel>,
+    permission_mode: zeron_proto::PermissionMode,
+    permission_policy: zeron_proto::PermissionPolicy,
     interrupt_grace: Duration,
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
@@ -628,6 +644,8 @@ async fn run_session(session: Session) {
         event_tx,
         controls,
         reasoning,
+        permission_mode,
+        permission_policy,
         interrupt_grace,
         kill_grace,
         stderr_tail,
@@ -669,7 +687,13 @@ async fn run_session(session: Session) {
                             }));
                             let _ = stdin_tx.send(StdinMsg::Line(line));
                         } else {
-                            handle_control_request(req, &request_input, &stdin_tx);
+                            handle_control_request(
+                                req,
+                                permission_mode,
+                                &permission_policy,
+                                &request_input,
+                                &stdin_tx,
+                            );
                         }
                         continue;
                     }
@@ -776,15 +800,18 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
-/// Serve one `can_use_tool` control request. Every tool is auto-approved
-/// (unattended parity — the CLI still blocks until SOME response arrives, so
-/// every request must be answered); `AskUserQuestion` is intercepted —
+/// Serve one `can_use_tool` control request. Full accepts a stray request;
+/// Ask/Auto surface it as a typed approval and fail closed on timeout.
+/// `AskUserQuestion` remains content input rather than an approval and is
+/// intercepted to
 /// surface the questions through the engine's input bridge (which owns the
 /// `InputRequested`/`InputResolved` lifecycle), wait for the user's answers
 /// (in a subtask so the frame loop keeps flowing), and hand them back keyed
 /// by question text, as the tool expects.
 fn handle_control_request(
     req: ControlRequestFrame,
+    permission_mode: zeron_proto::PermissionMode,
+    permission_policy: &zeron_proto::PermissionPolicy,
     request_input: &Arc<RequestInputFn>,
     stdin_tx: &mpsc::UnboundedSender<StdinMsg>,
 ) {
@@ -796,8 +823,66 @@ fn handle_control_request(
         return;
     }
     if req.request.tool_name != "AskUserQuestion" {
-        let line = control_response_line(&req.request_id, allow_response(req.request.input));
-        let _ = stdin_tx.send(StdinMsg::Line(line));
+        if permission_mode == zeron_proto::PermissionMode::Full {
+            let line = control_response_line(&req.request_id, allow_response(req.request.input));
+            let _ = stdin_tx.send(StdinMsg::Line(line));
+            return;
+        }
+        let request_input = Arc::clone(request_input);
+        let stdin_tx = stdin_tx.clone();
+        let permission_policy = permission_policy.clone();
+        tokio::spawn(async move {
+            let summary = format!("Claude requests the {} tool", req.request.tool_name);
+            let question = UserInputQuestion {
+                id: req.request_id.clone(),
+                header: "Approve tool".into(),
+                question: format!("{summary}. Target: {}.", permission_policy.machine_name),
+                options: vec!["Deny".into(), "Allow once".into(), "Cancel".into()],
+                multi_select: false,
+                approval: Some(zeron_proto::ApprovalRequest {
+                    provider_request_id: req.request_id.clone(),
+                    provider: HarnessId::ClaudeCode,
+                    turn_id: None,
+                    machine_name: permission_policy.machine_name.clone(),
+                    action_kind: if req.request.tool_name == "Bash" {
+                        zeron_proto::ApprovalActionKind::Command
+                    } else {
+                        zeron_proto::ApprovalActionKind::Tool
+                    },
+                    summary,
+                    requested_scope: permission_policy.scope,
+                    expires_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64
+                        + 120_000,
+                    supports_task_allowance: false,
+                }),
+            };
+            let allowed = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                (request_input)(vec![question.clone()]),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+            .iter()
+            .any(|answer| {
+                answer.question_id == question.id
+                    && answer.labels.iter().any(|label| label == "Allow once")
+            });
+            let response = if allowed {
+                allow_response(req.request.input)
+            } else {
+                serde_json::json!({
+                    "behavior": "deny",
+                    "message": "Denied by the LUNA permission policy"
+                })
+            };
+            let line = control_response_line(&req.request_id, response);
+            let _ = stdin_tx.send(StdinMsg::Line(line));
+        });
         return;
     }
     let request_input = Arc::clone(request_input);
@@ -857,6 +942,7 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
                             .into(),
                     })
                     .collect(),
+                approval: None,
             }
         })
         .collect()
@@ -895,6 +981,27 @@ fn updated_input_with_answers(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn permission_modes_map_to_exact_cli_arguments() {
+        use zeron_proto::PermissionMode::{Ask, Auto, Full};
+        assert_eq!(
+            claude_permission_args(Ask),
+            ["--restricted", "--permission-mode", "acceptEdits"]
+        );
+        assert_eq!(
+            claude_permission_args(Auto),
+            ["--restricted", "--permission-mode", "auto"]
+        );
+        assert_eq!(
+            claude_permission_args(Full),
+            [
+                "--permission-mode",
+                "bypassPermissions",
+                "--dangerously-skip-permissions"
+            ]
+        );
+    }
 
     #[test]
     fn parses_questions_tolerantly() {

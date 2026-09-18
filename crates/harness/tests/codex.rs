@@ -45,6 +45,10 @@ fn request(prompt: &str) -> RunRequest {
         cwd: String::new(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
+        permission_mode: zeron_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
         attachments: Vec::new(),
         worktree: None,
         resume: None,
@@ -407,7 +411,7 @@ async fn approvals_round_trip_as_input_requests() {
                 .iter()
                 .map(|q| UserInputAnswer {
                     question_id: q.id.clone(),
-                    labels: vec!["Yes".into()],
+                    labels: vec!["Allow once".into()],
                 })
                 .collect();
             let _ = tx.send(answers);
@@ -424,7 +428,14 @@ async fn approvals_round_trip_as_input_requests() {
     assert_eq!(asked.len(), 2, "{events:?}");
     assert_eq!(asked[0].header, "Approve command");
     assert!(asked[0].question.contains("rm -rf /tmp/x"));
-    assert_eq!(asked[0].options, vec!["Yes".to_string(), "No".to_string()]);
+    assert_eq!(
+        asked[0].options,
+        vec!["Deny", "Allow once", "Allow for task", "Cancel"]
+    );
+    assert_eq!(
+        asked[0].approval.as_ref().unwrap().provider,
+        HarnessId::Codex
+    );
     assert_eq!(asked[1].header, "Approve file change");
     assert!(asked[1].question.contains("/tmp/a.rs"));
     assert!(
@@ -449,7 +460,7 @@ async fn approvals_round_trip_as_input_requests() {
 
 #[tokio::test]
 async fn approval_no_answer_becomes_decline() {
-    let (controls, _steer, _token) = controls("No");
+    let (controls, _steer, _token) = controls("Deny");
     let mut req = request("scenario:decline");
     req.auto_approve = false;
     let events = run_to_end(&harness(), req, controls).await;

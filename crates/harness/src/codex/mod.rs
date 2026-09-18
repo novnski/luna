@@ -15,12 +15,12 @@
 //! - Notifications map to [`AgentEvent`]s: agentMessage/reasoning deltas (both
 //!   `delta`/`textDelta` spellings), item lifecycles → typed ToolCall/ToolResult,
 //!   `thread/tokenUsage/updated` → Usage, turn/completed|failed|aborted → Done.
-//! - Approvals + sandbox: yolo mode. The wire policy is always `"never"` and
-//!   the sandbox is forced to `danger-full-access` — parity with the Claude
-//!   adapter's auto-approve-everything (unattended runs). Stray
+//! - Approvals + sandbox follow the engine-resolved Ask / Auto / Full policy:
+//!   workspace-write + user review, workspace-write + `auto_review`, or
+//!   danger-full-access + `never`. Stray
 //!   `item/commandExecution/requestApproval` +
 //!   `item/fileChange/requestApproval` still round-trip through
-//!   [`RunControls::request_input`] as a synthesized yes/no question.
+//!   [`RunControls::request_input`] as a typed, machine-scoped approval.
 //! - Subagents are full child app-server threads. Parent spawn items establish
 //!   their stable ownership; content arriving before the spawn is buffered.
 //!   A registered child's notifications route through an EXPLICIT table
@@ -604,18 +604,11 @@ impl CodexHarness {
         title_only: bool,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let exe = self.resolve_executable()?;
-        // Yolo mode: danger-full-access + approvalPolicy "never" (set below) —
-        // codex's --dangerously-bypass-approvals-and-sandbox equivalent.
-        // Parity with the Claude adapter, which auto-approves every
-        // can_use_tool and so effectively grants full access. This also
-        // sidesteps codex ≤0.144.x's workspace-write bug where a linked
-        // worktree on a slash-named branch derives a malformed mount that
-        // kills every command.
-        request.sandbox = if title_only {
-            zeron_proto::SandboxLevel::ReadOnly
-        } else {
-            zeron_proto::SandboxLevel::DangerFullAccess
-        };
+        // Title generation has no tools and remains read-only. Ordinary runs
+        // keep the engine-resolved sandbox; never broaden it in the adapter.
+        if title_only {
+            request.sandbox = zeron_proto::SandboxLevel::ReadOnly;
+        }
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
         crate::compose_child_path(&mut cmd, &exe);
@@ -791,14 +784,13 @@ async fn run_session(session: Session) {
     let request_input = Arc::new(request_input);
 
     // ---- wire params ------------------------------------------------------
-    // Parity with the Claude adapter, which auto-approves every `can_use_tool`
-    // regardless of `auto_approve` (zeron sessions run unattended; combined
-    // with the danger-full-access override above this is codex's yolo mode):
-    // never surface wire approvals. "on-request" turned
-    // every command into a yes/no question (user report: "asking me for
-    // approval at every step"). The approval-as-input plumbing below stays for
-    // stray requests and a future explicit permission-mode setting.
-    let approval_policy = "never";
+    let effective_mode = request
+        .permission_policy
+        .as_ref()
+        .map(|policy| policy.effective_mode)
+        .unwrap_or(zeron_proto::PermissionMode::Ask);
+    let (approval_policy, approvals_reviewer) =
+        codex_permission_settings(effective_mode, title_only);
     let effort = to_effort(request.reasoning);
     // Service tier rides thread-start and every turn (mirrors the Codex IDE
     // client). "default" means Standard — omit it entirely.
@@ -839,6 +831,7 @@ async fn run_session(session: Session) {
         }
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
         p.insert("approvalPolicy".into(), approval_policy.into());
+        p.insert("approvalsReviewer".into(), approvals_reviewer.into());
         p.insert("sandbox".into(), sandbox_mode(request.sandbox).into());
         if let Some(model) = &request.model {
             p.insert("model".into(), Value::String(model.clone()));
@@ -944,6 +937,7 @@ async fn run_session(session: Session) {
         p.insert("threadId".into(), Value::String(thread_id.clone()));
         p.insert("input".into(), json!([{ "type": "text", "text": text }]));
         p.insert("approvalPolicy".into(), approval_policy.into());
+        p.insert("approvalsReviewer".into(), approvals_reviewer.into());
         p.insert(
             "sandboxPolicy".into(),
             sandbox_policy_value(request.sandbox),
@@ -1277,6 +1271,7 @@ async fn run_session(session: Session) {
                         &method,
                         &params,
                         request.auto_approve,
+                        request.permission_policy.clone().unwrap_or_default(),
                         &request_input,
                     );
                 }
@@ -1438,6 +1433,20 @@ async fn run_session(session: Session) {
     }
 }
 
+fn codex_permission_settings(
+    mode: zeron_proto::PermissionMode,
+    title_only: bool,
+) -> (&'static str, &'static str) {
+    if title_only {
+        return ("never", "user");
+    }
+    match mode {
+        zeron_proto::PermissionMode::Ask => ("on-request", "user"),
+        zeron_proto::PermissionMode::Auto => ("on-request", "auto_review"),
+        zeron_proto::PermissionMode::Full => ("never", "user"),
+    }
+}
+
 /// Deliver a steer as a fresh `turn/start` on the same thread (the fallback
 /// leg of the steer race, and the between-turns delivery path). Returns false
 /// when the loop should end (turn/start failed or the consumer hung up).
@@ -1497,6 +1506,7 @@ fn handle_server_request(
     method: &str,
     params: &Value,
     auto_approve: bool,
+    permission_policy: zeron_proto::PermissionPolicy,
     request_input: &Arc<RequestInputFn>,
 ) {
     // A tool's user-input request (EXPERIMENTAL, codex 0.146.x) is a CONTENT
@@ -1543,7 +1553,7 @@ fn handle_server_request(
         return;
     }
 
-    let question = approval_question(method, params);
+    let question = approval_question(method, params, &id, &permission_policy);
     let client = client.clone();
     let request_input = Arc::clone(request_input);
     tokio::spawn(async move {
@@ -1554,15 +1564,28 @@ fn handle_server_request(
         //
         // A dropped sender (caller went away) degrades to a decline so the
         // agent is unblocked — never silently allowed.
-        let answers = (request_input)(vec![question.clone()])
-            .await
-            .unwrap_or_default();
-        let accept = answers.iter().any(|a| {
-            a.question_id == question.id && a.labels.iter().any(|l| l.eq_ignore_ascii_case("yes"))
-        });
+        let answers = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            (request_input)(vec![question.clone()]),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+        let decision = answers
+            .iter()
+            .find(|answer| answer.question_id == question.id)
+            .and_then(|answer| answer.labels.first())
+            .map(String::as_str);
         client.respond(
             &id,
-            json!({ "decision": if accept { "accept" } else { "decline" } }),
+            json!({
+                "decision": match decision {
+                    Some("Allow once") => "accept",
+                    Some("Allow for task") => "acceptForSession",
+                    _ => "decline",
+                }
+            }),
         );
     });
 }
@@ -1619,6 +1642,7 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
                     .iter()
                     .find_map(|k| q.get(*k).and_then(Value::as_bool))
                     .unwrap_or(false),
+                approval: None,
             };
             (wire_id, question)
         })
@@ -1626,7 +1650,12 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
 }
 
 /// Synthesize the yes/no question an approval request surfaces to the user.
-fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
+fn approval_question(
+    method: &str,
+    params: &Value,
+    provider_request_id: &Value,
+    policy: &zeron_proto::PermissionPolicy,
+) -> UserInputQuestion {
     let (header, question) = if method.contains("commandExecution") {
         let command = match params.get("command") {
             Some(Value::String(s)) => s.clone(),
@@ -1663,12 +1692,40 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
             },
         )
     };
+    let action_kind = if method.contains("commandExecution") {
+        zeron_proto::ApprovalActionKind::Command
+    } else {
+        zeron_proto::ApprovalActionKind::FileChange
+    };
     UserInputQuestion {
         id: new_message_id(),
         header,
-        question,
-        options: vec!["Yes".into(), "No".into()],
+        question: format!("{question} Target: {}.", policy.machine_name),
+        options: vec![
+            "Deny".into(),
+            "Allow once".into(),
+            "Allow for task".into(),
+            "Cancel".into(),
+        ],
         multi_select: false,
+        approval: Some(zeron_proto::ApprovalRequest {
+            provider_request_id: provider_request_id.to_string(),
+            provider: HarnessId::Codex,
+            turn_id: params
+                .get("turnId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            machine_name: policy.machine_name.clone(),
+            action_kind,
+            summary: question,
+            requested_scope: policy.scope,
+            expires_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64
+                + 120_000,
+            supports_task_allowance: true,
+        }),
     }
 }
 
@@ -1680,19 +1737,31 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn approval_questions_are_yes_no() {
+    fn approval_questions_are_typed_and_machine_scoped() {
+        let policy = zeron_proto::PermissionPolicy {
+            machine_name: "test-machine".into(),
+            ..Default::default()
+        };
         let q = approval_question(
             "item/commandExecution/requestApproval",
             &json!({"itemId": "c1", "command": "rm -rf /tmp/x"}),
+            &json!("provider-1"),
+            &policy,
         );
         assert_eq!(q.header, "Approve command");
         assert!(q.question.contains("rm -rf /tmp/x"));
-        assert_eq!(q.options, vec!["Yes".to_string(), "No".to_string()]);
+        assert_eq!(
+            q.options,
+            vec!["Deny", "Allow once", "Allow for task", "Cancel"]
+        );
         assert!(!q.multi_select);
+        assert_eq!(q.approval.unwrap().machine_name, "test-machine");
 
         let q = approval_question(
             "item/fileChange/requestApproval",
             &json!({"changes": [{"path": "/a.rs"}, {"path": "/b.rs"}]}),
+            &json!("provider-2"),
+            &policy,
         );
         assert_eq!(q.header, "Approve file change");
         assert!(q.question.contains("/a.rs, /b.rs"));
@@ -1701,8 +1770,32 @@ mod tests {
         let q = approval_question(
             "item/commandExecution/requestApproval",
             &json!({"command": ["git", "push", "--force"]}),
+            &json!("provider-3"),
+            &policy,
         );
         assert!(q.question.contains("git push --force"));
+    }
+
+    #[test]
+    fn permission_modes_map_to_exact_app_server_settings() {
+        use zeron_proto::PermissionMode::{Ask, Auto, Full};
+        assert_eq!(
+            codex_permission_settings(Ask, false),
+            ("on-request", "user")
+        );
+        assert_eq!(
+            codex_permission_settings(Auto, false),
+            ("on-request", "auto_review")
+        );
+        assert_eq!(codex_permission_settings(Full, false), ("never", "user"));
+        assert_eq!(
+            sandbox_mode(zeron_proto::SandboxLevel::WorkspaceWrite),
+            "workspace-write"
+        );
+        assert_eq!(
+            sandbox_mode(zeron_proto::SandboxLevel::DangerFullAccess),
+            "danger-full-access"
+        );
     }
 
     #[test]

@@ -4187,6 +4187,21 @@ impl DocHost {
                         reasoning: request.reasoning,
                         model_options: request.model_options.clone(),
                         sandbox: request.sandbox,
+                        permission_mode: request.permission_mode,
+                        effective_permission_mode: request
+                            .permission_policy
+                            .as_ref()
+                            .map(|policy| policy.effective_mode)
+                            .unwrap_or(zeron_proto::PermissionMode::Ask),
+                        permission_ceiling_source: request
+                            .permission_policy
+                            .as_ref()
+                            .and_then(|policy| policy.ceiling_source),
+                        permission_degradation_reason: request
+                            .permission_policy
+                            .as_ref()
+                            .and_then(|policy| policy.degradation_reason),
+                        permission_audit: Vec::new(),
                     };
                     if let Err(err) = ws.set_chat_config(chat_id, &config) {
                         tracing::warn!(chat = %chat_id, error = %err, "run-config backfill failed");
@@ -4232,6 +4247,45 @@ impl DocHost {
             SessionCommandPayload::Interrupt {} => {
                 self.interrupt_and_pause_queue(sessions, handle).await?;
                 Ok((SessionCommandStatus::Applied, None))
+            }
+            SessionCommandPayload::RespondApproval {
+                request_id,
+                decision,
+            } => {
+                if sessions.respond_approval(chat_id, request_id, *decision)? {
+                    return Ok((SessionCommandStatus::Applied, None));
+                }
+                // Provider disconnect/restart drops the only response channel.
+                // A recovered approval remains visible in the transcript, but
+                // answering it can only close it as denied; never replay an
+                // approval as a new prompt or infer that an action succeeded.
+                let recoverable = handle.doc.read_entries().ok().is_some_and(|entries| {
+                    entries.iter().rev().any(|entry| {
+                        entry.parts.iter().any(|part| match part {
+                            MessagePart::Input {
+                                request_id: pending_id,
+                                questions,
+                                resolved: false,
+                                ..
+                            } => {
+                                pending_id == request_id
+                                    && questions.iter().any(|question| question.approval.is_some())
+                            }
+                            _ => false,
+                        })
+                    })
+                });
+                if !recoverable {
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some("no pending approval request".into()),
+                    ));
+                }
+                handle.doc.resolve_input(request_id)?;
+                Ok((
+                    SessionCommandStatus::Applied,
+                    Some("provider disconnected; approval denied safely".into()),
+                ))
             }
             SessionCommandPayload::RespondInput {
                 request_id,
@@ -4524,6 +4578,13 @@ impl DocHost {
                 .map(|c| c.sandbox)
                 .unwrap_or(zeron_proto::SandboxLevel::WorkspaceWrite),
             auto_approve: false,
+            permission_mode: config
+                .as_ref()
+                .map(|config| config.permission_mode)
+                .unwrap_or_default(),
+            parent_permission_ceiling: None,
+            environment_permission_ceiling: None,
+            permission_policy: None,
             attachments: Vec::new(),
             resume: None,
             worktree: None,

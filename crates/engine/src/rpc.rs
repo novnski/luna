@@ -60,7 +60,10 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use zeron_doc::{MessagePart, SessionCommandPayload};
-use zeron_proto::{ChatConfig, EngineInfo, HarnessId, ToolCall, WorkspaceScope};
+use zeron_proto::{
+    ChatConfig, EngineInfo, HarnessId, PermissionAuditEntry, PermissionMode, ToolCall,
+    WorkspaceScope,
+};
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 
 use crate::agent_accounts::AgentAccounts;
@@ -482,6 +485,15 @@ enum MutateParams {
     /// so they survive restarts and reach every device.
     #[serde(rename_all = "camelCase")]
     SetChatConfig { chat_id: String, config: ChatConfig },
+    /// Engine-owned permission mutation: resolves provider/machine ceilings,
+    /// persists requested/effective state, and appends a bounded audit entry.
+    #[serde(rename_all = "camelCase")]
+    SetThreadPermissionMode {
+        chat_id: String,
+        mode: PermissionMode,
+        #[serde(default)]
+        actor: Option<String>,
+    },
     /// Tombstone: removes the chats-map row; the session doc remains.
     #[serde(rename_all = "camelCase")]
     DeleteChat { chat_id: String },
@@ -896,6 +908,57 @@ impl EngineRpc {
                 .set_chat_config(&chat_id, &config)
                 .map_err(failed)
                 .map(drop),
+            MutateParams::SetThreadPermissionMode {
+                chat_id,
+                mode,
+                actor,
+            } => {
+                let Some(chat) = self.workspace.chat(&chat_id).map_err(failed)? else {
+                    return Err(RpcError::Failed("chat not found".into()));
+                };
+                let Some(mut config) = chat.config else {
+                    return Err(RpcError::Failed(
+                        "chat has no provider configuration".into(),
+                    ));
+                };
+                let policy = crate::permissions::resolve_preview(config.harness, mode);
+                let previous = config.effective_permission_mode;
+                config.permission_mode = mode;
+                config.effective_permission_mode = policy.effective_mode;
+                config.permission_ceiling_source = policy.ceiling_source;
+                config.permission_degradation_reason = policy.degradation_reason;
+                config.permission_audit.push(PermissionAuditEntry {
+                    actor: actor.unwrap_or_else(|| "local-user".into()),
+                    machine: policy.machine_name,
+                    requested_mode: mode,
+                    effective_mode: policy.effective_mode,
+                    previous_mode: Some(previous),
+                    provider_mapping: policy.provider_mapping,
+                    ceiling_source: policy.ceiling_source,
+                    reason: policy.degradation_reason,
+                    timestamp_ms: crate::now_ms(),
+                });
+                if config.permission_audit.len() > 100 {
+                    let excess = config.permission_audit.len() - 100;
+                    config.permission_audit.drain(..excess);
+                }
+                self.workspace
+                    .set_chat_config(&chat_id, &config)
+                    .map_err(failed)?;
+                // A parked provider process still carries its old permission
+                // signature. Retire it immediately at the idle boundary; an
+                // active turn keeps its policy until completion and the next
+                // dispatch reconstructs/resumes before accepting work.
+                if !self.sessions.turn_in_flight(&chat_id) {
+                    let sessions = self.sessions.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = sessions.interrupt(&chat_id).await {
+                            tracing::warn!(chat = %chat_id, %error, "idle permission runtime retirement failed");
+                        }
+                    });
+                }
+                Ok(())
+            }
             MutateParams::DeleteChat { chat_id } => {
                 self.workspace.delete_chat(&chat_id).map_err(failed)?;
                 self.doc_host.purge_chat(&chat_id);

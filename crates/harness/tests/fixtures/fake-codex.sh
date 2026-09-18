@@ -126,12 +126,12 @@ case "$turnline" in
 *scenario:happy*)
   # Verify the turn/start + thread/start params the harness must send.
   for want in '"method":"turn/start"' '"effort":"ultra"' '"model":"gpt-5.6-sol"' \
-    '"sandboxPolicy":{"type":"dangerFullAccess"}' \
-    '"approvalPolicy":"never"' '"summary":"auto"' \
+    '"sandboxPolicy":{"type":"workspaceWrite"' \
+    '"approvalPolicy":"on-request"' '"approvalsReviewer":"user"' '"summary":"auto"' \
     '"serviceTier":"fast"'; do
     has "$turnline" "$want" || { fail_turn "$tid" "turn param missing: $want"; exit 0; }
   done
-  for want in '"approvalPolicy":"never"' '"sandbox":"danger-full-access"' '"cwd":"/tmp"' \
+  for want in '"approvalPolicy":"on-request"' '"approvalsReviewer":"user"' '"sandbox":"workspace-write"' '"cwd":"/tmp"' \
     '"serviceTier":"fast"'; do
     has "$thread_line" "$want" || { fail_turn "$tid" "thread param missing: $want"; exit 0; }
   done
@@ -252,13 +252,10 @@ case "$turnline" in
   ;;
 
 *scenario:approve*)
-  # Wire policy is always "never" (unattended parity with the Claude
-  # adapter); the requests below are the STRAY-approval path, which must
-  # still round-trip as input questions.
-  has "$thread_line" '"approvalPolicy":"never"' ||
-    { fail_turn "$tid" "thread approvalPolicy should be never"; exit 0; }
-  has "$turnline" '"approvalPolicy":"never"' ||
-    { fail_turn "$tid" "turn approvalPolicy should be never"; exit 0; }
+  has "$thread_line" '"approvalPolicy":"on-request"' ||
+    { fail_turn "$tid" "thread approvalPolicy should be on-request"; exit 0; }
+  has "$turnline" '"approvalPolicy":"on-request"' ||
+    { fail_turn "$tid" "turn approvalPolicy should be on-request"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
   emit '{"id":101,"method":"item/commandExecution/requestApproval","params":{"itemId":"c1","command":"rm -rf /tmp/x"}}'

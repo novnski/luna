@@ -5,7 +5,8 @@
 //! is saved debounced from its own boot-time copy, so the composer keeps its
 //! own file rather than racing it): last harness, last model per harness
 //! (id + label, so the chip names the pick before the model list loads),
-//! last reasoning level, and last model option picks per harness. Written
+//! last reasoning level, permission choice per harness, and last model option
+//! picks per harness. Written
 //! synchronously on every pick (picks are rare); corrupt or missing files fall
 //! back to defaults.
 
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{HarnessId, ReasoningLevel};
+use zeron_proto::{HarnessId, PermissionMode, ReasoningLevel};
 
 const FILE_NAME: &str = "composer-defaults.json";
 
@@ -50,6 +51,12 @@ pub struct ComposerDefaults {
     pub model_by_harness: HashMap<HarnessId, RememberedModel>,
     /// Last reasoning level picked (global, like zeron's `reasoning` key).
     pub reasoning: Option<ReasoningLevel>,
+    /// Last requested permission mode per provider. Effective mode is always
+    /// recomputed against the target machine/provider before a run.
+    pub permission_by_harness: HashMap<HarnessId, PermissionMode>,
+    /// Stable execution-device ids on which Full access has already received
+    /// the explicit first-use confirmation (legacy entries may be names).
+    pub confirmed_full_machines: Vec<String>,
     /// Last non-default model option picks (option id → choice id), per
     /// harness and model id. Model-scoped because each pick was validated
     /// against that model's catalog row, so it stays safe to send before the
@@ -211,6 +218,13 @@ mod tests {
         defaults
             .model_options_mut(HarnessId::ClaudeCode, "claude-fable-5")
             .insert("contextWindow".into(), "1m".into());
+        defaults
+            .permission_by_harness
+            .insert(HarnessId::ClaudeCode, PermissionMode::Auto);
+        defaults
+            .permission_by_harness
+            .insert(HarnessId::Codex, PermissionMode::Full);
+        defaults.confirmed_full_machines.push("device-local".into());
         defaults.save(dir.path()).unwrap();
         let loaded = ComposerDefaults::load(dir.path());
         assert_eq!(loaded, defaults);

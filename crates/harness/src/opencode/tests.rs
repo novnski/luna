@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn permission_modes_compile_to_session_scoped_rules() {
+    let ask = opencode_permission_rules(zeron_proto::PermissionMode::Ask);
+    assert!(
+        ask.as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| { rule["permission"] == "bash" && rule["action"] == "ask" })
+    );
+    assert!(
+        ask.as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| { rule["permission"] == "edit" && rule["action"] == "allow" })
+    );
+    let full = opencode_permission_rules(zeron_proto::PermissionMode::Full);
+    assert_eq!(
+        full,
+        json!([{ "permission": "*", "pattern": "*", "action": "allow" }])
+    );
+}
+
 /// Real HTTP/SSE transport with explicitly ordered turn events. No provider or
 /// installed CLI is involved, so duplicate completion frames are reproducible.
 struct TurnWire {
@@ -134,7 +156,8 @@ impl TurnWire {
                     let answer = answer.expect("fixture must not ask for input");
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     let _ = tx.send(questions.into_iter().map(|q| UserInputAnswer {
-                        question_id: q.id, labels: vec![if answer { "Yes" } else { "No" }.into()],
+                        question_id: q.id,
+                        labels: vec![if answer { "Allow once" } else { "Deny" }.into()],
                     }).collect());
                     rx
                 }),
@@ -1028,7 +1051,7 @@ fn v2_frames_normalize_to_v1_payloads() {
                               "cache":{"read":0,"write":0}}}}})]
     );
     // The permission ask keeps its 1.x name on 2.x (observed live when a
-    // tool reaches outside the workspace); the auto-approver replies.
+    // tool reaches outside the workspace); the permission bridge replies.
     let out = normalize_v2_frame(
         json!({"id":"evt_11","type":"permission.asked","data":{
             "id":"per_1","sessionID":"ses_1","action":"external_directory",
