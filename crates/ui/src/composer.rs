@@ -25,6 +25,7 @@ use gpui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
+use zeron_engine::setup_health::{SetupHealthSnapshot, SetupOverall};
 use zeron_proto::{
     FileSearchMatch, HarnessId, RunRequest, SandboxLevel, SlashCommand, UserInputAnswer,
     UserInputQuestion, capabilities,
@@ -3866,6 +3867,8 @@ pub enum ComposerEvent {
     /// yet: the transcript remembers the stable id and promotes it to an
     /// own-turn anchor only when the host materializes the matching bubble.
     Queued { chat_id: String, message_id: String },
+    /// Contextual recovery from the local first-run readiness strip.
+    OpenSetup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3997,6 +4000,10 @@ fn slash_error_message(err: &RpcError) -> SharedString {
     }
 }
 
+fn show_first_run_setup(chats_synced: bool, has_chats: bool, selected_chat: bool) -> bool {
+    chats_synced && !has_chats && !selected_chat
+}
+
 pub struct Composer {
     pub(crate) state: Entity<AppState>,
     pub(crate) input: Entity<ComposerInput>,
@@ -4032,6 +4039,12 @@ pub struct Composer {
     /// Advertised commands per harness (one `ListCommands` per harness per
     /// composer lifetime; the engine caches discovery on its side too).
     slash_cache: HashMap<HarnessId, Vec<SlashCommand>>,
+    /// Minimal first-run readiness for a fresh local workspace. The engine owns
+    /// classification; the composer only renders its normalized snapshot.
+    setup_health: Option<Result<SetupHealthSnapshot, SharedString>>,
+    setup_loading: bool,
+    setup_probe_key: Option<String>,
+    setup_task: Option<Task<()>>,
     /// Slash-popup row scroll — the stack overflows into a wheel/keyboard-
     /// scrollable list once it outgrows the card.
     slash_scroll: gpui::ScrollHandle,
@@ -4143,6 +4156,7 @@ pub struct Composer {
     _observe: Subscription,
     _pickers_observe: Subscription,
     _picker_focus: Subscription,
+    _picker_setup: Subscription,
     _input_events: Subscription,
 }
 
@@ -4223,6 +4237,10 @@ impl Composer {
                 cx.notify();
             },
         );
+        let picker_setup = cx.subscribe(
+            &pickers,
+            |_: &mut Self, _, _: &crate::pickers::OpenSetup, cx| cx.emit(ComposerEvent::OpenSetup),
+        );
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));
         let input_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.on_submit(cx),
@@ -4283,6 +4301,10 @@ impl Composer {
             slash_task: None,
             slash: SlashState::default(),
             slash_cache: HashMap::new(),
+            setup_health: None,
+            setup_loading: false,
+            setup_probe_key: None,
+            setup_task: None,
             slash_scroll: gpui::ScrollHandle::new(),
             mention_scroll: gpui::ScrollHandle::new(),
             popup_bar: crate::popover::MenuScrollbarState::default(),
@@ -4341,6 +4363,7 @@ impl Composer {
             _observe: observe,
             _pickers_observe: pickers_observe,
             _picker_focus: picker_focus,
+            _picker_setup: picker_setup,
             _input_events: input_events,
         };
         // Dev knob: pre-stage attachments (drop/paste can't be synthesized on
@@ -4377,7 +4400,177 @@ impl Composer {
                     .extend(staged);
             }
         }
+        composer.refresh_first_run_setup(false, cx);
         composer
+    }
+
+    fn refresh_first_run_setup(&mut self, force: bool, cx: &mut Context<Self>) {
+        let (should_probe, engine, workspace_path) = {
+            let state = self.state.read(cx);
+            let should_probe = show_first_run_setup(
+                state.chats_synced,
+                !state.chats.is_empty(),
+                state.selected_chat.is_some(),
+            );
+            let engine = state.engine().cloned();
+            let local_device = engine
+                .as_ref()
+                .map(|engine| engine.engine_info().device_id.as_str())
+                .or(state.local_device_id.as_deref());
+            let workspace_path = state
+                .selected_space_row()
+                .filter(|space| Some(space.device_id.as_str()) == local_device)
+                .map(|space| space.path.clone());
+            (should_probe, engine, workspace_path)
+        };
+        if !should_probe {
+            return;
+        }
+        let Some(engine) = engine else {
+            return;
+        };
+        let key = format!(
+            "{}:{}",
+            engine.engine_info().device_id,
+            workspace_path.as_deref().unwrap_or("<no-project>")
+        );
+        if !force && self.setup_probe_key.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.setup_probe_key = Some(key.clone());
+        self.setup_loading = true;
+        if !force {
+            self.setup_health = None;
+        }
+        self.setup_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::SETUP_HEALTH,
+                    serde_json::json!({ "workspacePath": workspace_path }),
+                )
+                .await
+                .map_err(|error| SharedString::from(error.to_string()))
+                .and_then(|value| {
+                    serde_json::from_value::<SetupHealthSnapshot>(value)
+                        .map_err(|error| SharedString::from(error.to_string()))
+                });
+            this.update(cx, |composer, cx| {
+                if composer.setup_probe_key.as_deref() != Some(key.as_str()) {
+                    return;
+                }
+                composer.setup_health = Some(result);
+                composer.setup_loading = false;
+                composer.setup_task = None;
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn render_first_run_setup(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let first_run = {
+            let state = self.state.read(cx);
+            show_first_run_setup(
+                state.chats_synced,
+                !state.chats.is_empty(),
+                state.selected_chat.is_some(),
+            )
+        };
+        if !first_run {
+            return None;
+        }
+        let (ready, label, message): (bool, &'static str, SharedString) = if self.setup_loading
+            && self.setup_health.is_none()
+        {
+            (false, "Setup", "Checking local readiness…".into())
+        } else {
+            match self.setup_health.as_ref() {
+                Some(Ok(snapshot)) => match snapshot.overall {
+                    SetupOverall::Ready => {
+                        let provider = snapshot
+                            .providers
+                            .iter()
+                            .find(|provider| provider.is_fresh_available())
+                            .map(|provider| provider.name.as_str())
+                            .unwrap_or("A provider");
+                        (
+                            true,
+                            "Ready",
+                            format!(
+                                "{provider} is ready in the selected local project. Choose its model below, or open Setup."
+                            )
+                            .into(),
+                        )
+                    }
+                    SetupOverall::NeedsAction => (
+                        false,
+                        "Setup",
+                        "Choose a local project and make one provider available — open Setup for exact recovery."
+                            .into(),
+                    ),
+                    SetupOverall::Degraded => (
+                        false,
+                        "Stale",
+                        "Last-known provider evidence is stale — open Setup and check again.".into(),
+                    ),
+                    SetupOverall::Unavailable => (
+                        false,
+                        "Unknown",
+                        "Local readiness could not be verified — open Setup for the current evidence."
+                            .into(),
+                    ),
+                },
+                Some(Err(_)) => (
+                    false,
+                    "Unknown",
+                    "The local setup check failed — open Setup to retry without changing provider settings."
+                        .into(),
+                ),
+                None => (false, "Setup", "Checking local readiness…".into()),
+            }
+        };
+        let badge = if ready {
+            crate::settings::widgets::badge_active(theme, label)
+        } else {
+            crate::settings::widgets::badge(theme, label)
+        };
+        let accent = theme.accent;
+        Some(
+            crate::settings::widgets::section_card(theme)
+                .id("composer-first-run-setup")
+                .mx(px(4.0))
+                .mt(px(6.0))
+                .role(Role::Button)
+                .aria_label("Open local setup")
+                .tab_index(0)
+                .focus_visible(move |style| style.border_2().border_color(accent))
+                .cursor_pointer()
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::OpenSetup)))
+                .child(
+                    crate::settings::widgets::card_row(theme, true)
+                        .py(px(10.0))
+                        .child(badge)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_color(theme.text_muted)
+                                .child(message),
+                        )
+                        .child(
+                            crate::settings::widgets::ghost_action(theme)
+                                .child(SharedString::from("Open Setup")),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Capture-knob passthrough (`ZERON_OPEN_DIALOG=model`): open the
@@ -5691,6 +5884,7 @@ impl Composer {
     }
 
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        self.refresh_first_run_setup(false, cx);
         {
             let state = self.state.read(cx);
             let now = chrono::Utc::now();
@@ -7350,6 +7544,9 @@ impl Render for Composer {
                         .child(div().size(px(5.0)).rounded_full().bg(dot))
                         .child(div().min_w_0().truncate().child(notice)),
                 ))
+            })
+            .when_some(self.render_first_run_setup(&theme, cx), |el, setup| {
+                el.child(setup)
             });
 
         if wizard_active {
@@ -7986,6 +8183,23 @@ impl Render for Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_run_setup_waits_for_authoritative_state_and_stays_closed_for_existing_work() {
+        let cases = [
+            ((false, false, false), false),
+            ((true, false, false), true),
+            ((true, true, false), false),
+            ((true, true, true), false),
+            ((true, false, true), false),
+        ];
+        for ((synced, has_chats, selected_chat), expected) in cases {
+            assert_eq!(
+                show_first_run_setup(synced, has_chats, selected_chat),
+                expected
+            );
+        }
+    }
 
     fn composer_focus_window(
         cx: &mut gpui::TestAppContext,

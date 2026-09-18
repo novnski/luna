@@ -42,6 +42,7 @@ use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
+use crate::settings::setup::{SetupEvent, SetupPage};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, JUMP_SLOTS, KeymapConfig, RIGHT_PANE_DEFAULT,
@@ -403,6 +404,7 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
+    Setup,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles).
     Harnesses,
@@ -417,7 +419,8 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
+        SettingsSection::Setup,
         SettingsSection::Devices,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
@@ -433,6 +436,7 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
+            SettingsSection::Setup => "Setup",
             SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Agents",
             SettingsSection::Agents => "Accounts",
@@ -1407,6 +1411,7 @@ pub struct Shell {
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
     devices_page: Option<Entity<DevicesPage>>,
+    setup_page: Option<Entity<SetupPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
@@ -1414,6 +1419,7 @@ pub struct Shell {
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
     harnesses_page: Option<Entity<HarnessesPage>>,
+    setup_sub: Option<Subscription>,
     shortcuts_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     files_settings_sub: Option<Subscription>,
@@ -1629,6 +1635,9 @@ impl Shell {
                         t.on_own_queued_send(chat_id.clone(), message_id.clone(), cx)
                     });
                 }
+                ComposerEvent::OpenSetup => {
+                    _this.open_settings(SettingsSection::Setup, cx);
+                }
             }
         });
         // Spawn chips open their subagent's transcript as a right-pane tab.
@@ -1683,6 +1692,7 @@ impl Shell {
             Some("settings") | Some("settings/devices") => {
                 Route::Settings(SettingsSection::Devices)
             }
+            Some("settings/setup") => Route::Settings(SettingsSection::Setup),
             Some("settings/agents") => Route::Settings(SettingsSection::Agents),
             Some("settings/harnesses") => Route::Settings(SettingsSection::Harnesses),
             Some("settings/appearance") => Route::Settings(SettingsSection::Appearance),
@@ -1774,6 +1784,7 @@ impl Shell {
             route,
             nav,
             devices_page: None,
+            setup_page: None,
             archived_page: None,
             appearance_page: None,
             files_settings_page: None,
@@ -1781,6 +1792,7 @@ impl Shell {
             shortcuts_page: None,
             accounts_page: None,
             harnesses_page: None,
+            setup_sub: None,
             shortcuts_sub: None,
             notifications_sub: None,
             files_settings_sub: None,
@@ -3637,6 +3649,10 @@ impl Shell {
         if section == SettingsSection::Harnesses {
             self.harnesses_page = None;
         }
+        if section == SettingsSection::Setup {
+            self.setup_page = None;
+            self.setup_sub = None;
+        }
         self.route = Route::Settings(section);
         self.nav.push(NavEntry::Settings(section));
         self.close_user_menu(cx);
@@ -3696,6 +3712,29 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match section {
+            SettingsSection::Setup => {
+                if self.setup_page.is_none() {
+                    let state = self.state.clone();
+                    let page = cx.new(|cx| SetupPage::new(state, cx));
+                    self.setup_sub = Some(cx.subscribe(
+                        &page,
+                        |this: &mut Shell, _, event: &SetupEvent, cx| match event {
+                            SetupEvent::Continue => this.close_settings(cx),
+                            SetupEvent::OpenAgents => {
+                                this.open_settings(SettingsSection::Harnesses, cx)
+                            }
+                            SetupEvent::OpenAccounts => {
+                                this.open_settings(SettingsSection::Agents, cx)
+                            }
+                        },
+                    ));
+                    self.setup_page = Some(page);
+                }
+                match &self.setup_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     let state = self.state.clone();
@@ -5376,6 +5415,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
+            SettingsSection::Setup => icons::CHECKLIST,
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,

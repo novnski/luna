@@ -111,6 +111,9 @@ pub mod methods {
     /// Readiness barrier for the engine runtime. The call completes once stores
     /// and journals are assembled, or fails with the assembly error.
     pub const ENGINE_READY: &str = "EngineReady";
+    /// Minimal local first-run / Setup Doctor snapshot. Params may include the
+    /// selected local `workspacePath`; the engine performs reads only.
+    pub const SETUP_HEALTH: &str = "SetupHealth";
     /// Ask a headless IPC owner to drain its runtime and exit successfully.
     /// Headed IPC owners do not implement this method: closing another app's
     /// engine behind its windows would leave that process unusable.

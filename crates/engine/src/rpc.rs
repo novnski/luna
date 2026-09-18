@@ -338,6 +338,13 @@ struct ListAgentAccountsParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SetupHealthParams {
+    #[serde(default)]
+    workspace_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AgentAccountParams {
     harness: HarnessId,
     account_id: String,
@@ -508,6 +515,7 @@ pub struct EngineRpc {
     updater: Option<zeron_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
+    setup_health: crate::setup_health::SetupHealth,
 }
 
 impl EngineRpc {
@@ -549,6 +557,7 @@ impl EngineRpc {
             updater: None,
             local_import: None,
             engine_info,
+            setup_health: crate::setup_health::SetupHealth::default(),
         }
     }
 
@@ -1243,6 +1252,31 @@ impl RpcService for EngineRpc {
         match method {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
+            methods::SETUP_HEALTH => {
+                let p: SetupHealthParams = parse_params(params)?;
+                let chats = self.workspace.watch_chats();
+                let native_session_harnesses = chats
+                    .borrow()
+                    .iter()
+                    .filter(|chat| {
+                        chat.harness_session_id
+                            .as_deref()
+                            .is_some_and(|id| !id.is_empty())
+                    })
+                    .filter_map(|chat| chat.config.as_ref().map(|config| config.harness))
+                    .collect();
+                let snapshot = self
+                    .setup_health
+                    .snapshot(
+                        self.doc_host.device_id(),
+                        p.workspace_path.as_deref(),
+                        &self.registry,
+                        &self.agent_accounts,
+                        &native_session_harnesses,
+                    )
+                    .await;
+                RpcReply::value(&snapshot)
+            }
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {
