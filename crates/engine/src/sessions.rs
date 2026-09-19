@@ -55,6 +55,14 @@ pub enum SteerOutcome {
     NotSteerable,
 }
 
+/// Prepared registry metadata plus the transition guards that keep runtime
+/// dispatch excluded until the caller durably commits the task projection.
+pub(crate) struct PreparedTaskConfig {
+    pub(crate) config: ChatConfig,
+    _account_transition: Option<OwnedMutexGuard<()>>,
+    _chat_transition: OwnedMutexGuard<()>,
+}
+
 struct PendingInput {
     questions: Vec<UserInputQuestion>,
     resolver: oneshot::Sender<Vec<UserInputAnswer>>,
@@ -451,8 +459,26 @@ impl SessionsEngine {
         mode: PermissionMode,
         actor: Option<String>,
     ) -> Result<(), EngineError> {
+        let prepared = self.prepare_permission_mode(chat_id, mode, actor).await?;
+        let workspace = self
+            .inner
+            .workspace()
+            .ok_or_else(|| EngineError::Other("workspace host not wired".into()))?;
+        workspace.set_chat_config(chat_id, &prepared.config)?;
+        Ok(())
+    }
+
+    /// Resolve and stage a permission-mode change while holding the same
+    /// per-task transition guard used by dispatch. No registry state is
+    /// published; the caller owns the durable projection commit.
+    pub(crate) async fn prepare_permission_mode(
+        &self,
+        chat_id: &str,
+        mode: PermissionMode,
+        actor: Option<String>,
+    ) -> Result<PreparedTaskConfig, EngineError> {
         let gate = self.transition_gate(chat_id);
-        let _transition = gate.lock().await;
+        let transition = gate.lock_owned().await;
         let workspace = self
             .inner
             .workspace()
@@ -460,11 +486,12 @@ impl SessionsEngine {
         let Some(chat) = workspace.chat(chat_id)? else {
             return Err(EngineError::Other("chat not found".into()));
         };
-        let Some(mut config) = chat.config else {
+        let Some(original) = chat.config else {
             return Err(EngineError::Other(
                 "chat has no provider configuration".into(),
             ));
         };
+        let mut config = original.clone();
         let harness = config.harness;
         let policy =
             crate::permissions::resolve_preview_for(harness, config.model.as_deref(), mode);
@@ -494,10 +521,12 @@ impl SessionsEngine {
                 timestamp_ms: now_ms(),
             },
         );
-        workspace.set_chat_config(chat_id, &config)?;
-
         if self.turn_in_flight(chat_id) {
-            return Ok(());
+            return Ok(PreparedTaskConfig {
+                config,
+                _account_transition: None,
+                _chat_transition: transition,
+            });
         }
 
         // A parked child still owns the old runtime signature. Retire it while
@@ -513,22 +542,26 @@ impl SessionsEngine {
         let Some(chat) = workspace.chat(chat_id)? else {
             return Err(EngineError::Other("chat not found after retirement".into()));
         };
-        let Some(mut config) = chat.config else {
+        let Some(current) = chat.config else {
             return Err(EngineError::Other(
                 "chat lost provider configuration during retirement".into(),
             ));
         };
-        // Preserve a newer synced request if another writer replaced the row.
-        if config.permission_mode != mode || config.harness != harness {
-            return Ok(());
+        if current != original {
+            return Err(EngineError::Other(
+                "chat configuration changed while preparing the permission update".into(),
+            ));
         }
         apply_permission_policy(
             &mut config,
             &policy,
             format!("engine:{}", self.inner.device_id),
         );
-        workspace.set_chat_config(chat_id, &config)?;
-        Ok(())
+        Ok(PreparedTaskConfig {
+            config,
+            _account_transition: None,
+            _chat_transition: transition,
+        })
     }
 
     /// Establish a provider-wide lifecycle boundary. Active turns are never
@@ -574,9 +607,29 @@ impl SessionsEngine {
         chat_id: &str,
         account_id: &str,
     ) -> Result<(), EngineError> {
-        let _account_transition = self.inner.account_transition.lock().await;
+        let prepared = self
+            .prepare_task_provider_account(chat_id, account_id)
+            .await?;
+        let workspace = self
+            .inner
+            .workspace()
+            .ok_or_else(|| EngineError::Other("workspace host not wired".into()))?;
+        workspace.set_chat_config(chat_id, &prepared.config)?;
+        self.invalidate_provider_account_caches(prepared.config.harness);
+        Ok(())
+    }
+
+    /// Prepare a chat-level provider-account switch without publishing the
+    /// registry row. Both provider-wide and per-task transition guards remain
+    /// held in the returned value through the caller's durable commit.
+    pub(crate) async fn prepare_task_provider_account(
+        &self,
+        chat_id: &str,
+        account_id: &str,
+    ) -> Result<PreparedTaskConfig, EngineError> {
+        let account_transition = self.inner.account_transition.clone().lock_owned().await;
         let gate = self.transition_gate(chat_id);
-        let _chat_transition = gate.lock().await;
+        let chat_transition = gate.lock_owned().await;
         let workspace = self
             .inner
             .workspace()
@@ -601,7 +654,11 @@ impl SessionsEngine {
             .ok_or_else(|| EngineError::Other("provider accounts are not wired".into()))?;
         let resolved = accounts.resolve_execution(config.harness, Some(account_id))?;
         if config.provider_account_id.as_deref() == Some(resolved.account_id.as_str()) {
-            return Ok(());
+            return Ok(PreparedTaskConfig {
+                config,
+                _account_transition: Some(account_transition),
+                _chat_transition: chat_transition,
+            });
         }
         if self.turn_in_flight(chat_id) {
             return Err(EngineError::Other(
@@ -615,9 +672,17 @@ impl SessionsEngine {
             ));
         }
         config.provider_account_id = Some(resolved.account_id);
-        workspace.set_chat_config(chat_id, &config)?;
-        accounts.invalidate_caches(config.harness);
-        Ok(())
+        Ok(PreparedTaskConfig {
+            config,
+            _account_transition: Some(account_transition),
+            _chat_transition: chat_transition,
+        })
+    }
+
+    pub(crate) fn invalidate_provider_account_caches(&self, harness: HarnessId) {
+        if let Some(accounts) = self.inner.agent_accounts.get() {
+            accounts.invalidate_caches(harness);
+        }
     }
 
     /// Any run currently working or blocked on input — the auto-updater's

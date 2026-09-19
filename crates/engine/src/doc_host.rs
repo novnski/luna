@@ -842,15 +842,20 @@ impl DocHost {
         Ok(self.inner.store.task_command_receipt(command_id)?)
     }
 
+    pub fn task_command_snapshot(&self, task_id: &str) -> Result<TaskCommandRead, EngineError> {
+        Ok(self.inner.store.task_command_snapshot(task_id)?)
+    }
+
     pub fn read_task_commands(
         &self,
         task_id: &str,
-        after_task_sequence: Option<u64>,
+        after_task_sequence: u64,
+        limit: usize,
     ) -> Result<TaskCommandRead, EngineError> {
         Ok(self
             .inner
             .store
-            .read_task_commands(task_id, after_task_sequence)?)
+            .read_task_commands(task_id, after_task_sequence, limit)?)
     }
 
     pub fn subscribe_task_receipts(&self) -> broadcast::Receiver<CommandReceipt> {

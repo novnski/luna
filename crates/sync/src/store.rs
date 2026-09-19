@@ -545,6 +545,63 @@ impl DocsStore {
         reason: Option<CommandReceiptReason>,
         recovery_action: Option<&str>,
     ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.complete_task_command_inner(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            None,
+        )
+    }
+
+    /// L07 local projection boundary: the real registry snapshot and the
+    /// terminal command event/projection/receipt commit in the same SQLite
+    /// transaction. Callers publish the in-memory projection only after this
+    /// returns successfully.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_task_command_with_snapshot(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        doc_id: &str,
+        snapshot_bytes: &[u8],
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.complete_task_command_inner(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            Some((doc_id, snapshot_bytes)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn complete_task_command_inner(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        snapshot: Option<(&str, &[u8])>,
+    ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let Some(bytes) = tx
@@ -572,6 +629,14 @@ impl DocsStore {
         receipt.committed_at_ms = Some(now_ms());
         receipt.observed_at_ms = now_ms();
         let receipt = commit_task_command_tx(&tx, receipt, applied)?;
+        if let Some((doc_id, bytes)) = snapshot {
+            tx.execute(
+                "INSERT INTO snapshots (doc_id, bytes, saved_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(doc_id) DO UPDATE SET bytes=excluded.bytes,saved_at=excluded.saved_at",
+                params![doc_id, bytes, now_ms()],
+            )?;
+            self.invalidate_failed_publication(&tx, doc_id)?;
+        }
         tx.commit()?;
         Ok(Some(receipt))
     }
@@ -715,36 +780,68 @@ impl DocsStore {
             .transpose()
     }
 
+    /// Read only the authoritative task projection. This is the normal UI
+    /// bootstrap path and deliberately does not scan command history.
+    pub fn task_command_snapshot(&self, task_id: &str) -> Result<TaskCommandRead, StoreError> {
+        let conn = self.conn();
+        let snapshot = load_task_command_snapshot(&conn, task_id)?;
+        Ok(TaskCommandRead {
+            snapshot,
+            events: Vec::new(),
+            reload_required: false,
+            next_task_sequence: None,
+            has_more: false,
+        })
+    }
+
+    /// Read one bounded recovery page after a durable task-sequence cursor.
+    /// A cursor outside retained history returns the authoritative snapshot
+    /// with reload_required, never a misleading partial replay.
     pub fn read_task_commands(
         &self,
         task_id: &str,
-        after_task_sequence: Option<u64>,
+        after_task_sequence: u64,
+        limit: usize,
     ) -> Result<TaskCommandRead, StoreError> {
         let conn = self.conn();
         let snapshot = load_task_command_snapshot(&conn, task_id)?;
-        let reload_required =
-            after_task_sequence.is_some_and(|cursor| cursor > snapshot.task_sequence);
-        let from = if reload_required {
-            snapshot.task_sequence
-        } else {
-            after_task_sequence.unwrap_or(0)
-        };
+        let earliest = conn
+            .query_row(
+                "SELECT MIN(task_sequence) FROM task_command_events WHERE task_id=?1",
+                params![task_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )?
+            .map(|value| value as u64);
+        let reload_required = after_task_sequence > snapshot.task_sequence
+            || earliest.is_some_and(|first| after_task_sequence.saturating_add(1) < first)
+            || (earliest.is_none() && after_task_sequence < snapshot.task_sequence);
+        if reload_required {
+            return Ok(TaskCommandRead {
+                snapshot,
+                events: Vec::new(),
+                reload_required: true,
+                next_task_sequence: None,
+                has_more: false,
+            });
+        }
+        let limit = limit.clamp(1, 100);
         let mut stmt = conn.prepare(
             "SELECT sequence,task_sequence,command_id,receipt_json
              FROM task_command_events WHERE task_id=?1 AND task_sequence>?2
-             ORDER BY task_sequence",
+             ORDER BY task_sequence LIMIT ?3",
         )?;
-        let events = if reload_required {
-            Vec::new()
-        } else {
-            stmt.query_map(params![task_id, from as i64], |row| {
-                Ok((
-                    row.get::<_, i64>(0)? as u64,
-                    row.get::<_, i64>(1)? as u64,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                ))
-            })?
+        let events = stmt
+            .query_map(
+                params![task_id, after_task_sequence as i64, limit as i64],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? as u64,
+                        row.get::<_, i64>(1)? as u64,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                },
+            )?
             .map(|row| {
                 let (sequence, task_sequence, command_id, bytes) = row?;
                 Ok(TaskCommandEvent {
@@ -754,12 +851,15 @@ impl DocsStore {
                     receipt: serde_json::from_slice(&bytes)?,
                 })
             })
-            .collect::<Result<Vec<_>, StoreError>>()?
-        };
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let next_task_sequence = events.last().map(|event| event.task_sequence);
+        let has_more = next_task_sequence.is_some_and(|next| next < snapshot.task_sequence);
         Ok(TaskCommandRead {
             snapshot,
             events,
-            reload_required,
+            reload_required: false,
+            next_task_sequence,
+            has_more,
         })
     }
 
@@ -1184,7 +1284,7 @@ mod task_command_tests {
         assert_eq!(conflict_retry.kind, TaskCommandBeginKind::Conflict);
         assert_eq!(
             store
-                .read_task_commands("task-b", None)
+                .read_task_commands("task-b", 0, 50)
                 .unwrap()
                 .events
                 .len(),
@@ -1228,7 +1328,7 @@ mod task_command_tests {
         );
         assert!(
             store
-                .read_task_commands("task-a", Some(999))
+                .read_task_commands("task-a", 999, 50)
                 .unwrap()
                 .reload_required
         );
@@ -1262,7 +1362,7 @@ mod task_command_tests {
                 )
                 .is_err()
         );
-        let after_failure = store.read_task_commands("task-a", None).unwrap();
+        let after_failure = store.task_command_snapshot("task-a").unwrap();
         assert_eq!(after_failure.snapshot.task_revision, 1);
         assert_eq!(after_failure.snapshot.task_sequence, 2);
         assert_eq!(
@@ -1288,5 +1388,31 @@ mod task_command_tests {
             .unwrap();
         assert_eq!(recovered.snapshot.task_revision, 2);
         assert_eq!(recovered.snapshot.task_sequence, 3);
+
+        let snapshot_only = store.task_command_snapshot("task-a").unwrap();
+        assert!(snapshot_only.events.is_empty());
+        assert_eq!(snapshot_only.snapshot.task_sequence, 3);
+        let first_page = store.read_task_commands("task-a", 0, 1).unwrap();
+        assert_eq!(first_page.events.len(), 1);
+        assert_eq!(first_page.next_task_sequence, Some(1));
+        assert!(first_page.has_more);
+        let second_page = store
+            .read_task_commands("task-a", first_page.next_task_sequence.unwrap(), 1)
+            .unwrap();
+        assert_eq!(second_page.events.len(), 1);
+        assert_eq!(second_page.next_task_sequence, Some(2));
+        assert!(second_page.has_more);
+
+        store
+            .conn()
+            .execute(
+                "DELETE FROM task_command_events WHERE task_id='task-a' AND task_sequence=1",
+                [],
+            )
+            .unwrap();
+        let retention_gap = store.read_task_commands("task-a", 0, 50).unwrap();
+        assert!(retention_gap.reload_required);
+        assert!(retention_gap.events.is_empty());
+        assert_eq!(retention_gap.snapshot.task_sequence, 3);
     }
 }

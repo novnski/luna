@@ -214,6 +214,163 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn local_projection_rolls_back_with_terminal_receipt_failure_and_recovers_after_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    let before = snapshot(&client, &task_id).await;
+    assert!(
+        before.events.is_empty(),
+        "ordinary snapshots do not scan history"
+    );
+    let mut chats = core.workspace.watch_chats();
+    assert!(
+        chats
+            .borrow()
+            .iter()
+            .any(|chat| chat.id == task_id && chat.title.is_none())
+    );
+
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_atomic_projection BEFORE INSERT ON task_command_events
+             WHEN NEW.command_id='atomic-rename' BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+        )
+        .unwrap();
+    }
+    let command = envelope(
+        "atomic-rename",
+        &task_id,
+        Some(&before),
+        serde_json::json!({ "kind": "rename", "title": "durable title" }),
+    );
+    let failed = client
+        .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, command.clone())
+        .await;
+    assert!(
+        failed.is_err(),
+        "faulted terminal transaction must not acknowledge"
+    );
+    assert_eq!(
+        core.workspace.chat(&task_id).unwrap().unwrap().title,
+        None,
+        "candidate registry state is rolled back before readers can observe it"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), chats.changed())
+            .await
+            .is_err(),
+        "rolled-back projection is never published to workspace watchers"
+    );
+    let failed_read = snapshot(&client, &task_id).await;
+    assert_eq!(
+        failed_read.snapshot.task_revision,
+        before.snapshot.task_revision
+    );
+    assert_eq!(
+        failed_read.snapshot.task_sequence,
+        before.snapshot.task_sequence
+    );
+    let pending: Option<CommandReceipt> = client
+        .call_as(
+            methods::GET_TASK_COMMAND_RECEIPT,
+            serde_json::json!({ "commandId": "atomic-rename" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pending.unwrap().status, CommandReceiptStatus::Pending);
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_atomic_projection")
+            .unwrap();
+    }
+
+    // Drop without the orderly flush path to model process loss immediately
+    // after the failed terminal transaction.
+    drop(chats);
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+    let reopened = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    assert_eq!(
+        reopened.workspace.chat(&task_id).unwrap().unwrap().title,
+        None,
+        "a crash/reopen boundary retains the rolled-back task value"
+    );
+    let reopened_read = snapshot(&client, &task_id).await;
+    assert_eq!(
+        reopened_read.snapshot.task_revision,
+        before.snapshot.task_revision
+    );
+    let reopened_pending: Option<CommandReceipt> = client
+        .call_as(
+            methods::GET_TASK_COMMAND_RECEIPT,
+            serde_json::json!({ "commandId": "atomic-rename" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened_pending.unwrap().status,
+        CommandReceiptStatus::Pending
+    );
+    let applied = execute(&client, command).await;
+    assert_eq!(applied.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        applied.snapshot.task_revision,
+        before.snapshot.task_revision + 1
+    );
+    assert_eq!(
+        reopened
+            .workspace
+            .chat(&task_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("durable title")
+    );
+    reopened.shutdown().await;
+    drop(reopened);
+
+    let final_core = assemble(root.path(), runs, false);
+    let final_client = zeron_rpc::memory_client(final_core.rpc_service());
+    assert_eq!(
+        final_core
+            .workspace
+            .chat(&task_id)
+            .unwrap()
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("durable title")
+    );
+    let final_receipt: Option<CommandReceipt> = final_client
+        .call_as(
+            methods::GET_TASK_COMMAND_RECEIPT,
+            serde_json::json!({ "commandId": "atomic-rename" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(final_receipt.unwrap(), applied);
+    let final_read = snapshot(&final_client, &task_id).await;
+    assert_eq!(
+        final_read.snapshot.task_revision,
+        applied.snapshot.task_revision
+    );
+    assert_eq!(
+        final_read.snapshot.task_sequence,
+        applied.snapshot.task_sequence
+    );
+    final_core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn duplicate_send_survives_two_clients_response_loss_and_restart() {
     let root = tempfile::tempdir().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));
@@ -480,6 +637,38 @@ async fn revision_binding_turn_and_lifecycle_fences_are_visible() {
             .title
             .as_deref(),
         Some("current title")
+    );
+
+    let first_page: TaskCommandRead = client
+        .call_as(
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            serde_json::json!({
+                "taskId": task_id,
+                "afterTaskSequence": 0,
+                "limit": 2,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page.events.len(), 2);
+    assert!(first_page.has_more);
+    let next = first_page.next_task_sequence.unwrap();
+    let second_page: TaskCommandRead = client
+        .call_as(
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            serde_json::json!({
+                "taskId": task_id,
+                "afterTaskSequence": next,
+                "limit": 2,
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(
+        second_page
+            .events
+            .iter()
+            .all(|event| event.task_sequence > next)
     );
 
     let gap: TaskCommandRead = client

@@ -108,4 +108,11 @@ pub struct TaskCommandRead {
     /// True when the requested cursor is ahead of or incompatible with the
     /// durable sequence. Consumers must replace local state with `snapshot`.
     pub reload_required: bool,
+    /// Cursor to pass for the next bounded page. Absent for snapshot-only or
+    /// reload-required responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_task_sequence: Option<u64>,
+    /// More durable events exist after `next_task_sequence`.
+    #[serde(default)]
+    pub has_more: bool,
 }

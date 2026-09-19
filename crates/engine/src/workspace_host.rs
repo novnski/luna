@@ -26,7 +26,10 @@ use chrono::Utc;
 use tokio::sync::watch;
 
 use zeron_doc::{DeletedSpace, REGISTRY_DOC_ID, RegistryDoc, WorkspaceDoc};
-use zeron_proto::{Chat, ChatConfig, Device, Session, Space};
+use zeron_proto::{
+    Chat, ChatConfig, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, Device, Session,
+    Space,
+};
 use zeron_sync::{DocsStore, RegistryClient, RegistryTuning};
 
 use crate::doc_host::EdgeConfig;
@@ -191,6 +194,19 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Clone)]
 pub struct WorkspaceHost {
     inner: Arc<WorkspaceHostInner>,
+}
+
+pub(crate) enum TaskProjectionError {
+    Mutation(EngineError),
+    Commit(EngineError),
+}
+
+impl TaskProjectionError {
+    pub(crate) fn message(&self) -> &EngineError {
+        match self {
+            Self::Mutation(error) | Self::Commit(error) => error,
+        }
+    }
 }
 
 impl WorkspaceHost {
@@ -608,6 +624,98 @@ impl WorkspaceHost {
             room.nudge();
         }
         result
+    }
+
+    /// Apply a task metadata mutation and persist its registry projection in
+    /// the same SQLite transaction as the terminal receipt. The registry lock
+    /// prevents readers from observing the candidate state. Publication only
+    /// happens after commit; a storage failure restores the exact pre-command
+    /// document before releasing the lock.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_task_command_projection<R>(
+        &self,
+        command_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
+    ) -> Result<(R, CommandReceipt), TaskProjectionError> {
+        let mut reg = lock(&self.inner.reg);
+        let before = reg.to_bytes().map_err(|error| {
+            TaskProjectionError::Commit(EngineError::Other(format!(
+                "registry snapshot export failed: {error}"
+            )))
+        })?;
+        let result = match mutation(&mut reg) {
+            Ok(result) => result,
+            Err(error) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed after {error}: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Mutation(error));
+            }
+        };
+        let after = match reg.to_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed after snapshot export error {error}: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Commit(EngineError::Other(format!(
+                    "registry snapshot export failed: {error}"
+                ))));
+            }
+        };
+        let receipt = match self.inner.store.complete_task_command_with_snapshot(
+            command_id,
+            CommandReceiptStatus::Applied,
+            true,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            None::<CommandReceiptReason>,
+            None,
+            REGISTRY_DOC_ID,
+            &after,
+        ) {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Commit(EngineError::Other(
+                    "task command receipt vanished before projection commit".into(),
+                )));
+            }
+            Err(error) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed after storage error {error}: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Commit(error.into()));
+            }
+        };
+        drop(reg);
+        self.inner.bump_changed();
+        if let Some(room) = lock(&self.inner.room).as_ref() {
+            room.nudge();
+        }
+        Ok((result, receipt))
     }
 
     fn read<R>(&self, f: impl FnOnce(&RegistryDoc) -> R) -> R {
