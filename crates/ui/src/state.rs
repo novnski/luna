@@ -693,6 +693,9 @@ pub struct AppState {
     /// bootstrap so child views can persist small preference files.
     pub data_dir: Option<PathBuf>,
     engine: Option<EngineHandle>,
+    /// Changes whenever the attached profile runtime changes. Async UI writes
+    /// must match this generation before reporting success into current state.
+    engine_generation: u64,
     watch_tasks: Vec<Task<()>>,
     transcript_task: Option<Task<()>>,
     change_requests: ChangeRequestClientState,
@@ -765,6 +768,7 @@ impl AppState {
             update: None,
             data_dir: None,
             engine: None,
+            engine_generation: 0,
             watch_tasks: Vec::new(),
             transcript_task: None,
             change_requests: ChangeRequestClientState::default(),
@@ -1642,9 +1646,14 @@ impl AppState {
         self.engine.as_ref()
     }
 
+    pub(crate) fn engine_generation(&self) -> u64 {
+        self.engine_generation
+    }
+
     #[cfg(test)]
     pub(crate) fn set_test_engine(&mut self, handle: EngineHandle) {
         self.engine = Some(handle);
+        self.engine_generation = self.engine_generation.wrapping_add(1);
     }
 
     /// Drop every account-scoped view and subscription after its runtime has
@@ -1652,6 +1661,7 @@ impl AppState {
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
         self.engine = None;
+        self.engine_generation = self.engine_generation.wrapping_add(1);
         self.watch_tasks.clear();
         self.transcript_task = None;
         self.change_request_tasks.clear();
@@ -1734,6 +1744,7 @@ impl AppState {
         self.workspace_scope = Some(engine_info.workspace_scope);
         self.local_device_id = Some(engine_info.device_id.clone());
         self.engine = Some(handle.clone());
+        self.engine_generation = self.engine_generation.wrapping_add(1);
         let mut watch_tasks = Vec::with_capacity(8);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
@@ -4224,5 +4235,6 @@ impl AppState {
     /// Keep fixture documents deterministic while using the real attachment RPC.
     pub fn fixture_attachment_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
+        self.engine_generation = self.engine_generation.wrapping_add(1);
     }
 }

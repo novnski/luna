@@ -410,6 +410,7 @@ enum DraftSubmissionOutcome {
     Pending,
     Recoverable,
     Applied,
+    Recovered,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2475,11 +2476,11 @@ impl RpcService for EngineRpc {
             methods::SAVE_COMPOSER_DRAFT => {
                 let p: ComposerDraftSaveParams = parse_params(params)?;
                 self.validate_composer_draft(&p.draft)?;
-                let saved = self
+                let outcome = self
                     .store
                     .save_composer_draft(&self.engine_info.device_id, &p.draft)
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
-                RpcReply::value(&serde_json::json!({ "saved": saved }))
+                RpcReply::value(&outcome)
             }
             methods::BEGIN_DRAFT_SUBMISSION => {
                 let p: BeginDraftSubmissionParams = parse_params(params)?;
@@ -2505,7 +2506,7 @@ impl RpcService for EngineRpc {
                             &p.command_id,
                         )
                         .map_err(|error| RpcError::Failed(error.to_string()))?,
-                    DraftSubmissionOutcome::Applied => {
+                    DraftSubmissionOutcome::Applied | DraftSubmissionOutcome::Recovered => {
                         self.store
                             .accept_draft_submission(
                                 &self.engine_info.device_id,

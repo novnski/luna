@@ -119,3 +119,30 @@ pub struct ComposerDraftRead {
     #[serde(default)]
     pub submissions: Vec<DraftSubmission>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum ComposerDraftSaveOutcome {
+    Saved,
+    Unchanged,
+    Stale {
+        #[serde(rename = "currentRevision")]
+        current_revision: u64,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ComposerDraftSaveOutcome;
+
+    #[test]
+    fn stale_save_outcome_uses_the_camel_case_wire_contract() {
+        assert_eq!(
+            serde_json::to_value(ComposerDraftSaveOutcome::Stale {
+                current_revision: 41,
+            })
+            .unwrap(),
+            serde_json::json!({"outcome":"stale", "currentRevision":41})
+        );
+    }
+}

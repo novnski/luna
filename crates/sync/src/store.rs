@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 use zeron_proto::{
     CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, ComposerDraft,
-    ComposerDraftRead, DraftSubmission, DraftSubmissionState, TaskCommandEvent, TaskCommandRead,
-    TaskCommandSnapshot,
+    ComposerDraftRead, ComposerDraftSaveOutcome, DraftSubmission, DraftSubmissionState,
+    TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
 };
 
 /// Errors surfaced by [`DocsStore`].
@@ -349,7 +349,7 @@ impl DocsStore {
         &self,
         device_id: &str,
         draft: &ComposerDraft,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<ComposerDraftSaveOutcome, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let bytes = serde_json::to_vec(draft)?;
@@ -363,13 +363,15 @@ impl DocsStore {
             .optional()?;
         if let Some((revision, current_bytes)) = current {
             if revision > draft.revision {
-                return Ok(false);
+                return Ok(ComposerDraftSaveOutcome::Stale {
+                    current_revision: revision,
+                });
             }
             if revision == draft.revision {
                 let mut current: ComposerDraft = serde_json::from_slice(&current_bytes)?;
                 current.updated_at_ms = draft.updated_at_ms;
                 if current == *draft {
-                    return Ok(false);
+                    return Ok(ComposerDraftSaveOutcome::Unchanged);
                 }
                 return Err(StoreError::DraftRevisionConflict(draft.draft_id.clone()));
             }
@@ -405,7 +407,7 @@ impl DocsStore {
             draft.saved_blob_paths(),
         )?;
         tx.commit()?;
-        Ok(true)
+        Ok(ComposerDraftSaveOutcome::Saved)
     }
 
     /// Load only the selected draft plus unresolved submissions in the same
@@ -1643,13 +1645,19 @@ mod draft_tests {
         let store = DocsStore::open(dir.path()).unwrap();
 
         let original = draft(7, "submitted", &path);
-        assert!(store.save_composer_draft("device-a", &original).unwrap());
+        assert_eq!(
+            store.save_composer_draft("device-a", &original).unwrap(),
+            ComposerDraftSaveOutcome::Saved
+        );
         assert_eq!(store.attachment_owner_count("device-a", &path), 1);
-        assert!(
-            !store
+        assert_eq!(
+            store
                 .save_composer_draft("device-a", &draft(6, "stale", &path))
                 .unwrap(),
-            "a late async write must not restore stale content"
+            ComposerDraftSaveOutcome::Stale {
+                current_revision: 7
+            },
+            "a late async write must report the authoritative revision"
         );
 
         store
@@ -1657,7 +1665,10 @@ mod draft_tests {
             .unwrap();
         assert_eq!(store.attachment_owner_count("device-a", &path), 2);
         let newer = draft(8, "newer typing", &path);
-        assert!(store.save_composer_draft("device-a", &newer).unwrap());
+        assert_eq!(
+            store.save_composer_draft("device-a", &newer).unwrap(),
+            ComposerDraftSaveOutcome::Saved
+        );
         assert!(
             !store
                 .accept_draft_submission("device-a", "command-a", None)

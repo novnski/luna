@@ -2,7 +2,9 @@
 //! engine, so they stay on the composing device/profile.
 
 use sha2::{Digest, Sha256};
-use zeron_proto::{ComposerDraft, ComposerDraftRead, DraftBlob, DraftBlobState};
+use zeron_proto::{
+    ComposerDraft, ComposerDraftRead, ComposerDraftSaveOutcome, DraftBlob, DraftBlobState,
+};
 use zeron_rpc::{RpcError, methods};
 
 use crate::state::EngineHandle;
@@ -59,18 +61,17 @@ pub async fn read(
         .await
 }
 
-pub async fn save(engine: &EngineHandle, draft: &ComposerDraft) -> Result<bool, RpcError> {
-    let reply = engine
+pub async fn save(
+    engine: &EngineHandle,
+    draft: &ComposerDraft,
+) -> Result<ComposerDraftSaveOutcome, RpcError> {
+    engine
         .client()
-        .call(
+        .call_as(
             methods::SAVE_COMPOSER_DRAFT,
             serde_json::json!({ "draft": draft }),
         )
-        .await?;
-    Ok(reply
-        .get("saved")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false))
+        .await
 }
 
 pub async fn begin_submission(

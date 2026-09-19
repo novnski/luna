@@ -27,9 +27,10 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
 use zeron_proto::{
-    CommandReceiptStatus, ComposerDraft, DraftAppshot, DraftBlob, DraftBlobState, DraftContext,
-    DraftSubmissionState, FileSearchMatch, HarnessId, RunRequest, SandboxLevel, SlashCommand,
-    UserInputAnswer, UserInputQuestion, capabilities,
+    CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot, DraftBlob,
+    DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState, FileSearchMatch,
+    HarnessId, RunRequest, SandboxLevel, SlashCommand, UserInputAnswer, UserInputQuestion,
+    capabilities,
 };
 use zeron_rpc::{RpcError, methods};
 
@@ -4028,14 +4029,19 @@ pub struct Composer {
     draft_unavailable_appshot_metadata: HashMap<String, Vec<DraftAppshot>>,
     draft_loaded: HashSet<String>,
     draft_save_tasks: HashMap<String, Task<()>>,
+    draft_saves_in_flight: HashMap<String, u64>,
     draft_load_tasks: HashMap<String, Task<()>>,
     draft_blob_tasks: HashMap<(String, String), Task<()>>,
+    draft_blobs_in_flight: HashSet<(String, String)>,
     draft_receipt_tasks: HashMap<String, Task<()>>,
     draft_submitting: HashMap<String, u64>,
     draft_close_flushing: bool,
     draft_close_failed: bool,
     suppress_next_draft_edit: bool,
     draft_comment_fingerprints: HashMap<String, u64>,
+    recoverable_submissions: HashMap<String, Vec<DraftSubmission>>,
+    draft_merge_on_load: HashSet<String>,
+    draft_engine_generation: Option<u64>,
     appshot_entrances: HashMap<String, Instant>,
     /// The staged attachment being viewed full-size (click a thumbnail).
     preview: Option<attachments::PreviewImage>,
@@ -4180,6 +4186,7 @@ struct RestoredComposerDraft {
     pending_same_revision: bool,
     recoverable_submission: bool,
     recoverable_separate: bool,
+    recoverable_entries: Vec<DraftSubmission>,
 }
 
 enum ComposerSendOutcome {
@@ -4349,14 +4356,19 @@ impl Composer {
             draft_unavailable_appshot_metadata: HashMap::new(),
             draft_loaded: HashSet::new(),
             draft_save_tasks: HashMap::new(),
+            draft_saves_in_flight: HashMap::new(),
             draft_load_tasks: HashMap::new(),
             draft_blob_tasks: HashMap::new(),
+            draft_blobs_in_flight: HashSet::new(),
             draft_receipt_tasks: HashMap::new(),
             draft_submitting: HashMap::new(),
             draft_close_flushing: false,
             draft_close_failed: false,
             suppress_next_draft_edit: false,
             draft_comment_fingerprints: HashMap::new(),
+            recoverable_submissions: HashMap::new(),
+            draft_merge_on_load: HashSet::new(),
+            draft_engine_generation: None,
             appshot_entrances: HashMap::new(),
             preview: None,
             preview_focus: cx.focus_handle(),
@@ -4630,6 +4642,7 @@ impl Composer {
         cx: &mut Context<Self>,
     ) {
         if self.draft_is_saved(&key) {
+            self.finish_close_flush_if_ready(cx);
             return;
         }
         if self.draft_submitting.get(&key).is_some_and(|submitted| {
@@ -4637,59 +4650,82 @@ impl Composer {
         }) {
             return;
         }
+        let (engine, engine_generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
+            if key == self.current_key {
+                self.failure = Some(
+                    "Draft not saved — the local engine is unavailable; your text is still in this window."
+                        .into(),
+                );
+                self.failure_key = Some(key);
+            }
+            self.fail_close_flush(cx);
+            return;
+        };
+        let scheduled_revision = self.draft_revisions.get(&key).copied().unwrap_or(0);
+        self.draft_saves_in_flight
+            .insert(key.clone(), scheduled_revision);
         let task_key = key.clone();
         let task = cx.spawn(async move |this, cx| {
             if !delay.is_zero() {
                 cx.background_executor().timer(delay).await;
             }
-            let Some((engine, record)) = this
+            let Some(record) = this
                 .update(cx, |composer, cx| {
-                    let engine = composer.state.read(cx).engine().cloned()?;
+                    if composer.state.read(cx).engine_generation() != engine_generation {
+                        return None;
+                    }
                     let text = if task_key == composer.current_key {
                         composer.input.read(cx).text().to_string()
                     } else {
                         composer.drafts.get(&task_key).cloned().unwrap_or_default()
                     };
-                    Some((engine, composer.build_draft_record(&task_key, text, cx)))
+                    let record = composer.build_draft_record(&task_key, text, cx);
+                    composer
+                        .draft_saves_in_flight
+                        .insert(task_key.clone(), record.revision);
+                    Some(record)
                 })
                 .ok()
                 .flatten()
             else {
-                this.update(cx, |composer, cx| {
-                    if task_key == composer.current_key {
-                        composer.failure = Some(
-                            "Draft not saved — the local engine is unavailable; your text is still in this window."
-                                .into(),
-                        );
-                        composer.failure_key = Some(task_key.clone());
-                    }
-                    if composer.draft_close_flushing {
-                        composer.draft_close_flushing = false;
-                        composer.draft_close_failed = true;
-                        cx.emit(ComposerEvent::DraftFlushCompleted);
-                    }
-                    cx.notify();
-                })
-                .ok();
                 return;
             };
             let revision = record.revision;
             let result = crate::drafts::save(&engine, &record).await;
             this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != engine_generation {
+                    return;
+                }
+                if composer.draft_saves_in_flight.get(&task_key) == Some(&revision) {
+                    composer.draft_saves_in_flight.remove(&task_key);
+                }
                 match result {
-                    Ok(_) => {
+                    Ok(ComposerDraftSaveOutcome::Saved | ComposerDraftSaveOutcome::Unchanged) => {
                         let saved = composer
                             .draft_saved_revisions
                             .entry(task_key.clone())
                             .or_default();
                         *saved = (*saved).max(revision);
                         composer.draft_close_failed = false;
-                        if composer.draft_close_flushing
-                            && composer.draft_is_saved(&composer.current_key)
-                        {
-                            composer.draft_close_flushing = false;
-                            cx.emit(ComposerEvent::DraftFlushCompleted);
-                        }
+                    }
+                    Ok(ComposerDraftSaveOutcome::Stale { current_revision }) => {
+                        let saved = composer
+                            .draft_saved_revisions
+                            .entry(task_key.clone())
+                            .or_default();
+                        *saved = (*saved).max(current_revision);
+                        let local = composer
+                            .draft_revisions
+                            .entry(task_key.clone())
+                            .or_default();
+                        *local = (*local).max(current_revision.saturating_add(1));
+                        composer.draft_merge_on_load.insert(task_key.clone());
+                        composer.draft_loaded.remove(&task_key);
+                        composer.load_draft(task_key.clone(), cx);
                     }
                     Err(error) => {
                         if task_key == composer.current_key {
@@ -4701,13 +4737,10 @@ impl Composer {
                             );
                             composer.failure_key = Some(task_key.clone());
                         }
-                        if composer.draft_close_flushing {
-                            composer.draft_close_flushing = false;
-                            composer.draft_close_failed = true;
-                            cx.emit(ComposerEvent::DraftFlushCompleted);
-                        }
+                        composer.fail_close_flush(cx);
                     }
                 }
+                composer.finish_close_flush_if_ready(cx);
                 cx.notify();
             })
             .ok();
@@ -4720,18 +4753,51 @@ impl Composer {
             >= self.draft_revisions.get(key).copied().unwrap_or(0)
     }
 
+    fn all_drafts_saved(&self) -> bool {
+        self.draft_revisions
+            .keys()
+            .all(|key| self.draft_is_saved(key))
+            && self.draft_saves_in_flight.is_empty()
+            && self.draft_blobs_in_flight.is_empty()
+    }
+
+    fn finish_close_flush_if_ready(&mut self, cx: &mut Context<Self>) {
+        if self.draft_close_flushing && self.all_drafts_saved() {
+            self.draft_close_flushing = false;
+            self.draft_close_failed = false;
+            cx.emit(ComposerEvent::DraftFlushCompleted);
+        }
+    }
+
+    fn fail_close_flush(&mut self, cx: &mut Context<Self>) {
+        if self.draft_close_flushing {
+            self.draft_close_flushing = false;
+            self.draft_close_failed = true;
+            cx.emit(ComposerEvent::DraftFlushCompleted);
+        }
+    }
+
     pub(crate) fn prepare_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.draft_is_saved(&self.current_key) {
+        if self.all_drafts_saved() {
             return true;
         }
         self.draft_close_failed = false;
         self.draft_close_flushing = true;
-        self.schedule_draft_save(self.current_key.clone(), Duration::ZERO, cx);
+        let dirty = self
+            .draft_revisions
+            .keys()
+            .filter(|key| !self.draft_is_saved(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in dirty {
+            self.schedule_draft_save(key, Duration::ZERO, cx);
+        }
+        self.finish_close_flush_if_ready(cx);
         false
     }
 
     pub(crate) fn draft_flush_complete(&self) -> bool {
-        !self.draft_close_flushing && !self.draft_close_failed
+        self.all_drafts_saved() && !self.draft_close_failed
     }
 
     fn stage_draft_blob(
@@ -4744,7 +4810,11 @@ impl Composer {
             attachment.id.clone(),
             crate::drafts::waiting_blob(&attachment.id, &attachment.name),
         );
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
+        let (engine, engine_generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
             self.draft_blobs.entry(key.clone()).or_default().insert(
                 attachment.id.clone(),
                 crate::drafts::failed_blob(
@@ -4763,7 +4833,9 @@ impl Composer {
         let id = attachment.id.clone();
         let name = attachment.name.clone();
         let task_key = (key.clone(), id.clone());
+        self.draft_blobs_in_flight.insert(task_key.clone());
         let blob_key = key.clone();
+        let callback_key = task_key.clone();
         let task = cx.spawn(async move |this, cx| {
             let result = attachments::upload_attachment(
                 &engine,
@@ -4775,6 +4847,10 @@ impl Composer {
             )
             .await;
             this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != engine_generation {
+                    return;
+                }
+                composer.draft_blobs_in_flight.remove(&callback_key);
                 let blob = match result {
                     Ok(path) => crate::drafts::saved_blob(&id, &name, path, attachment.bytes()),
                     Err(error) => {
@@ -4797,6 +4873,7 @@ impl Composer {
                     .or_insert(0);
                 *revision = revision.saturating_add(1);
                 composer.schedule_draft_save(blob_key.clone(), Duration::ZERO, cx);
+                composer.finish_close_flush_if_ready(cx);
                 cx.notify();
             })
             .ok();
@@ -4807,11 +4884,472 @@ impl Composer {
         self.schedule_draft_save(key, Duration::ZERO, cx);
     }
 
+    fn merge_loaded_draft(
+        &mut self,
+        key: &str,
+        mut restored: RestoredComposerDraft,
+        cx: &mut Context<Self>,
+    ) {
+        let durable_revision = restored.record.revision;
+        let local_revision = self.draft_revisions.get(key).copied().unwrap_or(0);
+        if key.is_empty() {
+            self.canvas_draft_id = restored.record.draft_id.clone();
+        }
+        if restored.recoverable_entries.is_empty() {
+            self.recoverable_submissions.remove(key);
+        } else {
+            self.recoverable_submissions
+                .insert(key.to_string(), restored.recoverable_entries.clone());
+        }
+
+        if !restored.pending_same_revision {
+            let local_text = if key == self.current_key {
+                self.input.read(cx).text().to_string()
+            } else {
+                self.drafts.get(key).cloned().unwrap_or_default()
+            };
+            let merged_text = match (
+                restored.record.text.trim().is_empty(),
+                local_text.trim().is_empty(),
+                restored.record.text == local_text,
+            ) {
+                (_, _, true) => local_text,
+                (true, _, _) => local_text,
+                (_, true, _) => restored.record.text.clone(),
+                _ => format!("{}\n\n{}", restored.record.text, local_text),
+            };
+            let local_attachments = self.attachments.remove(key).unwrap_or_default();
+            for attachment in local_attachments {
+                if !restored
+                    .ordinary
+                    .iter()
+                    .any(|existing| existing.id == attachment.id)
+                {
+                    restored.ordinary.push(attachment);
+                }
+            }
+            let local_appshots = self.appshots.remove(key).unwrap_or_default();
+            for shot in local_appshots {
+                if !restored
+                    .appshots
+                    .iter()
+                    .any(|existing| existing.id == shot.id)
+                {
+                    restored.appshots.push(shot);
+                }
+            }
+            let mut blobs = restored
+                .record
+                .attachments
+                .iter()
+                .cloned()
+                .map(|blob| (blob.attachment_id.clone(), blob))
+                .collect::<HashMap<_, _>>();
+            if let Some(local) = self.draft_blobs.remove(key) {
+                blobs.extend(local);
+            }
+            self.draft_blobs.insert(key.to_string(), blobs);
+            let mut unavailable = restored.unavailable;
+            for blob in self.draft_unavailable.remove(key).unwrap_or_default() {
+                if !unavailable
+                    .iter()
+                    .any(|existing| existing.attachment_id == blob.attachment_id)
+                {
+                    unavailable.push(blob);
+                }
+            }
+            self.draft_unavailable.insert(key.to_string(), unavailable);
+            self.draft_unavailable_appshots
+                .entry(key.to_string())
+                .or_default()
+                .extend(restored.unavailable_appshots);
+            self.draft_unavailable_appshot_metadata
+                .entry(key.to_string())
+                .or_default()
+                .extend(restored.unavailable_appshot_metadata);
+            self.attachments.insert(key.to_string(), restored.ordinary);
+            self.appshots.insert(key.to_string(), restored.appshots);
+            self.drafts.insert(key.to_string(), merged_text.clone());
+            self.draft_comment_fingerprints.remove(key);
+            self.state.update(cx, |state, _| {
+                let mut seen = state
+                    .review_comments(key)
+                    .iter()
+                    .map(|comment| comment.id.clone())
+                    .collect::<HashSet<_>>();
+                for value in &restored.record.context.review_comments {
+                    if let Ok(comment) =
+                        serde_json::from_value::<crate::comments::ReviewComment>(value.clone())
+                        && seen.insert(comment.id.clone())
+                    {
+                        state.add_review_comment(key, comment);
+                    }
+                }
+            });
+            if key == self.current_key {
+                self.set_input_text_without_draft_edit(merged_text, cx);
+            }
+            self.failure = Some(
+                "This draft changed while it was loading. Both versions were kept and are being saved."
+                    .into(),
+            );
+            self.failure_key = Some(key.to_string());
+        } else {
+            self.failure = Some(
+                "A submitted message is still awaiting an authoritative delivery receipt; newer typing is being saved separately."
+                    .into(),
+            );
+            self.failure_key = Some(key.to_string());
+        }
+        self.draft_saved_revisions
+            .entry(key.to_string())
+            .and_modify(|saved| *saved = (*saved).max(durable_revision))
+            .or_insert(durable_revision);
+        self.draft_revisions.insert(
+            key.to_string(),
+            local_revision.max(durable_revision).saturating_add(1),
+        );
+        self.draft_merge_on_load.remove(key);
+        self.draft_loaded.insert(key.to_string());
+        self.schedule_draft_save(key.to_string(), Duration::ZERO, cx);
+    }
+
+    /// Merge the newest recoverable submission into the live draft. The
+    /// recoverable row is deleted only after the merged draft is durably
+    /// saved, so a failed read/save remains retryable after restart.
+    fn recover_latest_submission(&mut self, cx: &mut Context<Self>) {
+        let key = self.current_key.clone();
+        let Some(submission) = self
+            .recoverable_submissions
+            .get(&key)
+            .and_then(|entries| entries.last())
+            .cloned()
+        else {
+            return;
+        };
+        let (engine, engine_generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
+            self.failure =
+                Some("Recovery is unavailable while the local engine is offline.".into());
+            self.failure_key = Some(key);
+            cx.notify();
+            return;
+        };
+        if self
+            .draft_receipt_tasks
+            .contains_key(&submission.command_id)
+        {
+            return;
+        }
+
+        let command_id = submission.command_id.clone();
+        let task_command_id = command_id.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let appshot_attachment_ids = submission
+                .snapshot
+                .appshots
+                .iter()
+                .map(|shot| shot.screenshot_attachment_id.clone())
+                .collect::<HashSet<_>>();
+            let mut loaded = HashMap::new();
+            for blob in &submission.snapshot.attachments {
+                if blob.state != DraftBlobState::Saved {
+                    continue;
+                }
+                let Some(path) = blob.path.as_deref() else {
+                    continue;
+                };
+                if let Some(image) = attachments::read_attachment_image(
+                    &engine,
+                    cx.background_executor(),
+                    None,
+                    path,
+                    None,
+                )
+                .await
+                {
+                    loaded.insert(
+                        blob.attachment_id.clone(),
+                        StagedAttachment {
+                            id: blob.attachment_id.clone(),
+                            name: blob.name.clone(),
+                            image: image.image,
+                        },
+                    );
+                }
+            }
+
+            let record = this
+                .update(cx, |composer, cx| {
+                    if composer.state.read(cx).engine_generation() != engine_generation {
+                        return None;
+                    }
+                    let local_text = if key == composer.current_key {
+                        composer.input.read(cx).text().to_string()
+                    } else {
+                        composer.drafts.get(&key).cloned().unwrap_or_default()
+                    };
+                    let recovered_text = submission.snapshot.text.clone();
+                    let merged_text = match (
+                        local_text.trim().is_empty(),
+                        recovered_text.trim().is_empty(),
+                        local_text == recovered_text,
+                    ) {
+                        (_, _, true) => local_text,
+                        (true, _, _) => recovered_text,
+                        (_, true, _) => local_text,
+                        _ => format!("{local_text}\n\n{recovered_text}"),
+                    };
+
+                    let ordinary = composer.attachments.entry(key.clone()).or_default();
+                    for blob in &submission.snapshot.attachments {
+                        if appshot_attachment_ids.contains(&blob.attachment_id) {
+                            continue;
+                        }
+                        if let Some(attachment) = loaded.get(&blob.attachment_id)
+                            && !ordinary.iter().any(|item| item.id == attachment.id)
+                        {
+                            ordinary.push(attachment.clone());
+                        }
+                    }
+                    let shots = composer.appshots.entry(key.clone()).or_default();
+                    for shot in &submission.snapshot.appshots {
+                        let Some(screenshot) = loaded.get(&shot.screenshot_attachment_id).cloned()
+                        else {
+                            continue;
+                        };
+                        if shots.iter().any(|item| item.id == shot.id) {
+                            continue;
+                        }
+                        shots.push(CapturedAppshot {
+                            id: shot.id.clone(),
+                            app_name: shot.app_name.clone(),
+                            bundle_identifier: shot.bundle_identifier.clone(),
+                            window_title: shot.window_title.clone(),
+                            accessibility: appshots::AccessibilitySnapshot {
+                                format_version: shot.accessibility_format_version,
+                                content: shot.accessibility_content.clone(),
+                                truncated: shot.accessibility_truncated,
+                            },
+                            screenshot,
+                            screenshot_dimensions: shot.screenshot_dimensions,
+                            app_icon: None,
+                            captured_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+                                shot.captured_at_ms,
+                            )
+                            .unwrap_or_else(chrono::Utc::now),
+                        });
+                    }
+                    let unavailable = composer.draft_unavailable.entry(key.clone()).or_default();
+                    let blob_map = composer.draft_blobs.entry(key.clone()).or_default();
+                    for blob in &submission.snapshot.attachments {
+                        let mut restored = blob.clone();
+                        if !loaded.contains_key(&blob.attachment_id) {
+                            restored.state = DraftBlobState::NeedsReattachment;
+                            restored.path = None;
+                            restored.error =
+                                Some("The recovered blob is unavailable or corrupt".into());
+                        }
+                        blob_map
+                            .entry(restored.attachment_id.clone())
+                            .or_insert_with(|| restored.clone());
+                        if restored.state == DraftBlobState::NeedsReattachment
+                            && !unavailable
+                                .iter()
+                                .any(|item| item.attachment_id == restored.attachment_id)
+                        {
+                            unavailable.push(restored);
+                        }
+                    }
+                    let unavailable_appshots = composer
+                        .draft_unavailable_appshots
+                        .entry(key.clone())
+                        .or_default();
+                    let unavailable_metadata = composer
+                        .draft_unavailable_appshot_metadata
+                        .entry(key.clone())
+                        .or_default();
+                    for shot in &submission.snapshot.appshots {
+                        if !loaded.contains_key(&shot.screenshot_attachment_id) {
+                            unavailable_appshots.insert(shot.screenshot_attachment_id.clone());
+                            if !unavailable_metadata.iter().any(|item| item.id == shot.id) {
+                                unavailable_metadata.push(shot.clone());
+                            }
+                        }
+                    }
+
+                    composer.drafts.insert(key.clone(), merged_text.clone());
+                    if key == composer.current_key {
+                        composer.set_input_text_without_draft_edit(merged_text.clone(), cx);
+                    }
+                    let revision = composer.draft_revisions.entry(key.clone()).or_default();
+                    *revision = (*revision)
+                        .max(submission.snapshot.revision)
+                        .saturating_add(1);
+                    Some(composer.build_draft_record(&key, merged_text, cx))
+                })
+                .ok()
+                .flatten();
+            let Some(record) = record else {
+                return;
+            };
+            let revision = record.revision;
+            let saved = crate::drafts::save(&engine, &record).await;
+            let settled = match &saved {
+                Ok(ComposerDraftSaveOutcome::Saved | ComposerDraftSaveOutcome::Unchanged) => {
+                    crate::drafts::settle_submission(
+                        &engine,
+                        &submission.command_id,
+                        "recovered",
+                        None,
+                    )
+                    .await
+                }
+                _ => Ok(()),
+            };
+            this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != engine_generation {
+                    return;
+                }
+                composer.draft_receipt_tasks.remove(&submission.command_id);
+                match (saved, settled) {
+                    (
+                        Ok(ComposerDraftSaveOutcome::Saved | ComposerDraftSaveOutcome::Unchanged),
+                        Ok(()),
+                    ) => {
+                        composer
+                            .draft_saved_revisions
+                            .entry(key.clone())
+                            .and_modify(|value| *value = (*value).max(revision))
+                            .or_insert(revision);
+                        if let Some(entries) = composer.recoverable_submissions.get_mut(&key) {
+                            entries.retain(|entry| entry.command_id != submission.command_id);
+                            if entries.is_empty() {
+                                composer.recoverable_submissions.remove(&key);
+                            }
+                        }
+                        composer.failure = Some(
+                            "The previous unsent message was recovered into this draft.".into(),
+                        );
+                        composer.failure_key = Some(key.clone());
+                    }
+                    (Ok(ComposerDraftSaveOutcome::Stale { current_revision }), _) => {
+                        composer
+                            .draft_saved_revisions
+                            .entry(key.clone())
+                            .and_modify(|value| *value = (*value).max(current_revision))
+                            .or_insert(current_revision);
+                        composer.draft_merge_on_load.insert(key.clone());
+                        composer.draft_loaded.remove(&key);
+                        composer.load_draft(key.clone(), cx);
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        composer.failure = Some(
+                            format!("The previous message is still recoverable: {error}").into(),
+                        );
+                        composer.failure_key = Some(key.clone());
+                    }
+                }
+                composer.finish_close_flush_if_ready(cx);
+                cx.notify();
+            })
+            .ok();
+        });
+        self.draft_receipt_tasks.insert(task_command_id, task);
+    }
+
+    /// Composer state is profile-local. Runtime replacement changes the
+    /// engine generation before any callbacks from the old profile can land;
+    /// clear every cached draft surface and cancel its tasks at that boundary.
+    fn sync_draft_engine_generation(&mut self, cx: &mut Context<Self>) {
+        let (generation, key) = {
+            let state = self.state.read(cx);
+            (
+                state.engine_generation(),
+                state.selected_chat.clone().unwrap_or_default(),
+            )
+        };
+        let Some(previous) = self.draft_engine_generation.replace(generation) else {
+            return;
+        };
+        if previous == generation {
+            return;
+        }
+
+        self.draft_save_tasks.clear();
+        self.draft_load_tasks.clear();
+        self.draft_blob_tasks.clear();
+        self.draft_receipt_tasks.clear();
+        self.drafts.clear();
+        self.attachments.clear();
+        self.appshots.clear();
+        self.draft_revisions.clear();
+        self.draft_saved_revisions.clear();
+        self.draft_blobs.clear();
+        self.draft_unavailable.clear();
+        self.draft_unavailable_appshots.clear();
+        self.draft_unavailable_appshot_metadata.clear();
+        self.draft_loaded.clear();
+        self.draft_saves_in_flight.clear();
+        self.draft_blobs_in_flight.clear();
+        self.draft_submitting.clear();
+        self.draft_comment_fingerprints.clear();
+        self.recoverable_submissions.clear();
+        self.draft_merge_on_load.clear();
+        self.draft_close_flushing = false;
+        self.draft_close_failed = false;
+        self.queue_edit_draft = None;
+        self.editing_queued = None;
+        self.queue_edit_lease_id = None;
+        self.queue_edit_base_text_hash = None;
+        self.queue_edit_chat_id = None;
+        self.queue_edit_host_device_id = None;
+        self.queue_edit_pending_id = None;
+        self.queue_edit_finishing = false;
+        self.queue_edit_task = None;
+        self.queue_edit_renew_task = None;
+        self.queue_full_preview = None;
+        self.release_queue_previews(cx);
+        self.queue_removing.clear();
+        self.preview = None;
+        self.failure = None;
+        self.failure_key = None;
+        self.wizard = None;
+        self.answered_requests.clear();
+        self.advance_task = None;
+        self.send_task = None;
+        self.action_task = None;
+        self.sending = false;
+        self.launching_new_chat = false;
+        self.interrupt_tasks.clear();
+        self.interrupting.clear();
+        self.picker_task = None;
+        self.mention_task = None;
+        self.mention = FileMentionState::default();
+        self.slash_task = None;
+        self.slash = SlashState::default();
+        self.slash_cache.clear();
+        self.canvas_draft_id = uuid::Uuid::new_v4().to_string();
+        self.current_key = key;
+        self.input.update(cx, |input, cx| {
+            input.read_only = false;
+            cx.notify();
+        });
+        self.set_input_text_without_draft_edit(String::new(), cx);
+    }
+
     fn load_draft(&mut self, key: String, cx: &mut Context<Self>) {
         if self.draft_loaded.contains(&key) || self.draft_load_tasks.contains_key(&key) {
             return;
         }
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
+        let (engine, engine_generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
             return;
         };
         let task_id = (!key.is_empty()).then(|| key.clone());
@@ -4889,12 +5427,25 @@ impl Composer {
                     let recoverable_submission = read.submissions.iter().any(|submission| {
                         submission.state == DraftSubmissionState::Recoverable
                     });
+                    let recoverable_entries = read
+                        .submissions
+                        .iter()
+                        .filter(|submission| {
+                            submission.state == DraftSubmissionState::Recoverable
+                        })
+                        .cloned()
+                        .collect();
                     let mut record = match read.draft {
                         Some(record) => record,
                         None => match read.submissions.last() {
                             Some(submission) => submission.snapshot.clone(),
                             None => {
-                                this.update(cx, |composer, _| {
+                                this.update(cx, |composer, cx| {
+                                    if composer.state.read(cx).engine_generation()
+                                        != engine_generation
+                                    {
+                                        return;
+                                    }
                                     composer.draft_loaded.insert(load_key.clone());
                                     composer.draft_load_tasks.remove(&load_key);
                                     composer.draft_submitting.remove(&load_key);
@@ -5024,10 +5575,14 @@ impl Composer {
                         pending_same_revision,
                         recoverable_submission,
                         recoverable_separate,
+                        recoverable_entries,
                     })
                 }
                 Err(error) => {
                     this.update(cx, |composer, cx| {
+                        if composer.state.read(cx).engine_generation() != engine_generation {
+                            return;
+                        }
                         if load_key == composer.current_key {
                             composer.failure = Some(
                                 format!("Draft could not be loaded; new changes remain in memory: {error}")
@@ -5042,22 +5597,29 @@ impl Composer {
                 }
             };
             this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != engine_generation {
+                    return;
+                }
                 composer.draft_load_tasks.remove(&load_key);
-                composer.draft_loaded.insert(load_key.clone());
                 let Some(restored) = restored else {
+                    composer.draft_loaded.insert(load_key.clone());
                     return;
                 };
-                // Local typing or attachment intake that happened while the
-                // read was in flight always wins over the older stored row.
+                // A higher local revision means typing or attachment intake
+                // raced this read. Merge the durable row and local state,
+                // then persist a revision strictly above both versions.
                 if composer
                     .draft_revisions
                     .get(&load_key)
                     .copied()
                     .unwrap_or(0)
                     > starting_revision
+                    || composer.draft_merge_on_load.contains(&load_key)
                 {
+                    composer.merge_loaded_draft(&load_key, restored, cx);
                     return;
                 }
+                composer.draft_loaded.insert(load_key.clone());
                 let pending_same_revision = restored.pending_same_revision;
                 if load_key.is_empty() {
                     composer.canvas_draft_id = restored.record.draft_id.clone();
@@ -5088,6 +5650,13 @@ impl Composer {
                     load_key.clone(),
                     restored.unavailable_appshot_metadata,
                 );
+                if restored.recoverable_entries.is_empty() {
+                    composer.recoverable_submissions.remove(&load_key);
+                } else {
+                    composer
+                        .recoverable_submissions
+                        .insert(load_key.clone(), restored.recoverable_entries.clone());
+                }
                 if !pending_same_revision {
                     composer
                         .drafts
@@ -6589,6 +7158,7 @@ impl Composer {
     }
 
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_draft_engine_generation(cx);
         self.sync_review_comment_draft(cx);
         {
             let state = self.state.read(cx);
@@ -8400,6 +8970,10 @@ impl Render for Composer {
                 .as_ref()
                 .is_none_or(|key| *key == self.current_key)
         });
+        let recoverable_available = self
+            .recoverable_submissions
+            .get(&self.current_key)
+            .is_some_and(|entries| !entries.is_empty());
         // Composer honesty: when the target's delivery path is degraded, say
         // UP FRONT that a send will queue (a durable local write delivered on
         // reconnect) instead of letting the button imply instant delivery.
@@ -8461,6 +9035,23 @@ impl Render for Composer {
                         this.failure = None;
                         this.failure_key = None;
                         cx.notify();
+                    })),
+                )
+            })
+            .when(recoverable_available, |el| {
+                el.child(
+                    notice_chip(
+                        &theme,
+                        true,
+                        "Recovery",
+                        "Recover previous unsent message",
+                        NoticeChipIcon::Plain,
+                    )
+                    .id("composer-recover-unsent")
+                    .mx(px(4.0))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.recover_latest_submission(cx);
                     })),
                 )
             })
@@ -9125,6 +9716,12 @@ impl Render for Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use tokio::sync::oneshot;
+    use zeron_rpc::{RpcReply, RpcService};
 
     fn composer_focus_window(
         cx: &mut gpui::TestAppContext,
@@ -9150,6 +9747,415 @@ mod tests {
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
         (dir, window)
+    }
+
+    struct DraftTestRpc {
+        drafts: Mutex<HashMap<String, ComposerDraft>>,
+        submissions: Mutex<Vec<DraftSubmission>>,
+        saves: Mutex<Vec<ComposerDraft>>,
+        settlements: Mutex<Vec<(String, String)>>,
+        fail_saves: AtomicBool,
+        read_started: Mutex<Option<oneshot::Sender<()>>>,
+        read_release: Mutex<Option<oneshot::Receiver<()>>>,
+    }
+
+    impl DraftTestRpc {
+        fn new(drafts: Vec<ComposerDraft>) -> Self {
+            Self {
+                drafts: Mutex::new(
+                    drafts
+                        .into_iter()
+                        .map(|draft| (draft.draft_id.clone(), draft))
+                        .collect(),
+                ),
+                submissions: Mutex::new(Vec::new()),
+                saves: Mutex::new(Vec::new()),
+                settlements: Mutex::new(Vec::new()),
+                fail_saves: AtomicBool::new(false),
+                read_started: Mutex::new(None),
+                read_release: Mutex::new(None),
+            }
+        }
+
+        fn delayed(
+            drafts: Vec<ComposerDraft>,
+        ) -> (Arc<Self>, oneshot::Receiver<()>, oneshot::Sender<()>) {
+            let (started_tx, started_rx) = oneshot::channel();
+            let (release_tx, release_rx) = oneshot::channel();
+            let service = Arc::new(Self::new(drafts));
+            *service.read_started.lock().unwrap() = Some(started_tx);
+            *service.read_release.lock().unwrap() = Some(release_rx);
+            (service, started_rx, release_tx)
+        }
+    }
+
+    #[async_trait]
+    impl RpcService for DraftTestRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            match method {
+                methods::GET_COMPOSER_DRAFT => {
+                    if let Some(started) = self.read_started.lock().unwrap().take() {
+                        let _ = started.send(());
+                    }
+                    let release = self.read_release.lock().unwrap().take();
+                    if let Some(release) = release {
+                        let _ = release.await;
+                    }
+                    let task_id = params.get("taskId").and_then(|value| value.as_str());
+                    let draft_id = params.get("draftId").and_then(|value| value.as_str());
+                    let draft = self
+                        .drafts
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .find(|draft| {
+                            task_id.is_some_and(|task_id| draft.task_id.as_deref() == Some(task_id))
+                                || draft_id.is_some_and(|draft_id| draft.draft_id == draft_id)
+                        })
+                        .cloned();
+                    let submissions = self
+                        .submissions
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|submission| submission.task_id.as_deref() == task_id)
+                        .cloned()
+                        .collect();
+                    RpcReply::value(&zeron_proto::ComposerDraftRead { draft, submissions })
+                }
+                methods::SAVE_COMPOSER_DRAFT => {
+                    if self.fail_saves.load(Ordering::SeqCst) {
+                        return Err(RpcError::Failed("synthetic save failure".into()));
+                    }
+                    let draft: ComposerDraft = serde_json::from_value(
+                        params
+                            .get("draft")
+                            .cloned()
+                            .ok_or_else(|| RpcError::BadParams("missing draft".into()))?,
+                    )
+                    .map_err(|error| RpcError::BadParams(error.to_string()))?;
+                    let outcome = {
+                        let mut drafts = self.drafts.lock().unwrap();
+                        match drafts.get(&draft.draft_id) {
+                            Some(current) if current.revision > draft.revision => {
+                                ComposerDraftSaveOutcome::Stale {
+                                    current_revision: current.revision,
+                                }
+                            }
+                            Some(current) if current == &draft => {
+                                ComposerDraftSaveOutcome::Unchanged
+                            }
+                            _ => {
+                                drafts.insert(draft.draft_id.clone(), draft.clone());
+                                self.saves.lock().unwrap().push(draft);
+                                ComposerDraftSaveOutcome::Saved
+                            }
+                        }
+                    };
+                    RpcReply::value(&outcome)
+                }
+                methods::SETTLE_DRAFT_SUBMISSION => {
+                    let command = params["commandId"].as_str().unwrap().to_string();
+                    let outcome = params["outcome"].as_str().unwrap().to_string();
+                    self.settlements
+                        .lock()
+                        .unwrap()
+                        .push((command.clone(), outcome));
+                    self.submissions
+                        .lock()
+                        .unwrap()
+                        .retain(|submission| submission.command_id != command);
+                    RpcReply::value(&serde_json::json!({ "ok": true }))
+                }
+                methods::READ_ATTACHMENT_CHUNK => RpcReply::value(&serde_json::json!({
+                    "name":"recovered.png",
+                    "mimeType":"image/png",
+                    "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                    "nextOffset":68,
+                    "done":true
+                })),
+                methods::GET_TASK_COMMAND_RECEIPT => {
+                    RpcReply::value(&Option::<zeron_proto::CommandReceipt>::None)
+                }
+                other => Err(RpcError::UnknownMethod(other.into())),
+            }
+        }
+    }
+
+    fn test_draft(task_id: &str, revision: u64, text: &str) -> ComposerDraft {
+        ComposerDraft {
+            version: zeron_proto::COMPOSER_DRAFT_VERSION,
+            draft_id: task_id.into(),
+            task_id: Some(task_id.into()),
+            revision,
+            text: text.into(),
+            attachments: Vec::new(),
+            appshots: Vec::new(),
+            context: DraftContext::default(),
+            execution: serde_json::Value::Null,
+            updated_at_ms: revision as i64,
+        }
+    }
+
+    fn composer_with_draft_rpc(
+        cx: &mut gpui::TestAppContext,
+        task_id: &str,
+        service: Arc<DraftTestRpc>,
+    ) -> (Entity<AppState>, Entity<Composer>) {
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zeron_rpc::memory_client(service),
+            ));
+            state.selected_chat = Some(task_id.into());
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        (state, composer)
+    }
+
+    fn pump_until(
+        cx: &mut gpui::TestAppContext,
+        runtime: &tokio::runtime::Runtime,
+        mut done: impl FnMut(&gpui::TestAppContext) -> bool,
+    ) {
+        for _ in 0..100 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            if done(cx) {
+                return;
+            }
+        }
+        assert!(done(cx), "async fixture did not reach its expected state");
+    }
+
+    #[gpui::test]
+    fn delayed_high_revision_load_merges_typing_and_saves_above_both(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let (service, started, release) =
+            DraftTestRpc::delayed(vec![test_draft("task-race", 50, "durable text")]);
+        let (_state, composer) = composer_with_draft_rpc(cx, "task-race", service.clone());
+        cx.run_until_parked();
+        runtime
+            .block_on(tokio::time::timeout(Duration::from_secs(2), started))
+            .expect("draft read started")
+            .expect("draft read signal");
+
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("typed while loading".into(), cx);
+            composer.mark_draft_dirty(cx);
+        });
+        release.send(()).unwrap();
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| {
+                composer.draft_saved_revisions.get("task-race").copied() == Some(51)
+            })
+        });
+
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(
+                composer.input.read(cx).text(),
+                "durable text\n\ntyped while loading"
+            );
+            assert_eq!(composer.draft_revisions["task-race"], 51);
+            assert_eq!(composer.draft_saved_revisions["task-race"], 51);
+        });
+        let saves = service.saves.lock().unwrap();
+        assert_eq!(saves.last().unwrap().revision, 51);
+        assert_eq!(
+            saves.last().unwrap().text,
+            "durable text\n\ntyped while loading"
+        );
+    }
+
+    #[gpui::test]
+    fn engine_generation_change_discards_an_old_profile_load(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let (old_service, started, release) =
+            DraftTestRpc::delayed(vec![test_draft("shared-task", 9, "old profile")]);
+        let (state, composer) = composer_with_draft_rpc(cx, "shared-task", old_service.clone());
+        cx.run_until_parked();
+        runtime
+            .block_on(tokio::time::timeout(Duration::from_secs(2), started))
+            .expect("old profile read started")
+            .expect("old profile read signal");
+        composer.update(cx, |composer, _| {
+            composer.queue_edit_draft = Some(("old private queue edit".into(), vec![], vec![]));
+            composer.editing_queued = Some("old-queue-row".into());
+            composer.failure = Some("old profile warning".into());
+            composer.failure_key = Some("shared-task".into());
+        });
+
+        let new_service = Arc::new(DraftTestRpc::new(vec![test_draft(
+            "shared-task",
+            3,
+            "new profile",
+        )]));
+        state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zeron_rpc::memory_client(new_service.clone()),
+            ));
+        });
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        release.send(()).unwrap();
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, cx| {
+                composer.input.read(cx).text() == "new profile"
+            })
+        });
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(composer.input.read(cx).text(), "new profile");
+            assert_eq!(composer.draft_saved_revisions["shared-task"], 3);
+            assert!(composer.queue_edit_draft.is_none());
+            assert!(composer.editing_queued.is_none());
+            assert!(composer.failure.is_none());
+        });
+        assert!(old_service.saves.lock().unwrap().is_empty());
+    }
+
+    #[gpui::test]
+    fn close_flushes_dirty_drafts_from_both_sides_of_navigation(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let service = Arc::new(DraftTestRpc::new(Vec::new()));
+        let (state, composer) = composer_with_draft_rpc(cx, "task-a", service.clone());
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("draft A".into(), cx);
+            composer.mark_draft_dirty(cx);
+        });
+        state.update(cx, |state, _| state.selected_chat = Some("task-b".into()));
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("draft B".into(), cx);
+            composer.mark_draft_dirty(cx);
+            assert!(!composer.prepare_close(cx));
+        });
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_flush_complete())
+        });
+
+        let drafts = service.drafts.lock().unwrap();
+        assert_eq!(drafts["task-a"].text, "draft A");
+        assert_eq!(drafts["task-b"].text, "draft B");
+    }
+
+    #[gpui::test]
+    fn failed_save_keeps_orderly_close_blocked(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let service = Arc::new(DraftTestRpc::new(Vec::new()));
+        service.fail_saves.store(true, Ordering::SeqCst);
+        let (_state, composer) = composer_with_draft_rpc(cx, "task-fail", service);
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("must not be lost".into(), cx);
+            composer.mark_draft_dirty(cx);
+            assert!(!composer.prepare_close(cx));
+        });
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_close_failed)
+        });
+        composer.read_with(cx, |composer, _| {
+            assert!(!composer.draft_flush_complete());
+            assert!(
+                composer
+                    .failure
+                    .as_deref()
+                    .is_some_and(|message| message.contains("still in this window"))
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn recovery_action_merges_older_text_and_attachment_into_newer_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let service = Arc::new(DraftTestRpc::new(vec![test_draft(
+            "task-recover",
+            20,
+            "newer draft",
+        )]));
+        let mut snapshot = test_draft("older-snapshot", 10, "older unsent");
+        snapshot.task_id = Some("task-recover".into());
+        snapshot.attachments.push(DraftBlob {
+            attachment_id: "recovered-image".into(),
+            name: "recovered.png".into(),
+            path: Some("/synthetic/recovered.png".into()),
+            sha256: None,
+            size: Some(68),
+            state: DraftBlobState::Saved,
+            error: None,
+        });
+        service.submissions.lock().unwrap().push(DraftSubmission {
+            command_id: "recover-command".into(),
+            state: DraftSubmissionState::Recoverable,
+            snapshot,
+            task_id: Some("task-recover".into()),
+            queue_id: None,
+            updated_at_ms: 10,
+        });
+        let (_state, composer) = composer_with_draft_rpc(cx, "task-recover", service.clone());
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| {
+                composer
+                    .recoverable_submissions
+                    .get("task-recover")
+                    .is_some_and(|entries| !entries.is_empty())
+            })
+        });
+        composer.update(cx, |composer, cx| composer.recover_latest_submission(cx));
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| {
+                !composer
+                    .recoverable_submissions
+                    .contains_key("task-recover")
+            })
+        });
+
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(
+                composer.input.read(cx).text(),
+                "newer draft\n\nolder unsent"
+            );
+            assert_eq!(composer.attachments["task-recover"].len(), 1);
+            assert!(
+                !composer
+                    .recoverable_submissions
+                    .contains_key("task-recover")
+            );
+        });
+        assert_eq!(
+            service.settlements.lock().unwrap().as_slice(),
+            &[("recover-command".into(), "recovered".into())]
+        );
+        let saved = service.saves.lock().unwrap();
+        let saved = saved.last().unwrap();
+        assert_eq!(saved.text, "newer draft\n\nolder unsent");
+        assert_eq!(saved.attachments.len(), 1);
     }
 
     #[gpui::test]
@@ -10877,5 +11883,38 @@ impl Composer {
     pub fn fixture_clear_appshots(&mut self, cx: &mut Context<Self>) {
         self.appshots.clear();
         cx.notify();
+    }
+
+    /// Seed the real persistence path with neutral fixture-only images. This
+    /// is used by the isolated L08 native QA app; it never reads a user file.
+    pub fn fixture_stage_draft_evidence(&mut self, cx: &mut Context<Self>) {
+        use base64::Engine as _;
+
+        let png = base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .expect("fixture PNG");
+        let (attachment, _) = appshots::stage_appshot_png("fixture-attachment", png.clone())
+            .expect("fixture attachment");
+        let (screenshot, dimensions) =
+            appshots::stage_appshot_png("fixture-appshot", png).expect("fixture appshot");
+        self.add_staged(vec![attachment], cx);
+        self.stage_appshot(
+            CapturedAppshot {
+                id: "l08-native-appshot".into(),
+                app_name: "Synthetic Fixture".into(),
+                bundle_identifier: Some("test.luna.drafts-fixture".into()),
+                window_title: Some("L08 isolated native QA".into()),
+                accessibility: appshots::AccessibilitySnapshot {
+                    format_version: 1,
+                    content: "Synthetic fixture context; no live screen data.".into(),
+                    truncated: false,
+                },
+                screenshot,
+                screenshot_dimensions: Some(dimensions),
+                app_icon: None,
+                captured_at: chrono::Utc::now(),
+            },
+            cx,
+        );
     }
 }
