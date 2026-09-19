@@ -34,8 +34,9 @@ pub struct QueuedMessage {
     /// files that only exist on the device that typed it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
-    /// Do not automatically steer this row into a live turn. The row remains
-    /// visible until turn end or an explicit Steer now / Send now action.
+    /// Do not automatically steer this row into a live turn. Queue intent may
+    /// release at terminal Done; Steer intent remains visible until an
+    /// explicit Steer now / Send now action.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hold_for_turn_end: bool,
     /// The behavior chosen when this row was submitted. This is immutable
@@ -71,9 +72,9 @@ pub struct QueuedMessage {
     pub delivery_gate: Option<QueueDeliveryGate>,
 }
 
-/// Why a queued row is not currently eligible for automatic or explicit
-/// delivery. Kept on the row so moves preserve it and deleting the row cannot
-/// leave an orphaned lease behind.
+/// Why the requested delivery path remains held. Explicit Send now can
+/// override a hold reason, but not a delivery gate. Kept on the row so moves
+/// preserve it and deleting the row cannot leave an orphaned lease behind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",

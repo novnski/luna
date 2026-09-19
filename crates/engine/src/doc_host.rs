@@ -4408,6 +4408,14 @@ impl DocHost {
             // replayed merely because the provider is currently idle.
             return;
         }
+        if head.follow_up_behavior != zeron_proto::FollowUpBehavior::Queue {
+            // Follow-up intent is immutable. A rejected or otherwise blocked
+            // Steer remains the FIFO head until the user explicitly retries,
+            // removes, or sends it; edits preserve that intent. Terminal Done
+            // and later document notifications must never downgrade it into
+            // a fresh turn.
+            return;
+        }
         let send = QueueSend::NextTurn;
         let command_id = format!(
             "queue-dispatch:{}:{}:{}",

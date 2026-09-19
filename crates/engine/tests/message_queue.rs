@@ -2,10 +2,9 @@
 //! is busy, and how it eventually reaches the agent.
 //!
 //! The policy under test (`DocHost::drain_queue`):
-//! - idle agent → the queue drains immediately, in order;
-//! - busy agent that only takes input at a turn boundary → the queue HOLDS,
-//!   and flushes when the turn ends;
-//! - busy agent, including one that takes input mid-turn → held until turn end;
+//! - idle agent → Queue-intent rows drain immediately, in order;
+//! - busy agent → Queue-intent rows hold until terminal Done;
+//! - Steer-intent rows never become fresh turns through automatic drain;
 //! - "send now" → interrupts whatever is running.
 
 use std::sync::{Arc, Mutex};
@@ -31,6 +30,13 @@ use zeron_proto::{
 
 const CHAT: &str = "chat-queue";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HarnessSteerOutcome {
+    Incorporated,
+    Accepted,
+    Rejected,
+}
+
 /// A turn that does not end until the test says so, so "the agent is busy" is
 /// a state the test controls rather than races.
 struct HeldHarness {
@@ -43,36 +49,58 @@ struct HeldHarness {
     asks: bool,
     /// Use the same input bridge with typed approval metadata.
     approves: bool,
-    incorporates_steers: bool,
+    steer_outcome: HarnessSteerOutcome,
     persistent_after_done: bool,
 }
 
 impl HeldHarness {
     fn new(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, false, false, true, false)
+        Self::build(
+            steering,
+            false,
+            false,
+            HarnessSteerOutcome::Incorporated,
+            false,
+        )
     }
 
     fn asking(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, true, false, true, false)
+        Self::build(
+            steering,
+            true,
+            false,
+            HarnessSteerOutcome::Incorporated,
+            false,
+        )
     }
 
     fn approving(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, true, true, true, false)
+        Self::build(
+            steering,
+            true,
+            true,
+            HarnessSteerOutcome::Incorporated,
+            false,
+        )
     }
 
     fn accepted_only(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, false, false, false, false)
+        Self::build(steering, false, false, HarnessSteerOutcome::Accepted, false)
     }
 
     fn accepted_only_persistent(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, false, false, false, true)
+        Self::build(steering, false, false, HarnessSteerOutcome::Accepted, true)
+    }
+
+    fn rejecting(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
+        Self::build(steering, false, false, HarnessSteerOutcome::Rejected, false)
     }
 
     fn build(
         steering: SteeringMode,
         asks: bool,
         approves: bool,
-        incorporates_steers: bool,
+        steer_outcome: HarnessSteerOutcome,
         persistent_after_done: bool,
     ) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
         let (finish, _) = tokio::sync::broadcast::channel(16);
@@ -85,7 +113,7 @@ impl HeldHarness {
                 requests: Mutex::new(Vec::new()),
                 asks,
                 approves,
-                incorporates_steers,
+                steer_outcome,
                 persistent_after_done,
             }),
             prompts,
@@ -144,7 +172,7 @@ impl Harness for HeldHarness {
         }
         let finish = self.finish.subscribe();
         let steering = controls.steering;
-        let incorporates_steers = self.incorporates_steers;
+        let steer_outcome = self.steer_outcome;
         let persistent_after_done = self.persistent_after_done;
         let started = futures::stream::iter(vec![
             Ok(AgentEvent::SessionStarted {
@@ -188,9 +216,20 @@ impl Harness for HeldHarness {
                         match steer {
                             Some(mut steer) => {
                                 if let Some(tx) = steer.acceptance.take() {
-                                    let _ = tx.send(zeron_harness::SteerAcceptance::Accepted);
+                                    let acceptance = match steer_outcome {
+                                        HarnessSteerOutcome::Incorporated
+                                        | HarnessSteerOutcome::Accepted => {
+                                            zeron_harness::SteerAcceptance::Accepted
+                                        }
+                                        HarnessSteerOutcome::Rejected => {
+                                            zeron_harness::SteerAcceptance::Rejected(
+                                                "synthetic provider rejection".into(),
+                                            )
+                                        }
+                                    };
+                                    let _ = tx.send(acceptance);
                                 }
-                                let event = if incorporates_steers
+                                let event = if steer_outcome == HarnessSteerOutcome::Incorporated
                                     || steer.delivery == zeron_harness::SteerDelivery::AllowFollowUpTurn
                                 {
                                     AgentEvent::Steered {
@@ -237,6 +276,32 @@ fn queue_texts(core: &EngineCore) -> Vec<String> {
         .into_iter()
         .map(|item| item.text)
         .collect()
+}
+
+async fn enqueue_follow_up(client: &zeron_rpc::RpcClient, text: &str, behavior: &str) -> String {
+    let reply = client
+        .call(
+            zeron_rpc::methods::QUEUE_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT,
+                "text": text,
+                "holdForTurnEnd": true,
+                "followUpBehavior": behavior,
+            }),
+        )
+        .await
+        .expect("queue follow-up");
+    reply["id"].as_str().expect("queue id").to_string()
+}
+
+fn held_for(core: &EngineCore, id: &str, reason: zeron_doc::QueueHoldReason) -> bool {
+    core.doc_host
+        .queued_message(CHAT, id)
+        .ok()
+        .flatten()
+        .is_some_and(|row| {
+            matches!(row.status, QueueMessageStatus::Held) && row.hold_reason == Some(reason)
+        })
 }
 
 fn user_messages(core: &EngineCore) -> Vec<String> {
@@ -1047,6 +1112,198 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_steer_never_auto_drains_but_explicit_send_and_queue_still_work() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().join("data");
+    let (harness, prompts) = HeldHarness::rejecting(SteeringMode::StepBoundary);
+    let core = assemble_at(&data_dir, harness.clone());
+    create_chat(&core).await;
+    let client = zeron_rpc::memory_client(core.rpc_service());
+
+    core.doc_host
+        .queue_message(CHAT, "opening", Vec::new())
+        .expect("queue opening");
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|prompt| prompt == "opening")
+        },
+        "the opening turn to start",
+    )
+    .await;
+
+    let rejected_id = enqueue_follow_up(&client, "rejected steer remains held", "steer").await;
+    wait_for(
+        || {
+            held_for(
+                &core,
+                &rejected_id,
+                zeron_doc::QueueHoldReason::ProviderRejected,
+            )
+        },
+        "the provider-rejected steer to return to Held",
+    )
+    .await;
+    let queued_id = enqueue_follow_up(&client, "ordinary queue behind steer", "queue").await;
+
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "the rejected steer's owning turn to finish",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        queue_texts(&core),
+        vec!["rejected steer remains held", "ordinary queue behind steer"],
+        "a held Steer stays at the FIFO head after terminal Done"
+    );
+    assert_eq!(
+        prompts.lock().unwrap().as_slice(),
+        &["opening".to_string()],
+        "terminal Done must not downgrade rejected Steer into NextTurn"
+    );
+
+    core.doc_host
+        .update_queued_message(CHAT, &queued_id, "ordinary queue after doc notification")
+        .expect("update queued follower");
+    core.doc_host
+        .drain_queue(&core.doc_host.open(CHAT).unwrap())
+        .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        prompts.lock().unwrap().as_slice(),
+        &["opening".to_string()],
+        "later document and explicit drain notifications must not replay Steer"
+    );
+
+    assert!(
+        core.doc_host
+            .send_queued_now(CHAT, &rejected_id)
+            .await
+            .expect("explicit Send now remains authorized")
+    );
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p == "rejected steer remains held")
+        },
+        "the explicitly authorized Steer row to start once",
+    )
+    .await;
+    assert_eq!(
+        queue_texts(&core),
+        vec!["ordinary queue after doc notification"],
+        "explicit Send now selects only the Steer head"
+    );
+
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p == "ordinary queue after doc notification")
+        },
+        "the ordinary Queue row to auto-drain at terminal Done",
+    )
+    .await;
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &queued_id)
+                .ok()
+                .flatten()
+                .is_none()
+        },
+        "the ordinary Queue row to settle",
+    )
+    .await;
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "the ordinary Queue turn to finish",
+    )
+    .await;
+
+    core.doc_host
+        .queue_message(CHAT, "restart opening", Vec::new())
+        .expect("queue restart opening");
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p == "restart opening")
+        },
+        "the restart-check turn to start",
+    )
+    .await;
+    let persisted_id = enqueue_follow_up(&client, "rejected steer survives restart", "steer").await;
+    wait_for(
+        || {
+            held_for(
+                &core,
+                &persisted_id,
+                zeron_doc::QueueHoldReason::ProviderRejected,
+            )
+        },
+        "the restart-check steer to be rejected",
+    )
+    .await;
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "the restart-check owning turn to finish",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|prompt| prompt == "rejected steer survives restart")
+    );
+
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(core);
+
+    let (restarted_harness, restarted_prompts) = HeldHarness::rejecting(SteeringMode::StepBoundary);
+    let restarted = assemble_at(&data_dir, restarted_harness);
+    let row = restarted
+        .doc_host
+        .queued_message(CHAT, &persisted_id)
+        .unwrap()
+        .expect("rejected Steer survives restart");
+    assert_eq!(row.follow_up_behavior, zeron_proto::FollowUpBehavior::Steer);
+    assert!(matches!(row.status, QueueMessageStatus::Held));
+    assert_eq!(
+        row.hold_reason,
+        Some(zeron_doc::QueueHoldReason::ProviderRejected)
+    );
+    restarted
+        .doc_host
+        .drain_queue(&restarted.doc_host.open(CHAT).unwrap())
+        .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        restarted_prompts.lock().unwrap().is_empty(),
+        "startup and explicit drain notifications must not replay rejected Steer"
+    );
+    restarted.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn persistent_done_releases_unconfirmed_steer_for_authorized_next_send() {
     let tmp = tempfile::tempdir().unwrap();
     let (harness, prompts) = HeldHarness::accepted_only_persistent(SteeringMode::StepBoundary);
@@ -1201,7 +1458,18 @@ async fn steer_now_leaves_the_row_when_the_agent_cannot_steer_mid_turn() {
         Some(zeron_doc::QueueHoldReason::SteeringUnavailable)
     );
 
-    let _ = harness.finish.send(());
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "the unsupported Steer's owning turn to finish",
+    )
+    .await;
+    core.doc_host
+        .drain_queue(&core.doc_host.open(CHAT).unwrap())
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(queue_texts(&core), vec!["still queued"]);
+    assert!(!prompts.lock().unwrap().iter().any(|p| p == "still queued"));
     core.shutdown().await;
 }
 
@@ -1266,7 +1534,8 @@ async fn stale_steer_remains_queued_when_the_previous_turn_is_already_idle() {
 }
 
 /// Attachments never steer: the steer path carries a prompt and nothing else,
-/// so a message with files waits for a turn that can inline them.
+/// so the immutable Steer row waits for an explicit authorized send that can
+/// inline them rather than silently becoming a fresh turn at terminal Done.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_message_with_attachments_holds_even_for_a_steerable_agent() {
     let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
@@ -1320,14 +1589,36 @@ async fn a_message_with_attachments_holds_even_for_a_steerable_agent() {
         "a held attachment row must not appear in the transcript before dispatch"
     );
 
-    let _ = harness.finish.send(());
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "the attachment Steer's owning turn to finish",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(queue_texts(&core), vec!["with a file"]);
+    assert!(
+        !prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains("with a file")),
+        "terminal Done must not downgrade attachment Steer into NextTurn"
+    );
+
+    assert!(
+        core.doc_host
+            .send_queued_now(CHAT, attachment_id)
+            .await
+            .expect("explicit Send now remains available")
+    );
     wait_for(
         || {
             prompts.lock().unwrap().iter().any(|p| {
                 p == "with a file\n\nAttached images (local files — open them to view):\n- att-1"
             })
         },
-        "the held message to flush at turn end",
+        "the explicitly authorized attachment row to dispatch",
     )
     .await;
     assert!(
@@ -1770,7 +2061,15 @@ async fn a_message_holds_while_the_agent_waits_on_a_question() {
         Some(zeron_doc::QueueHoldReason::AwaitingInput)
     );
 
-    let _ = harness.finish.send(());
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "the question turn to finish",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(queue_texts(&core), vec!["follow-up"]);
+    assert!(!prompts.lock().unwrap().iter().any(|p| p == "follow-up"));
     core.shutdown().await;
 }
 
@@ -1819,7 +2118,21 @@ async fn a_steer_request_stays_queued_while_approval_is_pending() {
             .any(|prompt| prompt == "after approval")
     );
 
-    let _ = harness.finish.send(());
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "the approval turn to finish",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(queue_texts(&core), vec!["after approval"]);
+    assert!(
+        !prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|prompt| prompt == "after approval")
+    );
     core.shutdown().await;
 }
 
