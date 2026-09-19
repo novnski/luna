@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs::OpenOptions, io::Write as _};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -33,8 +34,10 @@ const PNG_B64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 struct L09FixtureHarness {
-    hold: Duration,
+    safety_deadline: Duration,
     steer_outcome: FixtureSteerOutcome,
+    control_path: PathBuf,
+    trace_path: PathBuf,
 }
 
 #[derive(Clone, Copy)]
@@ -43,6 +46,96 @@ enum FixtureSteerOutcome {
     Accepted,
     Rejected,
     Unknown,
+}
+
+impl FixtureSteerOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Incorporated => "incorporated",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum FixtureControlAction {
+    Tool,
+    Done,
+}
+
+impl FixtureControlAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Tool => "tool",
+            Self::Done => "done",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureControlCommand {
+    sequence: u64,
+    action: FixtureControlAction,
+}
+
+struct FixtureLifecycleControl {
+    command_path: PathBuf,
+    trace_path: PathBuf,
+    last_sequence: u64,
+}
+
+impl FixtureLifecycleControl {
+    fn new(command_path: PathBuf, trace_path: PathBuf) -> Self {
+        let last_sequence = read_control_command(&command_path)
+            .map(|command| command.sequence)
+            .unwrap_or_default();
+        Self {
+            command_path,
+            trace_path,
+            last_sequence,
+        }
+    }
+
+    fn poll(&mut self) -> Option<FixtureControlCommand> {
+        let command = read_control_command(&self.command_path)?;
+        if command.sequence <= self.last_sequence {
+            return None;
+        }
+        self.last_sequence = command.sequence;
+        Some(command)
+    }
+
+    fn trace(&self, run_id: &str, event: &str, detail: serde_json::Value) {
+        let Some(parent) = self.trace_path.parent() else {
+            return;
+        };
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.trace_path)
+        else {
+            return;
+        };
+        let line = serde_json::json!({
+            "atMs": chrono::Utc::now().timestamp_millis(),
+            "runId": run_id,
+            "event": event,
+            "detail": detail,
+        });
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn read_control_command(path: &Path) -> Option<FixtureControlCommand> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 fn fixture_steer_outcome() -> FixtureSteerOutcome {
@@ -101,11 +194,23 @@ impl Harness for L09FixtureHarness {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
-        let hold = self.hold;
+        let safety_deadline = self.safety_deadline;
         let steer_outcome = self.steer_outcome;
+        let control_path = self.control_path.clone();
+        let trace_path = self.trace_path.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             let session_id = format!("l09-qa-{}", uuid::Uuid::new_v4());
+            let mut lifecycle = FixtureLifecycleControl::new(control_path, trace_path);
+            lifecycle.trace(
+                &session_id,
+                "runStarted",
+                serde_json::json!({
+                    "baselineSequence": lifecycle.last_sequence,
+                    "steerOutcome": steer_outcome.as_str(),
+                    "safetyDeadlineMs": safety_deadline.as_millis(),
+                }),
+            );
             let mut assistant_message_id = format!("l09-qa-assistant-{}", uuid::Uuid::new_v4());
             let _ = tx.send(Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
@@ -118,29 +223,86 @@ impl Harness for L09FixtureHarness {
             let _ = tx.send(Ok(AgentEvent::TextDelta {
                 text: "L09 isolated synthetic turn accepted. No provider was contacted.".into(),
             }));
-            let _ = tx.send(Ok(AgentEvent::ToolCall {
-                id: "l09-qa-tool".into(),
-                call: ToolCall::Exec {
-                    command: "synthetic-fixture-check".into(),
-                },
-            }));
-            let _ = tx.send(Ok(AgentEvent::ToolResult {
-                id: "l09-qa-tool".into(),
-                is_error: false,
-                output: Some("synthetic tool boundary complete".into()),
-                diff: None,
-            }));
             let interrupt = controls.interrupt;
             let mut steering = controls.steering;
-            let deadline = tokio::time::sleep(hold);
+            let deadline = tokio::time::sleep(safety_deadline);
             tokio::pin!(deadline);
+            let mut control_poll = tokio::time::interval(Duration::from_millis(100));
             let mut steering_open = true;
+            let mut tool_emitted = false;
             let status = loop {
                 tokio::select! {
-                    _ = interrupt.cancelled() => break DoneStatus::Interrupted,
-                    _ = &mut deadline => break DoneStatus::Completed,
+                    _ = interrupt.cancelled() => {
+                        lifecycle.trace(&session_id, "interrupted", serde_json::json!({}));
+                        break DoneStatus::Interrupted;
+                    }
+                    _ = &mut deadline => {
+                        lifecycle.trace(&session_id, "safetyDeadline", serde_json::json!({}));
+                        break DoneStatus::Completed;
+                    }
+                    _ = control_poll.tick() => {
+                        let Some(command) = lifecycle.poll() else {
+                            continue;
+                        };
+                        match command.action {
+                            FixtureControlAction::Tool if !tool_emitted => {
+                                tool_emitted = true;
+                                lifecycle.trace(
+                                    &session_id,
+                                    "controlApplied",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "action": command.action.as_str(),
+                                    }),
+                                );
+                                let _ = tx.send(Ok(AgentEvent::ToolCall {
+                                    id: "l09-qa-tool".into(),
+                                    call: ToolCall::Exec {
+                                        command: "synthetic-fixture-check".into(),
+                                    },
+                                }));
+                                let _ = tx.send(Ok(AgentEvent::ToolResult {
+                                    id: "l09-qa-tool".into(),
+                                    is_error: false,
+                                    output: Some("synthetic tool boundary complete".into()),
+                                    diff: None,
+                                }));
+                            }
+                            FixtureControlAction::Tool => {
+                                lifecycle.trace(
+                                    &session_id,
+                                    "controlIgnored",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "action": command.action.as_str(),
+                                        "reason": "toolAlreadyEmitted",
+                                    }),
+                                );
+                            }
+                            FixtureControlAction::Done => {
+                                lifecycle.trace(
+                                    &session_id,
+                                    "controlApplied",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "action": command.action.as_str(),
+                                    }),
+                                );
+                                break DoneStatus::Completed;
+                            }
+                        }
+                    }
                     steer = steering.recv(), if steering_open => match steer {
                         Some(steer) => {
+                            lifecycle.trace(
+                                &session_id,
+                                "steerReceived",
+                                serde_json::json!({
+                                    "messageId": steer.message_id,
+                                    "delivery": format!("{:?}", steer.delivery),
+                                    "outcome": steer_outcome.as_str(),
+                                }),
+                            );
                             match steer_outcome {
                                 FixtureSteerOutcome::Incorporated => {
                                     if let Some(acceptance) = steer.acceptance {
@@ -191,6 +353,11 @@ impl Harness for L09FixtureHarness {
                     }
                 }
             };
+            lifecycle.trace(
+                &session_id,
+                "doneEmitted",
+                serde_json::json!({ "status": format!("{status:?}") }),
+            );
             let _ = tx.send(Ok(AgentEvent::Done {
                 status,
                 result: None,
@@ -205,13 +372,14 @@ impl Harness for L09FixtureHarness {
     }
 }
 
-fn fixture_hold() -> Duration {
+fn fixture_safety_deadline() -> Duration {
     Duration::from_millis(
-        std::env::var("L09_QA_MOCK_HOLD_MS")
+        std::env::var("L09_QA_SAFETY_MS")
+            .or_else(|_| std::env::var("L09_QA_MOCK_HOLD_MS"))
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(8_000)
-            .clamp(1_000, 30_000),
+            .unwrap_or(600_000)
+            .clamp(5_000, 900_000),
     )
 }
 
@@ -437,8 +605,10 @@ fn main() -> anyhow::Result<()> {
     accounts.disable_claude_keychain_fallback()?;
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(L09FixtureHarness {
-        hold: fixture_hold(),
+        safety_deadline: fixture_safety_deadline(),
         steer_outcome: fixture_steer_outcome(),
+        control_path: root.join("l09-fixture-control.json"),
+        trace_path: root.join("l09-fixture-control-trace.jsonl"),
     }));
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
@@ -505,7 +675,7 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx| {
             gpui_tokio::init(cx);
             gpui_base::init(cx);
-            let settings = settings::UiSettings::default();
+            let settings = settings::UiSettings::load(&ui_data);
             settings::init(settings.clone(), ui_data.clone(), cx);
             let fonts = typography::register_fonts(cx);
             typography::init(
@@ -592,4 +762,173 @@ fn main() -> anyhow::Result<()> {
         });
     runtime.block_on(core.shutdown());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_control(path: &Path, sequence: u64, action: &str) {
+        std::fs::write(
+            path,
+            serde_json::json!({ "sequence": sequence, "action": action }).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fixture_startup_loads_saved_settings_and_fresh_roots_default() {
+        let fresh = tempfile::tempdir().unwrap();
+        assert_eq!(
+            settings::UiSettings::load(fresh.path()).follow_up_behavior,
+            zeron_proto::FollowUpBehavior::Queue
+        );
+
+        let persisted = tempfile::tempdir().unwrap();
+        let mut saved = settings::UiSettings::default();
+        saved.follow_up_behavior = zeron_proto::FollowUpBehavior::Steer;
+        std::fs::write(
+            persisted.path().join("ui-settings.json"),
+            serde_json::to_vec_pretty(&saved).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings::UiSettings::load(persisted.path()).follow_up_behavior,
+            zeron_proto::FollowUpBehavior::Steer
+        );
+    }
+
+    #[test]
+    fn fixture_control_ignores_baseline_and_consumes_each_sequence_once() {
+        let root = tempfile::tempdir().unwrap();
+        let command = root.path().join("control.json");
+        let trace = root.path().join("trace.jsonl");
+        write_control(&command, 7, "tool");
+        let mut lifecycle = FixtureLifecycleControl::new(command.clone(), trace);
+        assert!(
+            lifecycle.poll().is_none(),
+            "baseline command must not replay"
+        );
+
+        write_control(&command, 8, "tool");
+        let tool = lifecycle.poll().expect("new tool command");
+        assert_eq!(tool.sequence, 8);
+        assert_eq!(tool.action, FixtureControlAction::Tool);
+        assert!(lifecycle.poll().is_none(), "same sequence is once-only");
+
+        write_control(&command, 9, "done");
+        let done = lifecycle.poll().expect("new done command");
+        assert_eq!(done.sequence, 9);
+        assert_eq!(done.action, FixtureControlAction::Done);
+        assert!(lifecycle.poll().is_none(), "done cannot replay");
+    }
+
+    #[tokio::test]
+    async fn fixture_control_drives_one_tool_boundary_then_done_without_eof() {
+        let root = tempfile::tempdir().unwrap();
+        let command = root.path().join("control.json");
+        let trace = root.path().join("trace.jsonl");
+        write_control(&command, 1, "done");
+        let harness = L09FixtureHarness {
+            safety_deadline: Duration::from_secs(5),
+            steer_outcome: FixtureSteerOutcome::Incorporated,
+            control_path: command.clone(),
+            trace_path: trace.clone(),
+        };
+        let (steering_tx, steering_rx) = tokio::sync::mpsc::channel(1);
+        let controls = RunControls {
+            request_input: Box::new(|_| {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let _ = tx.send(Vec::new());
+                rx
+            }),
+            steering: steering_rx,
+            interrupt: zeron_harness::CancellationToken::new(),
+        };
+        let request = RunRequest {
+            prompt: "fixture control test".into(),
+            harness: Some(HarnessId::Mock),
+            provider_account_id: None,
+            model: Some("mock-1".into()),
+            reasoning: None,
+            model_options: serde_json::Map::new(),
+            cwd: root.path().display().to_string(),
+            sandbox: SandboxLevel::WorkspaceWrite,
+            auto_approve: false,
+            permission_mode: PermissionMode::Ask,
+            parent_permission_ceiling: None,
+            environment_permission_ceiling: None,
+            permission_policy: None,
+            resume: None,
+            attachments: Vec::new(),
+            worktree: None,
+        };
+        let mut stream = harness.run(request, controls).await.unwrap();
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            AgentEvent::SessionStarted { .. }
+        ));
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            AgentEvent::TextDelta { .. }
+        ));
+
+        write_control(&command, 2, "tool");
+        let tool = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                let event = event.unwrap();
+                let complete = matches!(event, AgentEvent::ToolResult { .. });
+                events.push(event);
+                if complete {
+                    break;
+                }
+            }
+            events
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            tool.iter()
+                .filter(|event| matches!(event, AgentEvent::ToolCall { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            tool.iter()
+                .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+                .count(),
+            1
+        );
+
+        write_control(&command, 3, "tool");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        write_control(&command, 4, "done");
+        drop(steering_tx);
+        let tail = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                events.push(event.unwrap());
+            }
+            events
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            tail.iter()
+                .filter(|event| matches!(event, AgentEvent::ToolCall { .. }))
+                .count(),
+            0,
+            "the second tool command is once-only ignored"
+        );
+        assert_eq!(
+            tail.iter()
+                .filter(|event| matches!(event, AgentEvent::Done { .. }))
+                .count(),
+            1
+        );
+        let trace = std::fs::read_to_string(trace).unwrap();
+        assert!(trace.contains("toolAlreadyEmitted"));
+        assert_eq!(trace.matches("doneEmitted").count(), 1);
+    }
 }
