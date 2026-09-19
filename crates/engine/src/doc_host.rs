@@ -30,8 +30,9 @@ use tokio_util::task::TaskTracker;
 
 use zeron_doc::{
     COMMAND_DEFAULT_TTL_MS, CommandBasedOn, CommandDisposition, DocError, EvaluationContext,
-    MessagePart, MessageRole, MessageStatus, QueueDeliveryGate, QueuedMessage, SessionCommandEntry,
-    SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
+    MessagePart, MessageRole, MessageStatus, QueueClaimMode, QueueClaimOutcome, QueueDeliveryGate,
+    QueueMessageStatus, QueuedMessage, SessionCommandEntry, SessionCommandPayload,
+    SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
     join_continuation_entries,
 };
 use zeron_proto::{
@@ -440,6 +441,7 @@ pub enum BeginQueueEditOutcome {
         text: String,
         attachments: Vec<String>,
         base_text_hash: String,
+        revision: u64,
         expires_at_ms: i64,
     },
     Locked {
@@ -447,6 +449,9 @@ pub enum BeginQueueEditOutcome {
         expires_at_ms: i64,
     },
     Missing,
+    Claimed {
+        command_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -481,7 +486,27 @@ pub enum FinishQueueEditOutcome {
     Discarded,
     Released,
     Conflict { current_text: String },
+    RevisionConflict { current_revision: u64 },
+    Claimed { command_id: String },
     Lost,
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueueMutationOutcome {
+    Applied,
+    Duplicate,
+    RevisionConflict(QueuedMessage),
+    Claimed(QueuedMessage),
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueueDispatchOutcome {
+    Started,
+    AlreadyClaimed(QueuedMessage),
+    RevisionConflict(QueuedMessage),
+    Blocked(QueuedMessage),
     Missing,
 }
 
@@ -940,6 +965,18 @@ impl DocHost {
             binding_generation,
         )?;
         for receipt in &receipts {
+            if matches!(
+                receipt.intent.as_str(),
+                "sendQueuedNow" | "steerQueuedNow" | "dispatchQueued"
+            ) && let Some(message_id) = receipt.correlation_id.as_deref()
+                && let Ok(handle) = self.open(task_id)
+                && handle
+                    .doc
+                    .settle_queued_claim(message_id, &receipt.command_id)?
+            {
+                handle.publish_queue();
+                self.save_snapshot(&handle);
+            }
             self.publish_task_receipt(receipt.clone());
         }
         Ok(receipts)
@@ -1012,6 +1049,27 @@ impl DocHost {
         for handle in handles {
             handle.queue_paused.store(true, Ordering::Release);
         }
+    }
+
+    /// Acceptance-time stop fence. The durable interrupt command may execute
+    /// on the session-doc worker a moment later; setting this under the same
+    /// drain lock prevents an already-accepted Stop from losing to a late
+    /// upload/drain/send-now callback in that window. Returns the prior pause
+    /// state so a local storage rejection can restore it.
+    pub async fn fence_queue_for_stop(&self, chat_id: &str) -> Result<bool, EngineError> {
+        let handle = self.open(chat_id)?;
+        let _drain = handle.drain_lock.lock().await;
+        Ok(handle.queue_paused.swap(true, Ordering::AcqRel))
+    }
+
+    pub fn restore_queue_pause_after_failed_stop(
+        &self,
+        chat_id: &str,
+        was_paused: bool,
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        handle.queue_paused.store(was_paused, Ordering::Release);
+        Ok(())
     }
 
     /// Test-only retirement sentinel: reports true once the doc-host graph
@@ -1387,6 +1445,59 @@ impl DocHost {
                 doc.doc()
                     .import(&bytes)
                     .map_err(|e| EngineError::Other(e.to_string()))?;
+            }
+        }
+        // Reconcile crash windows before publishing the recovered queue. A
+        // terminal applied receipt proves provider acceptance for this exact
+        // claim and may finish removing it. Every unresolved/missing receipt
+        // stays visible as DeliveryUnknown; startup never replays it.
+        let queue_reconcile_frontier = doc.doc().oplog_vv();
+        let mut reconciled_queue_claim = false;
+        for item in doc.read_queue().unwrap_or_default() {
+            let command_id = match &item.status {
+                QueueMessageStatus::Claimed { command_id, .. }
+                | QueueMessageStatus::DeliveryUnknown { command_id, .. } => command_id,
+                QueueMessageStatus::Held => continue,
+            };
+            match self.inner.store.task_command_receipt(command_id)? {
+                Some(receipt)
+                    if receipt.status == CommandReceiptStatus::Applied
+                        && matches!(
+                            receipt.intent.as_str(),
+                            "sendQueuedNow" | "steerQueuedNow" | "dispatchQueued"
+                        )
+                        && receipt.correlation_id.as_deref() == Some(item.id.as_str()) =>
+                {
+                    reconciled_queue_claim |= doc.settle_queued_claim(&item.id, command_id)?;
+                }
+                receipt => {
+                    reconciled_queue_claim |=
+                        doc.mark_queued_claim_unknown(&item.id, command_id, now_ms())?;
+                    if receipt
+                        .is_some_and(|receipt| receipt.status == CommandReceiptStatus::Pending)
+                    {
+                        let _ = self.mark_task_command_unknown(
+                            command_id,
+                            "engine restarted with an unresolved queue claim; reconcile provider state before retry",
+                        );
+                    }
+                }
+            }
+        }
+        if reconciled_queue_claim && let Ok(snapshot) = doc.export_snapshot() {
+            self.inner.store.save_snapshot(chat_id, &snapshot)?;
+            if room_gen >= 2 && self.inner.store.chat_outbox_initialized(chat_id)? {
+                let update = doc
+                    .doc()
+                    .export(loro::ExportMode::updates(&queue_reconcile_frontier))
+                    .map_err(|error| EngineError::Other(error.to_string()))?;
+                if !update.is_empty() {
+                    self.inner.store.enqueue_chat_update(
+                        chat_id,
+                        &format!("queue-reconcile-{}", uuid::Uuid::new_v4()),
+                        &update,
+                    )?;
+                }
             }
         }
         let doc = Arc::new(doc);
@@ -2654,23 +2765,127 @@ impl DocHost {
         attachments: Vec<String>,
         hold_for_turn_end: bool,
     ) -> Result<String, EngineError> {
-        let handle = self.open(chat_id)?;
         let id = new_id();
+        self.queue_message_with_id_and_execution(
+            chat_id,
+            &id,
+            text,
+            attachments,
+            hold_for_turn_end,
+            None,
+        )?;
+        Ok(id)
+    }
+
+    /// L09 authoritative enqueue. `message_id` is also the stable queue row
+    /// identity, so an L07 retry after response loss cannot append twice.
+    pub fn queue_message_with_id_and_execution(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+        text: &str,
+        attachments: Vec<String>,
+        hold_for_turn_end: bool,
+        execution: Option<zeron_proto::ChatConfig>,
+    ) -> Result<bool, EngineError> {
+        let handle = self.open(chat_id)?;
+        if let Some(existing) = handle
+            .doc
+            .read_queue()?
+            .into_iter()
+            .find(|item| item.id == message_id)
+        {
+            return Ok(existing.text == text
+                && existing.attachments == attachments
+                && existing.hold_for_turn_end == hold_for_turn_end
+                && existing.execution == execution);
+        }
         handle.doc.push_queued(&QueuedMessage {
-            id: id.clone(),
+            id: message_id.to_string(),
             text: text.to_string(),
             attachments,
             hold_for_turn_end,
             issued_by: self.inner.config.device_id.clone(),
             issued_at: now_ms(),
             edited_at: None,
+            revision: 1,
+            execution,
+            status: QueueMessageStatus::Held,
             delivery_gate: None,
         })?;
         handle.publish_queue();
+        self.save_snapshot(&handle);
         // Same reasoning as a command: the user is acting in this chat again.
         self.unarchive_on_send(chat_id);
         self.nudge_remote_host(chat_id);
-        Ok(id)
+        Ok(true)
+    }
+
+    pub async fn enqueue_queued_message(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+        text: &str,
+        attachments: Vec<String>,
+        hold_for_turn_end: bool,
+        execution: Option<zeron_proto::ChatConfig>,
+    ) -> Result<QueueMutationOutcome, EngineError> {
+        if !self.is_host(chat_id) {
+            return Err(EngineError::Other(format!(
+                "device {} does not host chat {chat_id}",
+                self.inner.config.device_id
+            )));
+        }
+        let handle = self.open(chat_id)?;
+        let _drain = handle.drain_lock.lock().await;
+        if let Some(existing) = handle
+            .doc
+            .read_queue()?
+            .into_iter()
+            .find(|item| item.id == message_id)
+        {
+            return Ok(
+                if existing.text == text
+                    && existing.attachments == attachments
+                    && existing.hold_for_turn_end == hold_for_turn_end
+                    && existing.execution == execution
+                {
+                    QueueMutationOutcome::Duplicate
+                } else {
+                    QueueMutationOutcome::RevisionConflict(existing)
+                },
+            );
+        }
+        handle.doc.push_queued(&QueuedMessage {
+            id: message_id.to_string(),
+            text: text.to_string(),
+            attachments,
+            hold_for_turn_end,
+            issued_by: self.inner.config.device_id.clone(),
+            issued_at: now_ms(),
+            edited_at: None,
+            revision: 1,
+            execution,
+            status: QueueMessageStatus::Held,
+            delivery_gate: None,
+        })?;
+        handle.publish_queue();
+        self.save_snapshot(&handle);
+        self.unarchive_on_send(chat_id);
+        Ok(QueueMutationOutcome::Applied)
+    }
+
+    pub fn queued_message(
+        &self,
+        chat_id: &str,
+        id: &str,
+    ) -> Result<Option<QueuedMessage>, EngineError> {
+        Ok(self
+            .open(chat_id)?
+            .doc
+            .read_queue()?
+            .into_iter()
+            .find(|item| item.id == id))
     }
 
     /// Retype a queued message. Empty text deletes the row — emptying the box
@@ -2727,6 +2942,42 @@ impl DocHost {
         Ok(removed)
     }
 
+    pub async fn remove_queued_message_at_revision(
+        &self,
+        chat_id: &str,
+        id: &str,
+        expected_revision: u64,
+    ) -> Result<QueueMutationOutcome, EngineError> {
+        if !self.is_host(chat_id) {
+            return Err(EngineError::Other(format!(
+                "device {} does not host chat {chat_id}",
+                self.inner.config.device_id
+            )));
+        }
+        let handle = self.open(chat_id)?;
+        let _drain = handle.drain_lock.lock().await;
+        let Some(item) = handle
+            .doc
+            .read_queue()?
+            .into_iter()
+            .find(|item| item.id == id)
+        else {
+            return Ok(QueueMutationOutcome::Missing);
+        };
+        if !matches!(item.status, QueueMessageStatus::Held) {
+            return Ok(QueueMutationOutcome::Claimed(item));
+        }
+        if item.revision != expected_revision {
+            return Ok(QueueMutationOutcome::RevisionConflict(item));
+        }
+        if !handle.doc.remove_queued(id)? {
+            return Ok(QueueMutationOutcome::Missing);
+        }
+        handle.publish_queue();
+        self.save_snapshot(&handle);
+        Ok(QueueMutationOutcome::Applied)
+    }
+
     /// Acquire the host-side right to edit one queued row. This operation and
     /// every queue take share `drain_lock`, making the ACK the linearization
     /// point: after Acquired the row cannot race into the agent.
@@ -2754,6 +3005,15 @@ impl DocHost {
         else {
             return Ok(BeginQueueEditOutcome::Missing);
         };
+        match &item.status {
+            QueueMessageStatus::Held => {}
+            QueueMessageStatus::Claimed { command_id, .. }
+            | QueueMessageStatus::DeliveryUnknown { command_id, .. } => {
+                return Ok(BeginQueueEditOutcome::Claimed {
+                    command_id: command_id.clone(),
+                });
+            }
+        }
         if let Some(QueueDeliveryGate::Editing {
             owner_device_id,
             expires_at_ms,
@@ -2791,6 +3051,7 @@ impl DocHost {
             text: item.text,
             attachments: item.attachments,
             base_text_hash,
+            revision: item.revision,
             expires_at_ms,
         })
     }
@@ -2902,6 +3163,31 @@ impl DocHost {
         expected_text_hash: Option<&str>,
         attachments: Option<&[String]>,
     ) -> Result<FinishQueueEditOutcome, EngineError> {
+        self.finish_queued_message_edit_with_attachments_at_revision(
+            chat_id,
+            id,
+            lease_id,
+            action,
+            text,
+            expected_text_hash,
+            attachments,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finish_queued_message_edit_with_attachments_at_revision(
+        &self,
+        chat_id: &str,
+        id: &str,
+        lease_id: &str,
+        action: FinishQueueEditAction,
+        text: Option<&str>,
+        expected_text_hash: Option<&str>,
+        attachments: Option<&[String]>,
+        expected_revision: Option<u64>,
+    ) -> Result<FinishQueueEditOutcome, EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(format!(
                 "device {} does not host chat {chat_id}",
@@ -2926,6 +3212,18 @@ impl DocHost {
             else {
                 return Ok(FinishQueueEditOutcome::Missing);
             };
+            if let QueueMessageStatus::Claimed { command_id, .. }
+            | QueueMessageStatus::DeliveryUnknown { command_id, .. } = &item.status
+            {
+                return Ok(FinishQueueEditOutcome::Claimed {
+                    command_id: command_id.clone(),
+                });
+            }
+            if expected_revision.is_some_and(|revision| revision != item.revision) {
+                return Ok(FinishQueueEditOutcome::RevisionConflict {
+                    current_revision: item.revision,
+                });
+            }
             let (current_lease, base_text_hash) = match &item.delivery_gate {
                 Some(QueueDeliveryGate::Editing {
                     lease_id,
@@ -3123,6 +3421,143 @@ impl DocHost {
         Ok(true)
     }
 
+    /// L09 claim-first explicit delivery. The claimed row stays in the
+    /// durable queue projection until `confirm_task_command_correlation`
+    /// observes the matching provider message/turn. A replay that finds its
+    /// own claim never calls the provider again.
+    pub async fn send_queued_now_with_claim(
+        &self,
+        chat_id: &str,
+        id: &str,
+        expected_revision: u64,
+        command_id: &str,
+        expected_turn_id: Option<&str>,
+    ) -> Result<QueueDispatchOutcome, EngineError> {
+        self.dispatch_queued_with_claim(
+            chat_id,
+            id,
+            expected_revision,
+            command_id,
+            QueueClaimMode::SendNow,
+            QueueSend::Interrupt,
+            expected_turn_id,
+        )
+        .await
+    }
+
+    pub async fn steer_queued_now_with_claim(
+        &self,
+        chat_id: &str,
+        id: &str,
+        expected_revision: u64,
+        command_id: &str,
+        expected_turn_id: Option<&str>,
+    ) -> Result<QueueDispatchOutcome, EngineError> {
+        self.dispatch_queued_with_claim(
+            chat_id,
+            id,
+            expected_revision,
+            command_id,
+            QueueClaimMode::SteerNow,
+            QueueSend::Steer,
+            expected_turn_id,
+        )
+        .await
+    }
+
+    async fn dispatch_queued_with_claim(
+        &self,
+        chat_id: &str,
+        id: &str,
+        expected_revision: u64,
+        command_id: &str,
+        mode: QueueClaimMode,
+        send: QueueSend,
+        expected_turn_id: Option<&str>,
+    ) -> Result<QueueDispatchOutcome, EngineError> {
+        if !self.is_host(chat_id) {
+            return Err(EngineError::Other(format!(
+                "device {} does not host chat {chat_id}",
+                self.inner.config.device_id
+            )));
+        }
+        let handle = self.open(chat_id)?;
+        let _drain = handle.drain_lock.lock().await;
+        if expected_turn_id.is_some() && handle.queue_paused.load(Ordering::Acquire) {
+            let item = handle
+                .doc
+                .read_queue()?
+                .into_iter()
+                .find(|item| item.id == id);
+            return Ok(item
+                .map(QueueDispatchOutcome::Blocked)
+                .unwrap_or(QueueDispatchOutcome::Missing));
+        }
+        if let Some(expected_turn_id) = expected_turn_id {
+            let Some(sessions) = self.sessions() else {
+                return Err(EngineError::Other("sessions engine not wired".into()));
+            };
+            if sessions.active_turn_id(chat_id).as_deref() != Some(expected_turn_id) {
+                let item = handle
+                    .doc
+                    .read_queue()?
+                    .into_iter()
+                    .find(|item| item.id == id);
+                return Ok(item
+                    .map(QueueDispatchOutcome::Blocked)
+                    .unwrap_or(QueueDispatchOutcome::Missing));
+            }
+        }
+        if self.request_from_chat_row(chat_id, "").is_none()
+            && self
+                .sessions()
+                .and_then(|sessions| sessions.last_request(chat_id))
+                .is_none()
+        {
+            return Err(EngineError::Other(
+                "no live run and no prior run config".into(),
+            ));
+        }
+        let claim = handle
+            .doc
+            .claim_queued(id, expected_revision, command_id, mode, now_ms())?;
+        let item = match claim {
+            QueueClaimOutcome::Claimed(item) => item,
+            QueueClaimOutcome::AlreadyClaimed(item) => {
+                if handle
+                    .doc
+                    .mark_queued_claim_unknown(id, command_id, now_ms())?
+                {
+                    handle.publish_queue();
+                    self.save_snapshot(&handle);
+                }
+                return Ok(QueueDispatchOutcome::AlreadyClaimed(item));
+            }
+            QueueClaimOutcome::RevisionConflict(item) => {
+                return Ok(QueueDispatchOutcome::RevisionConflict(item));
+            }
+            QueueClaimOutcome::Blocked(item) => {
+                return Ok(QueueDispatchOutcome::Blocked(item));
+            }
+            QueueClaimOutcome::Missing => return Ok(QueueDispatchOutcome::Missing),
+        };
+        handle.publish_queue();
+        self.save_snapshot(&handle);
+        let was_paused = handle.queue_paused.swap(false, Ordering::AcqRel);
+        if let Err(error) = self.dispatch_queued(&handle, &item, send).await {
+            if was_paused {
+                handle.queue_paused.store(true, Ordering::Release);
+            }
+            let _ = handle
+                .doc
+                .mark_queued_claim_unknown(id, command_id, now_ms());
+            handle.publish_queue();
+            self.save_snapshot(&handle);
+            return Err(error);
+        }
+        Ok(QueueDispatchOutcome::Started)
+    }
+
     /// Promote one held row without ever interrupting a turn. A live,
     /// steerable turn receives it as steering; if that turn has already ended,
     /// it starts normally as the next turn. Unsupported harnesses and
@@ -3139,11 +3574,6 @@ impl DocHost {
         let Some(sessions) = self.sessions() else {
             return Err(EngineError::Other("sessions engine not wired".into()));
         };
-        if !sessions.steers_mid_turn(self.harness_for(chat_id)) {
-            return Err(EngineError::Other(
-                "the selected agent cannot accept mid-turn steering".into(),
-            ));
-        }
         let Some(candidate) = handle
             .doc
             .read_queue()?
@@ -3152,6 +3582,16 @@ impl DocHost {
         else {
             return Ok(false);
         };
+        let harness = candidate
+            .execution
+            .as_ref()
+            .map(|execution| execution.harness)
+            .unwrap_or_else(|| self.harness_for(chat_id));
+        if !sessions.steers_mid_turn(harness) {
+            return Err(EngineError::Other(
+                "the selected agent cannot accept mid-turn steering".into(),
+            ));
+        }
         if !candidate.attachments.is_empty() {
             return Err(EngineError::Other(
                 "messages with attachments cannot be steered mid-turn".into(),
@@ -3184,7 +3624,7 @@ impl DocHost {
     /// Host-only: hand queued messages to the agent when there is somewhere to
     /// put them.
     ///
-    /// - Idle: send the head as the next turn (and loop — the agent is free).
+    /// - Idle: claim and send the head as the next turn.
     /// - Turn in flight: hold. The turn-end watcher comes back for it.
     ///
     /// One at a time by design: each send changes the status this reads.
@@ -3202,62 +3642,185 @@ impl DocHost {
         if handle.queue_paused.load(Ordering::Acquire) {
             return;
         }
-        loop {
-            let Ok(Some(head)) = handle.doc.read_queue().map(|q| q.into_iter().next()) else {
+        let Ok(Some(head)) = handle.doc.read_queue().map(|q| q.into_iter().next()) else {
+            return;
+        };
+        match &head.delivery_gate {
+            Some(QueueDeliveryGate::Editing {
+                lease_id,
+                owner_device_id,
+                expires_at_ms,
+                base_text_hash,
+                ..
+            }) if *expires_at_ms <= now_ms() => {
+                let review = QueueDeliveryGate::ReviewRequired {
+                    previous_lease_id: lease_id.clone(),
+                    owner_device_id: owner_device_id.clone(),
+                    since_ms: now_ms(),
+                    base_text_hash: base_text_hash.clone(),
+                };
+                let _ = handle.doc.set_queued_delivery_gate(&head.id, Some(&review));
+                handle.publish_queue();
+                self.save_snapshot(handle);
                 return;
-            };
-            match &head.delivery_gate {
-                Some(QueueDeliveryGate::Editing {
-                    lease_id,
-                    owner_device_id,
-                    expires_at_ms,
-                    base_text_hash,
-                    ..
-                }) if *expires_at_ms <= now_ms() => {
-                    let review = QueueDeliveryGate::ReviewRequired {
-                        previous_lease_id: lease_id.clone(),
-                        owner_device_id: owner_device_id.clone(),
-                        since_ms: now_ms(),
-                        base_text_hash: base_text_hash.clone(),
-                    };
-                    let _ = handle.doc.set_queued_delivery_gate(&head.id, Some(&review));
+            }
+            Some(QueueDeliveryGate::Editing {
+                lease_id,
+                expires_at_ms,
+                ..
+            }) => {
+                self.arm_queue_edit_expiry(handle, &head.id, lease_id, *expires_at_ms);
+                return;
+            }
+            Some(QueueDeliveryGate::ReviewRequired { .. }) => return,
+            None => {}
+        }
+        // In flight, not just Working: an agent parked on a question owns
+        // the turn too, and the composer queues on the same reading. Taking
+        // `AwaitingInput` for idle would send the follow-up as a fresh turn
+        // and abandon the question.
+        if sessions.turn_in_flight(&handle.chat_id) {
+            return; // All queued messages wait, including rows from older clients.
+        }
+        if self.request_from_chat_row(&handle.chat_id, "").is_none()
+            && sessions.last_request(&handle.chat_id).is_none()
+        {
+            handle.queue_paused.store(true, Ordering::Release);
+            return;
+        }
+        if !matches!(head.status, QueueMessageStatus::Held) {
+            // Claimed/unknown work survives restart visibly and is never
+            // replayed merely because the provider is currently idle.
+            return;
+        }
+        let send = QueueSend::NextTurn;
+        let command_id = format!(
+            "queue-dispatch:{}:{}:{}",
+            handle.chat_id, head.id, head.revision
+        );
+        let now = now_ms();
+        let snapshot = match self.task_command_snapshot(&handle.chat_id) {
+            Ok(read) => read.snapshot,
+            Err(error) => {
+                tracing::warn!(chat = %handle.chat_id, %error, "queue receipt snapshot failed");
+                return;
+            }
+        };
+        let pending = CommandReceipt {
+            command_id: command_id.clone(),
+            task_id: handle.chat_id.clone(),
+            intent: "dispatchQueued".into(),
+            payload_hash: format!(
+                "{:x}",
+                Sha256::digest(format!("{}:{}:{}", head.id, head.revision, head.text).as_bytes())
+            ),
+            status: CommandReceiptStatus::Pending,
+            snapshot: snapshot.clone(),
+            event_sequence: None,
+            actor_id: self.inner.config.device_id.clone(),
+            client_id: "queue-drain".into(),
+            client_session_id: "engine".into(),
+            execution_environment: Some(self.inner.config.device_id.clone()),
+            correlation_id: None,
+            reason: None,
+            recovery_action: None,
+            accepted_at_ms: now,
+            committed_at_ms: None,
+            observed_at_ms: now,
+        };
+        let begin = match self.begin_task_command(pending, None, None, None) {
+            Ok(begin) => begin,
+            Err(error) => {
+                tracing::warn!(chat = %handle.chat_id, %error, "queue receipt acceptance failed");
+                return;
+            }
+        };
+        match begin.kind {
+            zeron_sync::TaskCommandBeginKind::Accepted => {}
+            zeron_sync::TaskCommandBeginKind::Duplicate
+                if begin.receipt.status == CommandReceiptStatus::Applied =>
+            {
+                if handle
+                    .doc
+                    .settle_queued_claim(&head.id, &command_id)
+                    .unwrap_or(false)
+                {
                     handle.publish_queue();
                     self.save_snapshot(handle);
-                    return;
                 }
-                Some(QueueDeliveryGate::Editing {
-                    lease_id,
-                    expires_at_ms,
-                    ..
-                }) => {
-                    self.arm_queue_edit_expiry(handle, &head.id, lease_id, *expires_at_ms);
-                    return;
-                }
-                Some(QueueDeliveryGate::ReviewRequired { .. }) => return,
-                None => {}
-            }
-            // In flight, not just Working: an agent parked on a question owns
-            // the turn too, and the composer queues on the same reading. Taking
-            // `AwaitingInput` for idle would send the follow-up as a fresh turn
-            // and abandon the question.
-            if sessions.turn_in_flight(&handle.chat_id) {
-                return; // All queued messages wait, including rows from older clients.
-            }
-            let send = QueueSend::NextTurn;
-            // Take it only once we know it is going out — a row that stays in
-            // the queue on a failed send is recoverable; a vanished one is not.
-            let Ok(Some(item)) = handle.doc.take_queued(&head.id) else {
                 return;
-            };
-            handle.publish_queue();
-            if let Err(err) = self.dispatch_queued(handle, &item, send).await {
-                tracing::warn!(chat = %handle.chat_id, error = %err, "queued send failed");
-                handle.queue_paused.store(true, Ordering::Release);
-                let _ = handle.doc.insert_queued(0, &item);
+            }
+            zeron_sync::TaskCommandBeginKind::Duplicate => {
+                let _ = handle.doc.claim_queued(
+                    &head.id,
+                    head.revision,
+                    &command_id,
+                    QueueClaimMode::NextTurn,
+                    now,
+                );
+                let _ = handle
+                    .doc
+                    .mark_queued_claim_unknown(&head.id, &command_id, now);
                 handle.publish_queue();
+                self.save_snapshot(handle);
+                let _ = self.mark_task_command_unknown(
+                    &command_id,
+                    "engine restarted after queue claim; reconcile provider state before retry",
+                );
                 return;
             }
+            zeron_sync::TaskCommandBeginKind::Conflict => return,
         }
+        self.publish_task_receipt(begin.receipt);
+        let _ = self.set_task_command_correlation(&command_id, &head.id);
+        let item = match handle.doc.claim_queued(
+            &head.id,
+            head.revision,
+            &command_id,
+            QueueClaimMode::NextTurn,
+            now,
+        ) {
+            Ok(QueueClaimOutcome::Claimed(item)) => item,
+            Ok(_) => {
+                let _ = self.complete_task_command(
+                    &command_id,
+                    CommandReceiptStatus::Conflict,
+                    false,
+                    snapshot.binding_id.as_deref(),
+                    snapshot.binding_generation,
+                    snapshot.active_turn_id.as_deref(),
+                    Some(CommandReceiptReason {
+                        code: CommandReasonCode::OperationRejected,
+                        message: "queued message changed before dispatch claim".into(),
+                    }),
+                    Some("Reload the durable queue before choosing another action."),
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(chat = %handle.chat_id, %error, "queue claim failed");
+                return;
+            }
+        };
+        handle.publish_queue();
+        self.save_snapshot(handle);
+        if let Err(err) = self.dispatch_queued(handle, &item, send).await {
+            tracing::warn!(chat = %handle.chat_id, error = %err, "queued send failed");
+            handle.queue_paused.store(true, Ordering::Release);
+            let _ = handle
+                .doc
+                .mark_queued_claim_unknown(&head.id, &command_id, now_ms());
+            handle.publish_queue();
+            self.save_snapshot(handle);
+            let _ = self.mark_task_command_unknown(
+                &command_id,
+                "provider dispatch returned without a provable acceptance result",
+            );
+            return;
+        }
+        // The matching SessionStarted/Steered event removes this exact
+        // claimed row and finalizes the pending receipt. Until then no
+        // second queue row may drain behind an unconfirmed provider call.
     }
 
     /// Stop the active turn without treating the resulting Idle transition as
@@ -3335,6 +3898,15 @@ impl DocHost {
                 "no live run and no prior run config".into(),
             ));
         };
+        if let Some(execution) = &item.execution {
+            request.harness = Some(execution.harness);
+            request.provider_account_id = execution.provider_account_id.clone();
+            request.model = execution.model.clone();
+            request.reasoning = execution.reasoning;
+            request.model_options = execution.model_options.clone();
+            request.sandbox = execution.sandbox;
+            request.permission_mode = execution.permission_mode;
+        }
         request.prompt = prompt;
         request.resume = None; // dispatch re-derives the harness session
         request.attachments = item.attachments.clone();
@@ -4749,6 +5321,11 @@ impl DocHost {
             issued_by: self.inner.config.device_id.clone(),
             issued_at: now_ms(),
             edited_at: None,
+            revision: 1,
+            execution: self
+                .workspace()
+                .and_then(|workspace| workspace.chat_config(chat_id)),
+            status: QueueMessageStatus::Held,
             delivery_gate: None,
         })?;
         handle.publish_queue();

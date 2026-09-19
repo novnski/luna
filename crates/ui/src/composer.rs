@@ -4094,6 +4094,8 @@ pub struct Composer {
     /// delivery. The text buffer is kept until Finish receives an ACK.
     pub(crate) queue_edit_lease_id: Option<String>,
     pub(crate) queue_edit_base_text_hash: Option<String>,
+    pub(crate) queue_edit_revision: Option<u64>,
+    pub(crate) queue_edit_command_id: Option<String>,
     pub(crate) queue_edit_chat_id: Option<String>,
     pub(crate) queue_edit_host_device_id: Option<String>,
     pub(crate) queue_edit_instance_id: String,
@@ -4398,6 +4400,8 @@ impl Composer {
             editing_queued: None,
             queue_edit_lease_id: None,
             queue_edit_base_text_hash: None,
+            queue_edit_revision: None,
+            queue_edit_command_id: None,
             queue_edit_chat_id: None,
             queue_edit_host_device_id: None,
             queue_edit_instance_id: uuid::Uuid::new_v4().to_string(),
@@ -5305,6 +5309,8 @@ impl Composer {
         self.editing_queued = None;
         self.queue_edit_lease_id = None;
         self.queue_edit_base_text_hash = None;
+        self.queue_edit_revision = None;
+        self.queue_edit_command_id = None;
         self.queue_edit_chat_id = None;
         self.queue_edit_host_device_id = None;
         self.queue_edit_pending_id = None;
@@ -5726,13 +5732,25 @@ impl Composer {
         }
         let receipt_key = command_id.clone();
         let map_key = command_id.clone();
+        let receipt_target = {
+            let state = self.state.read(cx);
+            state
+                .chats
+                .iter()
+                .find(|chat| chat.id == task_id)
+                .map(|chat| chat.device_id.clone())
+                .filter(|device| state.local_device_id.as_deref() != Some(device.as_str()))
+        };
         let task = cx.spawn(async move |this, cx| {
+            let mut stream_params = serde_json::json!({ "taskId": task_id.clone() });
+            let mut receipt_params = serde_json::json!({ "commandId": command_id.clone() });
+            if let Some(target) = receipt_target.as_deref() {
+                stream_params["targetDeviceId"] = target.into();
+                receipt_params["targetDeviceId"] = target.into();
+            }
             let Ok(mut stream) = engine
                 .client()
-                .subscribe(
-                    methods::WATCH_TASK_COMMANDS,
-                    serde_json::json!({ "taskId": task_id.clone() }),
-                )
+                .subscribe(methods::WATCH_TASK_COMMANDS, stream_params)
                 .await
             else {
                 return;
@@ -5741,7 +5759,7 @@ impl Composer {
                 .client()
                 .call_as::<Option<zeron_proto::CommandReceipt>>(
                     methods::GET_TASK_COMMAND_RECEIPT,
-                    serde_json::json!({ "commandId": command_id.clone() }),
+                    receipt_params,
                 )
                 .await
                 .ok()
@@ -5770,7 +5788,8 @@ impl Composer {
                 }
                 let applied = receipt.status == CommandReceiptStatus::Applied;
                 let outcome = if applied { "applied" } else { "recoverable" };
-                if crate::drafts::settle_submission(&engine, &command_id, outcome, None)
+                let queue_id = (receipt.intent == "queueMessage").then_some(command_id.as_str());
+                if crate::drafts::settle_submission(&engine, &command_id, outcome, queue_id)
                     .await
                     .is_err()
                 {
@@ -8033,32 +8052,39 @@ impl Composer {
                     } else {
                         queue_body.as_str()
                     };
-                    let params = serde_json::json!({
-                        "chatId": chat_id,
+                    let intent = serde_json::json!({
+                        "kind": "queueMessage",
+                        "messageId": message_id,
                         "text": queue_text,
                         "attachments": attachment_paths,
                         "holdForTurnEnd": true,
+                        "execution": resolved.chat_config(),
                     });
-                    let reply = engine.client().call(methods::QUEUE_MESSAGE, params).await.map_err(
-                        |error| match error {
-                            RpcError::Transport(_) | RpcError::Closed => {
-                                ComposerSendFailure::Unknown(format!(
-                                    "Queue acceptance is unknown: {error}"
-                                ))
-                            }
-                            _ => ComposerSendFailure::Rejected(format!("Send failed: {error}")),
-                        },
-                    )?;
-                    let queue_id = reply
-                        .get("id")
-                        .and_then(serde_json::Value::as_str)
-                        .filter(|id| !id.is_empty())
-                        .ok_or_else(|| {
-                            ComposerSendFailure::Unknown(
-                                "Queue acceptance is unknown: no id was returned".into(),
-                            )
-                        })?;
-                    return Ok(ComposerSendOutcome::Queued(queue_id.to_string()));
+                    let receipt = crate::task_commands::execute_receipt_on_with_id(
+                        &engine,
+                        &chat_id,
+                        host_device_id.as_deref(),
+                        message_id.clone(),
+                        intent,
+                    )
+                    .await
+                    .map_err(|error| {
+                        ComposerSendFailure::Unknown(format!(
+                            "Queue acceptance is unknown: {error}"
+                        ))
+                    })?;
+                    return match receipt.status {
+                        CommandReceiptStatus::Applied => {
+                            Ok(ComposerSendOutcome::Queued(message_id.clone()))
+                        }
+                        CommandReceiptStatus::Pending => Ok(ComposerSendOutcome::Pending),
+                        _ => Err(ComposerSendFailure::Rejected(
+                            receipt
+                                .reason
+                                .map(|reason| reason.message)
+                                .unwrap_or_else(|| "The queue rejected this message".into()),
+                        )),
+                    };
                 }
 
                 let command = SessionCommandPayload::Run {
@@ -8209,28 +8235,24 @@ impl Composer {
                                 .into(),
                         );
                         composer.failure_key = Some(err_chat_id.clone());
-                        if !queue {
-                            composer.watch_draft_receipt(
-                                err_message_id.clone(),
-                                err_chat_id.clone(),
-                                submitted_key.clone(),
-                                engine.clone(),
-                                cx,
-                            );
-                        }
+                        composer.watch_draft_receipt(
+                            err_message_id.clone(),
+                            err_chat_id.clone(),
+                            submitted_key.clone(),
+                            engine.clone(),
+                            cx,
+                        );
                     }
                     Err(ComposerSendFailure::Unknown(message)) => {
                         composer.failure = Some(message.clone().into());
                         composer.failure_key = Some(err_chat_id.clone());
-                        if !queue {
-                            composer.watch_draft_receipt(
-                                err_message_id.clone(),
-                                err_chat_id.clone(),
-                                submitted_key.clone(),
-                                engine.clone(),
-                                cx,
-                            );
-                        }
+                        composer.watch_draft_receipt(
+                            err_message_id.clone(),
+                            err_chat_id.clone(),
+                            submitted_key.clone(),
+                            engine.clone(),
+                            cx,
+                        );
                     }
                     _ => {}
                 }

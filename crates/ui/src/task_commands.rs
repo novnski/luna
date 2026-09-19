@@ -48,12 +48,23 @@ pub async fn execute_receipt_with_id(
     command_id: String,
     intent: serde_json::Value,
 ) -> Result<CommandReceipt, RpcError> {
+    execute_receipt_on_with_id(engine, task_id, None, command_id, intent).await
+}
+
+pub async fn execute_receipt_on_with_id(
+    engine: &EngineHandle,
+    task_id: &str,
+    target_device_id: Option<&str>,
+    command_id: String,
+    intent: serde_json::Value,
+) -> Result<CommandReceipt, RpcError> {
+    let mut snapshot_params = serde_json::json!({ "taskId": task_id });
+    if let Some(target) = target_device_id {
+        snapshot_params["targetDeviceId"] = target.into();
+    }
     let read: TaskCommandRead = engine
         .client()
-        .call_as(
-            methods::GET_TASK_COMMAND_SNAPSHOT,
-            serde_json::json!({ "taskId": task_id }),
-        )
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, snapshot_params)
         .await?;
     let session_kind = intent.get("kind").and_then(serde_json::Value::as_str);
     let control_kind = intent
@@ -78,7 +89,16 @@ pub async fn execute_receipt_with_id(
         )
     );
     let binding_fenced = session_kind == Some("session")
-        || matches!(session_kind, Some("sendQueuedNow" | "steerQueuedNow"))
+        || matches!(
+            session_kind,
+            Some(
+                "queueMessage"
+                    | "editQueuedMessage"
+                    | "removeQueuedMessage"
+                    | "sendQueuedNow"
+                    | "steerQueuedNow"
+            )
+        )
         || matches!(
             session_kind,
             Some(
@@ -110,6 +130,9 @@ pub async fn execute_receipt_with_id(
     if turn_fenced && let Some(turn_id) = read.snapshot.active_turn_id {
         params["expectedTurnId"] = turn_id.into();
     }
+    if let Some(target) = target_device_id {
+        params["targetDeviceId"] = target.into();
+    }
 
     // One bounded retry uses the exact same serialized envelope. If the first
     // reply was lost, readback returns its durable receipt and avoids replay.
@@ -120,7 +143,7 @@ pub async fn execute_receipt_with_id(
     let receipt = match first {
         Ok(receipt) => receipt,
         Err(first_error) => {
-            if let Some(receipt) = receipt(engine, &command_id).await? {
+            if let Some(receipt) = receipt(engine, target_device_id, &command_id).await? {
                 receipt
             } else {
                 match engine
@@ -129,7 +152,9 @@ pub async fn execute_receipt_with_id(
                     .await
                 {
                     Ok(receipt) => receipt,
-                    Err(_) => receipt(engine, &command_id).await?.ok_or(first_error)?,
+                    Err(_) => receipt(engine, target_device_id, &command_id)
+                        .await?
+                        .ok_or(first_error)?,
                 }
             }
         }
@@ -139,13 +164,15 @@ pub async fn execute_receipt_with_id(
 
 async fn receipt(
     engine: &EngineHandle,
+    target_device_id: Option<&str>,
     command_id: &str,
 ) -> Result<Option<CommandReceipt>, RpcError> {
+    let mut params = serde_json::json!({ "commandId": command_id });
+    if let Some(target) = target_device_id {
+        params["targetDeviceId"] = target.into();
+    }
     engine
         .client()
-        .call_as(
-            methods::GET_TASK_COMMAND_RECEIPT,
-            serde_json::json!({ "commandId": command_id }),
-        )
+        .call_as(methods::GET_TASK_COMMAND_RECEIPT, params)
         .await
 }

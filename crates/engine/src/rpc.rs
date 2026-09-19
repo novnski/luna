@@ -257,12 +257,42 @@ enum TaskCommandIntent {
         account_id: String,
     },
     #[serde(rename_all = "camelCase")]
+    QueueMessage {
+        message_id: String,
+        text: String,
+        #[serde(default)]
+        attachments: Vec<String>,
+        #[serde(default)]
+        hold_for_turn_end: bool,
+        #[serde(default)]
+        execution: Option<ChatConfig>,
+    },
+    #[serde(rename_all = "camelCase")]
+    EditQueuedMessage {
+        message_id: String,
+        expected_queue_revision: u64,
+        lease_id: String,
+        text: String,
+        expected_text_hash: String,
+        #[serde(default)]
+        attachments: Vec<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    RemoveQueuedMessage {
+        message_id: String,
+        expected_queue_revision: u64,
+    },
+    #[serde(rename_all = "camelCase")]
     SendQueuedNow {
         message_id: String,
+        #[serde(default)]
+        expected_queue_revision: Option<u64>,
     },
     #[serde(rename_all = "camelCase")]
     SteerQueuedNow {
         message_id: String,
+        #[serde(default)]
+        expected_queue_revision: Option<u64>,
     },
     #[serde(rename_all = "camelCase")]
     MarkSeen {
@@ -292,6 +322,9 @@ impl TaskCommandIntent {
             Self::SetConfig { .. } => "setConfig",
             Self::SetPermission { .. } => "setPermission",
             Self::SetProviderAccount { .. } => "setProviderAccount",
+            Self::QueueMessage { .. } => "queueMessage",
+            Self::EditQueuedMessage { .. } => "editQueuedMessage",
+            Self::RemoveQueuedMessage { .. } => "removeQueuedMessage",
             Self::SendQueuedNow { .. } => "sendQueuedNow",
             Self::SteerQueuedNow { .. } => "steerQueuedNow",
             Self::MarkSeen { .. } => "markSeen",
@@ -426,6 +459,10 @@ struct RelayCommandParams {
 #[serde(rename_all = "camelCase")]
 struct QueueMessageParams {
     chat_id: String,
+    #[serde(default)]
+    command_id: Option<String>,
+    #[serde(default)]
+    message_id: Option<String>,
     text: String,
     #[serde(default)]
     attachments: Vec<String>,
@@ -465,7 +502,7 @@ struct RenewQueuedMessageEditParams {
     lease_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum FinishQueuedMessageEditAction {
     Commit,
@@ -481,6 +518,10 @@ struct FinishQueuedMessageEditParams {
     id: String,
     lease_id: String,
     action: FinishQueuedMessageEditAction,
+    #[serde(default)]
+    command_id: Option<String>,
+    #[serde(default)]
+    expected_queue_revision: Option<u64>,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
@@ -1389,11 +1430,83 @@ impl EngineRpc {
             );
         }
 
+        if let TaskCommandIntent::SteerQueuedNow { message_id, .. } = &command.intent {
+            let Some(item) = self
+                .doc_host
+                .queued_message(&command.task_id, message_id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+            else {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Conflict,
+                    false,
+                    CommandReasonCode::QueueMissing,
+                    "the queued message no longer exists",
+                    "Reload the queue; do not create a replacement automatically.",
+                );
+            };
+            if item.delivery_gate.is_some()
+                || !matches!(item.status, zeron_doc::QueueMessageStatus::Held)
+            {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Conflict,
+                    false,
+                    CommandReasonCode::QueueClaimed,
+                    "the queued message is being edited, reviewed, or delivered",
+                    "Finish the current queue action and reload before retrying.",
+                );
+            }
+            let harness = item
+                .execution
+                .as_ref()
+                .map(|execution| execution.harness)
+                .unwrap_or_else(|| self.doc_host.harness_for(&command.task_id));
+            if !item.attachments.is_empty() || !self.sessions.steers_mid_turn(harness) {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Rejected,
+                    false,
+                    CommandReasonCode::UnsupportedOperation,
+                    "the selected agent cannot steer this queued message mid-turn",
+                    "Leave it queued or use Send now, which explicitly interrupts the turn.",
+                );
+            }
+        }
+        if let TaskCommandIntent::SendQueuedNow { .. } = &command.intent
+            && self
+                .doc_host
+                .request_from_chat_row(&command.task_id, "")
+                .is_none()
+            && self.sessions.last_request(&command.task_id).is_none()
+        {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Rejected,
+                false,
+                CommandReasonCode::OperationRejected,
+                "no durable execution configuration is available for this queued message",
+                "Restore the task execution settings before trying Send now again.",
+            );
+        }
+
         if let TaskCommandIntent::Session {
             command: mut payload,
             transfers,
         } = command.intent
         {
+            let stop_pause_before = if matches!(&payload, SessionCommandPayload::Interrupt {})
+                && command.expected_turn_id.is_some()
+            {
+                Some(
+                    self.doc_host
+                        .fence_queue_for_stop(&command.task_id)
+                        .await
+                        .map_err(|error| RpcError::Failed(error.to_string()))?,
+                )
+            } else {
+                None
+            };
             if let SessionCommandPayload::Steer { message_id, .. } = &mut payload
                 && message_id.is_none()
             {
@@ -1418,6 +1531,11 @@ impl EngineRpc {
                 payload,
                 transfers,
             ) {
+                if let Some(was_paused) = stop_pause_before {
+                    let _ = self
+                        .doc_host
+                        .restore_queue_pause_after_failed_stop(&command.task_id, was_paused);
+                }
                 return self.finish_task_command(
                     &command.command_id,
                     CommandReceiptStatus::Failed,
@@ -1442,10 +1560,14 @@ impl EngineRpc {
             && matches!(
                 command.intent,
                 TaskCommandIntent::Rename { .. } | TaskCommandIntent::SetArchived { .. }
+            )
+            || matches!(
+                command.intent,
+                TaskCommandIntent::SendQueuedNow { .. } | TaskCommandIntent::SteerQueuedNow { .. }
             );
         let provider_correlation = match &command.intent {
-            TaskCommandIntent::SendQueuedNow { message_id }
-            | TaskCommandIntent::SteerQueuedNow { message_id } => Some(message_id.clone()),
+            TaskCommandIntent::SendQueuedNow { message_id, .. }
+            | TaskCommandIntent::SteerQueuedNow { message_id, .. } => Some(message_id.clone()),
             _ => None,
         };
         if let Some(correlation) = provider_correlation.as_deref() {
@@ -1453,8 +1575,14 @@ impl EngineRpc {
                 .set_task_command_correlation(&command.command_id, correlation)
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
         }
+        let expected_turn_id = command.expected_turn_id.clone();
         let outcome = self
-            .apply_task_command_intent(&command.command_id, &command.task_id, command.intent)
+            .apply_task_command_intent(
+                &command.command_id,
+                &command.task_id,
+                command.intent,
+                expected_turn_id.as_deref(),
+            )
             .await;
         let outcome = match outcome {
             Ok(outcome) => outcome,
@@ -1593,6 +1721,7 @@ impl EngineRpc {
         command_id: &str,
         task_id: &str,
         intent: TaskCommandIntent,
+        expected_turn_id: Option<&str>,
     ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
         match intent {
             TaskCommandIntent::CreateChat {
@@ -1866,32 +1995,337 @@ impl EngineRpc {
                 drop(prepared);
                 Ok(Some(receipt))
             }
-            TaskCommandIntent::SendQueuedNow { message_id } => {
-                if self
+            TaskCommandIntent::QueueMessage {
+                message_id,
+                text,
+                attachments,
+                hold_for_turn_end,
+                execution,
+            } => {
+                use crate::doc_host::QueueMutationOutcome;
+                let outcome = self
                     .doc_host
-                    .send_queued_now(task_id, &message_id)
+                    .enqueue_queued_message(
+                        task_id,
+                        &message_id,
+                        &text,
+                        attachments,
+                        hold_for_turn_end,
+                        execution,
+                    )
+                    .await
+                    .map_err(TaskProjectionError::Mutation)?;
+                let (status, applied, code, message, recovery) = match outcome {
+                    QueueMutationOutcome::Applied | QueueMutationOutcome::Duplicate => (
+                        CommandReceiptStatus::Applied,
+                        true,
+                        CommandReasonCode::OperationRejected,
+                        "",
+                        "",
+                    ),
+                    QueueMutationOutcome::RevisionConflict(_) => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::CommandIdConflict,
+                        "that message id already names different queued content",
+                        "Read the existing queue row; never retry this payload with another id automatically.",
+                    ),
+                    QueueMutationOutcome::Claimed(_) => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::QueueClaimed,
+                        "the queued message is already claimed for delivery",
+                        "Observe the claimed delivery; do not enqueue a duplicate.",
+                    ),
+                    QueueMutationOutcome::Missing => unreachable!(),
+                };
+                let receipt = self
+                    .finish_task_command(command_id, status, applied, code, message, recovery)
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                    })?;
+                Ok(Some(receipt))
+            }
+            TaskCommandIntent::EditQueuedMessage {
+                message_id,
+                expected_queue_revision,
+                lease_id,
+                text,
+                expected_text_hash,
+                attachments,
+            } => {
+                use crate::doc_host::FinishQueueEditOutcome;
+                let already_applied = self
+                    .doc_host
+                    .queued_message(task_id, &message_id)
+                    .map_err(TaskProjectionError::Mutation)?
+                    .is_some_and(|item| {
+                        item.revision == expected_queue_revision.saturating_add(1)
+                            && item.text == text
+                            && item.attachments == attachments
+                            && item.delivery_gate.is_none()
+                            && matches!(item.status, zeron_doc::QueueMessageStatus::Held)
+                    });
+                let outcome = if already_applied {
+                    // Crash window: the queue projection committed but the
+                    // L07 receipt did not. Replaying the same command proves
+                    // its exact next revision/content and finalizes it without
+                    // applying a second edit.
+                    FinishQueueEditOutcome::Committed
+                } else {
+                    self.doc_host
+                        .finish_queued_message_edit_with_attachments_at_revision(
+                            task_id,
+                            &message_id,
+                            &lease_id,
+                            crate::doc_host::FinishQueueEditAction::Commit,
+                            Some(&text),
+                            Some(&expected_text_hash),
+                            Some(&attachments),
+                            Some(expected_queue_revision),
+                        )
+                        .await
+                        .map_err(TaskProjectionError::Mutation)?
+                };
+                let (status, applied, code, message, recovery) = match outcome {
+                    FinishQueueEditOutcome::Committed => (
+                        CommandReceiptStatus::Applied,
+                        true,
+                        CommandReasonCode::OperationRejected,
+                        "",
+                        "",
+                    ),
+                    FinishQueueEditOutcome::RevisionConflict { .. }
+                    | FinishQueueEditOutcome::Conflict { .. } => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::QueueRevisionConflict,
+                        "the queued message changed after editing began",
+                        "Keep the editor content, reload the row, and deliberately retry from the current revision.",
+                    ),
+                    FinishQueueEditOutcome::Claimed { .. } => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::QueueClaimed,
+                        "the queued message was claimed before this edit committed",
+                        "Keep the editor content and observe delivery; stale edits cannot replace claimed work.",
+                    ),
+                    FinishQueueEditOutcome::Missing => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::QueueMissing,
+                        "the queued message no longer exists",
+                        "Keep the editor content and reload the queue.",
+                    ),
+                    FinishQueueEditOutcome::Lost
+                    | FinishQueueEditOutcome::Cancelled
+                    | FinishQueueEditOutcome::Discarded
+                    | FinishQueueEditOutcome::Released => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::OperationRejected,
+                        "the queue edit lease is no longer valid",
+                        "Keep the editor content and acquire a fresh edit lease.",
+                    ),
+                };
+                let receipt = self
+                    .finish_task_command(command_id, status, applied, code, message, recovery)
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                    })?;
+                Ok(Some(receipt))
+            }
+            TaskCommandIntent::RemoveQueuedMessage {
+                message_id,
+                expected_queue_revision,
+            } => {
+                use crate::doc_host::QueueMutationOutcome;
+                let outcome = self
+                    .doc_host
+                    .remove_queued_message_at_revision(
+                        task_id,
+                        &message_id,
+                        expected_queue_revision,
+                    )
+                    .await
+                    .map_err(TaskProjectionError::Mutation)?;
+                let (status, applied, code, message, recovery) = match outcome {
+                    QueueMutationOutcome::Applied | QueueMutationOutcome::Missing => (
+                        CommandReceiptStatus::Applied,
+                        true,
+                        CommandReasonCode::OperationRejected,
+                        "",
+                        "",
+                    ),
+                    QueueMutationOutcome::RevisionConflict(_) => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::QueueRevisionConflict,
+                        "the queued message changed before removal",
+                        "Reload the queue and deliberately remove the current revision if still wanted.",
+                    ),
+                    QueueMutationOutcome::Claimed(_) => (
+                        CommandReceiptStatus::Conflict,
+                        false,
+                        CommandReasonCode::QueueClaimed,
+                        "the queued message was already claimed for delivery",
+                        "Observe or stop the active delivery; stale removal cannot cancel a claimed message.",
+                    ),
+                    QueueMutationOutcome::Duplicate => unreachable!(),
+                };
+                let receipt = self
+                    .finish_task_command(command_id, status, applied, code, message, recovery)
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                    })?;
+                Ok(Some(receipt))
+            }
+            TaskCommandIntent::SendQueuedNow {
+                message_id,
+                expected_queue_revision,
+            } => {
+                let revision = match expected_queue_revision {
+                    Some(revision) => revision,
+                    None => self
+                        .doc_host
+                        .queued_message(task_id, &message_id)
+                        .map_err(TaskProjectionError::Mutation)?
+                        .map(|item| item.revision)
+                        .unwrap_or(0),
+                };
+                match self
+                    .doc_host
+                    .send_queued_now_with_claim(
+                        task_id,
+                        &message_id,
+                        revision,
+                        command_id,
+                        expected_turn_id,
+                    )
                     .await
                     .map_err(TaskProjectionError::Mutation)?
                 {
-                    Ok(None)
-                } else {
-                    Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "queued message was already handled".into(),
-                    )))
+                    crate::doc_host::QueueDispatchOutcome::Started
+                    | crate::doc_host::QueueDispatchOutcome::AlreadyClaimed(_) => Ok(None),
+                    crate::doc_host::QueueDispatchOutcome::RevisionConflict(_) => {
+                        let receipt = self.finish_task_command(
+                            command_id,
+                            CommandReceiptStatus::Conflict,
+                            false,
+                            CommandReasonCode::QueueRevisionConflict,
+                            "the queued message changed before send-now claimed it",
+                            "Reload the queue before deliberately sending the current revision.",
+                        ).map_err(|error| TaskProjectionError::Commit(crate::EngineError::Other(error.to_string())))?;
+                        Ok(Some(receipt))
+                    }
+                    crate::doc_host::QueueDispatchOutcome::Blocked(_) => {
+                        let receipt = self
+                            .finish_task_command(
+                                command_id,
+                                CommandReceiptStatus::Conflict,
+                                false,
+                                CommandReasonCode::QueueClaimed,
+                                "the queued message is being edited, reviewed, or delivered",
+                                "Finish the current queue action and reload before retrying.",
+                            )
+                            .map_err(|error| {
+                                TaskProjectionError::Commit(crate::EngineError::Other(
+                                    error.to_string(),
+                                ))
+                            })?;
+                        Ok(Some(receipt))
+                    }
+                    crate::doc_host::QueueDispatchOutcome::Missing => {
+                        let receipt = self
+                            .finish_task_command(
+                                command_id,
+                                CommandReceiptStatus::Conflict,
+                                false,
+                                CommandReasonCode::QueueMissing,
+                                "the queued message no longer exists",
+                                "Reload the queue; do not construct a replacement automatically.",
+                            )
+                            .map_err(|error| {
+                                TaskProjectionError::Commit(crate::EngineError::Other(
+                                    error.to_string(),
+                                ))
+                            })?;
+                        Ok(Some(receipt))
+                    }
                 }
             }
-            TaskCommandIntent::SteerQueuedNow { message_id } => {
-                if self
+            TaskCommandIntent::SteerQueuedNow {
+                message_id,
+                expected_queue_revision,
+            } => {
+                let revision = match expected_queue_revision {
+                    Some(revision) => revision,
+                    None => self
+                        .doc_host
+                        .queued_message(task_id, &message_id)
+                        .map_err(TaskProjectionError::Mutation)?
+                        .map(|item| item.revision)
+                        .unwrap_or(0),
+                };
+                match self
                     .doc_host
-                    .steer_queued_now(task_id, &message_id)
+                    .steer_queued_now_with_claim(
+                        task_id,
+                        &message_id,
+                        revision,
+                        command_id,
+                        expected_turn_id,
+                    )
                     .await
                     .map_err(TaskProjectionError::Mutation)?
                 {
-                    Ok(None)
-                } else {
-                    Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "queued message was already handled".into(),
-                    )))
+                    crate::doc_host::QueueDispatchOutcome::Started
+                    | crate::doc_host::QueueDispatchOutcome::AlreadyClaimed(_) => Ok(None),
+                    crate::doc_host::QueueDispatchOutcome::RevisionConflict(_) => {
+                        let receipt = self.finish_task_command(
+                            command_id,
+                            CommandReceiptStatus::Conflict,
+                            false,
+                            CommandReasonCode::QueueRevisionConflict,
+                            "the queued message changed before steer-now claimed it",
+                            "Reload the queue before deliberately steering the current revision.",
+                        ).map_err(|error| TaskProjectionError::Commit(crate::EngineError::Other(error.to_string())))?;
+                        Ok(Some(receipt))
+                    }
+                    crate::doc_host::QueueDispatchOutcome::Blocked(_) => {
+                        let receipt = self
+                            .finish_task_command(
+                                command_id,
+                                CommandReceiptStatus::Conflict,
+                                false,
+                                CommandReasonCode::QueueClaimed,
+                                "the queued message is being edited, reviewed, or delivered",
+                                "Finish the current queue action and reload before retrying.",
+                            )
+                            .map_err(|error| {
+                                TaskProjectionError::Commit(crate::EngineError::Other(
+                                    error.to_string(),
+                                ))
+                            })?;
+                        Ok(Some(receipt))
+                    }
+                    crate::doc_host::QueueDispatchOutcome::Missing => {
+                        let receipt = self
+                            .finish_task_command(
+                                command_id,
+                                CommandReceiptStatus::Conflict,
+                                false,
+                                CommandReasonCode::QueueMissing,
+                                "the queued message no longer exists",
+                                "Reload the queue; do not construct a replacement automatically.",
+                            )
+                            .map_err(|error| {
+                                TaskProjectionError::Commit(crate::EngineError::Other(
+                                    error.to_string(),
+                                ))
+                            })?;
+                        Ok(Some(receipt))
+                    }
                 }
             }
             TaskCommandIntent::MarkSeen { at } => {
@@ -2073,6 +2507,10 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_MODELS
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
+            | methods::EXECUTE_TASK_COMMAND
+            | methods::GET_TASK_COMMAND_RECEIPT
+            | methods::GET_TASK_COMMAND_SNAPSHOT
+            | methods::WATCH_TASK_COMMANDS
             | methods::WATCH_DOC_MESSAGES
             // The queue lives on the chat doc, and only its host may send from
             // it — same addressing as the command ledger next door.
@@ -2157,7 +2595,8 @@ fn local_only_credential_method(method: &str) -> bool {
 fn is_stream_method(method: &str) -> bool {
     matches!(
         method,
-        methods::WATCH_DOC_MESSAGES
+        methods::WATCH_TASK_COMMANDS
+            | methods::WATCH_DOC_MESSAGES
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
             | methods::WATCH_CHECKOUT_DIFFS
@@ -2749,16 +3188,25 @@ impl RpcService for EngineRpc {
             }
             methods::QUEUE_MESSAGE => {
                 let p: QueueMessageParams = parse_params(params)?;
-                let id = self
-                    .doc_host
-                    .queue_message_with_behavior(
-                        &p.chat_id,
-                        &p.text,
-                        p.attachments,
-                        p.hold_for_turn_end,
-                    )
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(&serde_json::json!({ "id": id }))
+                let id = p
+                    .message_id
+                    .or_else(|| p.command_id.clone())
+                    .unwrap_or_else(crate::new_id);
+                let mut command = legacy_task_command(
+                    p.chat_id,
+                    TaskCommandIntent::QueueMessage {
+                        message_id: id.clone(),
+                        text: p.text,
+                        attachments: p.attachments,
+                        hold_for_turn_end: p.hold_for_turn_end,
+                        execution: None,
+                    },
+                );
+                if let Some(command_id) = p.command_id {
+                    command.command_id = command_id;
+                }
+                let receipt = self.execute_task_command(command, true).await?;
+                RpcReply::value(&serde_json::json!({ "id": id, "receipt": receipt }))
             }
             methods::UPDATE_QUEUED_MESSAGE => {
                 let p: QueuedMessageParams = parse_params(params)?;
@@ -2797,10 +3245,51 @@ impl RpcService for EngineRpc {
             }
             methods::FINISH_QUEUED_MESSAGE_EDIT => {
                 let p: FinishQueuedMessageEditParams = parse_params(params)?;
-                let action = match p.action {
-                    FinishQueuedMessageEditAction::Commit => {
-                        crate::doc_host::FinishQueueEditAction::Commit
+                if matches!(p.action, FinishQueuedMessageEditAction::Commit) {
+                    let text = p
+                        .text
+                        .clone()
+                        .ok_or_else(|| RpcError::BadParams("commit requires text".into()))?;
+                    let expected_text_hash = p.expected_text_hash.clone().ok_or_else(|| {
+                        RpcError::BadParams("commit requires expectedTextHash".into())
+                    })?;
+                    let revision = match p.expected_queue_revision {
+                        Some(revision) => revision,
+                        None => self
+                            .doc_host
+                            .queued_message(&p.chat_id, &p.id)
+                            .map_err(|error| RpcError::Failed(error.to_string()))?
+                            .map(|item| item.revision)
+                            .unwrap_or(0),
+                    };
+                    let mut command = legacy_task_command(
+                        p.chat_id,
+                        TaskCommandIntent::EditQueuedMessage {
+                            message_id: p.id,
+                            expected_queue_revision: revision,
+                            lease_id: p.lease_id,
+                            text,
+                            expected_text_hash,
+                            attachments: p.attachments.unwrap_or_default(),
+                        },
+                    );
+                    if let Some(command_id) = p.command_id {
+                        command.command_id = command_id;
                     }
+                    let receipt = self.execute_task_command(command, true).await?;
+                    let outcome = match receipt.reason.as_ref().map(|reason| reason.code) {
+                        _ if receipt.status == CommandReceiptStatus::Applied => "committed",
+                        Some(CommandReasonCode::QueueClaimed) => "claimed",
+                        Some(CommandReasonCode::QueueMissing) => "missing",
+                        _ => "conflict",
+                    };
+                    return RpcReply::value(&serde_json::json!({
+                        "outcome": outcome,
+                        "receipt": receipt,
+                    }));
+                }
+                let action = match p.action {
+                    FinishQueuedMessageEditAction::Commit => unreachable!(),
                     FinishQueuedMessageEditAction::Cancel => {
                         crate::doc_host::FinishQueueEditAction::Cancel
                     }
@@ -2838,12 +3327,28 @@ impl RpcService for EngineRpc {
             }
             methods::REMOVE_QUEUED_MESSAGE => {
                 let p: QueuedMessageParams = parse_params(params)?;
-                let removed = self
+                let existing = self
                     .doc_host
-                    .remove_queued_message(&p.chat_id, &p.id)
-                    .await
+                    .queued_message(&p.chat_id, &p.id)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(&serde_json::json!({ "removed": removed }))
+                let revision = existing.as_ref().map(|item| item.revision).unwrap_or(0);
+                let receipt = self
+                    .execute_task_command(
+                        legacy_task_command(
+                            p.chat_id,
+                            TaskCommandIntent::RemoveQueuedMessage {
+                                message_id: p.id,
+                                expected_queue_revision: revision,
+                            },
+                        ),
+                        true,
+                    )
+                    .await?;
+                RpcReply::value(&serde_json::json!({
+                    "removed": existing.is_some()
+                        && receipt.status == CommandReceiptStatus::Applied,
+                    "receipt": receipt,
+                }))
             }
             methods::SEND_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;
@@ -2851,7 +3356,10 @@ impl RpcService for EngineRpc {
                     .execute_task_command(
                         legacy_task_command(
                             p.chat_id,
-                            TaskCommandIntent::SendQueuedNow { message_id: p.id },
+                            TaskCommandIntent::SendQueuedNow {
+                                message_id: p.id,
+                                expected_queue_revision: None,
+                            },
                         ),
                         true,
                     )
@@ -2867,7 +3375,10 @@ impl RpcService for EngineRpc {
                     .execute_task_command(
                         legacy_task_command(
                             p.chat_id,
-                            TaskCommandIntent::SteerQueuedNow { message_id: p.id },
+                            TaskCommandIntent::SteerQueuedNow {
+                                message_id: p.id,
+                                expected_queue_revision: None,
+                            },
                         ),
                         true,
                     )
@@ -3892,6 +4403,11 @@ mod tests {
             methods::LIST_CREDENTIAL_METADATA
         ));
         assert!(forwardable(methods::QUEUE_COMMAND));
+        assert!(forwardable(methods::EXECUTE_TASK_COMMAND));
+        assert!(forwardable(methods::GET_TASK_COMMAND_RECEIPT));
+        assert!(forwardable(methods::GET_TASK_COMMAND_SNAPSHOT));
+        assert!(forwardable(methods::WATCH_TASK_COMMANDS));
+        assert!(is_stream_method(methods::WATCH_TASK_COMMANDS));
         assert!(forwardable(methods::SEARCH_FILES));
         assert!(forwardable(methods::SEARCH_GIT_HISTORY));
         assert!(forwardable(methods::FETCH_ALL));

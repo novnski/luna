@@ -17,11 +17,12 @@
 
 use loro::ToJson;
 use serde::{Deserialize, Serialize};
+use zeron_proto::ChatConfig;
 
 use crate::schema::{DocError, SessionDoc};
 
 /// One unsent message waiting its turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedMessage {
     /// Stable through promotion: the host uses this as the transcript user
@@ -44,6 +45,18 @@ pub struct QueuedMessage {
     /// Epoch millis of the last text edit, when there has been one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_at: Option<i64>,
+    /// Compare-and-set token for every user-visible queue mutation. Legacy
+    /// rows start at revision 1 when first read.
+    #[serde(default = "initial_queue_revision")]
+    pub revision: u64,
+    /// Execution choices frozen when the queue row is accepted. Legacy rows
+    /// intentionally fall back to the task's current config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ChatConfig>,
+    /// Delivery ownership. A claimed row remains in the durable projection
+    /// until the matching provider correlation is observed.
+    #[serde(default)]
+    pub status: QueueMessageStatus,
     /// Host-authoritative barrier preventing this row from reaching the
     /// agent while a client has an edit open. Expired edits fail closed into
     /// `ReviewRequired`; they never silently become sendable again.
@@ -77,6 +90,48 @@ pub enum QueueDeliveryGate {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum QueueMessageStatus {
+    #[default]
+    Held,
+    Claimed {
+        command_id: String,
+        mode: QueueClaimMode,
+        claimed_at_ms: i64,
+    },
+    DeliveryUnknown {
+        command_id: String,
+        mode: QueueClaimMode,
+        since_ms: i64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QueueClaimMode {
+    NextTurn,
+    SendNow,
+    SteerNow,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueueClaimOutcome {
+    Claimed(QueuedMessage),
+    AlreadyClaimed(QueuedMessage),
+    RevisionConflict(QueuedMessage),
+    Blocked(QueuedMessage),
+    Missing,
+}
+
+fn initial_queue_revision() -> u64 {
+    1
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -95,6 +150,9 @@ impl QueuedMessage {
             issued_by: issued_by.into(),
             issued_at: 0,
             edited_at: None,
+            revision: initial_queue_revision(),
+            execution: None,
+            status: QueueMessageStatus::Held,
             delivery_gate: None,
         }
     }
@@ -172,6 +230,7 @@ impl SessionDoc {
         }
         map.insert("text", text)?;
         map.insert("editedAt", now_ms)?;
+        map.insert("revision", current_revision(&map).saturating_add(1) as i64)?;
         self.doc().commit();
         Ok(true)
     }
@@ -258,6 +317,7 @@ impl SessionDoc {
             )?;
             map.insert("editedAt", now_ms)?;
         }
+        map.insert("revision", current_revision(&map).saturating_add(1) as i64)?;
         map.delete("deliveryGate")?;
         self.doc().commit();
         Ok(true)
@@ -275,6 +335,9 @@ impl SessionDoc {
             return Ok(false);
         }
         queue.mov(from, to)?;
+        if let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) = queue.get(to) {
+            map.insert("revision", current_revision(&map).saturating_add(1) as i64)?;
+        }
         self.doc().commit();
         Ok(true)
     }
@@ -285,6 +348,139 @@ impl SessionDoc {
         let Some(index) = index_of(&queue, id) else {
             return Ok(false);
         };
+        if self
+            .read_queue()?
+            .into_iter()
+            .find(|item| item.id == id)
+            .is_some_and(|item| !matches!(item.status, QueueMessageStatus::Held))
+        {
+            return Ok(false);
+        }
+        queue.delete(index, 1)?;
+        self.doc().commit();
+        Ok(true)
+    }
+
+    /// Atomically transition one held revision into provider-dispatch
+    /// ownership. Repeating the same claim is idempotent; every other stale
+    /// edit/remove/send observes the claimed row instead of taking it.
+    pub fn claim_queued(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        command_id: &str,
+        mode: QueueClaimMode,
+        claimed_at_ms: i64,
+    ) -> Result<QueueClaimOutcome, DocError> {
+        let queue = self.doc().get_movable_list("queue");
+        let Some(index) = index_of(&queue, id) else {
+            return Ok(QueueClaimOutcome::Missing);
+        };
+        let Some(mut item) = self.read_queue()?.into_iter().find(|item| item.id == id) else {
+            return Ok(QueueClaimOutcome::Missing);
+        };
+        match &item.status {
+            QueueMessageStatus::Claimed {
+                command_id: current,
+                ..
+            }
+            | QueueMessageStatus::DeliveryUnknown {
+                command_id: current,
+                ..
+            } if current == command_id => {
+                return Ok(QueueClaimOutcome::AlreadyClaimed(item));
+            }
+            QueueMessageStatus::Held => {}
+            _ => return Ok(QueueClaimOutcome::Blocked(item)),
+        }
+        if item.revision != expected_revision {
+            return Ok(QueueClaimOutcome::RevisionConflict(item));
+        }
+        if item.delivery_gate.is_some() {
+            return Ok(QueueClaimOutcome::Blocked(item));
+        }
+        let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) = queue.get(index)
+        else {
+            return Ok(QueueClaimOutcome::Missing);
+        };
+        item.status = QueueMessageStatus::Claimed {
+            command_id: command_id.to_string(),
+            mode,
+            claimed_at_ms,
+        };
+        map.insert(
+            "status",
+            crate::schema::loro_value_from_json(&serde_json::to_value(&item.status)?),
+        )?;
+        self.doc().commit();
+        Ok(QueueClaimOutcome::Claimed(item))
+    }
+
+    pub fn mark_queued_claim_unknown(
+        &self,
+        id: &str,
+        command_id: &str,
+        since_ms: i64,
+    ) -> Result<bool, DocError> {
+        let queue = self.doc().get_movable_list("queue");
+        let Some(index) = index_of(&queue, id) else {
+            return Ok(false);
+        };
+        let Some(item) = self.read_queue()?.into_iter().find(|item| item.id == id) else {
+            return Ok(false);
+        };
+        let QueueMessageStatus::Claimed {
+            command_id: current,
+            mode,
+            ..
+        } = item.status
+        else {
+            return Ok(false);
+        };
+        if current != command_id {
+            return Ok(false);
+        }
+        let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) = queue.get(index)
+        else {
+            return Ok(false);
+        };
+        let status = QueueMessageStatus::DeliveryUnknown {
+            command_id: command_id.to_string(),
+            mode,
+            since_ms,
+        };
+        map.insert(
+            "status",
+            crate::schema::loro_value_from_json(&serde_json::to_value(status)?),
+        )?;
+        self.doc().commit();
+        Ok(true)
+    }
+
+    /// Remove a claimed row only after the exact command's provider
+    /// correlation is observed. A stale completion cannot consume a newer row.
+    pub fn settle_queued_claim(&self, id: &str, command_id: &str) -> Result<bool, DocError> {
+        let queue = self.doc().get_movable_list("queue");
+        let Some(index) = index_of(&queue, id) else {
+            return Ok(false);
+        };
+        let Some(item) = self.read_queue()?.into_iter().find(|item| item.id == id) else {
+            return Ok(false);
+        };
+        let matches = match item.status {
+            QueueMessageStatus::Claimed {
+                command_id: current,
+                ..
+            }
+            | QueueMessageStatus::DeliveryUnknown {
+                command_id: current,
+                ..
+            } => current == command_id,
+            QueueMessageStatus::Held => false,
+        };
+        if !matches {
+            return Ok(false);
+        }
         queue.delete(index, 1)?;
         self.doc().commit();
         Ok(true)
@@ -302,10 +498,9 @@ impl SessionDoc {
         // Delivery gates are a model invariant, not merely a UI/engine
         // convention. This keeps future take call sites from accidentally
         // sending a row that is being edited or awaiting review.
-        if item
-            .as_ref()
-            .is_some_and(|item| item.delivery_gate.is_some())
-        {
+        if item.as_ref().is_some_and(|item| {
+            item.delivery_gate.is_some() || !matches!(item.status, QueueMessageStatus::Held)
+        }) {
             return Ok(None);
         }
         queue.delete(index, 1)?;
@@ -341,6 +536,7 @@ fn write_queued_map(map: &loro::LoroMap, item: &QueuedMessage) -> Result<(), Doc
     map.insert("text", item.text.as_str())?;
     map.insert("issuedBy", item.issued_by.as_str())?;
     map.insert("issuedAt", item.issued_at)?;
+    map.insert("revision", item.revision.max(1) as i64)?;
     if !item.attachments.is_empty() {
         map.insert(
             "attachments",
@@ -352,6 +548,18 @@ fn write_queued_map(map: &loro::LoroMap, item: &QueuedMessage) -> Result<(), Doc
     }
     if let Some(edited_at) = item.edited_at {
         map.insert("editedAt", edited_at)?;
+    }
+    if let Some(execution) = &item.execution {
+        map.insert(
+            "execution",
+            crate::schema::loro_value_from_json(&serde_json::to_value(execution)?),
+        )?;
+    }
+    if !matches!(item.status, QueueMessageStatus::Held) {
+        map.insert(
+            "status",
+            crate::schema::loro_value_from_json(&serde_json::to_value(&item.status)?),
+        )?;
     }
     if let Some(gate) = &item.delivery_gate {
         map.insert(
@@ -389,6 +597,24 @@ fn queued_from_json(v: serde_json::Value) -> Option<QueuedMessage> {
             .to_string(),
         issued_at: v.get("issuedAt").and_then(|t| t.as_i64()).unwrap_or(0),
         edited_at: v.get("editedAt").and_then(|t| t.as_i64()),
+        revision: v
+            .get("revision")
+            .and_then(|value| value.as_u64())
+            .unwrap_or_else(initial_queue_revision)
+            .max(1),
+        execution: v
+            .get("execution")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        status: match v.get("status") {
+            None | Some(serde_json::Value::Null) => QueueMessageStatus::Held,
+            Some(status) => serde_json::from_value(status.clone()).unwrap_or_else(|_| {
+                QueueMessageStatus::DeliveryUnknown {
+                    command_id: String::new(),
+                    mode: QueueClaimMode::NextTurn,
+                    since_ms: 0,
+                }
+            }),
+        },
         delivery_gate: match v.get("deliveryGate") {
             None | Some(serde_json::Value::Null) => None,
             Some(gate) => serde_json::from_value(gate.clone()).ok().or_else(|| {
@@ -403,6 +629,16 @@ fn queued_from_json(v: serde_json::Value) -> Option<QueuedMessage> {
             }),
         },
     })
+}
+
+fn current_revision(map: &loro::LoroMap) -> u64 {
+    match map.get("revision") {
+        Some(loro::ValueOrContainer::Value(loro::LoroValue::I64(value))) => value.max(1) as u64,
+        Some(loro::ValueOrContainer::Value(loro::LoroValue::Double(value))) => {
+            value.max(1.0) as u64
+        }
+        _ => initial_queue_revision(),
+    }
 }
 
 #[cfg(test)]
@@ -422,6 +658,9 @@ mod tests {
             issued_by: "device-a".into(),
             issued_at: 1_000,
             edited_at: None,
+            revision: 1,
+            execution: None,
+            status: QueueMessageStatus::Held,
             delivery_gate: None,
         }
     }
@@ -642,6 +881,63 @@ mod tests {
         assert!(doc.take_queued("q1").unwrap().is_none());
         assert!(doc.take_queue_head().unwrap().is_none());
         assert_eq!(texts(&doc), vec!["still editing"]);
+    }
+
+    #[test]
+    fn claim_is_atomic_against_stale_edit_remove_and_replay() {
+        let doc = doc();
+        doc.push_queued(&item("q1", "deliver once")).unwrap();
+        let claimed = doc
+            .claim_queued("q1", 1, "claim-1", QueueClaimMode::SendNow, 2_000)
+            .unwrap();
+        assert!(matches!(claimed, QueueClaimOutcome::Claimed(_)));
+        assert!(
+            !doc.remove_queued("q1").unwrap(),
+            "stale removal cannot consume a claimed row"
+        );
+        assert!(
+            doc.take_queued("q1").unwrap().is_none(),
+            "no second dispatch can take the claim"
+        );
+        assert!(matches!(
+            doc.claim_queued("q1", 1, "claim-1", QueueClaimMode::SendNow, 3_000)
+                .unwrap(),
+            QueueClaimOutcome::AlreadyClaimed(_)
+        ));
+        assert!(
+            doc.mark_queued_claim_unknown("q1", "claim-1", 4_000)
+                .unwrap()
+        );
+        assert!(matches!(
+            doc.read_queue().unwrap()[0].status,
+            QueueMessageStatus::DeliveryUnknown { .. }
+        ));
+        let restarted = {
+            let restored = loro::LoroDoc::new();
+            restored.import(&doc.export_snapshot().unwrap()).unwrap();
+            SessionDoc::from_doc(restored)
+        };
+        assert!(matches!(
+            restarted.read_queue().unwrap()[0].status,
+            QueueMessageStatus::DeliveryUnknown { .. }
+        ));
+        assert!(doc.settle_queued_claim("q1", "claim-1").unwrap());
+        assert!(doc.read_queue().unwrap().is_empty());
+    }
+
+    #[test]
+    fn queue_revision_fences_a_stale_claim_after_edit() {
+        let doc = doc();
+        doc.push_queued(&item("q1", "before")).unwrap();
+        assert!(doc.set_queued_text("q1", "after", 2_000).unwrap());
+        let row = doc.read_queue().unwrap().pop().unwrap();
+        assert_eq!(row.revision, 2);
+        assert!(matches!(
+            doc.claim_queued("q1", 1, "stale", QueueClaimMode::NextTurn, 3_000)
+                .unwrap(),
+            QueueClaimOutcome::RevisionConflict(current) if current.revision == 2
+        ));
+        assert_eq!(doc.read_queue().unwrap()[0].text, "after");
     }
 
     #[test]

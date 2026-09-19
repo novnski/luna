@@ -660,6 +660,274 @@ async fn duplicate_send_survives_two_clients_response_loss_and_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn durable_queue_commands_dedupe_and_revision_fence_edit_remove() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs, false);
+    let client_a = zeron_rpc::memory_client(core.rpc_service());
+    let client_b = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client_a, &task_id, &core.device_id).await;
+    core.doc_host.open(&task_id).unwrap();
+    core.doc_host.pause_all_queues();
+
+    let before = snapshot(&client_a, &task_id).await;
+    let enqueue = envelope(
+        "queue-command-1",
+        &task_id,
+        Some(&before),
+        serde_json::json!({
+            "kind": "queueMessage",
+            "messageId": "queue-message-1",
+            "text": "original queue text",
+            "holdForTurnEnd": true,
+            "execution": {
+                "harness": "mock",
+                "providerAccountId": null,
+                "model": "frozen-model",
+                "reasoning": "medium",
+                "modelOptions": {},
+                "sandbox": "workspace-write",
+                "permissionMode": "ask",
+                "effectivePermissionMode": "ask"
+            }
+        }),
+    );
+    let (first, duplicate) = tokio::join!(
+        execute(&client_a, enqueue.clone()),
+        execute(&client_b, enqueue.clone())
+    );
+    assert_eq!(first.status, CommandReceiptStatus::Applied);
+    assert_eq!(duplicate, first);
+    let queue = core
+        .doc_host
+        .open(&task_id)
+        .unwrap()
+        .doc()
+        .read_queue()
+        .unwrap();
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].revision, 1);
+    assert_eq!(
+        queue[0]
+            .execution
+            .as_ref()
+            .and_then(|config| config.model.as_deref()),
+        Some("frozen-model")
+    );
+
+    let lease = client_a
+        .call(
+            methods::BEGIN_QUEUED_MESSAGE_EDIT,
+            serde_json::json!({
+                "chatId": task_id,
+                "id": "queue-message-1",
+                "editorDeviceId": core.device_id,
+                "editorInstanceId": "test-window"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lease["outcome"], "acquired");
+    assert_eq!(lease["revision"], 1);
+    let after_enqueue = snapshot(&client_a, &task_id).await;
+    let edit_command = envelope(
+        "queue-edit-1",
+        &task_id,
+        Some(&after_enqueue),
+        serde_json::json!({
+            "kind": "editQueuedMessage",
+            "messageId": "queue-message-1",
+            "expectedQueueRevision": 1,
+            "leaseId": lease["leaseId"],
+            "text": "edited queue text",
+            "expectedTextHash": lease["baseTextHash"],
+            "attachments": []
+        }),
+    );
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_queue_edit_receipt BEFORE INSERT ON task_command_events
+             WHEN NEW.command_id='queue-edit-1'
+             BEGIN SELECT RAISE(ABORT, 'forced queue edit receipt loss'); END;",
+        )
+        .unwrap();
+    }
+    assert!(
+        client_a
+            .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, edit_command.clone())
+            .await
+            .is_err(),
+        "the queue projection commits before this synthetic receipt failure"
+    );
+    let edited = core
+        .doc_host
+        .queued_message(&task_id, "queue-message-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(edited.text, "edited queue text");
+    assert_eq!(edited.revision, 2);
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_queue_edit_receipt")
+            .unwrap();
+    }
+    let edit = execute(&client_a, edit_command).await;
+    assert_eq!(edit.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        core.doc_host
+            .queued_message(&task_id, "queue-message-1")
+            .unwrap()
+            .unwrap()
+            .revision,
+        2,
+        "receipt recovery must not apply the edit twice"
+    );
+
+    let after_edit = snapshot(&client_a, &task_id).await;
+    let stale_remove = execute(
+        &client_a,
+        envelope(
+            "queue-remove-stale",
+            &task_id,
+            Some(&after_edit),
+            serde_json::json!({
+                "kind": "removeQueuedMessage",
+                "messageId": "queue-message-1",
+                "expectedQueueRevision": 1
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(stale_remove.status, CommandReceiptStatus::Conflict);
+    assert_eq!(
+        stale_remove.reason.unwrap().code,
+        CommandReasonCode::QueueRevisionConflict
+    );
+
+    let remove = envelope(
+        "queue-remove-current",
+        &task_id,
+        Some(&snapshot(&client_a, &task_id).await),
+        serde_json::json!({
+            "kind": "removeQueuedMessage",
+            "messageId": "queue-message-1",
+            "expectedQueueRevision": 2
+        }),
+    );
+    let removed = execute(&client_a, remove.clone()).await;
+    assert_eq!(removed.status, CommandReceiptStatus::Applied);
+    assert!(
+        core.doc_host
+            .queued_message(&task_id, "queue-message-1")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(execute(&client_b, remove).await, removed);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepted_stop_fences_send_now_and_holds_the_queue() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), true);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    core.workspace.rename_chat(&task_id, "Pre-titled").unwrap();
+    let before_run = snapshot(&client, &task_id).await;
+    let run = execute(
+        &client,
+        envelope(
+            "stop-race-run",
+            &task_id,
+            Some(&before_run),
+            serde_json::json!({
+                "kind":"session",
+                "command": {
+                    "kind":"run",
+                    "request": request("hold active turn"),
+                    "messageId":"stop-race-run-message"
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        run.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+    wait_for_receipt(&client, "stop-race-run", CommandReceiptStatus::Applied).await;
+    let active = snapshot(&client, &task_id).await;
+    let turn_id = active.snapshot.active_turn_id.clone().expect("active turn");
+    let queued = execute(
+        &client,
+        envelope(
+            "stop-race-enqueue",
+            &task_id,
+            Some(&active),
+            serde_json::json!({
+                "kind":"queueMessage",
+                "messageId":"stop-race-queued",
+                "text":"must remain held",
+                "holdForTurnEnd":true
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(queued.status, CommandReceiptStatus::Applied);
+
+    let after_queue = snapshot(&client, &task_id).await;
+    let mut stop = envelope(
+        "stop-race-stop",
+        &task_id,
+        Some(&after_queue),
+        serde_json::json!({
+            "kind":"session",
+            "command":{"kind":"interrupt"}
+        }),
+    );
+    stop["expectedTurnId"] = turn_id.clone().into();
+    let stop_receipt = execute(&client, stop).await;
+    assert!(matches!(
+        stop_receipt.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+
+    let mut send_now = envelope(
+        "stop-race-send-now",
+        &task_id,
+        Some(&snapshot(&client, &task_id).await),
+        serde_json::json!({
+            "kind":"sendQueuedNow",
+            "messageId":"stop-race-queued",
+            "expectedQueueRevision":1
+        }),
+    );
+    send_now["expectedTurnId"] = turn_id.into();
+    let send_receipt = execute(&client, send_now).await;
+    assert_eq!(send_receipt.status, CommandReceiptStatus::Conflict);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while core.sessions.turn_in_flight(&task_id) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let row = core
+        .doc_host
+        .queued_message(&task_id, "stop-race-queued")
+        .unwrap()
+        .expect("stop holds the pending queue row");
+    assert!(matches!(row.status, zeron_doc::QueueMessageStatus::Held));
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revision_binding_turn_and_lifecycle_fences_are_visible() {
     let root = tempfile::tempdir().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));

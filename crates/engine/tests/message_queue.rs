@@ -16,7 +16,8 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 
 use zeron_doc::{
-    MessagePart, MessageRole, QueueDeliveryGate, SessionCommandPayload, SessionMessageEntry,
+    MessagePart, MessageRole, QueueClaimMode, QueueDeliveryGate, QueueMessageStatus, QueuedMessage,
+    SessionCommandPayload, SessionMessageEntry,
 };
 use zeron_engine::doc_host::{
     BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome,
@@ -434,6 +435,124 @@ async fn restart_restores_the_queue_frozen_until_an_explicit_send() {
     after.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_marks_an_unresolved_claim_unknown_without_replaying_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (harness, prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let core = assemble_at(tmp.path(), harness);
+    create_chat(&core).await;
+    let handle = core.doc_host.open(CHAT).unwrap();
+    core.doc_host.pause_all_queues();
+    let id = core
+        .doc_host
+        .queue_message(CHAT, "uncertain delivery", Vec::new())
+        .unwrap();
+    assert!(matches!(
+        handle
+            .doc()
+            .claim_queued(&id, 1, "missing-receipt", QueueClaimMode::NextTurn, 1)
+            .unwrap(),
+        zeron_doc::QueueClaimOutcome::Claimed(_)
+    ));
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(core);
+
+    let (harness, restarted_prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let restarted = assemble_at(tmp.path(), harness);
+    let row = restarted
+        .doc_host
+        .queued_message(CHAT, &id)
+        .unwrap()
+        .expect("unresolved claim survives restart");
+    assert!(matches!(
+        row.status,
+        QueueMessageStatus::DeliveryUnknown { .. }
+    ));
+    restarted
+        .doc_host
+        .drain_queue(&restarted.doc_host.open(CHAT).unwrap())
+        .await;
+    assert!(prompts.lock().unwrap().is_empty());
+    assert!(restarted_prompts.lock().unwrap().is_empty());
+    restarted.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (harness, prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let core = assemble_at(tmp.path(), harness);
+    create_chat(&core).await;
+    let id = core
+        .doc_host
+        .queue_message(CHAT, "accepted once", Vec::new())
+        .unwrap();
+    wait_for(
+        || queue_texts(&core).is_empty(),
+        "provider correlation to settle the queue claim",
+    )
+    .await;
+    let command_id = format!("queue-dispatch:{CHAT}:{id}:1");
+    assert_eq!(
+        core.doc_host
+            .task_command_receipt(&command_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        zeron_proto::CommandReceiptStatus::Applied
+    );
+
+    // Simulate a crash snapshot from the tiny window after the durable
+    // provider receipt committed but before the claimed row was saved away.
+    let handle = core.doc_host.open(CHAT).unwrap();
+    handle
+        .doc()
+        .push_queued(&QueuedMessage {
+            id: id.clone(),
+            text: "accepted once".into(),
+            attachments: Vec::new(),
+            hold_for_turn_end: true,
+            issued_by: core.device_id.clone(),
+            issued_at: 1,
+            edited_at: None,
+            revision: 1,
+            execution: None,
+            status: QueueMessageStatus::Claimed {
+                command_id: command_id.clone(),
+                mode: QueueClaimMode::NextTurn,
+                claimed_at_ms: 1,
+            },
+            delivery_gate: None,
+        })
+        .unwrap();
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(core);
+
+    let (harness, restarted_prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let restarted = assemble_at(tmp.path(), harness);
+    assert!(
+        restarted
+            .doc_host
+            .queued_message(CHAT, &id)
+            .unwrap()
+            .is_none(),
+        "applied correlation settles the stale claimed projection on restart"
+    );
+    assert_eq!(
+        prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|prompt| prompt.as_str() == "accepted once")
+            .count(),
+        1
+    );
+    assert!(restarted_prompts.lock().unwrap().is_empty());
+    restarted.shutdown().await;
+}
+
 /// Cancel is not a normal turn boundary: it freezes the visible queue instead
 /// of immediately promoting its head into a new inference. The freeze survives
 /// incidental queue edits and is lifted by an explicit send action.
@@ -603,7 +722,7 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
 /// The legacy explicit-steer RPC remains compatible with older clients;
 /// current clients offer only Send now.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn held_policy_keeps_a_steerable_message_visible_until_steer_now() {
+async fn steer_now_keeps_the_claim_until_the_provider_observes_a_boundary() {
     let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
     let client = zeron_rpc::memory_client(core.rpc_service());
 
@@ -642,12 +761,26 @@ async fn held_policy_keeps_a_steerable_message_visible_until_steer_now() {
     assert_eq!(reply["sent"], true);
     wait_for(
         || user_messages(&core).iter().any(|m| m == "hold this"),
-        "the held message to steer",
+        "the held message to enter the provider mailbox",
     )
     .await;
-    assert!(queue_texts(&core).is_empty());
+    assert_eq!(queue_texts(&core), vec!["hold this"]);
+    let row = core
+        .doc_host
+        .queued_message(CHAT, &id)
+        .unwrap()
+        .expect("unconfirmed steer stays visible");
+    assert!(matches!(
+        row.status,
+        zeron_doc::QueueMessageStatus::Claimed { .. }
+    ));
 
     let _ = harness.finish.send(());
+    wait_for(
+        || queue_texts(&core).is_empty(),
+        "the unconfirmed steer to reconcile as a fresh correlated turn",
+    )
+    .await;
     core.shutdown().await;
 }
 

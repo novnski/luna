@@ -11,8 +11,11 @@ use std::time::Duration;
 use base64::Engine as _;
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use sha2::{Digest, Sha256};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_proto::{ComposerDraft, DraftBlob, DraftBlobState, DraftContext, HarnessId};
+use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile};
+use zeron_proto::{
+    ChatConfig, ComposerDraft, DraftBlob, DraftBlobState, DraftContext, HarnessId, PermissionMode,
+    SandboxLevel,
+};
 use zeron_rpc::methods;
 use zeron_ui::*;
 
@@ -136,6 +139,89 @@ async fn seed_recovery(core: &EngineCore) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn seed_queue(core: &EngineCore) -> anyhow::Result<()> {
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    core.doc_host.open(TASK_A)?;
+    core.doc_host.pause_all_queues();
+    client
+        .call(
+            methods::UPLOAD_CHUNK,
+            serde_json::json!({
+                "uploadId":"l09-native-attachment",
+                "data":PNG_B64,
+                "seq":0
+            }),
+        )
+        .await?;
+    let committed = client
+        .call(
+            methods::UPLOAD_COMMIT,
+            serde_json::json!({
+                "uploadId":"l09-native-attachment",
+                "fileName":"l09-queue.png"
+            }),
+        )
+        .await?;
+    let attachment = committed["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("fixture upload returned no path"))?;
+    for (command_id, message_id, text, attachments) in [
+        (
+            "l09-native-enqueue-edit",
+            "l09-native-edit",
+            "L09 edit me — attachment must remain owned",
+            vec![attachment],
+        ),
+        (
+            "l09-native-enqueue-remove",
+            "l09-native-remove",
+            "L09 remove me safely",
+            Vec::new(),
+        ),
+        (
+            "l09-native-enqueue-send",
+            "l09-native-send",
+            "L09 send now exactly once",
+            Vec::new(),
+        ),
+    ] {
+        let receipt: zeron_proto::CommandReceipt = client
+            .call_as(
+                methods::EXECUTE_TASK_COMMAND,
+                serde_json::json!({
+                    "commandId": command_id,
+                    "actorId": "l09-native-fixture",
+                    "clientId": "l09-native-fixture",
+                    "clientSessionId": "isolated",
+                    "taskId": TASK_A,
+                    "intent": {
+                        "kind": "queueMessage",
+                        "messageId": message_id,
+                        "text": text,
+                        "attachments": attachments,
+                        "holdForTurnEnd": true,
+                        "execution": {
+                            "harness": "mock",
+                            "providerAccountId": null,
+                            "model": "mock-1",
+                            "reasoning": null,
+                            "modelOptions": {},
+                            "sandbox": "workspace-write",
+                            "permissionMode": "ask",
+                            "effectivePermissionMode": "ask"
+                        }
+                    }
+                }),
+            )
+            .await?;
+        anyhow::ensure!(
+            receipt.status == zeron_proto::CommandReceiptStatus::Applied,
+            "fixture queue seed was not applied"
+        );
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated fixture data root"));
@@ -150,7 +236,7 @@ fn main() -> anyhow::Result<()> {
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
             EngineProfile::development(&engine_data, "l08-native-org", "l08-native-user"),
-            Arc::new(HarnessRegistry::new()),
+            Arc::new(zeron_engine::default_registry()),
             HarnessId::Mock,
             None,
             account_config(&root),
@@ -164,8 +250,27 @@ fn main() -> anyhow::Result<()> {
             core.workspace.rename_chat(id, title)?;
         }
     }
+    core.workspace.set_chat_config(
+        TASK_A,
+        &ChatConfig {
+            harness: HarnessId::Mock,
+            provider_account_id: None,
+            model: Some("mock-1".into()),
+            reasoning: None,
+            model_options: Default::default(),
+            sandbox: SandboxLevel::WorkspaceWrite,
+            permission_mode: PermissionMode::Ask,
+            effective_permission_mode: PermissionMode::Ask,
+            permission_ceiling_source: None,
+            permission_degradation_reason: None,
+            permission_audit: Vec::new(),
+        },
+    )?;
     if mode == "recovery" {
         runtime.block_on(seed_recovery(&core))?;
+    } else if mode == "queue" {
+        core.workspace.rename_chat(TASK_A, "L09 Durable Queue")?;
+        runtime.block_on(seed_queue(&core))?;
     }
 
     let ipc_port = unused_port();
@@ -182,7 +287,7 @@ fn main() -> anyhow::Result<()> {
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
     let chats = core.workspace.read_chats()?;
     let device = core.device_id.clone();
-    let seed = mode == "seed";
+    let seed = matches!(mode.as_str(), "seed" | "queue");
 
     gpui_platform::application()
         .with_assets(icons::Assets)

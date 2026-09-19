@@ -13,7 +13,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement as _, Styled, Window, div, prelude::*, px,
 };
 
-use zeron_doc::{QueueDeliveryGate, QueuedMessage};
+use zeron_doc::{QueueDeliveryGate, QueueMessageStatus, QueuedMessage};
 use zeron_rpc::methods;
 
 use crate::composer::{Composer, QUEUE_COMPOSER_OVERLAP};
@@ -396,13 +396,29 @@ impl Composer {
         let key = SharedString::from(format!("queue-{}", item.id));
         let being_edited = editing.as_deref() == Some(item.id.as_str());
         let being_removed = self.queue_removing.contains(&item.id);
-        let delivery_blocked = item.delivery_gate.is_some();
+        let claim_blocked = !matches!(item.status, QueueMessageStatus::Held);
+        let delivery_blocked = item.delivery_gate.is_some() || claim_blocked;
         let interaction_blocked = delivery_blocked || being_removed;
-        let text = match &item.delivery_gate {
-            Some(QueueDeliveryGate::Editing {
-                owner_device_id, ..
-            }) if !being_edited => SharedString::from(format!("Editing on {owner_device_id}")),
-            Some(QueueDeliveryGate::ReviewRequired { .. }) if !being_edited => {
+        let text = match (&item.status, &item.delivery_gate) {
+            (QueueMessageStatus::Claimed { .. }, _) if !being_edited => {
+                SharedString::from(format!(
+                    "Sending… · {}",
+                    one_line(&queue_visible_text(&item.text, &item.attachments))
+                ))
+            }
+            (QueueMessageStatus::DeliveryUnknown { .. }, _) if !being_edited => {
+                SharedString::from(format!(
+                    "Delivery unknown · {}",
+                    one_line(&queue_visible_text(&item.text, &item.attachments))
+                ))
+            }
+            (
+                _,
+                Some(QueueDeliveryGate::Editing {
+                    owner_device_id, ..
+                }),
+            ) if !being_edited => SharedString::from(format!("Editing on {owner_device_id}")),
+            (_, Some(QueueDeliveryGate::ReviewRequired { .. })) if !being_edited => {
                 SharedString::from("Needs review")
             }
             _ => one_line(&queue_visible_text(&item.text, &item.attachments)),
@@ -414,7 +430,7 @@ impl Composer {
             "edit",
             "Edit",
             icons::PEN,
-            !being_removed,
+            !being_removed && !claim_blocked,
             theme,
             cx.listener(move |this, _, _, cx| {
                 this.begin_queue_edit(edit_id.clone(), cx);
@@ -430,7 +446,7 @@ impl Composer {
                 "Remove"
             },
             icons::TRASH_BIN_MINIMALISTIC,
-            !being_removed,
+            !being_removed && !claim_blocked,
             theme,
             cx.listener(move |this, _, _, cx| {
                 this.remove_queued(drop_id.clone(), cx);
@@ -1106,7 +1122,7 @@ impl Composer {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
-        let (chat_id, host_device_id, supported) = {
+        let (chat_id, host_device_id, revision, supported) = {
             let state = self.state.read(cx);
             let Some(chat_id) = state.selected_chat.clone() else {
                 return;
@@ -1119,7 +1135,15 @@ impl Composer {
                 &chat_id,
                 zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
             );
-            (chat_id, host_device_id, supported)
+            let Some(revision) = state
+                .queue
+                .iter()
+                .find(|item| item.id == id)
+                .map(|item| item.revision)
+            else {
+                return;
+            };
+            (chat_id, host_device_id, revision, supported)
         };
         if !supported {
             self.failure = Some("The chat host does not support safe queue removal".into());
@@ -1133,24 +1157,27 @@ impl Composer {
         self.queue_drag = None;
         cx.notify();
 
-        let params = serde_json::json!({
-            "chatId": chat_id,
-            "id": id,
-            "targetDeviceId": host_device_id,
+        let command_id = uuid::Uuid::new_v4().to_string();
+        let intent = serde_json::json!({
+            "kind": "removeQueuedMessage",
+            "messageId": id,
+            "expectedQueueRevision": revision,
         });
         cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(methods::REMOVE_QUEUED_MESSAGE, params)
-                .await;
+            let result = crate::task_commands::execute_receipt_on_with_id(
+                &engine,
+                &chat_id,
+                Some(&host_device_id),
+                command_id,
+                intent,
+            )
+            .await;
             this.update(cx, |composer, cx| {
                 composer.queue_removing.remove(&id);
                 let selected_matches =
                     composer.state.read(cx).selected_chat.as_deref() == Some(chat_id.as_str());
                 match result {
-                    Ok(reply)
-                        if queue_mutation_acknowledged(methods::REMOVE_QUEUED_MESSAGE, &reply) =>
-                    {
+                    Ok(receipt) if receipt.status == zeron_proto::CommandReceiptStatus::Applied => {
                         if selected_matches {
                             composer.state.update(cx, |state, cx| {
                                 state.queue.retain(|item| item.id != id);
@@ -1158,14 +1185,21 @@ impl Composer {
                             });
                         }
                     }
-                    Ok(reply) => {
+                    Ok(receipt) => {
                         tracing::debug!(
-                            ?reply,
+                            ?receipt,
                             "queued message had already left the queue before removal"
                         );
                         if selected_matches {
-                            composer.failure =
-                                Some("That message had already left the queue".into());
+                            composer.failure = Some(
+                                receipt
+                                    .reason
+                                    .map(|reason| reason.message)
+                                    .unwrap_or_else(|| {
+                                        "That message had already left the queue".into()
+                                    })
+                                    .into(),
+                            );
                             composer
                                 .state
                                 .update(cx, |state, cx| state.refresh_selected_queue(cx));
@@ -1233,7 +1267,7 @@ impl Composer {
             };
             (
                 item.id.clone(),
-                item.delivery_gate.is_some(),
+                item.delivery_gate.is_some() || !matches!(item.status, QueueMessageStatus::Held),
                 state.chat_host_supports(
                     chat_id,
                     zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
@@ -1287,11 +1321,11 @@ impl Composer {
         self.queue_drag = None;
         cx.notify();
         let params = serde_json::json!({
-            "chatId": chat_id,
+            "chatId": chat_id.clone(),
             "id": id,
             "editorDeviceId": owner_device_id,
             "editorInstanceId": instance_id,
-            "targetDeviceId": host_device_id,
+            "targetDeviceId": host_device_id.clone(),
         });
         let task = cx.spawn(async move |this, cx| {
             let result = engine
@@ -1361,6 +1395,12 @@ impl Composer {
                             cx.notify();
                             return;
                         };
+                        let Some(revision) = reply.get("revision").and_then(|v| v.as_u64()) else {
+                            composer.failure =
+                                Some("The chat host returned an invalid queue revision".into());
+                            cx.notify();
+                            return;
+                        };
                         let raw_text = reply
                             .get("text")
                             .and_then(|v| v.as_str())
@@ -1396,6 +1436,8 @@ impl Composer {
                         composer.editing_queued = Some(id.clone());
                         composer.queue_edit_lease_id = Some(lease_id.to_string());
                         composer.queue_edit_base_text_hash = Some(base_text_hash.to_string());
+                        composer.queue_edit_revision = Some(revision);
+                        composer.queue_edit_command_id = Some(uuid::Uuid::new_v4().to_string());
                         composer.queue_edit_chat_id = Some(chat_id.clone());
                         composer.queue_edit_host_device_id = Some(host_device_id.clone());
                         composer.schedule_draft_save(
@@ -1419,6 +1461,13 @@ impl Composer {
                     {
                         composer.failure =
                             Some("That queued message is being edited on another device".into());
+                    }
+                    Ok(reply)
+                        if reply.get("outcome").and_then(|v| v.as_str()) == Some("claimed") =>
+                    {
+                        composer.failure = Some(
+                            "That message has already been claimed for delivery".into(),
+                        );
                     }
                     Ok(_) => {
                         composer.failure =
@@ -1470,6 +1519,8 @@ impl Composer {
         self.editing_queued = None;
         self.queue_edit_lease_id = None;
         self.queue_edit_base_text_hash = None;
+        self.queue_edit_revision = None;
+        self.queue_edit_command_id = None;
         self.queue_edit_chat_id = None;
         self.queue_edit_host_device_id = None;
         self.queue_edit_pending_id = None;
@@ -1499,13 +1550,24 @@ impl Composer {
         if self.queue_edit_finishing {
             return;
         }
-        let (Some(id), Some(lease_id), Some(chat_id), Some(host_device_id), Some(engine)) = (
+        let (
+            Some(id),
+            Some(lease_id),
+            Some(revision),
+            Some(edit_command_id),
+            Some(chat_id),
+            Some(host_device_id),
+            Some(engine),
+        ) = (
             self.editing_queued.clone(),
             self.queue_edit_lease_id.clone(),
+            self.queue_edit_revision,
+            self.queue_edit_command_id.clone(),
             self.queue_edit_chat_id.clone(),
             self.queue_edit_host_device_id.clone(),
             self.state.read(cx).engine().cloned(),
-        ) else {
+        )
+        else {
             self.failure = Some("The edit lease was lost; your text is still in the editor".into());
             cx.notify();
             return;
@@ -1515,13 +1577,13 @@ impl Composer {
         let staged_appshots = self.staged_appshots().to_vec();
         staged.extend(staged_appshots.iter().map(|shot| shot.screenshot.clone()));
         let mut params = serde_json::json!({
-            "chatId": chat_id,
-            "id": id,
-            "leaseId": lease_id,
+            "chatId": chat_id.clone(),
+            "id": id.clone(),
+            "leaseId": lease_id.clone(),
             "action": action,
             "text": text,
-            "expectedTextHash": expected,
-            "targetDeviceId": host_device_id,
+            "expectedTextHash": expected.clone(),
+            "targetDeviceId": host_device_id.clone(),
         });
         self.queue_edit_finishing = true;
         self.input.update(cx, |input, cx| {
@@ -1534,9 +1596,13 @@ impl Composer {
                 if action == "commit" {
                     let mut paths = Vec::new();
                     for attachment in &staged {
+                        let upload_id = format!(
+                            "queue-edit-{edit_command_id}-{}",
+                            attachment.id
+                        );
                         let path = crate::attachments::upload_attachment(
                             &engine, cx.background_executor(), Some(&host_device_id),
-                            &uuid::Uuid::new_v4().to_string(), attachment, None,
+                            &upload_id, attachment, None,
                         ).await.map_err(|err| err.to_string())?;
                         paths.push(path);
                     }
@@ -1550,10 +1616,48 @@ impl Composer {
                     }
                     params["attachments"] = serde_json::json!(paths);
                 }
-                crate::attachments::call_with_timeout(
-                    &engine, cx.background_executor(), methods::FINISH_QUEUED_MESSAGE_EDIT,
-                    params, std::time::Duration::from_secs(30),
-                ).await.map_err(|err| err.to_string())
+                if action == "commit" {
+                    let intent = serde_json::json!({
+                        "kind": "editQueuedMessage",
+                        "messageId": id,
+                        "expectedQueueRevision": revision,
+                        "leaseId": lease_id,
+                        "text": params["text"],
+                        "expectedTextHash": params["expectedTextHash"],
+                        "attachments": params["attachments"],
+                    });
+                    let receipt = crate::task_commands::execute_receipt_on_with_id(
+                        &engine,
+                        &chat_id,
+                        Some(&host_device_id),
+                        edit_command_id,
+                        intent,
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                    let outcome = match receipt.status {
+                        zeron_proto::CommandReceiptStatus::Applied => "committed",
+                        zeron_proto::CommandReceiptStatus::Conflict => match receipt
+                            .reason
+                            .as_ref()
+                            .map(|reason| reason.code)
+                        {
+                            Some(zeron_proto::CommandReasonCode::QueueClaimed) => "claimed",
+                            Some(zeron_proto::CommandReasonCode::QueueMissing) => "missing",
+                            _ => "conflict",
+                        },
+                        _ => "lost",
+                    };
+                    Ok(serde_json::json!({
+                        "outcome": outcome,
+                        "message": receipt.reason.map(|reason| reason.message),
+                    }))
+                } else {
+                    crate::attachments::call_with_timeout(
+                        &engine, cx.background_executor(), methods::FINISH_QUEUED_MESSAGE_EDIT,
+                        params, std::time::Duration::from_secs(30),
+                    ).await.map_err(|err| err.to_string())
+                }
             }.await;
             this.update(cx, |composer, cx| {
                 composer.queue_edit_finishing = false;
@@ -1572,6 +1676,12 @@ impl Composer {
                         Some("missing") => {
                             composer.failure = Some(
                                 "The queued message was removed; your edit was kept locally".into(),
+                            );
+                        }
+                        Some("claimed") => {
+                            composer.failure = Some(
+                                "This message was claimed for delivery; your edit was kept locally"
+                                    .into(),
                             );
                         }
                         _ => {
@@ -1719,22 +1829,29 @@ impl Composer {
                 cx.notify();
             });
         }
-        let local_task_intent =
-            if host_device_id.as_deref() == Some(engine.engine_info().device_id.as_str()) {
-                pending_message.as_ref().and_then(|id| match method {
-                    methods::SEND_QUEUED_MESSAGE_NOW => Some(serde_json::json!({
-                        "kind": "sendQueuedNow",
-                        "messageId": id,
-                    })),
-                    methods::STEER_QUEUED_MESSAGE_NOW => Some(serde_json::json!({
-                        "kind": "steerQueuedNow",
-                        "messageId": id,
-                    })),
-                    _ => None,
-                })
-            } else {
-                None
-            };
+        let queue_revision = pending_message.as_ref().and_then(|id| {
+            self.state
+                .read(cx)
+                .queue
+                .iter()
+                .find(|item| item.id == *id)
+                .map(|item| item.revision)
+        });
+        let task_intent = pending_message.as_ref().and_then(|id| match method {
+            methods::SEND_QUEUED_MESSAGE_NOW => Some(serde_json::json!({
+                "kind": "sendQueuedNow",
+                "messageId": id,
+                "expectedQueueRevision": queue_revision,
+            })),
+            methods::STEER_QUEUED_MESSAGE_NOW => Some(serde_json::json!({
+                "kind": "steerQueuedNow",
+                "messageId": id,
+                "expectedQueueRevision": queue_revision,
+            })),
+            _ => None,
+        });
+        let command_id = uuid::Uuid::new_v4().to_string();
+        let task_target = host_device_id.clone();
         let mut params = params;
         if let Some(object) = params.as_object_mut() {
             object.insert("chatId".into(), serde_json::Value::String(chat_id.clone()));
@@ -1747,10 +1864,25 @@ impl Composer {
         // so cancelled — the move still in flight, leaving the optimistic list
         // showing an order the doc never got.
         cx.spawn(async move |this, cx| {
-            match if let Some(intent) = local_task_intent {
-                crate::task_commands::execute(&engine, &chat_id, intent)
-                    .await
-                    .map(|receipt| serde_json::json!({ "sent": true, "receipt": receipt }))
+            match if let Some(intent) = task_intent {
+                crate::task_commands::execute_receipt_on_with_id(
+                    &engine,
+                    &chat_id,
+                    task_target.as_deref(),
+                    command_id,
+                    intent,
+                )
+                .await
+                .map(|receipt| {
+                    serde_json::json!({
+                        "sent": matches!(
+                            receipt.status,
+                            zeron_proto::CommandReceiptStatus::Pending
+                                | zeron_proto::CommandReceiptStatus::Applied
+                        ),
+                        "receipt": receipt,
+                    })
+                })
             } else {
                 engine.client().call(method, params).await
             } {

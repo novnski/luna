@@ -143,6 +143,9 @@ fn main() -> anyhow::Result<()> {
             issued_by: device.clone(),
             issued_at: 1788900000000,
             edited_at: None,
+            revision: 1,
+            execution: None,
+            status: zeron_doc::QueueMessageStatus::Held,
             delivery_gate: None,
         },
         zeron_doc::QueuedMessage {
@@ -153,6 +156,9 @@ fn main() -> anyhow::Result<()> {
             issued_by: device.clone(),
             issued_at: 1788900000001,
             edited_at: None,
+            revision: 1,
+            execution: None,
+            status: zeron_doc::QueueMessageStatus::Held,
             delivery_gate: None,
         },
     ];
