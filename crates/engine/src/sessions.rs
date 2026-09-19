@@ -28,7 +28,7 @@ use zeron_doc::{
     DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter, SessionDoc,
     SessionMessageEntry, fold_event_into_parts, sanitize_tool_call,
 };
-use zeron_harness::{CancellationToken, Harness, RunControls, SteerMessage};
+use zeron_harness::{CancellationToken, Harness, RunControls, SteerAcceptance, SteerMessage};
 use zeron_proto::{
     AgentEvent, ChatConfig, DoneStatus, HarnessId, PermissionAuditEntry, PermissionMode,
     PermissionPolicy, RunRequest, Session, SessionStatus, UserInputAnswer, UserInputQuestion,
@@ -1102,13 +1102,18 @@ impl SessionsEngine {
         let acceptance =
             tokio::time::timeout(std::time::Duration::from_secs(5), acceptance_rx).await;
         match acceptance {
-            Ok(Ok(Ok(()))) if self.is_live(chat_id, &run_id) => Ok(SteerOutcome::Accepted),
-            Ok(Ok(Err(_))) => {
+            Ok(Ok(SteerAcceptance::Accepted)) if self.is_live(chat_id, &run_id) => {
+                Ok(SteerOutcome::Accepted)
+            }
+            Ok(Ok(SteerAcceptance::Rejected(_))) => {
                 let mut ledger = lock(&ledger);
                 ledger.retain(|steer| steer.message_id != user_id);
                 Ok(SteerOutcome::Rejected)
             }
-            Ok(Err(_)) | Err(_) | Ok(Ok(Ok(()))) => Ok(SteerOutcome::Unknown),
+            Ok(Ok(SteerAcceptance::Unknown(_)))
+            | Ok(Err(_))
+            | Err(_)
+            | Ok(Ok(SteerAcceptance::Accepted)) => Ok(SteerOutcome::Unknown),
         }
     }
 

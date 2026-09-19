@@ -79,7 +79,7 @@ impl Harness for CountingHarness {
                             match steer {
                                 Some(mut steer) => {
                                     if let Some(tx) = steer.acceptance.take() {
-                                        let _ = tx.send(Ok(()));
+                                        let _ = tx.send(zeron_harness::SteerAcceptance::Accepted);
                                     }
                                 }
                                 None => break DoneStatus::Completed,
@@ -1571,7 +1571,10 @@ async fn failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_re
 async fn native_steer_caller_applies_only_for_supported_attachment_free_held_rows() {
     let (supported, supported_row) = steer_queue_case(SteeringMode::StepBoundary, false).await;
     assert_eq!(supported.status, CommandReceiptStatus::Pending);
-    assert!(matches!(supported_row, QueueMessageStatus::Claimed { .. }));
+    assert!(matches!(
+        supported_row,
+        QueueMessageStatus::SteeringAccepted { .. }
+    ));
 
     let (unsupported_harness, harness_row) =
         steer_queue_case(SteeringMode::TurnBoundary, false).await;

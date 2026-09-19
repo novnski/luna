@@ -51,9 +51,11 @@ use zeron_proto::{
     RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
-use crate::jsonrpc::{Incoming, RpcClient};
+use crate::jsonrpc::{Incoming, RpcClient, RpcRequestFailure};
 use crate::process::{Child, Command, Stdio};
-use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child};
+use crate::{
+    Harness, HarnessError, RunControls, Signal, SteerAcceptance, send_signal, shutdown_child,
+};
 use normalize::{map_update, parse_commands};
 use subagent::SubagentTracker;
 use subagent_devin::DevinTracker;
@@ -2674,21 +2676,52 @@ fn steering_call_future(
     client: &RpcClient,
     session_id: &str,
     text: &str,
-) -> BoxFuture<'static, Result<Value, HarnessError>> {
+) -> BoxFuture<'static, Result<Value, RpcRequestFailure>> {
     let params = json!({
         "sessionId": session_id,
         "prompt": [{ "type": "text", "text": text }],
         "_meta": { "steering": { "idleBehavior": "promptRequired" } },
     });
-    prompt_like_request(client.clone(), "_session/steering", params)
+    let client = client.clone();
+    Box::pin(async move { client.request_classified("_session/steering", params).await })
 }
 
 type PendingSteeringCall = (
     String,
     bool,
-    Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
-    BoxFuture<'static, Result<Value, HarnessError>>,
+    Option<tokio::sync::oneshot::Sender<SteerAcceptance>>,
+    BoxFuture<'static, Result<Value, RpcRequestFailure>>,
 );
+
+#[derive(Debug)]
+enum AcpSteeringResult {
+    Incorporated,
+    Rejected {
+        message: String,
+        no_running_turn: bool,
+    },
+    Unknown(String),
+}
+
+fn classify_steering_result(result: Result<Value, RpcRequestFailure>) -> AcpSteeringResult {
+    match result {
+        Ok(response)
+            if response.get("outcome").and_then(Value::as_str) == Some("promptRequired") =>
+        {
+            AcpSteeringResult::Rejected {
+                no_running_turn: response.get("reason").and_then(Value::as_str)
+                    == Some("noRunningTurn"),
+                message: "ACP provider rejected in-turn steering".into(),
+            }
+        }
+        Ok(_) => AcpSteeringResult::Incorporated,
+        Err(RpcRequestFailure::Rejected(message)) => AcpSteeringResult::Rejected {
+            message,
+            no_running_turn: false,
+        },
+        Err(RpcRequestFailure::Unknown(message)) => AcpSteeringResult::Unknown(message),
+    }
+}
 
 /// The per-run event loop: one task multiplexing agent messages, the pending
 /// turn, the steering mailbox, the interrupt token, and consumer liveness.
@@ -3100,21 +3133,21 @@ async fn run_session(session: Session) {
                     )
                     .await
                     {
-                        Ok(Ok(resp)) => resp
-                            .get("outcome")
-                            .and_then(Value::as_str)
-                            .unwrap_or("injected")
-                            .to_owned(),
-                        Ok(Err(_)) | Err(_) => "promptRequired".to_owned(),
+                        Ok(result) => classify_steering_result(result),
+                        Err(_) => AcpSteeringResult::Unknown(
+                            "ACP steering response timed out at the turn boundary".into(),
+                        ),
                     };
                     if interrupted {
                         if let Some(tx) = acceptance {
-                            let _ = tx.send(Err("ACP turn ended while steering".into()));
+                            let _ = tx.send(SteerAcceptance::Unknown(
+                                "ACP turn ended while steering".into(),
+                            ));
                         }
                         // Winding down; abandoned like any queued steer.
-                    } else if outcome != "promptRequired" {
+                    } else if matches!(&outcome, AcpSteeringResult::Incorporated) {
                         if let Some(tx) = acceptance {
-                            let _ = tx.send(Ok(()));
+                            let _ = tx.send(SteerAcceptance::Accepted);
                         }
                         let (prev, next) = rotate(&mut assistant_message_id);
                         if !send(
@@ -3128,12 +3161,21 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                    } else if require_active {
-                        if let Some(tx) = acceptance {
-                            let _ = tx.send(Err("ACP provider rejected in-turn steering".into()));
-                        }
                     } else {
-                        queued_steers.push_back(text);
+                        match (require_active, outcome) {
+                            (true, AcpSteeringResult::Rejected { message, .. }) => {
+                                if let Some(tx) = acceptance {
+                                    let _ = tx.send(SteerAcceptance::Rejected(message));
+                                }
+                            }
+                            (true, AcpSteeringResult::Unknown(message)) => {
+                                if let Some(tx) = acceptance {
+                                    let _ = tx.send(SteerAcceptance::Unknown(message));
+                                }
+                            }
+                            (false, _) => queued_steers.push_back(text),
+                            (true, AcpSteeringResult::Incorporated) => unreachable!(),
+                        }
                     }
                     // Followers waiting on the settled call have no live turn
                     // to inject into anymore: boundary delivery.
@@ -3392,30 +3434,18 @@ async fn run_session(session: Session) {
                 if steering_call.is_some() =>
             {
                 let (text, require_active, acceptance, _) = steering_call.take().expect("guarded by if");
-                let outcome = match &res {
-                    Ok(resp) => resp
-                        .get("outcome")
-                        .and_then(Value::as_str)
-                        .unwrap_or("injected")
-                        .to_owned(),
-                    Err(e) => {
-                        tracing::debug!(
-                            target: "zeron_harness::acp",
-                            "_session/steering failed (redelivering): {e}"
-                        );
-                        // Failed calls redeliver like a lost turn-end race.
-                        "promptRequired".to_owned()
-                    }
-                };
+                let outcome = classify_steering_result(res);
                 if interrupted {
                     if let Some(tx) = acceptance {
-                        let _ = tx.send(Err("ACP run is interrupting".into()));
+                        let _ = tx.send(SteerAcceptance::Unknown(
+                            "ACP run is interrupting".into(),
+                        ));
                     }
                     // The run is winding down; the steer is abandoned like
                     // any queued steer at interrupt.
-                } else if outcome != "promptRequired" {
+                } else if matches!(&outcome, AcpSteeringResult::Incorporated) {
                     if let Some(tx) = acceptance {
-                        let _ = tx.send(Ok(()));
+                        let _ = tx.send(SteerAcceptance::Accepted);
                     }
                     // Injected into a live turn → a Steered boundary. But if
                     // the turn ended while the call was in flight, the
@@ -3486,6 +3516,19 @@ async fn run_session(session: Session) {
                             break 'main;
                         }
                     }
+                } else if require_active {
+                    if let Some(tx) = acceptance {
+                        let acceptance = match outcome {
+                            AcpSteeringResult::Rejected { message, .. } => {
+                                SteerAcceptance::Rejected(message)
+                            }
+                            AcpSteeringResult::Unknown(message) => {
+                                SteerAcceptance::Unknown(message)
+                            }
+                            AcpSteeringResult::Incorporated => unreachable!(),
+                        };
+                        let _ = tx.send(acceptance);
+                    }
                 } else if turn.is_some() {
                     // Raced the turn end: redeliver at the boundary the
                     // loop is about to hit. `noRunningTurn` is stronger —
@@ -3494,13 +3537,13 @@ async fn run_session(session: Session) {
                     // the grace deadline; if the prompt's response does not
                     // land first, the recovery arm below settles the dead
                     // turn and promotes this steer.
-                    if res
-                        .as_ref()
-                        .ok()
-                        .and_then(|r| r.get("reason"))
-                        .and_then(Value::as_str)
-                        == Some("noRunningTurn")
-                    {
+                    if matches!(
+                        &outcome,
+                        AcpSteeringResult::Rejected {
+                            no_running_turn: true,
+                            ..
+                        }
+                    ) {
                         tracing::warn!(
                             target: "zeron_harness::acp",
                             "steering answered noRunningTurn with a prompt \
@@ -3510,10 +3553,6 @@ async fn run_session(session: Session) {
                             Some(tokio::time::Instant::now() + STARVE_GRACE);
                     }
                     queued_steers.push_back(text);
-                } else if require_active {
-                    if let Some(tx) = acceptance {
-                        let _ = tx.send(Err("ACP provider rejected in-turn steering".into()));
-                    }
                 } else {
                     // The turn ended while the call was in flight and its
                     // boundary already passed — the steer becomes the next
@@ -3683,7 +3722,9 @@ async fn run_session(session: Session) {
                         // A busy-session cancel is already in flight: this
                         // steer lines up behind it and dispatches at flush.
                         if let Some(tx) = acceptance {
-                            let _ = tx.send(Err("ACP has no active turn to steer".into()));
+                            let _ = tx.send(SteerAcceptance::Rejected(
+                                "ACP has no active turn to steer".into(),
+                            ));
                         } else {
                             queued_steers.push_back(text);
                         }
@@ -3704,7 +3745,9 @@ async fn run_session(session: Session) {
                             Some(json!({ "sessionId": session_id })),
                         );
                         if let Some(tx) = acceptance {
-                            let _ = tx.send(Err("ACP active turn is being cancelled".into()));
+                            let _ = tx.send(SteerAcceptance::Rejected(
+                                "ACP active turn is being cancelled".into(),
+                            ));
                         } else {
                             queued_steers.push_back(text);
                         }
@@ -3713,7 +3756,9 @@ async fn run_session(session: Session) {
                     } else if turn.is_none() {
                         if require_active {
                             if let Some(tx) = acceptance {
-                                let _ = tx.send(Err("ACP has no active turn to steer".into()));
+                                let _ = tx.send(SteerAcceptance::Rejected(
+                                    "ACP has no active turn to steer".into(),
+                                ));
                             }
                             continue 'main;
                         }
@@ -3751,7 +3796,9 @@ async fn run_session(session: Session) {
                         // followers wait in the backlog.
                         if steering_call.is_some() {
                             if let Some(tx) = acceptance {
-                                let _ = tx.send(Err("another ACP steer is still pending".into()));
+                                let _ = tx.send(SteerAcceptance::Rejected(
+                                    "another ACP steer is still pending".into(),
+                                ));
                             } else {
                                 steer_backlog.push_back(text);
                             }
@@ -3762,7 +3809,9 @@ async fn run_session(session: Session) {
                     } else {
                         // No extension (Grok today): turn-boundary delivery.
                         if let Some(tx) = acceptance {
-                            let _ = tx.send(Err("ACP agent has no native in-turn steering".into()));
+                            let _ = tx.send(SteerAcceptance::Rejected(
+                                "ACP agent has no native in-turn steering".into(),
+                            ));
                         } else {
                             queued_steers.push_back(text);
                         }

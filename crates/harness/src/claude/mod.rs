@@ -487,7 +487,7 @@ impl ClaudeHarness {
             &apply_ultrathink(request.reasoning, &request.prompt),
             &images,
         );
-        let _ = stdin_tx.send(StdinMsg::Line(first));
+        let _ = stdin_tx.send(StdinMsg::line(first));
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
@@ -517,10 +517,22 @@ impl ClaudeHarness {
 }
 
 enum StdinMsg {
-    Line(String),
+    Line {
+        line: String,
+        written: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    },
     /// Close stdin (end of steering input): the CLI finishes the current turn
     /// and exits, which ends the run stream at stdout EOF.
     Close,
+}
+
+impl StdinMsg {
+    fn line(line: String) -> Self {
+        Self::Line {
+            line,
+            written: None,
+        }
+    }
 }
 
 /// Anthropic's API caps inline images at 5MB of raw bytes; larger files stay
@@ -601,15 +613,25 @@ async fn load_image_blocks(paths: &[String]) -> Vec<wire::ImageBlock> {
 async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<StdinMsg>) {
     while let Some(msg) = rx.recv().await {
         match msg {
-            StdinMsg::Line(line) => {
+            StdinMsg::Line { line, written } => {
                 let write = async {
                     stdin.write_all(line.as_bytes()).await?;
                     stdin.write_all(b"\n").await?;
                     stdin.flush().await
                 };
-                if let Err(e) = write.await {
-                    tracing::debug!(target: "zeron_harness::claude", "stdin write failed (tolerated): {e}");
-                    return;
+                match write.await {
+                    Ok(()) => {
+                        if let Some(written) = written {
+                            let _ = written.send(Ok(()));
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(written) = written {
+                            let _ = written.send(Err(e.to_string()));
+                        }
+                        tracing::debug!(target: "zeron_harness::claude", "stdin write failed (tolerated): {e}");
+                        return;
+                    }
                 }
             }
             StdinMsg::Close => {
@@ -661,6 +683,8 @@ async fn run_session(session: Session) {
     let request_input = Arc::new(request_input);
 
     let mut norm = Normalizer::new();
+    let mut awaiting_steer_incorporation: std::collections::VecDeque<String> =
+        std::collections::VecDeque::new();
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
@@ -688,7 +712,7 @@ async fn run_session(session: Session) {
                             let line = control_response_line(&req.request_id, serde_json::json!({
                                 "behavior": "deny", "message": "Tools are disabled for title generation"
                             }));
-                            let _ = stdin_tx.send(StdinMsg::Line(line));
+                            let _ = stdin_tx.send(StdinMsg::line(line));
                         } else {
                             handle_control_request(
                                 req,
@@ -700,6 +724,18 @@ async fn run_session(session: Session) {
                         }
                         continue;
                     }
+                    let incorporated_position = match &frame {
+                        Frame::User(user) if user.parent_tool_use_id.is_none() => user
+                            .message
+                            .blocks()
+                            .filter(|block| block.kind == "text")
+                            .find_map(|block| {
+                                awaiting_steer_incorporation
+                                    .iter()
+                                    .position(|pending| pending == &block.text)
+                            }),
+                        _ => None,
+                    };
                     for ev in norm.normalize(frame, interrupted) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
                         if event_tx.send(Ok(ev)).await.is_err() {
@@ -713,6 +749,20 @@ async fn run_session(session: Session) {
                             }
                         }
                     }
+                    if let Some(position) = incorporated_position {
+                        awaiting_steer_incorporation.remove(position);
+                        let (prev, next) = norm.rotate_for_steer();
+                        if event_tx
+                            .send(Ok(AgentEvent::Steered {
+                                assistant_message_id: Some(prev),
+                                next_assistant_message_id: Some(next),
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            break 'main;
+                        }
+                    }
                 }
                 Ok(None) => break 'main, // stdout EOF: the CLI exited
                 Err(e) => {
@@ -723,28 +773,57 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
-                    let line = wire::user_message_line(&apply_ultrathink(reasoning, &msg.prompt));
-                    let accepted = stdin_tx.send(StdinMsg::Line(line)).is_ok();
-                    if let Some(tx) = msg.acceptance {
-                        let _ = tx.send(if accepted {
-                            Ok(())
-                        } else {
-                            Err("Claude input channel closed".into())
-                        });
-                    }
-                    if !accepted {
-                        continue 'main;
-                    }
-                    // The CLI consumes the queued line at its own step
-                    // boundary; rotate the assistant message id so post-steer
-                    // output folds into a fresh message.
-                    let (prev, next) = norm.rotate_for_steer();
-                    let ev = AgentEvent::Steered {
-                        assistant_message_id: Some(prev),
-                        next_assistant_message_id: Some(next),
-                    };
-                    if event_tx.send(Ok(ev)).await.is_err() {
-                        break 'main;
+                    let prompt = apply_ultrathink(reasoning, &msg.prompt);
+                    let line = wire::user_message_line(&prompt);
+                    if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
+                        let (written_tx, written_rx) = tokio::sync::oneshot::channel();
+                        if stdin_tx.send(StdinMsg::Line {
+                            line,
+                            written: Some(written_tx),
+                        }).is_err() {
+                            if let Some(tx) = msg.acceptance {
+                                let _ = tx.send(crate::SteerAcceptance::Rejected(
+                                    "Claude input channel closed before dispatch".into(),
+                                ));
+                            }
+                            continue 'main;
+                        }
+                        match written_rx.await {
+                            Ok(Ok(())) => {
+                                awaiting_steer_incorporation.push_back(prompt);
+                                if let Some(tx) = msg.acceptance {
+                                    let _ = tx.send(crate::SteerAcceptance::Accepted);
+                                }
+                            }
+                            Ok(Err(error)) => {
+                                if let Some(tx) = msg.acceptance {
+                                    let _ = tx.send(crate::SteerAcceptance::Unknown(error));
+                                }
+                            }
+                            Err(_) => {
+                                if let Some(tx) = msg.acceptance {
+                                    let _ = tx.send(crate::SteerAcceptance::Unknown(
+                                        "Claude stdin writer ended before confirming the write"
+                                            .into(),
+                                    ));
+                                }
+                            }
+                        }
+                    } else {
+                        let accepted = stdin_tx.send(StdinMsg::line(line)).is_ok();
+                        if !accepted {
+                            continue 'main;
+                        }
+                        // Ordinary warm routing retains its historical local
+                        // boundary/follow-up behavior.
+                        let (prev, next) = norm.rotate_for_steer();
+                        let ev = AgentEvent::Steered {
+                            assistant_message_id: Some(prev),
+                            next_assistant_message_id: Some(next),
+                        };
+                        if event_tx.send(Ok(ev)).await.is_err() {
+                            break 'main;
+                        }
                     }
                 }
                 None => {
@@ -758,7 +837,7 @@ async fn run_session(session: Session) {
             _ = interrupt.cancelled(), if !interrupt_sent => {
                 interrupt_sent = true;
                 interrupted = true;
-                let _ = stdin_tx.send(StdinMsg::Line(wire::interrupt_request_line("int_1")));
+                let _ = stdin_tx.send(StdinMsg::line(wire::interrupt_request_line("int_1")));
                 // Escalate if the CLI doesn't wind down within the grace
                 // periods: SIGTERM (kills bash trees, runs SessionEnd hooks),
                 // then SIGKILL. Aborted once the child is reaped.
@@ -838,7 +917,7 @@ fn handle_control_request(
     if req.request.tool_name != "AskUserQuestion" {
         if permission_mode == zeron_proto::PermissionMode::Full {
             let line = control_response_line(&req.request_id, allow_response(req.request.input));
-            let _ = stdin_tx.send(StdinMsg::Line(line));
+            let _ = stdin_tx.send(StdinMsg::line(line));
             return;
         }
         let request_input = Arc::clone(request_input);
@@ -894,7 +973,7 @@ fn handle_control_request(
                 })
             };
             let line = control_response_line(&req.request_id, response);
-            let _ = stdin_tx.send(StdinMsg::Line(line));
+            let _ = stdin_tx.send(StdinMsg::line(line));
         });
         return;
     }
@@ -916,7 +995,7 @@ fn handle_control_request(
         let answers = (request_input)(questions.clone()).await.unwrap_or_default();
         let updated = updated_input_with_answers(&input, &questions, &answers);
         let line = control_response_line(&request_id, allow_response(updated));
-        let _ = stdin_tx.send(StdinMsg::Line(line));
+        let _ = stdin_tx.send(StdinMsg::line(line));
     });
 }
 

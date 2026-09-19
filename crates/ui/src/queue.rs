@@ -431,12 +431,40 @@ impl Composer {
         let delivery_blocked = item.delivery_gate.is_some() || claim_blocked;
         let interaction_blocked = delivery_blocked || being_removed;
         let text = match (&item.status, &item.delivery_gate, item.hold_reason) {
+            (
+                QueueMessageStatus::Claimed {
+                    mode: zeron_doc::QueueClaimMode::SteerNow,
+                    ..
+                },
+                _,
+                _,
+            ) if !being_edited => SharedString::from(format!(
+                "Requesting steer… · {}",
+                one_line(&queue_visible_text(&item.text, &item.attachments))
+            )),
             (QueueMessageStatus::Claimed { .. }, _, _) if !being_edited => {
                 SharedString::from(format!(
                     "Sending… · {}",
                     one_line(&queue_visible_text(&item.text, &item.attachments))
                 ))
             }
+            (QueueMessageStatus::SteeringAccepted { .. }, _, _) if !being_edited => {
+                SharedString::from(format!(
+                    "Accepted for steering · {}",
+                    one_line(&queue_visible_text(&item.text, &item.attachments))
+                ))
+            }
+            (
+                QueueMessageStatus::DeliveryUnknown {
+                    mode: zeron_doc::QueueClaimMode::SteerNow,
+                    ..
+                },
+                _,
+                _,
+            ) if !being_edited => SharedString::from(format!(
+                "Steer outcome unknown · {}",
+                one_line(&queue_visible_text(&item.text, &item.attachments))
+            )),
             (QueueMessageStatus::DeliveryUnknown { .. }, _, _) if !being_edited => {
                 SharedString::from(format!(
                     "Delivery unknown · {}",

@@ -541,6 +541,7 @@ fn finish_queue_edit_projection(
         return Ok((FinishQueueEditOutcome::Missing, false));
     };
     if let QueueMessageStatus::Claimed { command_id, .. }
+    | QueueMessageStatus::SteeringAccepted { command_id, .. }
     | QueueMessageStatus::DeliveryUnknown { command_id, .. } = &item.status
     {
         return Ok((
@@ -1079,6 +1080,7 @@ impl DocHost {
                         .find(|item| item.id == correlation_id)
                         .and_then(|item| match item.status {
                             QueueMessageStatus::Claimed { command_id, .. }
+                            | QueueMessageStatus::SteeringAccepted { command_id, .. }
                             | QueueMessageStatus::DeliveryUnknown { command_id, .. } => {
                                 Some(command_id)
                             }
@@ -1617,6 +1619,7 @@ impl DocHost {
         for item in doc.read_queue().unwrap_or_default() {
             let command_id = match &item.status {
                 QueueMessageStatus::Claimed { command_id, .. }
+                | QueueMessageStatus::SteeringAccepted { command_id, .. }
                 | QueueMessageStatus::DeliveryUnknown { command_id, .. } => command_id,
                 QueueMessageStatus::Held => continue,
             };
@@ -3223,7 +3226,8 @@ impl DocHost {
                     command_id,
                     mode: QueueClaimMode::SteerNow,
                     ..
-                } => Some(command_id),
+                }
+                | QueueMessageStatus::SteeringAccepted { command_id, .. } => Some(command_id),
                 _ => None,
             })
         else {
@@ -3531,6 +3535,7 @@ impl DocHost {
                 match &item.status {
                     QueueMessageStatus::Held => {}
                     QueueMessageStatus::Claimed { command_id, .. }
+                    | QueueMessageStatus::SteeringAccepted { command_id, .. }
                     | QueueMessageStatus::DeliveryUnknown { command_id, .. } => {
                         return Ok((
                             BeginQueueEditOutcome::Claimed {
@@ -4197,7 +4202,32 @@ impl DocHost {
             handle.queue_paused.store(true, Ordering::Release);
         }
         match provider_outcome {
-            QueueProviderOutcome::Accepted => Ok(QueueDispatchOutcome::Started),
+            QueueProviderOutcome::Accepted => {
+                if send == QueueSend::Steer {
+                    let result = self.persist_queue_projection_if(
+                        &handle,
+                        &format!("steer-accepted:{command_id}"),
+                        |doc| {
+                            let row = doc.mark_queued_steer_accepted(id, command_id, now_ms())?;
+                            let changed = row.is_some();
+                            Ok((row, changed))
+                        },
+                    );
+                    if let Err(error) = result {
+                        let _ = self.mark_queue_task_unknown(
+                            &handle,
+                            command_id,
+                            "provider accepted native steering, but the durable acceptance projection failed",
+                            |doc| {
+                                doc.mark_queued_claim_unknown(id, command_id, now_ms())?;
+                                Ok(())
+                            },
+                        );
+                        return Err(error);
+                    }
+                }
+                Ok(QueueDispatchOutcome::Started)
+            }
             QueueProviderOutcome::Unknown => {
                 let (row, _) = self.mark_queue_task_unknown(
                     &handle,

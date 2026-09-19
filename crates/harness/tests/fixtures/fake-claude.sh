@@ -107,12 +107,21 @@ case "$first" in
   esac
   ;;
 
+*scenario:steer-accepted-only*)
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":[],"cwd":"/tmp","session_id":"sess-steer"}'
+  emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"first"}}}'
+  read -r steer || exit 1
+  emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"accepted-without-incorporation"}}}'
+  emit '{"type":"result","subtype":"success","result":"accepted","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-steer"}'
+  ;;
+
 *scenario:steer*)
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":[],"cwd":"/tmp","session_id":"sess-steer"}'
   emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"first"}}}'
   # The queued steering user line, applied at "the step boundary" (here: now).
   read -r steer || exit 1
   content=$(printf '%s\n' "$steer" | sed 's/.*"content":"\([^"]*\)".*/\1/')
+  emit "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"$content\"}]}}"
   emit "{\"type\":\"stream_event\",\"parent_tool_use_id\":null,\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"steered:$content\"}}}"
   emit '{"type":"result","subtype":"success","result":"steered","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-steer"}'
   ;;

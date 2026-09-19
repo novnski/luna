@@ -12,7 +12,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use zeron_harness::codex::native::CodexNativeClient;
 use zeron_harness::{
-    CancellationToken, CodexHarness, Harness, HarnessError, RunControls, SteerMessage,
+    CancellationToken, CodexHarness, Harness, HarnessError, RunControls, SteerAcceptance,
+    SteerMessage,
 };
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, TodoItem,
@@ -542,7 +543,10 @@ async fn explicit_steer_confirms_native_turn_steer_acceptance() {
         .expect("steer queued");
     let events = run_to_end(&harness(), request("scenario:steer"), controls).await;
 
-    assert_eq!(accepted_rx.await.expect("acceptance response"), Ok(()));
+    assert_eq!(
+        accepted_rx.await.expect("acceptance response"),
+        SteerAcceptance::Accepted
+    );
     assert!(
         events
             .iter()
@@ -569,7 +573,10 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
     drop(steer);
     let events = run_to_end(&harness(), request("scenario:steer-race"), controls).await;
 
-    assert!(accepted_rx.await.expect("acceptance response").is_err());
+    assert!(matches!(
+        accepted_rx.await.expect("acceptance response"),
+        SteerAcceptance::Rejected(_)
+    ));
     assert_eq!(
         events
             .iter()
@@ -581,6 +588,79 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
     assert!(!events.contains(&AgentEvent::TextDelta {
         text: "fallback".into()
     }));
+}
+
+#[tokio::test]
+async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
+    let (controls, steer, _token) = controls("Yes");
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "redirect please".into(),
+            message_id: Some("queued-steer".into()),
+            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(accepted_tx),
+        })
+        .await
+        .expect("steer queued");
+    drop(steer);
+    let events = run_to_end(
+        &harness(),
+        request("scenario:steer-lost-response"),
+        controls,
+    )
+    .await;
+
+    assert!(matches!(
+        accepted_rx.await.expect("acceptance response"),
+        SteerAcceptance::Unknown(_)
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. }))
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::Done { .. }))
+            .count(),
+        1,
+        "a lost response must not manufacture a fallback turn: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn explicit_steer_ack_without_provider_echo_is_not_incorporated() {
+    let (controls, steer, _token) = controls("Yes");
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "redirect please".into(),
+            message_id: Some("queued-steer".into()),
+            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(accepted_tx),
+        })
+        .await
+        .expect("steer queued");
+    drop(steer);
+    let events = run_to_end(
+        &harness(),
+        request("scenario:steer-accepted-only"),
+        controls,
+    )
+    .await;
+
+    assert_eq!(
+        accepted_rx.await.expect("acceptance response"),
+        SteerAcceptance::Accepted
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "an RPC ACK alone must not synthesize incorporation: {events:?}"
+    );
 }
 
 #[tokio::test]

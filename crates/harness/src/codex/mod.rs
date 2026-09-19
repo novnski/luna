@@ -58,13 +58,13 @@ use zeron_proto::{
     RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
-use crate::jsonrpc::{Incoming, RpcClient};
+use crate::jsonrpc::{Incoming, RpcClient, RpcRequestFailure};
 use crate::process::{Child, Command, Stdio};
-use crate::{Harness, HarnessError, RunControls};
+use crate::{Harness, HarnessError, RunControls, SteerAcceptance};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
 use normalize::{
     ChildRoute, Phase, ReasoningStream, delta_text, item_id, item_type, notification_thread_id,
-    route_child_notification, turn_error_message, turn_id, usage_event,
+    route_child_notification, turn_error_message, turn_id, usage_event, user_message_text,
 };
 
 /// Engine-only model-option keys. They are consumed by this adapter and never
@@ -1114,6 +1114,10 @@ async fn run_session(session: Session) {
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
     // next `turn/start` when the expected turn's end notification arrives.
     let mut queued_steers: VecDeque<String> = VecDeque::new();
+    // A successful `turn/steer` response proves provider acceptance, not that
+    // the model incorporated the prompt. The echoed user item is the latter
+    // boundary; until it arrives the engine keeps the queue row unsettled.
+    let mut awaiting_steer_incorporation: VecDeque<String> = VecDeque::new();
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
@@ -1196,6 +1200,28 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
+                        if phase == Phase::Completed
+                            && matches!(item_type(item), "userMessage" | "user_message")
+                            && let Some(text) = user_message_text(item)
+                            && let Some(position) = awaiting_steer_incorporation
+                                .iter()
+                                .position(|pending| pending == &text)
+                        {
+                            awaiting_steer_incorporation.remove(position);
+                            let (prev, next) = rotate(&mut assistant_message_id);
+                            if !send(
+                                &event_tx,
+                                AgentEvent::Steered {
+                                    assistant_message_id: Some(prev),
+                                    next_assistant_message_id: Some(next),
+                                },
+                            )
+                            .await
+                            {
+                                break 'main;
+                            }
+                            continue 'main;
+                        }
                         if matches!(item_type(item), "agentMessage" | "agent_message") {
                             if phase == Phase::Completed {
                                 // Fallback for non-streamed messages only.
@@ -1418,23 +1444,12 @@ async fn run_session(session: Session) {
                             "expectedTurnId": expected,
                             "input": [{ "type": "text", "text": text }],
                         });
-                        match client.request("turn/steer", steer_params).await {
+                        match client.request_classified("turn/steer", steer_params).await {
                             Ok(_) => {
                                 if let Some(tx) = acceptance.take() {
-                                    let _ = tx.send(Ok(()));
+                                    let _ = tx.send(SteerAcceptance::Accepted);
                                 }
-                                let (prev, next) = rotate(&mut assistant_message_id);
-                                if !send(
-                                    &event_tx,
-                                    AgentEvent::Steered {
-                                        assistant_message_id: Some(prev),
-                                        next_assistant_message_id: Some(next),
-                                    },
-                                )
-                                .await
-                                {
-                                    break 'main;
-                                }
+                                awaiting_steer_incorporation.push_back(text);
                             }
                             // A failed `turn/steer` does NOT mean the text is
                             // bad: most commonly the active turn finished
@@ -1442,16 +1457,25 @@ async fn run_session(session: Session) {
                             // for redelivery as the next `turn/start` when the
                             // expected turn's end arrives (also the safe
                             // fallback for older Codex without steering).
-                            Err(e) => {
+                            Err(failure) => {
                                 if require_active {
                                     if let Some(tx) = acceptance.take() {
-                                        let _ = tx.send(Err(e.to_string()));
+                                        let outcome = match failure {
+                                            RpcRequestFailure::Rejected(message) => {
+                                                SteerAcceptance::Rejected(message)
+                                            }
+                                            RpcRequestFailure::Unknown(message) => {
+                                                SteerAcceptance::Unknown(message)
+                                            }
+                                        };
+                                        let _ = tx.send(outcome);
                                     }
                                     continue 'main;
                                 }
                                 tracing::debug!(
                                     target: "zeron_harness::codex",
-                                    "turn/steer rejected (queued as next turn): {e}"
+                                    "turn/steer did not settle (queued as next turn): {}",
+                                    failure.message()
                                 );
                                 if router.active.as_deref() == Some(expected.as_str())
                                     && !router.is_completed(&expected)
@@ -1473,7 +1497,9 @@ async fn run_session(session: Session) {
                         }
                     } else if require_active {
                         if let Some(tx) = acceptance.take() {
-                            let _ = tx.send(Err("no active Codex turn to steer".into()));
+                            let _ = tx.send(SteerAcceptance::Rejected(
+                                "no active Codex turn to steer".into(),
+                            ));
                         }
                     } else if !steer_as_new_turn(
                         &client,

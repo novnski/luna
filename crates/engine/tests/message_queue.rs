@@ -43,25 +43,31 @@ struct HeldHarness {
     asks: bool,
     /// Use the same input bridge with typed approval metadata.
     approves: bool,
+    incorporates_steers: bool,
 }
 
 impl HeldHarness {
     fn new(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, false, false)
+        Self::build(steering, false, false, true)
     }
 
     fn asking(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, true, false)
+        Self::build(steering, true, false, true)
     }
 
     fn approving(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, true, true)
+        Self::build(steering, true, true, true)
+    }
+
+    fn accepted_only(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
+        Self::build(steering, false, false, false)
     }
 
     fn build(
         steering: SteeringMode,
         asks: bool,
         approves: bool,
+        incorporates_steers: bool,
     ) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
         let (finish, _) = tokio::sync::broadcast::channel(16);
         let prompts = Arc::new(Mutex::new(Vec::new()));
@@ -73,6 +79,7 @@ impl HeldHarness {
                 requests: Mutex::new(Vec::new()),
                 asks,
                 approves,
+                incorporates_steers,
             }),
             prompts,
         )
@@ -130,6 +137,7 @@ impl Harness for HeldHarness {
         }
         let finish = self.finish.subscribe();
         let steering = controls.steering;
+        let incorporates_steers = self.incorporates_steers;
         let started = futures::stream::iter(vec![
             Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
@@ -155,7 +163,7 @@ impl Harness for HeldHarness {
         ]);
         let done = futures::stream::unfold(
             (finish, steering, false),
-            |(mut finish, mut steering, ended)| async move {
+            move |(mut finish, mut steering, ended)| async move {
                 if ended {
                     return None;
                 }
@@ -172,12 +180,19 @@ impl Harness for HeldHarness {
                         match steer {
                             Some(mut steer) => {
                                 if let Some(tx) = steer.acceptance.take() {
-                                    let _ = tx.send(Ok(()));
+                                    let _ = tx.send(zeron_harness::SteerAcceptance::Accepted);
                                 }
-                                return Some((Ok(AgentEvent::Steered {
-                                    assistant_message_id: Some("a-before-steer".into()),
-                                    next_assistant_message_id: Some("a-after-steer".into()),
-                                }), (finish, steering, false)));
+                                let event = if incorporates_steers {
+                                    AgentEvent::Steered {
+                                        assistant_message_id: Some("a-before-steer".into()),
+                                        next_assistant_message_id: Some("a-after-steer".into()),
+                                    }
+                                } else {
+                                    AgentEvent::TextDelta {
+                                        text: "accepted without incorporation evidence".into(),
+                                    }
+                                };
+                                return Some((Ok(event), (finish, steering, false)));
                             }
                             None => return None,
                         }
@@ -859,6 +874,116 @@ async fn steer_preference_uses_native_acceptance_and_settles_the_same_row() {
     );
     let _ = harness.finish.send(());
     core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().join("data");
+    let (harness, prompts) = HeldHarness::accepted_only(SteeringMode::StepBoundary);
+    let core = assemble_at(&data_dir, harness.clone());
+    create_chat(&core).await;
+    let client = zeron_rpc::memory_client(core.rpc_service());
+
+    core.doc_host
+        .queue_message(CHAT, "opening", Vec::new())
+        .expect("queue opening");
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|prompt| prompt == "opening")
+        },
+        "the first turn to start",
+    )
+    .await;
+
+    let reply = client
+        .call(
+            zeron_rpc::methods::QUEUE_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT,
+                "text": "accepted only",
+                "holdForTurnEnd": true,
+                "followUpBehavior": "steer",
+            }),
+        )
+        .await
+        .expect("queue held steer");
+    let id = reply["id"].as_str().expect("queue id").to_string();
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| {
+                    matches!(row.status, QueueMessageStatus::SteeringAccepted { .. })
+                })
+        },
+        "provider acceptance without incorporation",
+    )
+    .await;
+    assert!(
+        !user_messages(&core)
+            .iter()
+            .any(|message| message == "accepted only")
+    );
+    assert_eq!(
+        prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|prompt| prompt.as_str() == "accepted only")
+            .count(),
+        0
+    );
+
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| matches!(row.status, QueueMessageStatus::DeliveryUnknown { .. }))
+        },
+        "terminal run to preserve the unsettled steer as unknown",
+    )
+    .await;
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(core);
+
+    let (restarted_harness, restarted_prompts) = HeldHarness::new(SteeringMode::StepBoundary);
+    let restarted = assemble_at(&data_dir, restarted_harness);
+    let row = restarted
+        .doc_host
+        .queued_message(CHAT, &id)
+        .unwrap()
+        .expect("unknown steer survives restart");
+    assert!(matches!(
+        row.status,
+        QueueMessageStatus::DeliveryUnknown { .. }
+    ));
+    restarted
+        .doc_host
+        .drain_queue(&restarted.doc_host.open(CHAT).unwrap())
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|prompt| prompt.as_str() == "accepted only")
+            .count(),
+        0
+    );
+    assert!(restarted_prompts.lock().unwrap().is_empty());
+    restarted.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

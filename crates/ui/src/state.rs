@@ -2516,7 +2516,11 @@ mod tests {
     use super::*;
     use chrono::TimeDelta;
     use gpui::AppContext;
-    use zeron_engine::{EngineCore, default_registry};
+    use zeron_engine::{
+        AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
+        default_registry,
+    };
+    use zeron_harness::mock::MockHarness;
     // `SessionStatus` is only needed to build the fixtures below — the module
     // itself derives everything through `zeron_proto::view`.
     use zeron_proto::{SessionStatus, UserProfile};
@@ -3621,13 +3625,29 @@ mod tests {
             .unwrap();
         let _runtime_guard = runtime.enter();
         let dir = tempfile::tempdir().unwrap();
-        let core = EngineCore::assemble(
-            dir.path(),
-            Arc::new(default_registry()),
+        let providers = dir.path().join("synthetic-providers");
+        let accounts = AgentAccountsConfig {
+            data_dir: providers.clone(),
+            claude_config_dir: providers.join("claude"),
+            claude_config_file: providers.join("claude.json"),
+            codex_home: providers.join("codex"),
+            cursor_sdk_auth_file: providers.join("cursor/auth.json"),
+        };
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let registry = HarnessRegistry::new();
+        registry.register(Arc::new(MockHarness { script: Vec::new() }));
+        let core = EngineCore::assemble_with_profile_and_agent_accounts_config(
+            EngineProfile::development(dir.path(), "watch-test-org", "watch-test-user"),
+            Arc::new(registry),
             HarnessId::Mock,
             None,
+            accounts,
         )
         .unwrap();
+        let mut auth_config = AuthConfig::new("http://127.0.0.1:1", dir.path().join("auth"));
+        auth_config.dev_user_id = "watch-test-user".into();
+        auth_config.use_in_memory_credentials_for_tests();
+        core.set_auth(Auth::new(auth_config));
         core.workspace
             .create_chat(CHAT_ID, None, Some(&core.device_id), None, None)
             .unwrap();

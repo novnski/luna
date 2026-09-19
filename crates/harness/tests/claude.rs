@@ -12,7 +12,8 @@ use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
 use zeron_harness::{
-    CancellationToken, ClaudeHarness, Harness, HarnessError, RunControls, SteerMessage,
+    CancellationToken, ClaudeHarness, Harness, HarnessError, RunControls, SteerAcceptance,
+    SteerMessage,
 };
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel, ToolCall, UserInputAnswer,
@@ -393,6 +394,64 @@ async fn steering_lines_are_written_to_stdin_mid_run() {
             ..
         })
     ));
+}
+
+#[tokio::test]
+async fn explicit_steer_uses_provider_echo_as_incorporation_evidence() {
+    let (controls, steer, _token) = controls("A");
+    let (acceptance_tx, acceptance_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "redirect please".into(),
+            message_id: Some("queued-steer".into()),
+            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(acceptance_tx),
+        })
+        .await
+        .expect("steer queued");
+    let events = run_to_end(&harness(), request("scenario:steer"), controls).await;
+
+    assert_eq!(
+        acceptance_rx.await.expect("acceptance response"),
+        SteerAcceptance::Accepted
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. }))
+    );
+}
+
+#[tokio::test]
+async fn explicit_claude_write_ack_without_echo_is_not_incorporated() {
+    let (controls, steer, _token) = controls("A");
+    let (acceptance_tx, acceptance_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "redirect please".into(),
+            message_id: Some("queued-steer".into()),
+            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(acceptance_tx),
+        })
+        .await
+        .expect("steer queued");
+    let events = run_to_end(
+        &harness(),
+        request("scenario:steer-accepted-only"),
+        controls,
+    )
+    .await;
+
+    assert_eq!(
+        acceptance_rx.await.expect("acceptance response"),
+        SteerAcceptance::Accepted
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "stdin write success alone must not synthesize incorporation: {events:?}"
+    );
 }
 
 #[tokio::test]

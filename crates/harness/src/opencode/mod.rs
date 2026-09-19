@@ -1612,7 +1612,7 @@ async fn run_session(session: Session) {
                     Some(steer) => {
                         if steer.delivery == crate::SteerDelivery::RequireActiveTurn {
                             if let Some(tx) = steer.acceptance {
-                                let _ = tx.send(Err(
+                                let _ = tx.send(crate::SteerAcceptance::Rejected(
                                     "OpenCode supports follow-up turns, not native in-turn steering"
                                         .into(),
                                 ));

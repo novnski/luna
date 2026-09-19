@@ -40,7 +40,23 @@ pub(crate) enum Incoming {
     Eof,
 }
 
-type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RpcRequestFailure {
+    /// A JSON-RPC error response correlated to the request.
+    Rejected(String),
+    /// No authoritative response was observed after dispatch may have begun.
+    Unknown(String),
+}
+
+impl RpcRequestFailure {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::Rejected(message) | Self::Unknown(message) => message,
+        }
+    }
+}
+
+type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, RpcRequestFailure>>>>>;
 
 #[derive(Clone)]
 pub(crate) struct RpcClient {
@@ -70,23 +86,34 @@ impl RpcClient {
 
     /// Send a request and await its response (resolved by the reader task).
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, HarnessError> {
+        self.request_classified(method, params)
+            .await
+            .map_err(|failure| HarnessError::Protocol(format!("{method}: {}", failure.message())))
+    }
+
+    /// Send a request while preserving the distinction between a correlated
+    /// JSON-RPC rejection and a transport/EOF outcome that may have delivered
+    /// the request but lost its response.
+    pub async fn request_classified(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, RpcRequestFailure> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         self.pending.lock().expect("pending lock").insert(id, tx);
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if self.writer.send(line.to_string()).is_err() {
             self.pending.lock().expect("pending lock").remove(&id);
-            return Err(HarnessError::Protocol(format!(
-                "{method}: app-server stdin closed"
-            )));
+            return Err(RpcRequestFailure::Unknown("app-server stdin closed".into()));
         }
         match rx.await {
             Ok(Ok(result)) => Ok(result),
-            Ok(Err(message)) => Err(HarnessError::Protocol(format!("{method}: {message}"))),
+            Ok(Err(failure)) => Err(failure),
             // Sender dropped: the reader hit EOF and failed all pending.
-            Err(_) => Err(HarnessError::Protocol(format!(
-                "{method}: app-server exited before responding"
-            ))),
+            Err(_) => Err(RpcRequestFailure::Unknown(
+                "app-server exited before responding".into(),
+            )),
         }
     }
 
@@ -194,7 +221,7 @@ async fn read_loop(stdout: ChildStdout, pending: Pending, tx: mpsc::Sender<Incom
                     continue;
                 };
                 let outcome = match msg.get("error") {
-                    Some(err) => Err(response_error(err)),
+                    Some(err) => Err(RpcRequestFailure::Rejected(response_error(err))),
                     None => Ok(msg
                         .get_mut("result")
                         .map(Value::take)

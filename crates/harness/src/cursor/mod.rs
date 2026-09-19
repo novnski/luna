@@ -602,7 +602,7 @@ async fn run_session(session: Session) {
                 Some(msg) => {
                     if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
                         if let Some(tx) = msg.acceptance {
-                            let _ = tx.send(Err(
+                            let _ = tx.send(crate::SteerAcceptance::Rejected(
                                 "Cursor supports follow-up turns, not native in-turn steering"
                                     .into(),
                             ));

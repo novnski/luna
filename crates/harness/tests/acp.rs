@@ -10,7 +10,9 @@ use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
 use zeron_harness::acp::SignInProgress;
-use zeron_harness::{AcpHarness, CancellationToken, Harness, RunControls, SteerMessage};
+use zeron_harness::{
+    AcpHarness, CancellationToken, Harness, RunControls, SteerAcceptance, SteerMessage,
+};
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
     TodoItem, ToolCall, UserInputAnswer,
@@ -324,6 +326,69 @@ async fn steering_extension_injects_mid_turn() {
         text: "steered".into()
     }));
     assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
+
+async fn run_explicit_steer_scenario(scenario: &str) -> (Vec<AgentEvent>, SteerAcceptance) {
+    let (controls, steer, _token) = controls();
+    let stream = harness()
+        .run(request(scenario), controls)
+        .await
+        .expect("run starts");
+    tokio::time::timeout(Duration::from_secs(10), async move {
+        let mut events = Vec::new();
+        let mut stream = stream;
+        let mut steer = Some(steer);
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let mut accepted_tx = Some(accepted_tx);
+        while let Some(ev) = stream.next().await {
+            let ev = ev.expect("stream event");
+            if matches!(ev, AgentEvent::TextDelta { ref text } if text == "first")
+                && let Some(sender) = steer.take()
+            {
+                sender
+                    .send(SteerMessage {
+                        prompt: "redirect please".into(),
+                        message_id: Some("queued-steer".into()),
+                        delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+                        acceptance: accepted_tx.take(),
+                    })
+                    .await
+                    .expect("steer sent");
+            }
+            events.push(ev);
+        }
+        (events, accepted_rx.await.expect("acceptance response"))
+    })
+    .await
+    .expect("run finished in time")
+}
+
+#[tokio::test]
+async fn explicit_acp_lost_response_is_unknown_and_never_replayed() {
+    let (events, acceptance) = run_explicit_steer_scenario("scenario:steer-lost-response").await;
+    assert!(matches!(acceptance, SteerAcceptance::Unknown(_)));
+    assert_eq!(
+        dones(&events),
+        vec![(DoneStatus::Completed, None)],
+        "lost steering response must not create a follow-up prompt: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. }))
+    );
+}
+
+#[tokio::test]
+async fn explicit_acp_json_rpc_error_is_a_confirmed_rejection() {
+    let (events, acceptance) = run_explicit_steer_scenario("scenario:steer-explicit-reject").await;
+    assert!(matches!(acceptance, SteerAcceptance::Rejected(_)));
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. }))
+    );
 }
 
 /// The steering response racing the turn's own end: the injection landed in

@@ -282,7 +282,31 @@ case "$turnline" in
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
   ;;
 
-# NOTE: steer-race before steer — `case` takes the first matching glob.
+# NOTE: specific steer scenarios before steer — `case` takes the first match.
+*scenario:steer-lost-response*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
+  read -r steerline || exit 1
+  has "$steerline" '"method":"turn/steer"' || exit 1
+  # The request arrived, but its response is deliberately lost. Ending the
+  # wire forces a transport-unknown outcome; explicit steering must not retry.
+  emit '{"method":"item/agentMessage/delta","params":{"itemId":"m1","delta":"request-arrived-response-lost"}}'
+  emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
+  ;;
+
+*scenario:steer-accepted-only*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
+  read -r steerline || exit 1
+  sid=$(rid "$steerline")
+  has "$steerline" '"method":"turn/steer"' || exit 1
+  emit "{\"id\":$sid,\"result\":{}}"
+  # No echoed userMessage: accepted for steering is not proof that the model
+  # incorporated the prompt.
+  emit '{"method":"item/agentMessage/delta","params":{"itemId":"m1","delta":"accepted-without-incorporation"}}'
+  emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
+  ;;
+
 *scenario:steer-race*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
@@ -316,6 +340,7 @@ case "$turnline" in
     has "$steerline" '"expectedTurnId":"t-1"' &&
     has "$steerline" 'redirect please'; then
     emit "{\"id\":$sid,\"result\":{}}"
+    emit '{"method":"item/completed","params":{"item":{"id":"u-steer","type":"userMessage","text":"redirect please"}}}'
     emit '{"method":"item/agentMessage/delta","params":{"itemId":"m1","delta":"steered"}}'
     emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
   else

@@ -122,6 +122,12 @@ pub enum QueueMessageStatus {
         mode: QueueClaimMode,
         claimed_at_ms: i64,
     },
+    /// The provider acknowledged an explicit steer request, but has not yet
+    /// emitted evidence that the model incorporated it.
+    SteeringAccepted {
+        command_id: String,
+        accepted_at_ms: i64,
+    },
     DeliveryUnknown {
         command_id: String,
         mode: QueueClaimMode,
@@ -405,6 +411,10 @@ impl SessionDoc {
                 command_id: current,
                 ..
             }
+            | QueueMessageStatus::SteeringAccepted {
+                command_id: current,
+                ..
+            }
             | QueueMessageStatus::DeliveryUnknown {
                 command_id: current,
                 ..
@@ -438,6 +448,50 @@ impl SessionDoc {
         Ok(QueueClaimOutcome::Claimed(item))
     }
 
+    /// Persist provider acceptance without claiming model incorporation. A
+    /// matching incorporation event later settles the row; a terminal run
+    /// without one converts it to DeliveryUnknown instead of replaying it.
+    pub fn mark_queued_steer_accepted(
+        &self,
+        id: &str,
+        command_id: &str,
+        accepted_at_ms: i64,
+    ) -> Result<Option<QueuedMessage>, DocError> {
+        let queue = self.doc().get_movable_list("queue");
+        let Some(index) = index_of(&queue, id) else {
+            return Ok(None);
+        };
+        let Some(mut item) = self.read_queue()?.into_iter().find(|item| item.id == id) else {
+            return Ok(None);
+        };
+        match &item.status {
+            QueueMessageStatus::SteeringAccepted {
+                command_id: current,
+                ..
+            } if current == command_id => return Ok(Some(item)),
+            QueueMessageStatus::Claimed {
+                command_id: current,
+                mode: QueueClaimMode::SteerNow,
+                ..
+            } if current == command_id => {}
+            _ => return Ok(None),
+        }
+        let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) = queue.get(index)
+        else {
+            return Ok(None);
+        };
+        item.status = QueueMessageStatus::SteeringAccepted {
+            command_id: command_id.to_string(),
+            accepted_at_ms,
+        };
+        map.insert(
+            "status",
+            crate::schema::loro_value_from_json(&serde_json::to_value(&item.status)?),
+        )?;
+        self.doc().commit();
+        Ok(Some(item))
+    }
+
     pub fn mark_queued_claim_unknown(
         &self,
         id: &str,
@@ -451,13 +505,14 @@ impl SessionDoc {
         let Some(item) = self.read_queue()?.into_iter().find(|item| item.id == id) else {
             return Ok(false);
         };
-        let QueueMessageStatus::Claimed {
-            command_id: current,
-            mode,
-            ..
-        } = item.status
-        else {
-            return Ok(false);
+        let (current, mode) = match item.status {
+            QueueMessageStatus::Claimed {
+                command_id, mode, ..
+            } => (command_id, mode),
+            QueueMessageStatus::SteeringAccepted { command_id, .. } => {
+                (command_id, QueueClaimMode::SteerNow)
+            }
+            _ => return Ok(false),
         };
         if current != command_id {
             return Ok(false);
@@ -491,6 +546,10 @@ impl SessionDoc {
         };
         let matches = match item.status {
             QueueMessageStatus::Claimed {
+                command_id: current,
+                ..
+            }
+            | QueueMessageStatus::SteeringAccepted {
                 command_id: current,
                 ..
             }
@@ -1075,6 +1134,48 @@ mod tests {
         ));
         assert!(doc.settle_queued_claim("q1", "claim-1").unwrap());
         assert!(doc.read_queue().unwrap().is_empty());
+    }
+
+    #[test]
+    fn steering_acceptance_round_trips_then_becomes_unknown_or_settles() {
+        let doc = doc();
+        doc.push_queued(&item("q1", "accepted but not incorporated"))
+            .unwrap();
+        assert!(matches!(
+            doc.claim_queued("q1", 1, "claim-1", QueueClaimMode::SteerNow, 2_000)
+                .unwrap(),
+            QueueClaimOutcome::Claimed(_)
+        ));
+        let accepted = doc
+            .mark_queued_steer_accepted("q1", "claim-1", 3_000)
+            .unwrap()
+            .expect("matching steer claim");
+        assert!(matches!(
+            accepted.status,
+            QueueMessageStatus::SteeringAccepted { .. }
+        ));
+
+        let restored = loro::LoroDoc::new();
+        restored.import(&doc.export_snapshot().unwrap()).unwrap();
+        let restarted = SessionDoc::from_doc(restored);
+        assert!(matches!(
+            restarted.read_queue().unwrap()[0].status,
+            QueueMessageStatus::SteeringAccepted { .. }
+        ));
+        assert!(
+            restarted
+                .mark_queued_claim_unknown("q1", "claim-1", 4_000)
+                .unwrap()
+        );
+        assert!(matches!(
+            restarted.read_queue().unwrap()[0].status,
+            QueueMessageStatus::DeliveryUnknown {
+                mode: QueueClaimMode::SteerNow,
+                ..
+            }
+        ));
+        assert!(restarted.settle_queued_claim("q1", "claim-1").unwrap());
+        assert!(restarted.read_queue().unwrap().is_empty());
     }
 
     #[test]

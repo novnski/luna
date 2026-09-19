@@ -18,10 +18,11 @@ use sha2::{Digest, Sha256};
 use zeron_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
 };
-use zeron_harness::{Harness, HarnessError, RunControls};
+use zeron_harness::{Harness, HarnessError, RunControls, SteerAcceptance};
 use zeron_proto::{
     AgentEvent, ChatConfig, ComposerDraft, DoneStatus, DraftBlob, DraftBlobState, DraftContext,
     HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
+    ToolCall,
 };
 use zeron_rpc::methods;
 use zeron_ui::*;
@@ -33,6 +34,30 @@ const PNG_B64: &str =
 
 struct L09FixtureHarness {
     hold: Duration,
+    steer_outcome: FixtureSteerOutcome,
+}
+
+#[derive(Clone, Copy)]
+enum FixtureSteerOutcome {
+    Incorporated,
+    Accepted,
+    Rejected,
+    Unknown,
+}
+
+fn fixture_steer_outcome() -> FixtureSteerOutcome {
+    match std::env::var("L09_QA_STEER_OUTCOME")
+        .unwrap_or_else(|_| "incorporated".into())
+        .as_str()
+    {
+        "incorporated" => FixtureSteerOutcome::Incorporated,
+        "accepted" => FixtureSteerOutcome::Accepted,
+        "rejected" => FixtureSteerOutcome::Rejected,
+        "unknown" => FixtureSteerOutcome::Unknown,
+        other => panic!(
+            "unsupported L09_QA_STEER_OUTCOME={other}; use incorporated, accepted, rejected, or unknown"
+        ),
+    }
 }
 
 #[async_trait]
@@ -77,19 +102,33 @@ impl Harness for L09FixtureHarness {
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let hold = self.hold;
+        let steer_outcome = self.steer_outcome;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             let session_id = format!("l09-qa-{}", uuid::Uuid::new_v4());
+            let mut assistant_message_id = format!("l09-qa-assistant-{}", uuid::Uuid::new_v4());
             let _ = tx.send(Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
                 model: "mock-1".into(),
                 tools: Vec::new(),
                 cwd: request.cwd,
                 session_id: session_id.clone(),
-                assistant_message_id: format!("l09-qa-assistant-{}", uuid::Uuid::new_v4()),
+                assistant_message_id: assistant_message_id.clone(),
             }));
             let _ = tx.send(Ok(AgentEvent::TextDelta {
                 text: "L09 isolated synthetic turn accepted. No provider was contacted.".into(),
+            }));
+            let _ = tx.send(Ok(AgentEvent::ToolCall {
+                id: "l09-qa-tool".into(),
+                call: ToolCall::Exec {
+                    command: "synthetic-fixture-check".into(),
+                },
+            }));
+            let _ = tx.send(Ok(AgentEvent::ToolResult {
+                id: "l09-qa-tool".into(),
+                is_error: false,
+                output: Some("synthetic tool boundary complete".into()),
+                diff: None,
             }));
             let interrupt = controls.interrupt;
             let mut steering = controls.steering;
@@ -102,9 +141,51 @@ impl Harness for L09FixtureHarness {
                     _ = &mut deadline => break DoneStatus::Completed,
                     steer = steering.recv(), if steering_open => match steer {
                         Some(steer) => {
-                            let _ = tx.send(Ok(AgentEvent::TextDelta {
-                                text: format!("\nSynthetic steer accepted: {}", steer.prompt),
-                            }));
+                            match steer_outcome {
+                                FixtureSteerOutcome::Incorporated => {
+                                    if let Some(acceptance) = steer.acceptance {
+                                        let _ = acceptance.send(SteerAcceptance::Accepted);
+                                    }
+                                    let next = format!(
+                                        "l09-qa-assistant-{}",
+                                        uuid::Uuid::new_v4()
+                                    );
+                                    let _ = tx.send(Ok(AgentEvent::Steered {
+                                        assistant_message_id: Some(assistant_message_id.clone()),
+                                        next_assistant_message_id: Some(next.clone()),
+                                    }));
+                                    assistant_message_id = next;
+                                    let _ = tx.send(Ok(AgentEvent::TextDelta {
+                                        text: format!(
+                                            "\nSynthetic provider incorporated: {}",
+                                            steer.prompt
+                                        ),
+                                    }));
+                                }
+                                FixtureSteerOutcome::Accepted => {
+                                    if let Some(acceptance) = steer.acceptance {
+                                        let _ = acceptance.send(SteerAcceptance::Accepted);
+                                    }
+                                    let _ = tx.send(Ok(AgentEvent::TextDelta {
+                                        text: "\nSynthetic provider accepted the request without incorporation evidence."
+                                            .into(),
+                                    }));
+                                }
+                                FixtureSteerOutcome::Rejected => {
+                                    if let Some(acceptance) = steer.acceptance {
+                                        let _ = acceptance.send(SteerAcceptance::Rejected(
+                                            "synthetic provider rejection".into(),
+                                        ));
+                                    }
+                                }
+                                FixtureSteerOutcome::Unknown => {
+                                    if let Some(acceptance) = steer.acceptance {
+                                        let _ = acceptance.send(SteerAcceptance::Unknown(
+                                            "synthetic response was lost".into(),
+                                        ));
+                                    }
+                                }
+                            }
                         }
                         None => steering_open = false,
                     }
@@ -357,6 +438,7 @@ fn main() -> anyhow::Result<()> {
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(L09FixtureHarness {
         hold: fixture_hold(),
+        steer_outcome: fixture_steer_outcome(),
     }));
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(

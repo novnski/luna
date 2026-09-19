@@ -232,6 +232,25 @@ case "$promptline" in
   emit "{\"id\":$pid,\"result\":{\"stopReason\":\"end_turn\"}}"
   ;;
 
+*scenario:steer-lost-response*)
+  update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}}'
+  read -r steerline || exit 1
+  has "$steerline" '"method":"_session/steering"' || exit 1
+  update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"request-arrived-response-lost"}}'
+  emit "{\"id\":$pid,\"result\":{\"stopReason\":\"end_turn\"}}"
+  # Exit without a steering response: transport outcome is unknown, never a
+  # provider rejection and never safe to replay.
+  ;;
+
+*scenario:steer-explicit-reject*)
+  update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}}'
+  read -r steerline || exit 1
+  sid=$(rid "$steerline")
+  has "$steerline" '"method":"_session/steering"' || exit 1
+  emit "{\"id\":$sid,\"error\":{\"code\":-32602,\"message\":\"no running turn\"}}"
+  emit "{\"id\":$pid,\"result\":{\"stopReason\":\"end_turn\"}}"
+  ;;
+
 *scenario:steer-ext*)
   update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}}'
   read -r steerline || exit 1

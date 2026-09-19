@@ -53,7 +53,17 @@ pub struct SteerMessage {
     pub delivery: SteerDelivery,
     /// Provider-level acceptance for explicit steering. `None` for ordinary
     /// warm routing, whose existing boundary fallback remains valid.
-    pub acceptance: Option<oneshot::Sender<Result<(), String>>>,
+    pub acceptance: Option<oneshot::Sender<SteerAcceptance>>,
+}
+
+/// What the provider wire proved about an explicit in-turn steer request.
+/// `Unknown` is deliberately distinct from rejection: the request may have
+/// reached the provider, so callers must preserve it without replaying it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SteerAcceptance {
+    Accepted,
+    Rejected(String),
+    Unknown(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
