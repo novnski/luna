@@ -835,6 +835,12 @@ fn rotate(id: &mut String) -> (String, String) {
     (prev, id.clone())
 }
 
+fn clear_explicit_steer_turn(owner: &mut Option<String>, terminal_turn_id: &str) {
+    if owner.as_deref() == Some(terminal_turn_id) {
+        *owner = None;
+    }
+}
+
 async fn send(tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>, ev: AgentEvent) -> bool {
     tx.send(Ok(ev)).await.is_ok()
 }
@@ -1118,7 +1124,7 @@ async fn run_session(session: Session) {
     // request ids. Keep explicit steering single-flight and never manufacture
     // incorporation from a text match; a successful RPC response is only an
     // accepted-but-unconfirmed delivery.
-    let mut explicit_steer_unconfirmed = false;
+    let mut explicit_steer_turn: Option<String> = None;
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
@@ -1263,6 +1269,7 @@ async fn run_session(session: Session) {
 
                     "turn/completed" => {
                         let id = turn_id(&params);
+                        clear_explicit_steer_turn(&mut explicit_steer_turn, &id);
                         router.note_completed(&id);
                         // Item ids never span turns; without this the set grew
                         // one entry per message for a persistent session's life.
@@ -1326,7 +1333,8 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/failed" => {
-                        router.note_completed(&turn_id(&params));
+                        let id = turn_id(&params);
+                        router.note_completed(&id);
                         if let Some(usage) = pending_usage.take()
                             && !send(&event_tx, usage).await
                         {
@@ -1357,7 +1365,8 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/aborted" => {
-                        router.note_completed(&turn_id(&params));
+                        let id = turn_id(&params);
+                        router.note_completed(&id);
                         done_current = true;
                         if interrupted {
                             done_after_interrupt = true;
@@ -1417,7 +1426,7 @@ async fn run_session(session: Session) {
                     let require_active =
                         msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let mut acceptance = msg.acceptance;
-                    if require_active && explicit_steer_unconfirmed {
+                    if require_active && explicit_steer_turn.is_some() {
                         if let Some(tx) = acceptance.take() {
                             let _ = tx.send(SteerAcceptance::Rejected(
                                 "another Codex steer is accepted but incorporation is unconfirmed"
@@ -1435,7 +1444,7 @@ async fn run_session(session: Session) {
                         match client.request_classified("turn/steer", steer_params).await {
                             Ok(_) => {
                                 if require_active {
-                                    explicit_steer_unconfirmed = true;
+                                    explicit_steer_turn = Some(expected.clone());
                                     if let Some(tx) = acceptance.take() {
                                         let _ = tx.send(SteerAcceptance::Accepted);
                                     }
@@ -1909,6 +1918,17 @@ use crate::{Signal, send_signal, shutdown_child};
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn explicit_steer_owner_clears_only_on_its_terminal_turn() {
+        let mut owner = Some("turn-new".to_string());
+        clear_explicit_steer_turn(&mut owner, "turn-stale");
+        assert_eq!(owner.as_deref(), Some("turn-new"));
+        clear_explicit_steer_turn(&mut owner, "turn-new");
+        assert!(owner.is_none());
+        clear_explicit_steer_turn(&mut owner, "turn-new");
+        assert!(owner.is_none());
+    }
 
     #[cfg(unix)]
     #[tokio::test]

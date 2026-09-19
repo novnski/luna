@@ -1566,6 +1566,23 @@ impl Inner {
             .is_some_and(|h| !lock(&h.routed_steers).is_empty())
     }
 
+    /// Retire explicit native steers owned by the turn that just reached a
+    /// terminal provider boundary. Ordinary warm routes stay in FIFO order
+    /// for their legacy follow-up-turn fallback.
+    fn take_terminal_explicit_steers(&self, chat_id: &str, run_id: &str) -> Vec<RoutedSteer> {
+        let runs = lock(&self.runs);
+        let Some(handle) = runs.get(chat_id).filter(|handle| handle.run_id == run_id) else {
+            return Vec::new();
+        };
+        let mut ledger = lock(&handle.routed_steers);
+        let entries = std::mem::take(&mut *ledger);
+        let (ordinary, explicit): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .partition(|steer| steer.delivery == zeron_harness::SteerDelivery::AllowFollowUpTurn);
+        *ledger = ordinary.into();
+        explicit
+    }
+
     /// Publish the completion marker atomically with the settled status. Keep
     /// it on subsequent Working/heartbeat rows for coalesced and remote watches.
     fn set_status_with_completion(
@@ -2615,9 +2632,14 @@ async fn drive_run(
                 inner.set_status(&chat_id, SessionStatus::Working, true);
             } else {
                 match &event {
-                    AgentEvent::Steered { .. } => {
+                    AgentEvent::Steered { .. } if inner.has_pending_steers(&chat_id, &run_id) => {
                         idle_since = None;
                         inner.set_status(&chat_id, SessionStatus::Working, true);
+                    }
+                    AgentEvent::Steered { .. } => {
+                        tracing::debug!(chat = %chat_id, run = %run_id,
+                            "ignoring stale steer boundary after terminal turn");
+                        continue;
                     }
                     AgentEvent::Done { .. } => {
                         idle_since = None;
@@ -3046,9 +3068,24 @@ async fn drive_run(
             {
                 titles.maybe_generate(&chat_id, harness_id, &user_prompt, &run_cwd);
             }
-            // An accepted steer awaiting its boundary owns the continuation:
-            // the previous Done is an internal handoff, not a completion ping.
-            // Ordinary queued rows are not in this ledger and still notify.
+            // Explicit native acceptance belongs to THIS provider turn. A
+            // persistent warm stream may stay open after Done, so waiting for
+            // EOF would leave its ledger entry blocking every later user turn.
+            // Retire it now as unknown/no-replay. Ordinary warm routes retain
+            // their legacy continuation/fallback semantics.
+            let terminal_explicit = inner.take_terminal_explicit_steers(&chat_id, &run_id);
+            if let Some(host) = inner.doc_host() {
+                for steer in terminal_explicit {
+                    if let Err(error) =
+                        host.mark_steer_correlation_unknown(&chat_id, &steer.message_id)
+                    {
+                        tracing::error!(chat = %chat_id, run = %run_id, %error,
+                            "terminal explicit steer unknown-state persistence failed");
+                    }
+                }
+            }
+            // An ordinary warm steer awaiting its boundary owns the
+            // continuation; explicit entries were finalized above.
             let pending_steer = inner.has_pending_steers(&chat_id, &run_id);
             let completed_turn = (*status == DoneStatus::Completed
                 && !interrupted

@@ -44,23 +44,28 @@ struct HeldHarness {
     /// Use the same input bridge with typed approval metadata.
     approves: bool,
     incorporates_steers: bool,
+    persistent_after_done: bool,
 }
 
 impl HeldHarness {
     fn new(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, false, false, true)
+        Self::build(steering, false, false, true, false)
     }
 
     fn asking(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, true, false, true)
+        Self::build(steering, true, false, true, false)
     }
 
     fn approving(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, true, true, true)
+        Self::build(steering, true, true, true, false)
     }
 
     fn accepted_only(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, false, false, false)
+        Self::build(steering, false, false, false, false)
+    }
+
+    fn accepted_only_persistent(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
+        Self::build(steering, false, false, false, true)
     }
 
     fn build(
@@ -68,6 +73,7 @@ impl HeldHarness {
         asks: bool,
         approves: bool,
         incorporates_steers: bool,
+        persistent_after_done: bool,
     ) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
         let (finish, _) = tokio::sync::broadcast::channel(16);
         let prompts = Arc::new(Mutex::new(Vec::new()));
@@ -80,6 +86,7 @@ impl HeldHarness {
                 asks,
                 approves,
                 incorporates_steers,
+                persistent_after_done,
             }),
             prompts,
         )
@@ -138,6 +145,7 @@ impl Harness for HeldHarness {
         let finish = self.finish.subscribe();
         let steering = controls.steering;
         let incorporates_steers = self.incorporates_steers;
+        let persistent_after_done = self.persistent_after_done;
         let started = futures::stream::iter(vec![
             Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
@@ -174,7 +182,7 @@ impl Harness for HeldHarness {
                             result: None,
                             error: None,
                             session_id: Some("sess-queue".into()),
-                        }), (finish, steering, true)));
+                        }), (finish, steering, !persistent_after_done)));
                     }
                     steer = steering.recv() => {
                         match steer {
@@ -182,7 +190,9 @@ impl Harness for HeldHarness {
                                 if let Some(tx) = steer.acceptance.take() {
                                     let _ = tx.send(zeron_harness::SteerAcceptance::Accepted);
                                 }
-                                let event = if incorporates_steers {
+                                let event = if incorporates_steers
+                                    || steer.delivery == zeron_harness::SteerDelivery::AllowFollowUpTurn
+                                {
                                     AgentEvent::Steered {
                                         assistant_message_id: Some("a-before-steer".into()),
                                         next_assistant_message_id: Some("a-after-steer".into()),
@@ -1034,6 +1044,125 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
     );
     assert!(restarted_prompts.lock().unwrap().is_empty());
     restarted.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persistent_done_releases_unconfirmed_steer_for_authorized_next_send() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (harness, prompts) = HeldHarness::accepted_only_persistent(SteeringMode::StepBoundary);
+    let core = assemble_at(&tmp.path().join("data"), harness.clone());
+    create_chat(&core).await;
+    let client = zeron_rpc::memory_client(core.rpc_service());
+
+    core.doc_host
+        .queue_message(CHAT, "opening", Vec::new())
+        .expect("queue opening");
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|prompt| prompt == "opening")
+        },
+        "persistent turn to start",
+    )
+    .await;
+
+    let first = client
+        .call(
+            zeron_rpc::methods::QUEUE_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT,
+                "text": "accepted on persistent stream",
+                "holdForTurnEnd": true,
+                "followUpBehavior": "steer",
+            }),
+        )
+        .await
+        .expect("queue explicit steer");
+    let first_id = first["id"].as_str().expect("first id").to_string();
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &first_id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| {
+                    matches!(row.status, QueueMessageStatus::SteeringAccepted { .. })
+                })
+        },
+        "explicit steer acceptance",
+    )
+    .await;
+
+    harness.finish.send(()).unwrap();
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &first_id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| matches!(row.status, QueueMessageStatus::DeliveryUnknown { .. }))
+        },
+        "terminal Done to finalize explicit steer as unknown without EOF",
+    )
+    .await;
+
+    core.doc_host.pause_all_queues();
+    let second_id = "authorized-next".to_string();
+    assert!(
+        core.doc_host
+            .queue_message_with_id_and_execution(
+                CHAT,
+                &second_id,
+                "authorized after persistent Done",
+                Vec::new(),
+                true,
+                zeron_proto::FollowUpBehavior::Queue,
+                None,
+            )
+            .expect("queue authorized next message")
+    );
+    assert!(
+        core.doc_host
+            .send_queued_now(CHAT, &second_id)
+            .await
+            .expect("explicit Send now remains available")
+    );
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &second_id)
+                .ok()
+                .flatten()
+                .is_none()
+        },
+        "authorized next message to correlate on the still-open stream",
+    )
+    .await;
+
+    assert!(
+        core.doc_host
+            .queued_message(CHAT, &first_id)
+            .unwrap()
+            .is_some_and(|row| {
+                matches!(row.status, QueueMessageStatus::DeliveryUnknown { .. })
+            }),
+        "a later steer boundary must not settle the prior unknown row"
+    );
+    assert_eq!(
+        prompts.lock().unwrap().as_slice(),
+        &["opening".to_string()],
+        "the authorized next message must reuse the persistent stream exactly once"
+    );
+    assert!(
+        user_messages(&core)
+            .iter()
+            .any(|message| message == "authorized after persistent Done")
+    );
+
+    core.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

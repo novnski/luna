@@ -728,6 +728,13 @@ async fn run_session(session: Session) {
                     }
                     for ev in norm.normalize(frame, interrupted) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
+                        if is_done {
+                            // Stream-json result frames are the authoritative
+                            // per-turn terminal boundary. A native stdin ACK
+                            // that never produced correlated incorporation is
+                            // no longer allowed to block the next user turn.
+                            explicit_steer_unconfirmed = false;
+                        }
                         if event_tx.send(Ok(ev)).await.is_err() {
                             break 'main; // consumer gone — reap below
                         }
