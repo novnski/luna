@@ -26,6 +26,28 @@ pub async fn execute_with_id(
     command_id: String,
     intent: serde_json::Value,
 ) -> Result<CommandReceipt, RpcError> {
+    let receipt = execute_receipt_with_id(engine, task_id, command_id, intent).await?;
+    match receipt.status {
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied => Ok(receipt),
+        _ => Err(RpcError::Failed(
+            receipt
+                .reason
+                .as_ref()
+                .map(|reason| reason.message.clone())
+                .unwrap_or_else(|| format!("task command ended as {:?}", receipt.status)),
+        )),
+    }
+}
+
+/// Same bounded L07 transport/recovery path, but preserve terminal rejection
+/// versus pending/unknown so the composer can settle its immutable draft
+/// snapshot without guessing that a lost response means the effect failed.
+pub async fn execute_receipt_with_id(
+    engine: &EngineHandle,
+    task_id: &str,
+    command_id: String,
+    intent: serde_json::Value,
+) -> Result<CommandReceipt, RpcError> {
     let read: TaskCommandRead = engine
         .client()
         .call_as(
@@ -112,16 +134,7 @@ pub async fn execute_with_id(
             }
         }
     };
-    match receipt.status {
-        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied => Ok(receipt),
-        _ => Err(RpcError::Failed(
-            receipt
-                .reason
-                .as_ref()
-                .map(|reason| reason.message.clone())
-                .unwrap_or_else(|| format!("task command ended as {:?}", receipt.status)),
-        )),
-    }
+    Ok(receipt)
 }
 
 async fn receipt(

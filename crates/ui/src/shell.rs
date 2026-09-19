@@ -1632,6 +1632,7 @@ impl Shell {
                         t.on_own_queued_send(chat_id.clone(), message_id.clone(), cx)
                     });
                 }
+                ComposerEvent::DraftFlushCompleted => cx.notify(),
             }
         });
         // Spawn chips open their subagent's transcript as a right-pane tab.
@@ -3267,21 +3268,25 @@ impl Shell {
     }
 
     fn prepare_exit(&mut self, action: PendingExit, cx: &mut Context<Self>) -> bool {
+        let composer_ready = self
+            .composer
+            .update(cx, |composer, cx| composer.prepare_close(cx));
         let surfaces = self
             .files
             .values()
             .chain(self.file_surfaces.values())
             .cloned()
             .collect::<Vec<_>>();
-        if surfaces
-            .iter()
-            .all(|surface| !surface.read(cx).has_unsaved_changes())
+        if composer_ready
+            && surfaces
+                .iter()
+                .all(|surface| !surface.read(cx).has_unsaved_changes())
         {
             self.pending_exit = None;
             return true;
         }
         self.pending_exit = Some(action);
-        let mut all_ready = true;
+        let mut all_ready = composer_ready;
         for surface in surfaces {
             let disposition = surface.update(cx, |surface, cx| surface.prepare_close(cx));
             all_ready &= disposition == FilesCloseDisposition::Allow;
@@ -9565,6 +9570,7 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_time = Some(std::time::Instant::now());
         if self.all_file_edits_flushed(cx)
+            && self.composer.read(cx).draft_flush_complete()
             && let Some(action) = self.pending_exit.take()
         {
             let shell = cx.weak_entity();

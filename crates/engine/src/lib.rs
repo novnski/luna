@@ -153,6 +153,7 @@ impl std::fmt::Debug for EngineConfig {
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
+    pub store: Arc<DocsStore>,
     pub sessions: SessionsEngine,
     pub doc_host: DocHost,
     pub workspace: WorkspaceHost,
@@ -314,7 +315,7 @@ impl EngineCore {
         let agent_accounts_config =
             agent_accounts_config.unwrap_or_else(|| AgentAccountsConfig::detect(data_dir));
         let task_identity = TaskIdentityService::open(
-            store,
+            store.clone(),
             workspace.clone(),
             &device_id,
             agent_accounts_config.codex_home.clone(),
@@ -387,6 +388,7 @@ impl EngineCore {
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
         task_identity.start_startup_reconciliation();
         Ok(Self {
+            store,
             sessions,
             doc_host,
             workspace,
@@ -520,6 +522,7 @@ impl EngineCore {
 
     pub fn rpc_service(&self) -> Arc<EngineRpc> {
         let mut rpc = EngineRpc::new(
+            self.store.clone(),
             self.sessions.clone(),
             self.doc_host.clone(),
             self.workspace.clone(),

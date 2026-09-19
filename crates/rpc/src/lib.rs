@@ -124,6 +124,12 @@ pub mod methods {
     pub const GET_TASK_COMMAND_RECEIPT: &str = "GetTaskCommandReceipt";
     pub const GET_TASK_COMMAND_SNAPSHOT: &str = "GetTaskCommandSnapshot";
     pub const WATCH_TASK_COMMANDS: &str = "WatchTaskCommands";
+    /// L08 composing-device-local durable draft surface. These methods are
+    /// intentionally not relay-forwardable or synced across devices.
+    pub const GET_COMPOSER_DRAFT: &str = "GetComposerDraft";
+    pub const SAVE_COMPOSER_DRAFT: &str = "SaveComposerDraft";
+    pub const BEGIN_DRAFT_SUBMISSION: &str = "BeginDraftSubmission";
+    pub const SETTLE_DRAFT_SUBMISSION: &str = "SettleDraftSubmission";
     /// Ask a headless IPC owner to drain its runtime and exit successfully.
     /// Headed IPC owners do not implement this method: closing another app's
     /// engine behind its windows would leave that process unusable.

@@ -4,7 +4,8 @@
 //! [`with_comments`] appends them; [`extract_badge`] reads the same block back
 //! out for the transcript. There is no second data model.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum CommentSide {
     Old,
     New,
@@ -19,7 +20,8 @@ impl CommentSide {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
 pub enum CommentSource {
     Diff {
         side: CommentSide,
@@ -28,7 +30,8 @@ pub enum CommentSource {
     File,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReviewComment {
     pub id: String,
     /// The current workspace path. For an old-side diff comment on a renamed

@@ -1398,6 +1398,11 @@ impl Composer {
                         composer.queue_edit_base_text_hash = Some(base_text_hash.to_string());
                         composer.queue_edit_chat_id = Some(chat_id.clone());
                         composer.queue_edit_host_device_id = Some(host_device_id.clone());
+                        composer.schedule_draft_save(
+                            composer.current_key.clone(),
+                            std::time::Duration::ZERO,
+                            cx,
+                        );
                         composer.queue_edit_draft = Some((
                             composer.input.read(cx).text().to_string(),
                             composer.attachments.remove(&composer.current_key).unwrap_or_default(),
@@ -1406,7 +1411,7 @@ impl Composer {
                         composer.attachments.insert(composer.current_key.clone(), loaded_attachments);
                         composer.appshots.insert(composer.current_key.clone(), loaded_appshots);
                         composer.focus_pending = true;
-                        composer.input.update(cx, |input, cx| input.set_text(text, cx));
+                        composer.set_input_text_without_draft_edit(text, cx);
                         composer.start_queue_edit_renewal(engine.clone(), cx);
                     }
                     Ok(reply)
@@ -1477,7 +1482,7 @@ impl Composer {
         self.queue_edit_renew_task = None;
         if let Some((text, attachments, appshots)) = self.queue_edit_draft.take() {
             self.appshots.insert(self.current_key.clone(), appshots);
-            self.input.update(cx, |input, cx| input.set_text(text, cx));
+            self.set_input_text_without_draft_edit(text, cx);
             self.attachments
                 .insert(self.current_key.clone(), attachments);
         }

@@ -116,7 +116,8 @@ pub fn bump_harness_catalog(cx: &mut App) {
 /// Everything a new chat is configured with before the first send. The folder
 /// and device come from the selected SPACE — the draft only carries the git
 /// extras (ref + checkout kind) and the run config.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DraftConfig {
     pub harness: Option<HarnessId>,
     pub provider_account_id: Option<String>,
@@ -128,12 +129,15 @@ pub struct DraftConfig {
     /// Where the new session runs (the t3code env-mode).
     pub checkout: CheckoutKind,
     pub permission_mode: Option<PermissionMode>,
+    #[serde(default)]
+    pub model_options: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Where a new session runs (t3code's env-mode: `local | worktree`). "Current
 /// worktree" is NOT a third mode — it's `Local` when the picked ref is already
 /// materialized as a worktree (the session reuses that checkout's path).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum CheckoutKind {
     /// The space's own folder — or the picked ref's existing worktree.
     #[default]
@@ -161,7 +165,8 @@ pub enum CheckoutPlan {
 /// The fully-resolved run configuration the composer sends: concrete harness,
 /// model and reasoning (never a "default" passthrough once the catalog is
 /// loaded), plus the explicit non-default option picks.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolvedRunConfig {
     pub harness: Option<HarnessId>,
     pub provider_account_id: Option<String>,
@@ -170,6 +175,13 @@ pub struct ResolvedRunConfig {
     pub model_options: serde_json::Map<String, serde_json::Value>,
     pub permission_mode: PermissionMode,
     pub effective_permission_mode: PermissionMode,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedDraftExecution {
+    draft: DraftConfig,
+    resolved: ResolvedRunConfig,
 }
 
 impl ResolvedRunConfig {
@@ -692,6 +704,35 @@ pub struct Pickers {
 }
 
 impl Pickers {
+    pub(crate) fn persisted_draft_execution(&self, cx: &App) -> serde_json::Value {
+        serde_json::to_value(PersistedDraftExecution {
+            draft: self.config.clone(),
+            resolved: self.resolved(cx),
+        })
+        .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Restore only canvas-local selections. Existing chats own their current
+    /// config in the task row, so a draft never permanently rebinds a chat to
+    /// an account or model that has since changed.
+    pub(crate) fn restore_draft_execution(
+        &mut self,
+        value: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.read(cx).selected_chat.is_some() {
+            return;
+        }
+        let Ok(saved) = serde_json::from_value::<PersistedDraftExecution>(value.clone()) else {
+            return;
+        };
+        self.config = saved.draft;
+        self.full_confirmation = None;
+        self.account_error = None;
+        self.switch_error = None;
+        cx.notify();
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| {
             ComposerInput::with_context("Search…", "PaletteSearch", cx)
@@ -746,6 +787,7 @@ impl Pickers {
                 this.config.model = None;
                 this.config.reasoning = None;
                 this.config.permission_mode = None;
+                this.config.model_options.clear();
                 this.switch_error = None;
             }
             // A space switch invalidates the branch draft + cache — the folder
@@ -1144,6 +1186,12 @@ impl Pickers {
         let Some(harness) = self.effective_harness(cx) else {
             return Default::default();
         };
+        if !self.config.model_options.is_empty() {
+            return match self.selected_model(cx) {
+                Some(model) => offered_options(model, self.config.model_options.clone()),
+                None => self.config.model_options.clone(),
+            };
+        }
         match self.selected_model(cx) {
             Some(model) => offered_options(
                 model,
@@ -1825,6 +1873,7 @@ impl Pickers {
             self.config.provider_account_id = None;
             self.config.reasoning = None;
             self.config.permission_mode = None;
+            self.config.model_options.clear();
             self.full_confirmation = None;
         }
         self.config.harness = Some(harness);
@@ -1899,6 +1948,7 @@ impl Pickers {
         } else {
             // New chat: draft pick + sticky last-used memory for this harness.
             self.config.model = Some(model_id.clone());
+            self.config.model_options.clear();
             if let Some(harness) = self.effective_harness(cx) {
                 let label = self
                     .models
@@ -2044,10 +2094,16 @@ impl Pickers {
             // New chat: the pick is the sticky memory for the catalog model
             // that offered it — never stored unvalidated.
             let options = self.defaults.model_options_mut(harness, &model);
+            let draft_options = &mut self.config.model_options;
             if default {
                 options.remove(&option_id);
+                draft_options.remove(&option_id);
             } else {
-                options.insert(option_id, serde_json::Value::String(choice_id));
+                options.insert(
+                    option_id.clone(),
+                    serde_json::Value::String(choice_id.clone()),
+                );
+                draft_options.insert(option_id, serde_json::Value::String(choice_id));
             }
             self.save_defaults();
         }

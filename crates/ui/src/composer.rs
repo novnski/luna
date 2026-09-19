@@ -8,6 +8,7 @@
 //! the gpui element only feeds them measurements.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -26,8 +27,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
 use zeron_proto::{
-    FileSearchMatch, HarnessId, RunRequest, SandboxLevel, SlashCommand, UserInputAnswer,
-    UserInputQuestion, capabilities,
+    CommandReceiptStatus, ComposerDraft, DraftAppshot, DraftBlob, DraftBlobState, DraftContext,
+    DraftSubmissionState, FileSearchMatch, HarnessId, RunRequest, SandboxLevel, SlashCommand,
+    UserInputAnswer, UserInputQuestion, capabilities,
 };
 use zeron_rpc::{RpcError, methods};
 
@@ -3866,6 +3868,8 @@ pub enum ComposerEvent {
     /// yet: the transcript remembers the stable id and promotes it to an
     /// own-turn anchor only when the host materializes the matching bubble.
     Queued { chat_id: String, message_id: String },
+    /// Wake the shell after an orderly-close flush completes.
+    DraftFlushCompleted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4014,6 +4018,24 @@ pub struct Composer {
     /// attachments. Each owns one screenshot that joins the existing upload
     /// path only at send time.
     pub(crate) appshots: HashMap<String, Vec<CapturedAppshot>>,
+    /// Stable identity for the blank canvas before a task exists.
+    canvas_draft_id: String,
+    draft_revisions: HashMap<String, u64>,
+    draft_saved_revisions: HashMap<String, u64>,
+    draft_blobs: HashMap<String, HashMap<String, DraftBlob>>,
+    draft_unavailable: HashMap<String, Vec<DraftBlob>>,
+    draft_unavailable_appshots: HashMap<String, HashSet<String>>,
+    draft_unavailable_appshot_metadata: HashMap<String, Vec<DraftAppshot>>,
+    draft_loaded: HashSet<String>,
+    draft_save_tasks: HashMap<String, Task<()>>,
+    draft_load_tasks: HashMap<String, Task<()>>,
+    draft_blob_tasks: HashMap<(String, String), Task<()>>,
+    draft_receipt_tasks: HashMap<String, Task<()>>,
+    draft_submitting: HashMap<String, u64>,
+    draft_close_flushing: bool,
+    draft_close_failed: bool,
+    suppress_next_draft_edit: bool,
+    draft_comment_fingerprints: HashMap<String, u64>,
     appshot_entrances: HashMap<String, Instant>,
     /// The staged attachment being viewed full-size (click a thumbnail).
     preview: Option<attachments::PreviewImage>,
@@ -4146,6 +4168,39 @@ pub struct Composer {
     _input_events: Subscription,
 }
 
+struct RestoredComposerDraft {
+    record: ComposerDraft,
+    ordinary: Vec<StagedAttachment>,
+    appshots: Vec<CapturedAppshot>,
+    unavailable: Vec<DraftBlob>,
+    unavailable_appshots: HashSet<String>,
+    unavailable_appshot_metadata: Vec<DraftAppshot>,
+    warning: Option<String>,
+    pending_submission: bool,
+    pending_same_revision: bool,
+    recoverable_submission: bool,
+    recoverable_separate: bool,
+}
+
+enum ComposerSendOutcome {
+    Applied,
+    Pending,
+    Queued(String),
+}
+
+enum ComposerSendFailure {
+    Rejected(String),
+    Unknown(String),
+}
+
+fn submission_has_newer_draft(
+    submitted_revision: u64,
+    current_revision: u64,
+    current_text: &str,
+) -> bool {
+    current_revision > submitted_revision || !current_text.trim().is_empty()
+}
+
 impl EventEmitter<ComposerEvent> for Composer {}
 
 impl Composer {
@@ -4215,7 +4270,15 @@ impl Composer {
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
         // loaded, popover toggled, pick made) must repaint the composer too.
-        let pickers_observe = cx.observe(&pickers, |_, _, cx| cx.notify());
+        let pickers_observe = cx.observe(&pickers, |this: &mut Self, _, cx| {
+            if this.editing_queued.is_none()
+                && this.current_key.is_empty()
+                && !this.draft_submitting.contains_key(&this.current_key)
+            {
+                this.mark_draft_dirty(cx);
+            }
+            cx.notify();
+        });
         let picker_focus = cx.subscribe(
             &pickers,
             |this: &mut Self, _, _: &crate::pickers::ReturnComposerFocus, cx| {
@@ -4227,9 +4290,13 @@ impl Composer {
         let input_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.on_submit(cx),
             ComposerInputEvent::ModifiedSubmitted => this.on_modified_submit(cx),
-            ComposerInputEvent::Edited | ComposerInputEvent::CursorMoved => {
-                this.on_input_edited(cx)
+            ComposerInputEvent::Edited => {
+                this.on_input_edited(cx);
+                if this.wizard.is_none() && !std::mem::take(&mut this.suppress_next_draft_edit) {
+                    this.mark_draft_dirty(cx);
+                }
             }
+            ComposerInputEvent::CursorMoved => this.on_input_edited(cx),
             ComposerInputEvent::ViewportChanged => cx.notify(),
             // The slash popup and the mention popup share the input's
             // completion key routing; they are mutually exclusive by token
@@ -4273,6 +4340,23 @@ impl Composer {
             drafts: HashMap::new(),
             attachments: HashMap::new(),
             appshots: HashMap::new(),
+            canvas_draft_id: uuid::Uuid::new_v4().to_string(),
+            draft_revisions: HashMap::new(),
+            draft_saved_revisions: HashMap::new(),
+            draft_blobs: HashMap::new(),
+            draft_unavailable: HashMap::new(),
+            draft_unavailable_appshots: HashMap::new(),
+            draft_unavailable_appshot_metadata: HashMap::new(),
+            draft_loaded: HashSet::new(),
+            draft_save_tasks: HashMap::new(),
+            draft_load_tasks: HashMap::new(),
+            draft_blob_tasks: HashMap::new(),
+            draft_receipt_tasks: HashMap::new(),
+            draft_submitting: HashMap::new(),
+            draft_close_flushing: false,
+            draft_close_failed: false,
+            suppress_next_draft_edit: false,
+            draft_comment_fingerprints: HashMap::new(),
             appshot_entrances: HashMap::new(),
             preview: None,
             preview_focus: cx.focus_handle(),
@@ -4395,6 +4479,774 @@ impl Composer {
         !self.sending && self.wizard.is_none()
     }
 
+    fn draft_id_for(&self, key: &str) -> String {
+        if key.is_empty() {
+            self.canvas_draft_id.clone()
+        } else {
+            key.to_string()
+        }
+    }
+
+    pub(crate) fn set_input_text_without_draft_edit(
+        &mut self,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.suppress_next_draft_edit = true;
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+
+    fn build_draft_record(&self, key: &str, text: String, cx: &App) -> ComposerDraft {
+        let (ordinary, shots) = if key == self.current_key {
+            if let Some((saved_text, saved_attachments, saved_appshots)) = &self.queue_edit_draft {
+                let text = saved_text.clone();
+                return self.build_draft_record_parts(
+                    key,
+                    text,
+                    saved_attachments,
+                    saved_appshots,
+                    cx,
+                );
+            }
+            (self.attachments.get(key), self.appshots.get(key))
+        } else {
+            (self.attachments.get(key), self.appshots.get(key))
+        };
+        self.build_draft_record_parts(
+            key,
+            text,
+            ordinary.map(Vec::as_slice).unwrap_or_default(),
+            shots.map(Vec::as_slice).unwrap_or_default(),
+            cx,
+        )
+    }
+
+    fn build_draft_record_parts(
+        &self,
+        key: &str,
+        text: String,
+        ordinary: &[StagedAttachment],
+        shots: &[CapturedAppshot],
+        cx: &App,
+    ) -> ComposerDraft {
+        let blobs = self.draft_blobs.get(key);
+        let mut attachments: Vec<DraftBlob> = ordinary
+            .iter()
+            .chain(shots.iter().map(|shot| &shot.screenshot))
+            .map(|attachment| {
+                blobs
+                    .and_then(|blobs| blobs.get(&attachment.id))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::drafts::waiting_blob(&attachment.id, &attachment.name)
+                    })
+            })
+            .collect();
+        attachments.extend(
+            self.draft_unavailable
+                .get(key)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        let mut appshots: Vec<DraftAppshot> = shots
+            .iter()
+            .map(|shot| DraftAppshot {
+                id: shot.id.clone(),
+                screenshot_attachment_id: shot.screenshot.id.clone(),
+                app_name: shot.app_name.clone(),
+                bundle_identifier: shot.bundle_identifier.clone(),
+                window_title: shot.window_title.clone(),
+                accessibility_format_version: shot.accessibility.format_version,
+                accessibility_content: shot.accessibility.content.clone(),
+                accessibility_truncated: shot.accessibility.truncated,
+                screenshot_dimensions: shot.screenshot_dimensions,
+                captured_at_ms: shot.captured_at.timestamp_millis(),
+            })
+            .collect();
+        appshots.extend(
+            self.draft_unavailable_appshot_metadata
+                .get(key)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        let review_comments = self
+            .state
+            .read(cx)
+            .review_comments(key)
+            .iter()
+            .filter_map(|comment| serde_json::to_value(comment).ok())
+            .collect();
+        ComposerDraft {
+            version: zeron_proto::COMPOSER_DRAFT_VERSION,
+            draft_id: self.draft_id_for(key),
+            task_id: (!key.is_empty()).then(|| key.to_string()),
+            revision: self.draft_revisions.get(key).copied().unwrap_or(1),
+            text,
+            attachments,
+            appshots,
+            context: DraftContext {
+                review_comments,
+                quoted: None,
+                terminal: None,
+            },
+            execution: if key.is_empty() {
+                self.pickers.read(cx).persisted_draft_execution(cx)
+            } else {
+                serde_json::Value::Null
+            },
+            updated_at_ms: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+
+    fn mark_draft_dirty(&mut self, cx: &mut Context<Self>) {
+        if self.editing_queued.is_some() && !self.queue_edit_finishing {
+            return;
+        }
+        let key = self.current_key.clone();
+        let revision = self.draft_revisions.entry(key.clone()).or_insert(0);
+        *revision = revision.saturating_add(1);
+        self.schedule_draft_save(key, crate::drafts::SAVE_DEBOUNCE, cx);
+    }
+
+    fn sync_review_comment_draft(&mut self, cx: &mut Context<Self>) {
+        let key = self.current_key.clone();
+        let encoded =
+            serde_json::to_string(self.state.read(cx).review_comments(&key)).unwrap_or_default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        encoded.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+        match self.draft_comment_fingerprints.insert(key, fingerprint) {
+            Some(previous) if previous != fingerprint => self.mark_draft_dirty(cx),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn schedule_draft_save(
+        &mut self,
+        key: String,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        if self.draft_is_saved(&key) {
+            return;
+        }
+        if self.draft_submitting.get(&key).is_some_and(|submitted| {
+            self.draft_revisions.get(&key).copied().unwrap_or(0) <= *submitted
+        }) {
+            return;
+        }
+        let task_key = key.clone();
+        let task = cx.spawn(async move |this, cx| {
+            if !delay.is_zero() {
+                cx.background_executor().timer(delay).await;
+            }
+            let Some((engine, record)) = this
+                .update(cx, |composer, cx| {
+                    let engine = composer.state.read(cx).engine().cloned()?;
+                    let text = if task_key == composer.current_key {
+                        composer.input.read(cx).text().to_string()
+                    } else {
+                        composer.drafts.get(&task_key).cloned().unwrap_or_default()
+                    };
+                    Some((engine, composer.build_draft_record(&task_key, text, cx)))
+                })
+                .ok()
+                .flatten()
+            else {
+                this.update(cx, |composer, cx| {
+                    if task_key == composer.current_key {
+                        composer.failure = Some(
+                            "Draft not saved — the local engine is unavailable; your text is still in this window."
+                                .into(),
+                        );
+                        composer.failure_key = Some(task_key.clone());
+                    }
+                    if composer.draft_close_flushing {
+                        composer.draft_close_flushing = false;
+                        composer.draft_close_failed = true;
+                        cx.emit(ComposerEvent::DraftFlushCompleted);
+                    }
+                    cx.notify();
+                })
+                .ok();
+                return;
+            };
+            let revision = record.revision;
+            let result = crate::drafts::save(&engine, &record).await;
+            this.update(cx, |composer, cx| {
+                match result {
+                    Ok(_) => {
+                        let saved = composer
+                            .draft_saved_revisions
+                            .entry(task_key.clone())
+                            .or_default();
+                        *saved = (*saved).max(revision);
+                        composer.draft_close_failed = false;
+                        if composer.draft_close_flushing
+                            && composer.draft_is_saved(&composer.current_key)
+                        {
+                            composer.draft_close_flushing = false;
+                            cx.emit(ComposerEvent::DraftFlushCompleted);
+                        }
+                    }
+                    Err(error) => {
+                        if task_key == composer.current_key {
+                            composer.failure = Some(
+                                format!(
+                                    "Draft not saved — your text is still in this window: {error}"
+                                )
+                                .into(),
+                            );
+                            composer.failure_key = Some(task_key.clone());
+                        }
+                        if composer.draft_close_flushing {
+                            composer.draft_close_flushing = false;
+                            composer.draft_close_failed = true;
+                            cx.emit(ComposerEvent::DraftFlushCompleted);
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        self.draft_save_tasks.insert(key, task);
+    }
+
+    fn draft_is_saved(&self, key: &str) -> bool {
+        self.draft_saved_revisions.get(key).copied().unwrap_or(0)
+            >= self.draft_revisions.get(key).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn prepare_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.draft_is_saved(&self.current_key) {
+            return true;
+        }
+        self.draft_close_failed = false;
+        self.draft_close_flushing = true;
+        self.schedule_draft_save(self.current_key.clone(), Duration::ZERO, cx);
+        false
+    }
+
+    pub(crate) fn draft_flush_complete(&self) -> bool {
+        !self.draft_close_flushing && !self.draft_close_failed
+    }
+
+    fn stage_draft_blob(
+        &mut self,
+        key: String,
+        attachment: StagedAttachment,
+        cx: &mut Context<Self>,
+    ) {
+        self.draft_blobs.entry(key.clone()).or_default().insert(
+            attachment.id.clone(),
+            crate::drafts::waiting_blob(&attachment.id, &attachment.name),
+        );
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.draft_blobs.entry(key.clone()).or_default().insert(
+                attachment.id.clone(),
+                crate::drafts::failed_blob(
+                    &attachment.id,
+                    &attachment.name,
+                    "The local engine was unavailable; reattach after restart.",
+                ),
+            );
+            self.failure = Some("Attachment is not saved and will need reattachment.".into());
+            self.failure_key = Some(key.clone());
+            let revision = self.draft_revisions.entry(key.clone()).or_insert(0);
+            *revision = revision.saturating_add(1);
+            self.schedule_draft_save(key, Duration::ZERO, cx);
+            return;
+        };
+        let id = attachment.id.clone();
+        let name = attachment.name.clone();
+        let task_key = (key.clone(), id.clone());
+        let blob_key = key.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = attachments::upload_attachment(
+                &engine,
+                cx.background_executor(),
+                None,
+                &id,
+                &attachment,
+                None,
+            )
+            .await;
+            this.update(cx, |composer, cx| {
+                let blob = match result {
+                    Ok(path) => crate::drafts::saved_blob(&id, &name, path, attachment.bytes()),
+                    Err(error) => {
+                        composer.failure = Some(
+                            format!("{name} is not saved and will need reattachment: {error}")
+                                .into(),
+                        );
+                        composer.failure_key = Some(blob_key.clone());
+                        crate::drafts::failed_blob(&id, &name, error)
+                    }
+                };
+                composer
+                    .draft_blobs
+                    .entry(blob_key.clone())
+                    .or_default()
+                    .insert(id.clone(), blob);
+                let revision = composer
+                    .draft_revisions
+                    .entry(blob_key.clone())
+                    .or_insert(0);
+                *revision = revision.saturating_add(1);
+                composer.schedule_draft_save(blob_key.clone(), Duration::ZERO, cx);
+                cx.notify();
+            })
+            .ok();
+        });
+        self.draft_blob_tasks.insert(task_key, task);
+        let revision = self.draft_revisions.entry(key.clone()).or_insert(0);
+        *revision = revision.saturating_add(1);
+        self.schedule_draft_save(key, Duration::ZERO, cx);
+    }
+
+    fn load_draft(&mut self, key: String, cx: &mut Context<Self>) {
+        if self.draft_loaded.contains(&key) || self.draft_load_tasks.contains_key(&key) {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let task_id = (!key.is_empty()).then(|| key.clone());
+        let canvas_id = key.is_empty().then(|| self.canvas_draft_id.clone());
+        let starting_revision = self.draft_revisions.get(&key).copied().unwrap_or(0);
+        let load_key = key.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let read = crate::drafts::read(
+                &engine,
+                task_id.as_deref(),
+                canvas_id.as_deref().filter(|_| starting_revision > 0),
+            )
+            .await;
+            let restored = match read {
+                Ok(mut read) => {
+                    let mut applied = HashSet::new();
+                    for submission in &mut read.submissions {
+                        if submission.state != DraftSubmissionState::Pending {
+                            continue;
+                        }
+                        let receipt = engine
+                            .client()
+                            .call_as::<Option<zeron_proto::CommandReceipt>>(
+                                methods::GET_TASK_COMMAND_RECEIPT,
+                                serde_json::json!({
+                                    "commandId": submission.command_id.clone()
+                                }),
+                            )
+                            .await;
+                        match receipt {
+                            Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => {
+                                if crate::drafts::settle_submission(
+                                    &engine,
+                                    &submission.command_id,
+                                    "applied",
+                                    submission.queue_id.as_deref(),
+                                )
+                                .await
+                                .is_ok()
+                                {
+                                    applied.insert(submission.command_id.clone());
+                                }
+                            }
+                            Ok(Some(receipt)) if receipt.status != CommandReceiptStatus::Pending => {
+                                if crate::drafts::settle_submission(
+                                    &engine,
+                                    &submission.command_id,
+                                    "recoverable",
+                                    None,
+                                )
+                                .await
+                                .is_ok()
+                                {
+                                    submission.state = DraftSubmissionState::Recoverable;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    read.submissions
+                        .retain(|submission| !applied.contains(&submission.command_id));
+                    if !applied.is_empty()
+                        && let Ok(refreshed) = crate::drafts::read(
+                            &engine,
+                            task_id.as_deref(),
+                            canvas_id.as_deref().filter(|_| starting_revision > 0),
+                        )
+                        .await
+                    {
+                        read = refreshed;
+                    }
+                    let pending_submission = read.submissions.iter().any(|submission| {
+                        submission.state == DraftSubmissionState::Pending
+                    });
+                    let recoverable_submission = read.submissions.iter().any(|submission| {
+                        submission.state == DraftSubmissionState::Recoverable
+                    });
+                    let mut record = match read.draft {
+                        Some(record) => record,
+                        None => match read.submissions.last() {
+                            Some(submission) => submission.snapshot.clone(),
+                            None => {
+                                this.update(cx, |composer, _| {
+                                    composer.draft_loaded.insert(load_key.clone());
+                                    composer.draft_load_tasks.remove(&load_key);
+                                    composer.draft_submitting.remove(&load_key);
+                                })
+                                .ok();
+                                return;
+                            }
+                        },
+                    };
+                    let pending_same_revision = read.submissions.iter().any(|submission| {
+                        submission.state == DraftSubmissionState::Pending
+                            && submission.snapshot.revision == record.revision
+                    });
+                    let recoverable_separate = read.submissions.iter().any(|submission| {
+                        submission.state == DraftSubmissionState::Recoverable
+                            && (submission.snapshot.draft_id != record.draft_id
+                                || submission.snapshot.revision < record.revision)
+                    });
+                    let appshot_attachment_ids = record
+                        .appshots
+                        .iter()
+                        .map(|shot| shot.screenshot_attachment_id.clone())
+                        .collect::<HashSet<_>>();
+                    let mut loaded = HashMap::new();
+                    let mut warnings = Vec::new();
+                    for blob in &mut record.attachments {
+                        if blob.state != DraftBlobState::Saved {
+                            warnings.push(blob.name.clone());
+                            continue;
+                        }
+                        let Some(path) = blob.path.as_deref() else {
+                            blob.state = DraftBlobState::NeedsReattachment;
+                            warnings.push(blob.name.clone());
+                            continue;
+                        };
+                        match attachments::read_attachment_image(
+                            &engine,
+                            cx.background_executor(),
+                            None,
+                            path,
+                            None,
+                        )
+                        .await
+                        {
+                            Some(image) => {
+                                loaded.insert(
+                                    blob.attachment_id.clone(),
+                                    StagedAttachment {
+                                        id: blob.attachment_id.clone(),
+                                        name: blob.name.clone(),
+                                        image: image.image,
+                                    },
+                                );
+                            }
+                            None => {
+                                blob.state = DraftBlobState::NeedsReattachment;
+                                blob.path = None;
+                                blob.error = Some("The saved blob is unavailable or corrupt".into());
+                                warnings.push(blob.name.clone());
+                            }
+                        }
+                    }
+                    let ordinary = record
+                        .attachments
+                        .iter()
+                        .filter(|blob| !appshot_attachment_ids.contains(&blob.attachment_id))
+                        .filter_map(|blob| loaded.get(&blob.attachment_id).cloned())
+                        .collect();
+                    let unavailable = record
+                        .attachments
+                        .iter()
+                        .filter(|blob| !loaded.contains_key(&blob.attachment_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let unavailable_appshots = unavailable
+                        .iter()
+                        .filter(|blob| appshot_attachment_ids.contains(&blob.attachment_id))
+                        .map(|blob| blob.attachment_id.clone())
+                        .collect();
+                    let unavailable_appshot_metadata = record
+                        .appshots
+                        .iter()
+                        .filter(|shot| {
+                            !loaded.contains_key(&shot.screenshot_attachment_id)
+                        })
+                        .cloned()
+                        .collect();
+                    let appshots = record
+                        .appshots
+                        .iter()
+                        .filter_map(|shot| {
+                            let screenshot = loaded.get(&shot.screenshot_attachment_id)?.clone();
+                            Some(CapturedAppshot {
+                                id: shot.id.clone(),
+                                app_name: shot.app_name.clone(),
+                                bundle_identifier: shot.bundle_identifier.clone(),
+                                window_title: shot.window_title.clone(),
+                                accessibility: appshots::AccessibilitySnapshot {
+                                    format_version: shot.accessibility_format_version,
+                                    content: shot.accessibility_content.clone(),
+                                    truncated: shot.accessibility_truncated,
+                                },
+                                screenshot,
+                                screenshot_dimensions: shot.screenshot_dimensions,
+                                app_icon: None,
+                                captured_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+                                    shot.captured_at_ms,
+                                )
+                                .unwrap_or_else(chrono::Utc::now),
+                            })
+                        })
+                        .collect();
+                    Some(RestoredComposerDraft {
+                        record,
+                        ordinary,
+                        appshots,
+                        unavailable,
+                        unavailable_appshots,
+                        unavailable_appshot_metadata,
+                        warning: (!warnings.is_empty()).then(|| {
+                            format!(
+                                "{} needs reattachment before this draft can be sent.",
+                                warnings.join(", ")
+                            )
+                        }),
+                        pending_submission,
+                        pending_same_revision,
+                        recoverable_submission,
+                        recoverable_separate,
+                    })
+                }
+                Err(error) => {
+                    this.update(cx, |composer, cx| {
+                        if load_key == composer.current_key {
+                            composer.failure = Some(
+                                format!("Draft could not be loaded; new changes remain in memory: {error}")
+                                    .into(),
+                            );
+                            composer.failure_key = Some(load_key.clone());
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                    None
+                }
+            };
+            this.update(cx, |composer, cx| {
+                composer.draft_load_tasks.remove(&load_key);
+                composer.draft_loaded.insert(load_key.clone());
+                let Some(restored) = restored else {
+                    return;
+                };
+                // Local typing or attachment intake that happened while the
+                // read was in flight always wins over the older stored row.
+                if composer
+                    .draft_revisions
+                    .get(&load_key)
+                    .copied()
+                    .unwrap_or(0)
+                    > starting_revision
+                {
+                    return;
+                }
+                let pending_same_revision = restored.pending_same_revision;
+                if load_key.is_empty() {
+                    composer.canvas_draft_id = restored.record.draft_id.clone();
+                }
+                composer
+                    .draft_revisions
+                    .insert(load_key.clone(), restored.record.revision);
+                composer
+                    .draft_saved_revisions
+                    .insert(load_key.clone(), restored.record.revision);
+                composer.draft_blobs.insert(
+                    load_key.clone(),
+                    restored
+                        .record
+                        .attachments
+                        .iter()
+                        .cloned()
+                        .map(|blob| (blob.attachment_id.clone(), blob))
+                        .collect(),
+                );
+                composer
+                    .draft_unavailable
+                    .insert(load_key.clone(), restored.unavailable);
+                composer
+                    .draft_unavailable_appshots
+                    .insert(load_key.clone(), restored.unavailable_appshots);
+                composer.draft_unavailable_appshot_metadata.insert(
+                    load_key.clone(),
+                    restored.unavailable_appshot_metadata,
+                );
+                if !pending_same_revision {
+                    composer
+                        .drafts
+                        .insert(load_key.clone(), restored.record.text.clone());
+                    composer
+                        .attachments
+                        .insert(load_key.clone(), restored.ordinary);
+                    composer.appshots.insert(load_key.clone(), restored.appshots);
+                    composer.draft_comment_fingerprints.remove(&load_key);
+                    composer.state.update(cx, |state, _| {
+                        state.purge_review_comments(&load_key);
+                        for value in &restored.record.context.review_comments {
+                            if let Ok(comment) = serde_json::from_value(value.clone()) {
+                                state.add_review_comment(&load_key, comment);
+                            }
+                        }
+                    });
+                    if load_key == composer.current_key {
+                        composer.set_input_text_without_draft_edit(
+                            restored.record.text.clone(),
+                            cx,
+                        );
+                        composer.pickers.update(cx, |pickers, cx| {
+                            pickers.restore_draft_execution(&restored.record.execution, cx)
+                        });
+                    }
+                }
+                if let Some(warning) = restored.warning {
+                    composer.failure = Some(warning.into());
+                    composer.failure_key = Some(load_key.clone());
+                } else if restored.pending_submission {
+                    composer.failure = Some(
+                        "A submitted message is still awaiting an authoritative delivery receipt; it was preserved and will not be resent automatically."
+                            .into(),
+                    );
+                    composer.failure_key = Some(load_key.clone());
+                } else if restored.recoverable_separate {
+                    composer.failure = Some(
+                        "A previous unsent message was preserved separately from this newer draft."
+                            .into(),
+                    );
+                    composer.failure_key = Some(load_key.clone());
+                } else if restored.recoverable_submission {
+                    composer.failure = Some(
+                        "A previously rejected message was restored as a recoverable draft."
+                            .into(),
+                    );
+                    composer.failure_key = Some(load_key.clone());
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        self.draft_load_tasks.insert(key, task);
+    }
+
+    fn watch_draft_receipt(
+        &mut self,
+        command_id: String,
+        task_id: String,
+        draft_key: String,
+        engine: crate::state::EngineHandle,
+        cx: &mut Context<Self>,
+    ) {
+        if self.draft_receipt_tasks.contains_key(&command_id) {
+            return;
+        }
+        let receipt_key = command_id.clone();
+        let map_key = command_id.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let Ok(mut stream) = engine
+                .client()
+                .subscribe(
+                    methods::WATCH_TASK_COMMANDS,
+                    serde_json::json!({ "taskId": task_id.clone() }),
+                )
+                .await
+            else {
+                return;
+            };
+            let mut current = engine
+                .client()
+                .call_as::<Option<zeron_proto::CommandReceipt>>(
+                    methods::GET_TASK_COMMAND_RECEIPT,
+                    serde_json::json!({ "commandId": command_id.clone() }),
+                )
+                .await
+                .ok()
+                .flatten();
+            loop {
+                let receipt = match current.take() {
+                    Some(receipt) => receipt,
+                    None => loop {
+                        let Some(value) = stream.recv().await else {
+                            return;
+                        };
+                        let Some(value) = value.get("receipt") else {
+                            continue;
+                        };
+                        if let Ok(receipt) =
+                            serde_json::from_value::<zeron_proto::CommandReceipt>(value.clone())
+                        {
+                            break receipt;
+                        }
+                    },
+                };
+                if receipt.command_id != command_id
+                    || receipt.status == CommandReceiptStatus::Pending
+                {
+                    continue;
+                }
+                let applied = receipt.status == CommandReceiptStatus::Applied;
+                let outcome = if applied { "applied" } else { "recoverable" };
+                if crate::drafts::settle_submission(&engine, &command_id, outcome, None)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                if !applied && draft_key.is_empty() {
+                    let _ = crate::task_commands::execute(
+                        &engine,
+                        &task_id,
+                        serde_json::json!({ "kind": "delete" }),
+                    )
+                    .await;
+                }
+                this.update(cx, |composer, cx| {
+                    composer.draft_receipt_tasks.remove(&receipt_key);
+                    composer.draft_submitting.remove(&draft_key);
+                    if !applied {
+                        composer.draft_loaded.remove(&draft_key);
+                        if draft_key.is_empty()
+                            && composer.state.read(cx).selected_chat.as_deref()
+                                == Some(task_id.as_str())
+                        {
+                            composer
+                                .state
+                                .update(cx, |state, cx| state.select_chat(None, cx));
+                        }
+                        composer.failure = Some(
+                            "The submitted message was rejected and its draft was preserved."
+                                .into(),
+                        );
+                        composer.failure_key = Some(draft_key.clone());
+                        composer.load_draft(draft_key.clone(), cx);
+                    } else if composer.failure_key.as_deref() == Some(task_id.as_str()) {
+                        composer.failure = None;
+                        composer.failure_key = None;
+                    }
+                    cx.notify();
+                })
+                .ok();
+                break;
+            }
+        });
+        self.draft_receipt_tasks.insert(map_key, task);
+    }
+
     // ---- attachment staging (use-attachments.ts) ----
 
     /// Staged attachments for the chat the composer is showing.
@@ -4440,6 +5292,13 @@ impl Composer {
         appshot: CapturedAppshot,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(ids) = self.draft_unavailable_appshots.remove(&key) {
+            if let Some(unavailable) = self.draft_unavailable.get_mut(&key) {
+                unavailable.retain(|blob| !ids.contains(&blob.attachment_id));
+            }
+            self.draft_unavailable_appshot_metadata.remove(&key);
+        }
+        let screenshot = appshot.screenshot.clone();
         let staged_bytes = self
             .appshots
             .get(&key)
@@ -4482,13 +5341,14 @@ impl Composer {
             if let Some((_, _, saved_appshots)) = &mut self.queue_edit_draft {
                 saved_appshots.push(appshot);
             } else {
-                self.appshots.entry(key).or_default().push(appshot);
+                self.appshots.entry(key.clone()).or_default().push(appshot);
             }
         } else {
-            self.appshots.entry(key).or_default().push(appshot);
+            self.appshots.entry(key.clone()).or_default().push(appshot);
         }
         self.failure = None;
         self.failure_key = None;
+        self.stage_draft_blob(key, screenshot, cx);
         cx.notify();
         true
     }
@@ -4506,10 +5366,29 @@ impl Composer {
         if staged.is_empty() {
             return;
         }
+        let key = self.current_key.clone();
+        let names = staged
+            .iter()
+            .map(|attachment| attachment.name.as_str())
+            .collect::<HashSet<_>>();
+        let unavailable_appshots = self
+            .draft_unavailable_appshots
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(unavailable) = self.draft_unavailable.get_mut(&key) {
+            unavailable.retain(|blob| {
+                unavailable_appshots.contains(&blob.attachment_id)
+                    || !names.contains(blob.name.as_str())
+            });
+        }
         self.attachments
             .entry(self.current_key.clone())
             .or_default()
-            .extend(staged);
+            .extend(staged.iter().cloned());
+        for attachment in staged {
+            self.stage_draft_blob(key.clone(), attachment, cx);
+        }
         self.focus_pending = true;
         cx.notify();
     }
@@ -4567,6 +5446,10 @@ impl Composer {
                 self.attachments.remove(&self.current_key);
             }
         }
+        if let Some(blobs) = self.draft_blobs.get_mut(&self.current_key) {
+            blobs.remove(id);
+        }
+        self.mark_draft_dirty(cx);
         cx.notify();
     }
 
@@ -4594,12 +5477,23 @@ impl Composer {
         if self.queue_edit_finishing {
             return;
         }
+        let mut screenshot_id = None;
         if let Some(list) = self.appshots.get_mut(&self.current_key) {
+            screenshot_id = list
+                .iter()
+                .find(|appshot| appshot.id == id)
+                .map(|appshot| appshot.screenshot.id.clone());
             list.retain(|appshot| appshot.id != id);
             if list.is_empty() {
                 self.appshots.remove(&self.current_key);
             }
         }
+        if let Some(screenshot_id) = screenshot_id
+            && let Some(blobs) = self.draft_blobs.get_mut(&self.current_key)
+        {
+            blobs.remove(&screenshot_id);
+        }
+        self.mark_draft_dirty(cx);
         cx.notify();
     }
 
@@ -4608,6 +5502,10 @@ impl Composer {
     pub fn purge_chat(&mut self, chat_id: &str, cx: &mut Context<Self>) {
         self.attachments.remove(chat_id);
         self.appshots.remove(chat_id);
+        self.draft_blobs.remove(chat_id);
+        self.draft_unavailable.remove(chat_id);
+        self.draft_unavailable_appshots.remove(chat_id);
+        self.draft_unavailable_appshot_metadata.remove(chat_id);
         self.state.update(cx, |state, _| {
             state.purge_review_comments(chat_id);
         });
@@ -5691,6 +6589,7 @@ impl Composer {
     }
 
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_review_comment_draft(cx);
         {
             let state = self.state.read(cx);
             let now = chrono::Utc::now();
@@ -5761,6 +6660,7 @@ impl Composer {
             } else {
                 self.drafts.insert(self.current_key.clone(), old_text);
             }
+            self.schedule_draft_save(self.current_key.clone(), Duration::ZERO, cx);
             let draft = self.drafts.get(&key).cloned().unwrap_or_default();
             self.current_key = key;
             // `failure` deliberately survives navigation: chat-scoped
@@ -5799,8 +6699,10 @@ impl Composer {
                 self.last_rendered_height = 0.0;
                 self.route_snap_until = Some(Instant::now() + Duration::from_millis(ROUTE_SNAP_MS));
             }
-            self.input.update(cx, |input, cx| input.set_text(draft, cx));
+            self.set_input_text_without_draft_edit(draft, cx);
         }
+
+        self.load_draft(self.current_key.clone(), cx);
 
         // A pending agent question must not take over an active queue edit.
         if self.editing_queued.is_some() {
@@ -6033,6 +6935,49 @@ impl Composer {
                 return;
             }
         }
+        if let Some(blob) = self
+            .draft_unavailable
+            .get(&self.current_key)
+            .and_then(|blobs| blobs.first())
+        {
+            self.failure = Some(
+                format!(
+                    "{} needs reattachment before this draft can be sent.",
+                    blob.name
+                )
+                .into(),
+            );
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return;
+        }
+        let unsaved = self
+            .staged()
+            .iter()
+            .chain(self.staged_appshots().iter().map(|shot| &shot.screenshot))
+            .find(|attachment| {
+                self.draft_blobs
+                    .get(&self.current_key)
+                    .and_then(|blobs| blobs.get(&attachment.id))
+                    .is_none_or(|blob| blob.state != DraftBlobState::Saved)
+            });
+        if let Some(attachment) = unsaved {
+            self.failure = Some(
+                format!(
+                    "{} is not durably saved yet. Wait for saving to finish or reattach it.",
+                    attachment.name
+                )
+                .into(),
+            );
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return;
+        }
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let draft_snapshot = self.build_draft_record(&self.current_key, text.clone(), cx);
+        let submitted_revision = draft_snapshot.revision;
+        self.draft_submitting
+            .insert(self.current_key.clone(), submitted_revision);
         // Snapshot-and-clear NOW (use-attachments.ts takeAttachments): the
         // strip empties the instant you hit send; a failure hands the files
         // back into the chat's stash.
@@ -6058,10 +7003,10 @@ impl Composer {
             }
             taken
         });
+        self.draft_comment_fingerprints.remove(&key);
         let typed = text.clone();
         let text = crate::comments::with_comments(&text, &comments);
         self.preview = None;
-        let message_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().timestamp_millis();
         // Existing busy chats always queue; compatibility was checked before
         // taking the draft, attachments, or review comments.
@@ -6206,7 +7151,7 @@ impl Composer {
             cx.notify();
         });
 
-        self.input.update(cx, |input, cx| input.set_text("", cx));
+        self.set_input_text_without_draft_edit(String::new(), cx);
         self.drafts.remove(&self.current_key);
         self.failure = None;
         self.sending = true;
@@ -6222,10 +7167,30 @@ impl Composer {
         cx.notify();
 
         let restore_text = typed;
+        let submitted_key = key.clone();
         let err_chat_id = chat_id.clone();
         let err_message_id = message_id.clone();
         self.send_task = Some(cx.spawn(async move |this, cx| {
-            let result: Result<Option<String>, String> = async {
+            let mut result: Result<ComposerSendOutcome, ComposerSendFailure> = async {
+                crate::drafts::save(&engine, &draft_snapshot)
+                    .await
+                    .map_err(|error| {
+                        ComposerSendFailure::Rejected(format!(
+                            "Draft was not saved; nothing was sent: {error}"
+                        ))
+                    })?;
+                crate::drafts::begin_submission(
+                    &engine,
+                    &message_id,
+                    Some(&chat_id),
+                    &draft_snapshot,
+                )
+                .await
+                .map_err(|error| {
+                    ComposerSendFailure::Rejected(format!(
+                        "Draft submission could not be recorded; nothing was sent: {error}"
+                    ))
+                })?;
                 // Attachments stage FIRST — before the chat row or anything
                 // else exists. Staging is chat-independent (keyed by
                 // uploadId), and ordering it first makes a new-chat send
@@ -6271,7 +7236,9 @@ impl Composer {
                         .await
                         {
                             tracing::warn!(name = %att.name, error = %err, "local attachment stage failed");
-                            return Err("Couldn't stage the attachment locally.".to_string());
+                            return Err(ComposerSendFailure::Rejected(
+                                "Couldn't stage the attachment locally.".to_string(),
+                            ));
                         }
                         transfers.push(serde_json::json!({
                             "uploadId": upload_id,
@@ -6308,10 +7275,10 @@ impl Composer {
                             Ok(path) => attachment_paths.push(path),
                             Err(err) => {
                                 tracing::warn!(name = %att.name, error = %err, "attachment upload failed");
-                                return Err(
+                                return Err(ComposerSendFailure::Rejected(
                                     "Couldn't upload the attachment — the device may be offline."
                                         .to_string(),
-                                );
+                                ));
                             }
                         }
                     }
@@ -6502,17 +7469,26 @@ impl Composer {
                         "attachments": attachment_paths,
                         "holdForTurnEnd": true,
                     });
-                    let reply = engine
-                        .client()
-                        .call(methods::QUEUE_MESSAGE, params)
-                        .await
-                        .map_err(|e| format!("Send failed: {e}"))?;
+                    let reply = engine.client().call(methods::QUEUE_MESSAGE, params).await.map_err(
+                        |error| match error {
+                            RpcError::Transport(_) | RpcError::Closed => {
+                                ComposerSendFailure::Unknown(format!(
+                                    "Queue acceptance is unknown: {error}"
+                                ))
+                            }
+                            _ => ComposerSendFailure::Rejected(format!("Send failed: {error}")),
+                        },
+                    )?;
                     let queue_id = reply
                         .get("id")
                         .and_then(serde_json::Value::as_str)
                         .filter(|id| !id.is_empty())
-                        .ok_or_else(|| "Send failed: queue did not return an id".to_string())?;
-                    return Ok(Some(queue_id.to_string()));
+                        .ok_or_else(|| {
+                            ComposerSendFailure::Unknown(
+                                "Queue acceptance is unknown: no id was returned".into(),
+                            )
+                        })?;
+                    return Ok(ComposerSendOutcome::Queued(queue_id.to_string()));
                 }
 
                 let command = SessionCommandPayload::Run {
@@ -6537,7 +7513,7 @@ impl Composer {
                     message_id: message_id.clone(),
                 };
                 let command = serde_json::to_value(&command)
-                    .map_err(|e| format!("Send failed: {e}"))?;
+                    .map_err(|e| ComposerSendFailure::Rejected(format!("Send failed: {e}")))?;
                 let mut intent = serde_json::json!({ "kind": "session", "command": command });
                 if !transfers.is_empty() {
                     intent["transfers"] = serde_json::Value::Array(transfers);
@@ -6545,18 +7521,86 @@ impl Composer {
                 // Deadline-bounded: QueueCommand is a local write (in-process
                 // or IPC), but a deferred engine handle can park forever —
                 // the send task must never grind silently (2026-08-19).
-                crate::task_commands::execute_with_id(
+                let receipt = crate::task_commands::execute_receipt_with_id(
                     &engine,
                     &chat_id,
                     message_id.clone(),
                     intent,
                 )
                 .await
-                .map_err(|e| format!("Send failed: {e}"))?;
-                Ok(None)
+                .map_err(|error| {
+                    ComposerSendFailure::Unknown(format!("Delivery is unknown: {error}"))
+                })?;
+                match receipt.status {
+                    CommandReceiptStatus::Applied => Ok(ComposerSendOutcome::Applied),
+                    CommandReceiptStatus::Pending => Ok(ComposerSendOutcome::Pending),
+                    _ => Err(ComposerSendFailure::Rejected(
+                        receipt
+                            .reason
+                            .map(|reason| reason.message)
+                            .unwrap_or_else(|| "The task rejected this message".into()),
+                    )),
+                }
             }
             .await;
-            if result.is_err() && is_new {
+            if matches!(&result, Ok(ComposerSendOutcome::Pending)) {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                if let Ok(Some(receipt)) = engine
+                    .client()
+                    .call_as::<Option<zeron_proto::CommandReceipt>>(
+                        methods::GET_TASK_COMMAND_RECEIPT,
+                        serde_json::json!({ "commandId": message_id.clone() }),
+                    )
+                    .await
+                {
+                    result = match receipt.status {
+                        CommandReceiptStatus::Applied => Ok(ComposerSendOutcome::Applied),
+                        CommandReceiptStatus::Pending => Ok(ComposerSendOutcome::Pending),
+                        _ => Err(ComposerSendFailure::Rejected(
+                            receipt
+                                .reason
+                                .map(|reason| reason.message)
+                                .unwrap_or_else(|| "The task rejected this message".into()),
+                        )),
+                    };
+                }
+            }
+            let settlement = match &result {
+                Ok(ComposerSendOutcome::Applied) => {
+                    crate::drafts::settle_submission(&engine, &message_id, "applied", None).await
+                }
+                Ok(ComposerSendOutcome::Queued(queue_id)) => {
+                    crate::drafts::settle_submission(
+                        &engine,
+                        &message_id,
+                        "applied",
+                        Some(queue_id),
+                    )
+                    .await
+                }
+                Err(ComposerSendFailure::Rejected(_)) => {
+                    crate::drafts::settle_submission(
+                        &engine,
+                        &message_id,
+                        "recoverable",
+                        None,
+                    )
+                    .await
+                }
+                Ok(ComposerSendOutcome::Pending) | Err(ComposerSendFailure::Unknown(_)) => Ok(()),
+            };
+            if let Err(error) = settlement {
+                tracing::warn!(%error, "draft submission settlement failed");
+                if matches!(
+                    &result,
+                    Ok(ComposerSendOutcome::Applied | ComposerSendOutcome::Queued(_))
+                ) {
+                    result = Ok(ComposerSendOutcome::Pending);
+                }
+            }
+            if matches!(&result, Err(ComposerSendFailure::Rejected(_))) && is_new {
                 // A failed new-chat send must not strand a just-minted empty
                 // chat in the sidebar (v0.2.12 "empty transcript" report).
                 // Staging now runs before CreateChat, so usually nothing was
@@ -6572,16 +7616,55 @@ impl Composer {
             }
             this.update(cx, |composer, cx| {
                 composer.sending = false;
+                if matches!(
+                    &result,
+                    Ok(ComposerSendOutcome::Applied | ComposerSendOutcome::Queued(_))
+                        | Err(ComposerSendFailure::Rejected(_))
+                ) {
+                    composer.draft_submitting.remove(&submitted_key);
+                }
                 composer
                     .state
                     .update(cx, |s, _| s.end_upload_progress());
-                if let Ok(Some(message_id)) = &result {
+                if let Ok(ComposerSendOutcome::Queued(message_id)) = &result {
                     cx.emit(ComposerEvent::Queued {
                         chat_id: err_chat_id.clone(),
                         message_id: message_id.clone(),
                     });
                 }
-                if let Err(message) = result {
+                match &result {
+                    Ok(ComposerSendOutcome::Pending) => {
+                        composer.failure = Some(
+                            "Delivery is still pending or unknown. The submitted draft is preserved and will not be resent automatically."
+                                .into(),
+                        );
+                        composer.failure_key = Some(err_chat_id.clone());
+                        if !queue {
+                            composer.watch_draft_receipt(
+                                err_message_id.clone(),
+                                err_chat_id.clone(),
+                                submitted_key.clone(),
+                                engine.clone(),
+                                cx,
+                            );
+                        }
+                    }
+                    Err(ComposerSendFailure::Unknown(message)) => {
+                        composer.failure = Some(message.clone().into());
+                        composer.failure_key = Some(err_chat_id.clone());
+                        if !queue {
+                            composer.watch_draft_receipt(
+                                err_message_id.clone(),
+                                err_chat_id.clone(),
+                                submitted_key.clone(),
+                                engine.clone(),
+                                cx,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                if let Err(ComposerSendFailure::Rejected(message)) = result {
                     // Failure: red banner, echo removed, prompt back in the
                     // draft, staged files back in the stash. A failed NEW
                     // chat restores to the CANVAS (key "") and navigates back
@@ -6592,7 +7675,24 @@ impl Composer {
                     } else {
                         err_chat_id.clone()
                     };
-                    composer.failure = Some(message.into());
+                    let current_text = (composer.current_key == restore_key)
+                        .then(|| composer.input.read(cx).text().to_string())
+                        .unwrap_or_default();
+                    let has_newer_draft = submission_has_newer_draft(
+                        submitted_revision,
+                        composer
+                            .draft_revisions
+                            .get(&restore_key)
+                            .copied()
+                            .unwrap_or(0),
+                        &current_text,
+                    );
+                    composer.failure = Some(if has_newer_draft {
+                        "The previous message was rejected and preserved separately from your newer draft."
+                            .into()
+                    } else {
+                        message.into()
+                    });
                     composer.failure_key = Some(restore_key.clone());
                     composer.state.update(cx, |s, cx| {
                         s.remove_echo(&err_chat_id, &err_message_id);
@@ -6602,12 +7702,17 @@ impl Composer {
                             // loads the restored draft below.
                             s.select_chat(None, cx);
                         }
-                        for comment in &comments {
-                            s.add_review_comment(&restore_key, comment.clone());
+                        if !has_newer_draft {
+                            for comment in &comments {
+                                s.add_review_comment(&restore_key, comment.clone());
+                            }
                         }
                         cx.notify();
                     });
-                    if is_new && composer.current_key != restore_key {
+                    if has_newer_draft {
+                        // The immutable submission record remains recoverable;
+                        // never merge it into text typed after dispatch.
+                    } else if is_new && composer.current_key != restore_key {
                         // A re-key swap to the canvas is pending (the
                         // select_chat(None) above); it loads this draft into
                         // the input on flush — setting the input directly
@@ -6618,9 +7723,9 @@ impl Composer {
                         // existing chat, or the deleted row's watch event
                         // re-keyed to the canvas before this handler ran —
                         // no further swap will fire). Set the input directly.
-                        composer.input.update(cx, |input, cx| input.set_text(restore_text, cx));
+                        composer.set_input_text_without_draft_edit(restore_text, cx);
                     }
-                    if !ordinary_staged.is_empty() {
+                    if !has_newer_draft && !ordinary_staged.is_empty() {
                         // Merge by id (stashAttachments): files the user staged
                         // while the send was in flight survive the hand-back —
                         // draining the minted chat's slot too when the restore
@@ -6637,7 +7742,13 @@ impl Composer {
                         }
                         composer.attachments.insert(restore_key.clone(), merged);
                     }
-                    composer.restore_failed_appshots(&staged_appshots, &err_chat_id, &restore_key);
+                    if !has_newer_draft {
+                        composer.restore_failed_appshots(
+                            &staged_appshots,
+                            &err_chat_id,
+                            &restore_key,
+                        );
+                    }
                 }
                 cx.notify();
             })
@@ -9462,6 +10573,13 @@ mod tests {
     fn queued_submit_does_not_publish_an_optimistic_transcript_echo() {
         assert!(should_publish_optimistic_echo(false));
         assert!(!should_publish_optimistic_echo(true));
+    }
+
+    #[test]
+    fn failed_submission_never_overwrites_newer_typing() {
+        assert!(!submission_has_newer_draft(4, 4, ""));
+        assert!(submission_has_newer_draft(4, 5, ""));
+        assert!(submission_has_newer_draft(4, 4, "typed while sending"));
     }
 
     #[test]

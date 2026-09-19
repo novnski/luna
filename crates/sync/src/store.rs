@@ -9,8 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use zeron_proto::{
-    CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus,
-    TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
+    CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, ComposerDraft,
+    ComposerDraftRead, DraftSubmission, DraftSubmissionState, TaskCommandEvent, TaskCommandRead,
+    TaskCommandSnapshot,
 };
 
 /// Errors surfaced by [`DocsStore`].
@@ -22,6 +23,10 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("immutable draft submission {0} already has different content")]
+    DraftSubmissionConflict(String),
+    #[error("composer draft {0} reused a revision with different content")]
+    DraftRevisionConflict(String),
 }
 
 /// Ordered, append-only migrations. Each entry runs once inside a transaction;
@@ -88,6 +93,47 @@ const MIGRATIONS: &[&str] = &[
         receipt_json BLOB NOT NULL,
         PRIMARY KEY(command_id,task_id,payload_hash)
      ) STRICT;",
+    // v5 — L08 device-local composer drafts and explicit staged-blob owners.
+    // Blob bytes live in the existing profile uploads directory; these rows
+    // are the crash-consistent projection that says which durable files are
+    // still owned by a draft, unresolved submission, or queued entry.
+    "CREATE TABLE composer_drafts (
+        device_id TEXT NOT NULL,
+        draft_id TEXT NOT NULL,
+        task_id TEXT,
+        revision INTEGER NOT NULL,
+        record_json BLOB NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(device_id, draft_id)
+     ) STRICT;
+     CREATE UNIQUE INDEX composer_drafts_task
+       ON composer_drafts(device_id, task_id) WHERE task_id IS NOT NULL;
+     CREATE INDEX composer_drafts_canvas
+       ON composer_drafts(device_id, updated_at DESC) WHERE task_id IS NULL;
+     CREATE TABLE composer_draft_submissions (
+        device_id TEXT NOT NULL,
+        command_id TEXT NOT NULL,
+        draft_id TEXT NOT NULL,
+        task_id TEXT,
+        draft_revision INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        record_json BLOB NOT NULL,
+        queue_id TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(device_id, command_id)
+     ) STRICT;
+     CREATE INDEX composer_draft_submissions_scope
+       ON composer_draft_submissions(device_id, task_id, draft_id, updated_at);
+     CREATE TABLE attachment_owners (
+        device_id TEXT NOT NULL,
+        blob_path TEXT NOT NULL,
+        owner_kind TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(device_id, blob_path, owner_kind, owner_id)
+     ) STRICT;
+     CREATE INDEX attachment_owners_owner
+       ON attachment_owners(device_id, owner_kind, owner_id);",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +340,326 @@ impl DocsStore {
             )
             .optional()?;
         Ok(row)
+    }
+
+    /// Persist one complete versioned composer draft and its blob ownership in
+    /// one SQLite transaction. An older async save is ignored rather than
+    /// restoring stale content after a task/profile switch.
+    pub fn save_composer_draft(
+        &self,
+        device_id: &str,
+        draft: &ComposerDraft,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let bytes = serde_json::to_vec(draft)?;
+        let current = tx
+            .query_row(
+                "SELECT revision,record_json FROM composer_drafts
+                 WHERE device_id=?1 AND draft_id=?2",
+                params![device_id, draft.draft_id],
+                |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        if let Some((revision, current_bytes)) = current {
+            if revision > draft.revision {
+                return Ok(false);
+            }
+            if revision == draft.revision {
+                let mut current: ComposerDraft = serde_json::from_slice(&current_bytes)?;
+                current.updated_at_ms = draft.updated_at_ms;
+                if current == *draft {
+                    return Ok(false);
+                }
+                return Err(StoreError::DraftRevisionConflict(draft.draft_id.clone()));
+            }
+        }
+        if let Some(task_id) = draft.task_id.as_deref() {
+            tx.execute(
+                "DELETE FROM composer_drafts
+                 WHERE device_id=?1 AND task_id=?2 AND draft_id<>?3",
+                params![device_id, task_id, draft.draft_id],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO composer_drafts
+               (device_id,draft_id,task_id,revision,record_json,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(device_id,draft_id) DO UPDATE SET
+               task_id=excluded.task_id, revision=excluded.revision,
+               record_json=excluded.record_json, updated_at=excluded.updated_at",
+            params![
+                device_id,
+                draft.draft_id,
+                draft.task_id,
+                draft.revision as i64,
+                bytes,
+                draft.updated_at_ms
+            ],
+        )?;
+        replace_attachment_owners_tx(
+            &tx,
+            device_id,
+            "draft",
+            &draft.draft_id,
+            draft.saved_blob_paths(),
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Load only the selected draft plus unresolved submissions in the same
+    /// scope. This never scans task journals or unrelated drafts.
+    pub fn read_composer_draft(
+        &self,
+        device_id: &str,
+        task_id: Option<&str>,
+        draft_id: Option<&str>,
+    ) -> Result<ComposerDraftRead, StoreError> {
+        let conn = self.conn();
+        let draft_bytes: Option<Vec<u8>> = match (task_id, draft_id) {
+            (Some(task_id), _) => conn
+                .query_row(
+                    "SELECT record_json FROM composer_drafts
+                     WHERE device_id=?1 AND task_id=?2 LIMIT 1",
+                    params![device_id, task_id],
+                    |row| row.get(0),
+                )
+                .optional()?,
+            (None, Some(draft_id)) => conn
+                .query_row(
+                    "SELECT record_json FROM composer_drafts
+                     WHERE device_id=?1 AND draft_id=?2 AND task_id IS NULL",
+                    params![device_id, draft_id],
+                    |row| row.get(0),
+                )
+                .optional()?,
+            (None, None) => conn
+                .query_row(
+                    "SELECT record_json FROM composer_drafts
+                     WHERE device_id=?1 AND task_id IS NULL
+                     ORDER BY updated_at DESC LIMIT 1",
+                    params![device_id],
+                    |row| row.get(0),
+                )
+                .optional()?,
+        };
+        let draft = draft_bytes
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()?;
+        let effective_draft_id = draft
+            .as_ref()
+            .map(|draft: &ComposerDraft| draft.draft_id.as_str())
+            .or(draft_id)
+            .unwrap_or_default();
+        let mut stmt = conn.prepare(
+            "SELECT command_id,state,record_json,task_id,queue_id,updated_at
+             FROM composer_draft_submissions
+             WHERE device_id=?1 AND
+               ((?2 IS NOT NULL AND task_id=?2) OR
+                (?2 IS NULL AND task_id IS NULL AND draft_id=?3))
+             ORDER BY updated_at, command_id",
+        )?;
+        let submissions = stmt
+            .query_map(params![device_id, task_id, effective_draft_id], |row| {
+                let state: String = row.get(1)?;
+                let state = match state.as_str() {
+                    "pending" => DraftSubmissionState::Pending,
+                    _ => DraftSubmissionState::Recoverable,
+                };
+                let bytes: Vec<u8> = row.get(2)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    state,
+                    bytes,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(
+                |(command_id, state, bytes, task_id, queue_id, updated_at_ms)| {
+                    Ok(DraftSubmission {
+                        command_id,
+                        state,
+                        snapshot: serde_json::from_slice(&bytes)?,
+                        task_id,
+                        queue_id,
+                        updated_at_ms,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        Ok(ComposerDraftRead { draft, submissions })
+    }
+
+    /// Freeze the exact revision before dispatch. Reusing a command id with a
+    /// different snapshot is rejected, matching L07's immutable envelope.
+    pub fn begin_draft_submission(
+        &self,
+        device_id: &str,
+        command_id: &str,
+        task_id: Option<&str>,
+        snapshot: &ComposerDraft,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let bytes = serde_json::to_vec(snapshot)?;
+        let existing: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT record_json FROM composer_draft_submissions
+                 WHERE device_id=?1 AND command_id=?2",
+                params![device_id, command_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            if existing == bytes {
+                return Ok(());
+            }
+            return Err(StoreError::DraftSubmissionConflict(command_id.into()));
+        }
+        tx.execute(
+            "INSERT INTO composer_draft_submissions
+               (device_id,command_id,draft_id,task_id,draft_revision,state,
+                record_json,updated_at)
+             VALUES (?1,?2,?3,?4,?5,'pending',?6,?7)",
+            params![
+                device_id,
+                command_id,
+                snapshot.draft_id,
+                task_id,
+                snapshot.revision as i64,
+                bytes,
+                now_ms()
+            ],
+        )?;
+        replace_attachment_owners_tx(
+            &tx,
+            device_id,
+            "submission",
+            command_id,
+            snapshot.saved_blob_paths(),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_draft_submission_recoverable(
+        &self,
+        device_id: &str,
+        command_id: &str,
+    ) -> Result<(), StoreError> {
+        self.conn().execute(
+            "UPDATE composer_draft_submissions
+             SET state='recoverable',updated_at=?3
+             WHERE device_id=?1 AND command_id=?2",
+            params![device_id, command_id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Accept one submission and clear only the exact draft revision it froze.
+    /// A queue id transfers blob ownership in the same transaction.
+    pub fn accept_draft_submission(
+        &self,
+        device_id: &str,
+        command_id: &str,
+        queue_id: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let row: Option<(String, u64, Vec<u8>)> = tx
+            .query_row(
+                "SELECT draft_id,draft_revision,record_json
+                 FROM composer_draft_submissions
+                 WHERE device_id=?1 AND command_id=?2",
+                params![device_id, command_id],
+                |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((draft_id, submitted_revision, bytes)) = row else {
+            return Ok(false);
+        };
+        let snapshot: ComposerDraft = serde_json::from_slice(&bytes)?;
+        if let Some(queue_id) = queue_id {
+            replace_attachment_owners_tx(
+                &tx,
+                device_id,
+                "queue",
+                queue_id,
+                snapshot.saved_blob_paths(),
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM attachment_owners
+             WHERE device_id=?1 AND owner_kind='submission' AND owner_id=?2",
+            params![device_id, command_id],
+        )?;
+        tx.execute(
+            "DELETE FROM composer_draft_submissions
+             WHERE device_id=?1 AND command_id=?2",
+            params![device_id, command_id],
+        )?;
+        let current: Option<u64> = tx
+            .query_row(
+                "SELECT revision FROM composer_drafts
+                 WHERE device_id=?1 AND draft_id=?2",
+                params![device_id, draft_id],
+                |row| Ok(row.get::<_, i64>(0)? as u64),
+            )
+            .optional()?;
+        let cleared = current == Some(submitted_revision);
+        if cleared {
+            tx.execute(
+                "DELETE FROM attachment_owners
+                 WHERE device_id=?1 AND owner_kind='draft' AND owner_id=?2",
+                params![device_id, draft_id],
+            )?;
+            tx.execute(
+                "DELETE FROM composer_drafts WHERE device_id=?1 AND draft_id=?2",
+                params![device_id, draft_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(cleared)
+    }
+
+    /// Record owners for a currently observed queue. Stale owner retirement is
+    /// deliberately deferred to L18; L08 prefers bounded leakage to deleting
+    /// bytes that another unopened queue may still own.
+    pub fn replace_queue_attachment_owners(
+        &self,
+        device_id: &str,
+        queue: impl IntoIterator<Item = (String, Vec<String>)>,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        for (queue_id, paths) in queue {
+            for path in paths {
+                tx.execute(
+                    "INSERT OR IGNORE INTO attachment_owners
+                       (device_id,blob_path,owner_kind,owner_id,created_at)
+                     VALUES (?1,?2,'queue',?3,?4)",
+                    params![device_id, path, queue_id, now_ms()],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn attachment_owner_count(&self, device_id: &str, path: &str) -> usize {
+        self.conn()
+            .query_row(
+                "SELECT COUNT(*) FROM attachment_owners WHERE device_id=?1 AND blob_path=?2",
+                params![device_id, path],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or_default() as usize
     }
 
     /// Delete the snapshot row for `doc_id` (destructive schema breaks: the
@@ -902,6 +1268,29 @@ impl DocsStore {
     }
 }
 
+fn replace_attachment_owners_tx<'a>(
+    tx: &rusqlite::Transaction<'_>,
+    device_id: &str,
+    owner_kind: &str,
+    owner_id: &str,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "DELETE FROM attachment_owners
+         WHERE device_id=?1 AND owner_kind=?2 AND owner_id=?3",
+        params![device_id, owner_kind, owner_id],
+    )?;
+    for path in paths {
+        tx.execute(
+            "INSERT OR IGNORE INTO attachment_owners
+               (device_id,blob_path,owner_kind,owner_id,created_at)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![device_id, path, owner_kind, owner_id, now_ms()],
+        )?;
+    }
+    Ok(())
+}
+
 fn load_task_command_snapshot(
     conn: &Connection,
     task_id: &str,
@@ -1194,6 +1583,127 @@ mod publication_tests {
         store.delete_snapshot("chat").unwrap();
         assert!(store.pending_chat_updates("chat").unwrap().is_empty());
         assert!(!store.chat_outbox_initialized("chat").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+
+    fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
+        ComposerDraft {
+            version: zeron_proto::COMPOSER_DRAFT_VERSION,
+            draft_id: "task-a".into(),
+            task_id: Some("task-a".into()),
+            revision,
+            text: text.into(),
+            attachments: vec![zeron_proto::DraftBlob {
+                attachment_id: "image-a".into(),
+                name: "fixture.png".into(),
+                path: Some(path.into()),
+                sha256: Some("synthetic".into()),
+                size: Some(7),
+                state: zeron_proto::DraftBlobState::Saved,
+                error: None,
+            }],
+            appshots: vec![zeron_proto::DraftAppshot {
+                id: "shot-a".into(),
+                screenshot_attachment_id: "image-a".into(),
+                app_name: "Fixture".into(),
+                bundle_identifier: Some("test.fixture".into()),
+                window_title: Some("Synthetic window".into()),
+                accessibility_format_version: 1,
+                accessibility_content: "synthetic captured context".into(),
+                accessibility_truncated: false,
+                screenshot_dimensions: Some((2, 2)),
+                captured_at_ms: 1,
+            }],
+            context: zeron_proto::DraftContext {
+                review_comments: vec![serde_json::json!({"path":"src/lib.rs","line":7})],
+                quoted: Some(serde_json::json!({"messageId":"quoted"})),
+                terminal: Some(serde_json::json!({"terminalId":"terminal"})),
+            },
+            execution: serde_json::json!({
+                "model":"fixture-model",
+                "providerAccountId":"fixture-account",
+                "permissionMode":"auto"
+            }),
+            updated_at_ms: revision as i64,
+        }
+    }
+
+    #[test]
+    fn draft_revision_submission_and_blob_ownership_are_atomic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("synthetic.png")
+            .to_string_lossy()
+            .to_string();
+        let store = DocsStore::open(dir.path()).unwrap();
+
+        let original = draft(7, "submitted", &path);
+        assert!(store.save_composer_draft("device-a", &original).unwrap());
+        assert_eq!(store.attachment_owner_count("device-a", &path), 1);
+        assert!(
+            !store
+                .save_composer_draft("device-a", &draft(6, "stale", &path))
+                .unwrap(),
+            "a late async write must not restore stale content"
+        );
+
+        store
+            .begin_draft_submission("device-a", "command-a", Some("task-a"), &original)
+            .unwrap();
+        assert_eq!(store.attachment_owner_count("device-a", &path), 2);
+        let newer = draft(8, "newer typing", &path);
+        assert!(store.save_composer_draft("device-a", &newer).unwrap());
+        assert!(
+            !store
+                .accept_draft_submission("device-a", "command-a", None)
+                .unwrap(),
+            "accepting revision 7 must not clear revision 8"
+        );
+        let read = store
+            .read_composer_draft("device-a", Some("task-a"), None)
+            .unwrap();
+        assert_eq!(read.draft.unwrap().text, "newer typing");
+        assert!(read.submissions.is_empty());
+        assert_eq!(store.attachment_owner_count("device-a", &path), 1);
+
+        store
+            .begin_draft_submission("device-a", "command-b", Some("task-a"), &newer)
+            .unwrap();
+        drop(store);
+        let reopened = DocsStore::open(dir.path()).unwrap();
+        let pending = reopened
+            .read_composer_draft("device-a", Some("task-a"), None)
+            .unwrap();
+        assert_eq!(pending.draft.as_ref().unwrap().text, "newer typing");
+        assert_eq!(pending.submissions[0].state, DraftSubmissionState::Pending);
+        reopened
+            .mark_draft_submission_recoverable("device-a", "command-b")
+            .unwrap();
+        let read = reopened
+            .read_composer_draft("device-a", Some("task-a"), None)
+            .unwrap();
+        assert_eq!(read.submissions.len(), 1);
+        assert_eq!(read.submissions[0].state, DraftSubmissionState::Recoverable);
+        assert_eq!(read.submissions[0].snapshot.appshots[0].app_name, "Fixture");
+
+        assert!(
+            reopened
+                .accept_draft_submission("device-a", "command-b", Some("queue-a"))
+                .unwrap()
+        );
+        assert!(
+            reopened
+                .read_composer_draft("device-a", Some("task-a"), None)
+                .unwrap()
+                .draft
+                .is_none()
+        );
+        assert_eq!(reopened.attachment_owner_count("device-a", &path), 1);
     }
 }
 

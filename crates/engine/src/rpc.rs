@@ -63,10 +63,11 @@ use tokio::sync::watch;
 use zeron_doc::{MessagePart, RegistryDoc, SessionCommandPayload};
 use zeron_proto::{
     Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
-    CommandReceiptStatus, EngineInfo, HarnessId, ImportOwnership, PermissionMode,
-    TaskCommandSnapshot, TaskLineage, ToolCall, WorkspaceScope,
+    CommandReceiptStatus, ComposerDraft, ComposerDraftRead, DraftBlobState, EngineInfo, HarnessId,
+    ImportOwnership, PermissionMode, TaskCommandSnapshot, TaskLineage, ToolCall, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
+use zeron_sync::DocsStore;
 
 use crate::agent_accounts::AgentAccounts;
 use crate::auth::Auth;
@@ -368,6 +369,47 @@ struct TaskCommandSnapshotParams {
     after_task_sequence: Option<u64>,
     #[serde(default)]
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ComposerDraftReadParams {
+    #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
+    draft_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ComposerDraftSaveParams {
+    draft: ComposerDraft,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeginDraftSubmissionParams {
+    command_id: String,
+    #[serde(default)]
+    task_id: Option<String>,
+    snapshot: ComposerDraft,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettleDraftSubmissionParams {
+    command_id: String,
+    outcome: DraftSubmissionOutcome,
+    #[serde(default)]
+    queue_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum DraftSubmissionOutcome {
+    Pending,
+    Recoverable,
+    Applied,
 }
 
 #[derive(Debug, Deserialize)]
@@ -752,6 +794,7 @@ enum MutateParams {
 }
 
 pub struct EngineRpc {
+    store: std::sync::Arc<DocsStore>,
     sessions: SessionsEngine,
     doc_host: DocHost,
     workspace: WorkspaceHost,
@@ -775,6 +818,7 @@ pub struct EngineRpc {
 impl EngineRpc {
     #[allow(clippy::too_many_arguments)] // engine assembly seam, not a public API
     pub fn new(
+        store: std::sync::Arc<DocsStore>,
         sessions: SessionsEngine,
         doc_host: DocHost,
         workspace: WorkspaceHost,
@@ -795,6 +839,7 @@ impl EngineRpc {
             capabilities: zeron_proto::capabilities::current(),
         };
         Self {
+            store,
             sessions,
             doc_host,
             workspace,
@@ -861,6 +906,81 @@ impl EngineRpc {
         self.local_import
             .as_ref()
             .ok_or_else(|| RpcError::Failed("local import requires a synced workspace".into()))
+    }
+
+    fn validate_composer_draft(&self, draft: &ComposerDraft) -> Result<(), RpcError> {
+        if draft.version != zeron_proto::COMPOSER_DRAFT_VERSION {
+            return Err(RpcError::BadParams(
+                "unsupported composer draft version".into(),
+            ));
+        }
+        if draft.draft_id.is_empty() || draft.draft_id.len() > 128 {
+            return Err(RpcError::BadParams("invalid composer draft id".into()));
+        }
+        let encoded =
+            serde_json::to_vec(draft).map_err(|error| RpcError::BadParams(error.to_string()))?;
+        if encoded.len() > 4 * 1024 * 1024 {
+            return Err(RpcError::BadParams(
+                "composer draft metadata is too large".into(),
+            ));
+        }
+        for blob in &draft.attachments {
+            if blob.state != DraftBlobState::Saved {
+                continue;
+            }
+            let path = blob
+                .path
+                .as_deref()
+                .ok_or_else(|| RpcError::BadParams("saved draft attachment has no path".into()))?;
+            self.uploads
+                .validate_draft_blob(path, blob.size, blob.sha256.as_deref())
+                .map_err(|error| RpcError::BadParams(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn mark_unavailable_draft_blobs(&self, draft: &mut ComposerDraft) {
+        for blob in &mut draft.attachments {
+            let validation = match blob.state {
+                DraftBlobState::Saved => blob
+                    .path
+                    .as_deref()
+                    .ok_or_else(|| {
+                        crate::EngineError::Other("Saved attachment has no durable path".into())
+                    })
+                    .and_then(|path| {
+                        self.uploads
+                            .validate_draft_blob(path, blob.size, blob.sha256.as_deref())
+                    }),
+                DraftBlobState::WaitingForUpload => Err(crate::EngineError::Other(
+                    "Attachment copy did not finish before the app stopped".into(),
+                )),
+                DraftBlobState::NeedsReattachment => continue,
+            };
+            if let Err(error) = validation {
+                blob.state = DraftBlobState::NeedsReattachment;
+                blob.error = Some(error.to_string());
+                blob.path = None;
+            }
+        }
+    }
+
+    fn read_composer_draft(
+        &self,
+        task_id: Option<&str>,
+        draft_id: Option<&str>,
+    ) -> Result<ComposerDraftRead, RpcError> {
+        let mut read = self
+            .store
+            .read_composer_draft(&self.engine_info.device_id, task_id, draft_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        if let Some(draft) = &mut read.draft {
+            self.mark_unavailable_draft_blobs(draft);
+        }
+        for submission in &mut read.submissions {
+            self.mark_unavailable_draft_blobs(&mut submission.snapshot);
+        }
+        Ok(read)
     }
 
     /// Resolve a mention-search root from synced workspace rows. A client may
@@ -2347,6 +2467,56 @@ impl RpcService for EngineRpc {
                         .map_err(|error| RpcError::Failed(error.to_string()))?,
                 )
             }
+            methods::GET_COMPOSER_DRAFT => {
+                let p: ComposerDraftReadParams = parse_params(params)?;
+                let read = self.read_composer_draft(p.task_id.as_deref(), p.draft_id.as_deref())?;
+                RpcReply::value(&read)
+            }
+            methods::SAVE_COMPOSER_DRAFT => {
+                let p: ComposerDraftSaveParams = parse_params(params)?;
+                self.validate_composer_draft(&p.draft)?;
+                let saved = self
+                    .store
+                    .save_composer_draft(&self.engine_info.device_id, &p.draft)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "saved": saved }))
+            }
+            methods::BEGIN_DRAFT_SUBMISSION => {
+                let p: BeginDraftSubmissionParams = parse_params(params)?;
+                self.validate_composer_draft(&p.snapshot)?;
+                self.store
+                    .begin_draft_submission(
+                        &self.engine_info.device_id,
+                        &p.command_id,
+                        p.task_id.as_deref(),
+                        &p.snapshot,
+                    )
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "stored": true }))
+            }
+            methods::SETTLE_DRAFT_SUBMISSION => {
+                let p: SettleDraftSubmissionParams = parse_params(params)?;
+                match p.outcome {
+                    DraftSubmissionOutcome::Pending => {}
+                    DraftSubmissionOutcome::Recoverable => self
+                        .store
+                        .mark_draft_submission_recoverable(
+                            &self.engine_info.device_id,
+                            &p.command_id,
+                        )
+                        .map_err(|error| RpcError::Failed(error.to_string()))?,
+                    DraftSubmissionOutcome::Applied => {
+                        self.store
+                            .accept_draft_submission(
+                                &self.engine_info.device_id,
+                                &p.command_id,
+                                p.queue_id.as_deref(),
+                            )
+                            .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    }
+                }
+                RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
             methods::GET_TASK_COMMAND_SNAPSHOT => {
                 let p: TaskCommandSnapshotParams = parse_params(params)?;
                 let mut read = match p.after_task_sequence {
@@ -2540,14 +2710,38 @@ impl RpcService for EngineRpc {
                     .open(&p.chat_id)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 let rx = handle.watch_queue();
+                let store = self.store.clone();
+                let uploads = self.uploads.clone();
+                let device_id = self.engine_info.device_id.clone();
                 Ok(RpcReply::Stream(
-                    futures::stream::unfold((rx, true), |(mut rx, first)| async move {
-                        if !first {
-                            rx.changed().await.ok()?;
+                    futures::stream::unfold((rx, true), move |(mut rx, first)| {
+                        let store = store.clone();
+                        let uploads = uploads.clone();
+                        let device_id = device_id.clone();
+                        async move {
+                            if !first {
+                                rx.changed().await.ok()?;
+                            }
+                            let items = rx.borrow_and_update().clone();
+                            let owners = items
+                                .iter()
+                                .map(|item| {
+                                    let paths = item
+                                        .attachments
+                                        .iter()
+                                        .filter_map(|path| uploads.owned_blob_path(path))
+                                        .collect();
+                                    (item.id.clone(), paths)
+                                })
+                                .collect::<Vec<_>>();
+                            if let Err(error) =
+                                store.replace_queue_attachment_owners(&device_id, owners)
+                            {
+                                tracing::warn!(%error, "queue attachment ownership refresh failed");
+                            }
+                            let value = serde_json::json!({ "items": items });
+                            Some((value, (rx, false)))
                         }
-                        let items = rx.borrow_and_update().clone();
-                        let value = serde_json::json!({ "items": items });
-                        Some((value, (rx, false)))
                     })
                     .boxed(),
                 ))

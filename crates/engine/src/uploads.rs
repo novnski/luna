@@ -22,6 +22,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::EngineError;
 
@@ -238,6 +239,46 @@ impl Uploads {
         target
             .is_file()
             .then(|| target.to_string_lossy().to_string())
+    }
+
+    /// Verify that a draft reference names immutable bytes in this profile's
+    /// durable upload jail. Draft reads never follow arbitrary source paths.
+    pub fn validate_draft_blob(
+        &self,
+        path: &str,
+        expected_size: Option<u64>,
+        expected_sha256: Option<&str>,
+    ) -> Result<(), EngineError> {
+        let file = self.inspect(path, &[])?;
+        if expected_size.is_some_and(|size| size != file.size) {
+            return Err(EngineError::Other("Draft attachment size changed".into()));
+        }
+        if let Some(expected) = expected_sha256 {
+            let bytes = std::fs::read(&file.resolved)?;
+            let actual = format!("{:x}", Sha256::digest(bytes));
+            if actual != expected {
+                return Err(EngineError::Other(
+                    "Draft attachment checksum changed".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Canonical profile-owned path for ownership bookkeeping. Workspace
+    /// files are readable attachments but are never adopted as LUNA blobs.
+    pub fn owned_blob_path(&self, path: &str) -> Option<String> {
+        let resolved_ref;
+        let path = if is_pending_ref(path) {
+            resolved_ref = self.resolve_pending(path)?;
+            resolved_ref.as_str()
+        } else {
+            path
+        };
+        let resolved = std::fs::canonicalize(path).ok()?;
+        let root = std::fs::canonicalize(&self.inner.dir).ok()?;
+        (resolved.starts_with(&root) && resolved != root)
+            .then(|| resolved.to_string_lossy().to_string())
     }
 
     /// Read one 45KB chunk of an attachment. `extra_roots` are the workspace's
