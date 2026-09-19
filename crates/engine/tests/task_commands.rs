@@ -8,11 +8,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use zeron_doc::MessageRole;
+use zeron_doc::{MessageRole, QueueClaimMode, QueueMessageStatus};
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, CommandReasonCode, CommandReceipt, CommandReceiptStatus, DoneStatus, HarnessId,
+    AgentEvent, COMPOSER_DRAFT_VERSION, CommandReasonCode, CommandReceipt, CommandReceiptStatus,
+    ComposerDraft, ComposerDraftRead, DoneStatus, DraftContext, DraftSubmissionState, HarnessId,
     Model, PermissionMode, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode, TaskCommandRead,
 };
 use zeron_rpc::{RpcClient, methods};
@@ -130,6 +131,21 @@ fn request(prompt: &str) -> RunRequest {
         resume: None,
         attachments: Vec::new(),
         worktree: None,
+    }
+}
+
+fn composer_draft(task_id: &str, text: &str) -> ComposerDraft {
+    ComposerDraft {
+        version: COMPOSER_DRAFT_VERSION,
+        draft_id: format!("task:{task_id}"),
+        task_id: Some(task_id.to_string()),
+        revision: 1,
+        text: text.to_string(),
+        attachments: Vec::new(),
+        appshots: Vec::new(),
+        context: DraftContext::default(),
+        execution: serde_json::Value::Null,
+        updated_at_ms: 1,
     }
 }
 
@@ -760,15 +776,15 @@ async fn durable_queue_commands_dedupe_and_revision_fence_edit_remove() {
             .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, edit_command.clone())
             .await
             .is_err(),
-        "the queue projection commits before this synthetic receipt failure"
+        "the atomic queue projection/receipt transaction must surface the failure"
     );
-    let edited = core
+    let unchanged = core
         .doc_host
         .queued_message(&task_id, "queue-message-1")
         .unwrap()
         .unwrap();
-    assert_eq!(edited.text, "edited queue text");
-    assert_eq!(edited.revision, 2);
+    assert_eq!(unchanged.text, "original queue text");
+    assert_eq!(unchanged.revision, 1);
     {
         let db = rusqlite::Connection::open(&db_path).unwrap();
         db.execute_batch("DROP TRIGGER fail_queue_edit_receipt")
@@ -783,7 +799,7 @@ async fn durable_queue_commands_dedupe_and_revision_fence_edit_remove() {
             .unwrap()
             .revision,
         2,
-        "receipt recovery must not apply the edit twice"
+        "the exact retry applies the edit once after durable storage recovers"
     );
 
     let after_edit = snapshot(&client_a, &task_id).await;
@@ -807,6 +823,45 @@ async fn durable_queue_commands_dedupe_and_revision_fence_edit_remove() {
         CommandReasonCode::QueueRevisionConflict
     );
 
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_queue_remove_snapshot BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='{task_id}'
+             BEGIN SELECT RAISE(ABORT, 'forced queue remove snapshot failure'); END;"
+        ))
+        .unwrap();
+    }
+    let failed_remove = execute(
+        &client_a,
+        envelope(
+            "queue-remove-storage-failure",
+            &task_id,
+            Some(&snapshot(&client_a, &task_id).await),
+            serde_json::json!({
+                "kind": "removeQueuedMessage",
+                "messageId": "queue-message-1",
+                "expectedQueueRevision": 2
+            }),
+        ),
+    )
+    .await;
+    assert_ne!(failed_remove.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        core.doc_host
+            .queued_message(&task_id, "queue-message-1")
+            .unwrap()
+            .unwrap()
+            .revision,
+        2,
+        "failed durable removal must leave the live queue projection intact"
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_queue_remove_snapshot")
+            .unwrap();
+    }
+
     let remove = envelope(
         "queue-remove-current",
         &task_id,
@@ -827,6 +882,570 @@ async fn durable_queue_commands_dedupe_and_revision_fence_edit_remove() {
     );
     assert_eq!(execute(&client_b, remove).await, removed);
     core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_queue_snapshot_never_applies_or_clears_the_draft_and_retry_reopens_once() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let message_id = "durable-enqueue-row";
+    let failed_command_id = "durable-enqueue-failed";
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    core.doc_host.open(&task_id).unwrap();
+    core.doc_host.pause_all_queues();
+
+    let draft = composer_draft(&task_id, "draft survives failed queue persistence");
+    client
+        .call(
+            methods::SAVE_COMPOSER_DRAFT,
+            serde_json::json!({ "draft": draft }),
+        )
+        .await
+        .unwrap();
+    client
+        .call(
+            methods::BEGIN_DRAFT_SUBMISSION,
+            serde_json::json!({
+                "commandId": failed_command_id,
+                "taskId": task_id,
+                "snapshot": draft,
+            }),
+        )
+        .await
+        .unwrap();
+
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_queue_snapshot BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='{task_id}'
+             BEGIN SELECT RAISE(ABORT, 'forced queue snapshot failure'); END;"
+        ))
+        .unwrap();
+    }
+    let failed = execute(
+        &client,
+        envelope(
+            failed_command_id,
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "queueMessage",
+                "messageId": message_id,
+                "text": "persist exactly once",
+                "holdForTurnEnd": true,
+                "execution": null,
+            }),
+        ),
+    )
+    .await;
+    assert_ne!(failed.status, CommandReceiptStatus::Applied);
+    assert!(
+        core.doc_host
+            .queued_message(&task_id, message_id)
+            .unwrap()
+            .is_none(),
+        "a failed projection transaction must not mutate the watched queue"
+    );
+    let draft_read: ComposerDraftRead = client
+        .call_as(
+            methods::GET_COMPOSER_DRAFT,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        draft_read.draft.as_ref().map(|draft| draft.text.as_str()),
+        Some("draft survives failed queue persistence")
+    );
+    assert!(draft_read.submissions.iter().any(|submission| {
+        submission.command_id == failed_command_id
+            && submission.state == DraftSubmissionState::Pending
+    }));
+
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_queue_snapshot")
+            .unwrap();
+    }
+    drop(client);
+    drop(core);
+
+    let reopened = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    reopened.doc_host.open(&task_id).unwrap();
+    reopened.doc_host.pause_all_queues();
+    assert!(
+        reopened
+            .doc_host
+            .queued_message(&task_id, message_id)
+            .unwrap()
+            .is_none()
+    );
+    let retry_command_id = "durable-enqueue-retry";
+    client
+        .call(
+            methods::BEGIN_DRAFT_SUBMISSION,
+            serde_json::json!({
+                "commandId": retry_command_id,
+                "taskId": task_id,
+                "snapshot": draft,
+            }),
+        )
+        .await
+        .unwrap();
+    let retried = execute(
+        &client,
+        envelope(
+            retry_command_id,
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "queueMessage",
+                "messageId": message_id,
+                "text": "persist exactly once",
+                "holdForTurnEnd": true,
+                "execution": null,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(retried.status, CommandReceiptStatus::Applied);
+    client
+        .call(
+            methods::SETTLE_DRAFT_SUBMISSION,
+            serde_json::json!({
+                "commandId": retry_command_id,
+                "outcome": "applied",
+                "queueId": message_id,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .doc_host
+            .open(&task_id)
+            .unwrap()
+            .doc()
+            .read_queue()
+            .unwrap()
+            .iter()
+            .filter(|item| item.id == message_id)
+            .count(),
+        1
+    );
+    drop(client);
+    drop(reopened);
+
+    let after_restart = assemble(root.path(), runs.clone(), false);
+    after_restart.doc_host.open(&task_id).unwrap();
+    assert_eq!(
+        after_restart
+            .doc_host
+            .open(&task_id)
+            .unwrap()
+            .doc()
+            .read_queue()
+            .unwrap()
+            .iter()
+            .filter(|item| item.id == message_id)
+            .count(),
+        1
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    after_restart.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_edit_and_remove_projections_stay_absent_after_abrupt_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    core.doc_host.open(&task_id).unwrap();
+    core.doc_host.pause_all_queues();
+    assert_eq!(
+        execute(
+            &client,
+            envelope(
+                "projection-failure-enqueue",
+                &task_id,
+                Some(&snapshot(&client, &task_id).await),
+                serde_json::json!({
+                    "kind": "queueMessage",
+                    "messageId": "projection-failure-row",
+                    "text": "original",
+                    "holdForTurnEnd": true
+                }),
+            ),
+        )
+        .await
+        .status,
+        CommandReceiptStatus::Applied
+    );
+    let lease = client
+        .call(
+            methods::BEGIN_QUEUED_MESSAGE_EDIT,
+            serde_json::json!({
+                "chatId": task_id,
+                "id": "projection-failure-row",
+                "editorDeviceId": core.device_id,
+                "editorInstanceId": "failure-test"
+            }),
+        )
+        .await
+        .unwrap();
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_edit_projection BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='{task_id}'
+             BEGIN SELECT RAISE(ABORT, 'forced edit projection failure'); END;"
+        ))
+        .unwrap();
+    }
+    let failed_edit = execute(
+        &client,
+        envelope(
+            "projection-failure-edit",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "editQueuedMessage",
+                "messageId": "projection-failure-row",
+                "expectedQueueRevision": 1,
+                "leaseId": lease["leaseId"],
+                "text": "must not persist",
+                "expectedTextHash": lease["baseTextHash"],
+                "attachments": []
+            }),
+        ),
+    )
+    .await;
+    assert_ne!(failed_edit.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        core.doc_host
+            .queued_message(&task_id, "projection-failure-row")
+            .unwrap()
+            .unwrap()
+            .text,
+        "original"
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_edit_projection")
+            .unwrap();
+    }
+    drop(client);
+    drop(core);
+
+    let reopened = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let row = reopened
+        .doc_host
+        .queued_message(&task_id, "projection-failure-row")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.text, "original");
+    assert_eq!(row.revision, 1);
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_remove_projection BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='{task_id}'
+             BEGIN SELECT RAISE(ABORT, 'forced remove projection failure'); END;"
+        ))
+        .unwrap();
+    }
+    let failed_remove = execute(
+        &client,
+        envelope(
+            "projection-failure-remove",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "removeQueuedMessage",
+                "messageId": "projection-failure-row",
+                "expectedQueueRevision": 1
+            }),
+        ),
+    )
+    .await;
+    assert_ne!(failed_remove.status, CommandReceiptStatus::Applied);
+    assert!(
+        reopened
+            .doc_host
+            .queued_message(&task_id, "projection-failure-row")
+            .unwrap()
+            .is_some()
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_remove_projection")
+            .unwrap();
+    }
+    drop(client);
+    drop(reopened);
+
+    let after_restart = assemble(root.path(), runs, false);
+    let row = after_restart
+        .doc_host
+        .queued_message(&task_id, "projection-failure-row")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.text, "original");
+    assert_eq!(row.revision, 1);
+    after_restart.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_durable_claim_never_reaches_the_provider_and_reopens_held() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), true);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+
+    let run = execute(
+        &client,
+        envelope(
+            "claim-failure-run",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": request("hold the provider"),
+                    "messageId": "claim-failure-run-message"
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        run.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+    wait_for_receipt(&client, "claim-failure-run", CommandReceiptStatus::Applied).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+    let queued = execute(
+        &client,
+        envelope(
+            "claim-failure-enqueue",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "queueMessage",
+                "messageId": "claim-failure-row",
+                "text": "must stay held",
+                "holdForTurnEnd": true
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(queued.status, CommandReceiptStatus::Applied);
+
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_queue_claim_snapshot BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='{task_id}'
+             BEGIN SELECT RAISE(ABORT, 'forced queue claim snapshot failure'); END;"
+        ))
+        .unwrap();
+    }
+    let send = execute(
+        &client,
+        envelope(
+            "claim-failure-send",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "sendQueuedNow",
+                "messageId": "claim-failure-row",
+                "expectedQueueRevision": 1
+            }),
+        ),
+    )
+    .await;
+    assert_ne!(send.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "claim persistence must precede provider dispatch"
+    );
+    let row = core
+        .doc_host
+        .queued_message(&task_id, "claim-failure-row")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(row.status, zeron_doc::QueueMessageStatus::Held));
+
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_queue_claim_snapshot")
+            .unwrap();
+    }
+    drop(client);
+    drop(core);
+    let reopened = assemble(root.path(), runs.clone(), false);
+    let row = reopened
+        .doc_host
+        .queued_message(&task_id, "claim-failure-row")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(row.status, zeron_doc::QueueMessageStatus::Held));
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let command_id = "correlation-storage-failure";
+    let message_id = "correlation-storage-row";
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    core.doc_host.open(&task_id).unwrap();
+    core.doc_host.pause_all_queues();
+    assert_eq!(
+        execute(
+            &client,
+            envelope(
+                "correlation-storage-enqueue",
+                &task_id,
+                Some(&snapshot(&client, &task_id).await),
+                serde_json::json!({
+                    "kind": "queueMessage",
+                    "messageId": message_id,
+                    "text": "claimed until correlation is durable",
+                    "holdForTurnEnd": true
+                }),
+            ),
+        )
+        .await
+        .status,
+        CommandReceiptStatus::Applied
+    );
+
+    let task_snapshot = snapshot(&client, &task_id).await.snapshot;
+    let now = chrono::Utc::now().timestamp_millis();
+    let begin = core
+        .doc_host
+        .begin_task_command(
+            CommandReceipt {
+                command_id: command_id.into(),
+                task_id: task_id.clone(),
+                intent: "sendQueuedNow".into(),
+                payload_hash: "correlation-storage-payload".into(),
+                status: CommandReceiptStatus::Pending,
+                snapshot: task_snapshot,
+                event_sequence: None,
+                actor_id: core.device_id.clone(),
+                client_id: "test".into(),
+                client_session_id: "test".into(),
+                execution_environment: Some(core.device_id.clone()),
+                correlation_id: None,
+                reason: None,
+                recovery_action: None,
+                accepted_at_ms: now,
+                committed_at_ms: None,
+                observed_at_ms: now,
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(begin.kind, zeron_sync::TaskCommandBeginKind::Accepted);
+    core.doc_host
+        .set_task_command_correlation(command_id, message_id)
+        .unwrap();
+    let handle = core.doc_host.open(&task_id).unwrap();
+    assert!(matches!(
+        handle
+            .doc()
+            .claim_queued(message_id, 1, command_id, QueueClaimMode::SendNow, now)
+            .unwrap(),
+        zeron_doc::QueueClaimOutcome::Claimed(_)
+    ));
+    core.doc_host.flush_all();
+
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_correlation_snapshot BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='{task_id}'
+             BEGIN SELECT RAISE(ABORT, 'forced correlation snapshot failure'); END;"
+        ))
+        .unwrap();
+    }
+    assert!(
+        core.doc_host
+            .confirm_task_command_correlation(&task_id, message_id, "synthetic-turn", None, None,)
+            .is_err()
+    );
+    assert_eq!(
+        core.doc_host
+            .task_command_receipt(command_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        CommandReceiptStatus::Pending
+    );
+    assert!(matches!(
+        core.doc_host
+            .queued_message(&task_id, message_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        QueueMessageStatus::Claimed { .. }
+    ));
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_correlation_snapshot")
+            .unwrap();
+    }
+    drop(client);
+    drop(handle);
+    drop(core);
+
+    let reopened = assemble(root.path(), runs, false);
+    assert!(matches!(
+        reopened
+            .doc_host
+            .queued_message(&task_id, message_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        QueueMessageStatus::DeliveryUnknown { .. }
+    ));
+    assert_ne!(
+        reopened
+            .doc_host
+            .task_command_receipt(command_id)
+            .unwrap()
+            .unwrap()
+            .status,
+        CommandReceiptStatus::Applied
+    );
+    reopened.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

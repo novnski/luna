@@ -1570,11 +1570,10 @@ impl EngineRpc {
             | TaskCommandIntent::SteerQueuedNow { message_id, .. } => Some(message_id.clone()),
             _ => None,
         };
-        if let Some(correlation) = provider_correlation.as_deref() {
-            self.doc_host
-                .set_task_command_correlation(&command.command_id, correlation)
-                .map_err(|error| RpcError::Failed(error.to_string()))?;
-        }
+        // Queue delivery writes correlation and the durable claimed queue
+        // projection in one transaction inside DocHost. Publishing the
+        // correlation here would recreate a crash window where a receipt
+        // names provider work that was never durably claimed.
         let expected_turn_id = command.expected_turn_id.clone();
         let outcome = self
             .apply_task_command_intent(
@@ -2003,9 +2002,10 @@ impl EngineRpc {
                 execution,
             } => {
                 use crate::doc_host::QueueMutationOutcome;
-                let outcome = self
+                let (outcome, committed) = self
                     .doc_host
                     .enqueue_queued_message(
+                        command_id,
                         task_id,
                         &message_id,
                         &text,
@@ -2015,14 +2015,13 @@ impl EngineRpc {
                     )
                     .await
                     .map_err(TaskProjectionError::Mutation)?;
+                if let Some(receipt) = committed {
+                    return Ok(Some(receipt));
+                }
                 let (status, applied, code, message, recovery) = match outcome {
-                    QueueMutationOutcome::Applied | QueueMutationOutcome::Duplicate => (
-                        CommandReceiptStatus::Applied,
-                        true,
-                        CommandReasonCode::OperationRejected,
-                        "",
-                        "",
-                    ),
+                    QueueMutationOutcome::Applied | QueueMutationOutcome::Duplicate => {
+                        unreachable!("applied queue mutation must commit its receipt atomically")
+                    }
                     QueueMutationOutcome::RevisionConflict(_) => (
                         CommandReceiptStatus::Conflict,
                         false,
@@ -2066,27 +2065,30 @@ impl EngineRpc {
                             && item.delivery_gate.is_none()
                             && matches!(item.status, zeron_doc::QueueMessageStatus::Held)
                     });
-                let outcome = if already_applied {
+                let (outcome, committed) = if already_applied {
                     // Crash window: the queue projection committed but the
                     // L07 receipt did not. Replaying the same command proves
                     // its exact next revision/content and finalizes it without
                     // applying a second edit.
-                    FinishQueueEditOutcome::Committed
+                    (FinishQueueEditOutcome::Committed, None)
                 } else {
                     self.doc_host
-                        .finish_queued_message_edit_with_attachments_at_revision(
+                        .finish_queued_message_edit_task(
+                            command_id,
                             task_id,
                             &message_id,
                             &lease_id,
-                            crate::doc_host::FinishQueueEditAction::Commit,
-                            Some(&text),
-                            Some(&expected_text_hash),
-                            Some(&attachments),
-                            Some(expected_queue_revision),
+                            &text,
+                            &expected_text_hash,
+                            &attachments,
+                            expected_queue_revision,
                         )
                         .await
                         .map_err(TaskProjectionError::Mutation)?
                 };
+                if let Some(receipt) = committed {
+                    return Ok(Some(receipt));
+                }
                 let (status, applied, code, message, recovery) = match outcome {
                     FinishQueueEditOutcome::Committed => (
                         CommandReceiptStatus::Applied,
@@ -2140,23 +2142,23 @@ impl EngineRpc {
                 expected_queue_revision,
             } => {
                 use crate::doc_host::QueueMutationOutcome;
-                let outcome = self
+                let (outcome, committed) = self
                     .doc_host
                     .remove_queued_message_at_revision(
+                        command_id,
                         task_id,
                         &message_id,
                         expected_queue_revision,
                     )
                     .await
                     .map_err(TaskProjectionError::Mutation)?;
+                if let Some(receipt) = committed {
+                    return Ok(Some(receipt));
+                }
                 let (status, applied, code, message, recovery) = match outcome {
-                    QueueMutationOutcome::Applied | QueueMutationOutcome::Missing => (
-                        CommandReceiptStatus::Applied,
-                        true,
-                        CommandReasonCode::OperationRejected,
-                        "",
-                        "",
-                    ),
+                    QueueMutationOutcome::Applied | QueueMutationOutcome::Missing => {
+                        unreachable!("applied queue removal must commit its receipt atomically")
+                    }
                     QueueMutationOutcome::RevisionConflict(_) => (
                         CommandReceiptStatus::Conflict,
                         false,

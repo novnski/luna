@@ -670,7 +670,11 @@ async fn a_steer_command_holds_for_an_agent_that_takes_no_mid_turn_prompt() {
         "the held steer to flush at turn end",
     )
     .await;
-    assert!(queue_texts(&core).is_empty());
+    wait_for(
+        || queue_texts(&core).is_empty(),
+        "the held steer claim to correlate",
+    )
+    .await;
 
     let _ = harness.finish.send(());
     core.shutdown().await;
@@ -714,7 +718,11 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
         "second queued turn",
     )
     .await;
-    assert!(queue_texts(&core).is_empty());
+    wait_for(
+        || queue_texts(&core).is_empty(),
+        "the second queued claim to correlate",
+    )
+    .await;
     let _ = harness.finish.send(());
     core.shutdown().await;
 }
@@ -864,7 +872,11 @@ async fn steer_now_starts_the_next_turn_when_the_previous_turn_is_already_idle()
         Some(id.as_str()),
         "promoting an idle queued row preserves its transcript identity"
     );
-    assert!(queue_texts(&core).is_empty());
+    wait_for(
+        || queue_texts(&core).is_empty(),
+        "the promoted queue claim to correlate",
+    )
+    .await;
 
     let _ = harness.finish.send(());
     core.shutdown().await;

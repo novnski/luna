@@ -510,6 +510,100 @@ pub enum QueueDispatchOutcome {
     Missing,
 }
 
+struct PreparedQueueProjection<T> {
+    outcome: T,
+    snapshot: Vec<u8>,
+    update: Vec<u8>,
+    batch_id: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_queue_edit_projection(
+    doc: &SessionDoc,
+    id: &str,
+    lease_id: &str,
+    action: FinishQueueEditAction,
+    text: Option<&str>,
+    expected_text_hash: Option<&str>,
+    attachments: Option<&[String]>,
+    expected_revision: Option<u64>,
+) -> Result<(FinishQueueEditOutcome, bool), EngineError> {
+    let Some(item) = doc.read_queue()?.into_iter().find(|item| item.id == id) else {
+        return Ok((FinishQueueEditOutcome::Missing, false));
+    };
+    if let QueueMessageStatus::Claimed { command_id, .. }
+    | QueueMessageStatus::DeliveryUnknown { command_id, .. } = &item.status
+    {
+        return Ok((
+            FinishQueueEditOutcome::Claimed {
+                command_id: command_id.clone(),
+            },
+            false,
+        ));
+    }
+    if expected_revision.is_some_and(|revision| revision != item.revision) {
+        return Ok((
+            FinishQueueEditOutcome::RevisionConflict {
+                current_revision: item.revision,
+            },
+            false,
+        ));
+    }
+    let (current_lease, base_text_hash) = match &item.delivery_gate {
+        Some(QueueDeliveryGate::Editing {
+            lease_id,
+            base_text_hash,
+            ..
+        }) => (lease_id, base_text_hash),
+        Some(QueueDeliveryGate::ReviewRequired {
+            previous_lease_id,
+            base_text_hash,
+            ..
+        }) => (previous_lease_id, base_text_hash),
+        None => return Ok((FinishQueueEditOutcome::Lost, false)),
+    };
+    if current_lease != lease_id {
+        return Ok((FinishQueueEditOutcome::Lost, false));
+    }
+    if action == FinishQueueEditAction::Commit
+        && (expected_text_hash != Some(base_text_hash.as_str())
+            || queue_text_hash(&item.text) != *base_text_hash)
+    {
+        return Ok((
+            FinishQueueEditOutcome::Conflict {
+                current_text: item.text,
+            },
+            false,
+        ));
+    }
+    let replacement = match action {
+        FinishQueueEditAction::Commit => Some(text.unwrap_or_default()),
+        FinishQueueEditAction::Cancel | FinishQueueEditAction::ReleaseUnchanged => None,
+        FinishQueueEditAction::Discard => Some(""),
+    };
+    if !doc.finish_queued_edit_with_attachments(
+        id,
+        replacement,
+        if action == FinishQueueEditAction::Commit {
+            attachments
+        } else {
+            None
+        },
+        now_ms(),
+    )? {
+        return Ok((FinishQueueEditOutcome::Missing, false));
+    }
+    Ok((
+        match action {
+            FinishQueueEditAction::Commit => FinishQueueEditOutcome::Committed,
+            FinishQueueEditAction::Cancel => FinishQueueEditOutcome::Cancelled,
+            FinishQueueEditAction::Discard => FinishQueueEditOutcome::Discarded,
+            FinishQueueEditAction::ReleaseUnchanged => FinishQueueEditOutcome::Released,
+        },
+        true,
+    ))
+}
+
 /// Content and its historical presentation cutoff travel atomically, even
 /// when the watch coalesces several backfill and live commits.
 #[derive(Clone, Default)]
@@ -542,6 +636,10 @@ pub struct ChatDocHandle {
     /// the turn and starting its own the chat reads Idle, and an idle chat with
     /// a queue is exactly what the flush drains.
     drain_lock: tokio::sync::Mutex<()>,
+    /// Serializes candidate queue projections through durable commit and
+    /// post-commit installation. Queue mutations are built off-doc, so a
+    /// failed SQLite transaction is never observable through this handle.
+    queue_projection_lock: Mutex<()>,
     /// An explicit user interrupt freezes automatic queue delivery. The next
     /// explicit prompt or queue send resumes it; incidental doc/status changes
     /// must not turn Cancel into "send the next row".
@@ -957,26 +1055,80 @@ impl DocHost {
         binding_id: Option<&str>,
         binding_generation: Option<u32>,
     ) -> Result<Vec<CommandReceipt>, EngineError> {
-        let receipts = self.inner.store.confirm_task_command_correlation(
-            task_id,
-            correlation_id,
-            active_turn_id,
-            binding_id,
-            binding_generation,
-        )?;
-        for receipt in &receipts {
-            if matches!(
-                receipt.intent.as_str(),
-                "sendQueuedNow" | "steerQueuedNow" | "dispatchQueued"
-            ) && let Some(message_id) = receipt.correlation_id.as_deref()
-                && let Ok(handle) = self.open(task_id)
-                && handle
-                    .doc
-                    .settle_queued_claim(message_id, &receipt.command_id)?
-            {
-                handle.publish_queue();
-                self.save_snapshot(&handle);
+        let handle = self.open(task_id).ok();
+        let mut prepared = None;
+        let mut _projection = None;
+        if let Some(handle) = handle.as_ref() {
+            _projection = Some(lock(&handle.queue_projection_lock));
+            let candidate = self.prepare_queue_projection(
+                handle,
+                &format!("correlation:{correlation_id}"),
+                |doc| {
+                    let command_id = doc
+                        .read_queue()?
+                        .into_iter()
+                        .find(|item| item.id == correlation_id)
+                        .and_then(|item| match item.status {
+                            QueueMessageStatus::Claimed { command_id, .. }
+                            | QueueMessageStatus::DeliveryUnknown { command_id, .. } => {
+                                Some(command_id)
+                            }
+                            QueueMessageStatus::Held => None,
+                        });
+                    let Some(command_id) = command_id else {
+                        return Ok(false);
+                    };
+                    let matching_receipt = self
+                        .inner
+                        .store
+                        .task_command_receipt(&command_id)?
+                        .is_some_and(|receipt| {
+                            receipt.status == CommandReceiptStatus::Pending
+                                && receipt.correlation_id.as_deref() == Some(correlation_id)
+                                && matches!(
+                                    receipt.intent.as_str(),
+                                    "sendQueuedNow" | "steerQueuedNow" | "dispatchQueued"
+                                )
+                        });
+                    if !matching_receipt {
+                        return Ok(false);
+                    }
+                    let changed = doc.settle_queued_claim(correlation_id, &command_id)?;
+                    Ok(changed)
+                },
+            )?;
+            if candidate.outcome {
+                prepared = Some(candidate);
             }
+        }
+        let snapshots = prepared
+            .as_ref()
+            .zip(handle.as_ref())
+            .map(|(prepared, handle)| vec![(handle.chat_id.as_str(), prepared.snapshot.as_slice())])
+            .unwrap_or_default();
+        let updates = prepared
+            .as_ref()
+            .zip(handle.as_ref())
+            .map(|(prepared, handle)| Self::queue_projection_updates(handle, prepared))
+            .unwrap_or_default();
+        let receipts = self
+            .inner
+            .store
+            .confirm_task_command_correlation_with_snapshot_changes(
+                task_id,
+                correlation_id,
+                active_turn_id,
+                binding_id,
+                binding_generation,
+                &snapshots,
+                &updates,
+            )?;
+        if !receipts.is_empty()
+            && let (Some(handle), Some(prepared)) = (handle.as_ref(), prepared)
+        {
+            self.install_queue_projection(handle, prepared)?;
+        }
+        for receipt in &receipts {
             self.publish_task_receipt(receipt.clone());
         }
         Ok(receipts)
@@ -1485,20 +1637,22 @@ impl DocHost {
             }
         }
         if reconciled_queue_claim && let Ok(snapshot) = doc.export_snapshot() {
-            self.inner.store.save_snapshot(chat_id, &snapshot)?;
-            if room_gen >= 2 && self.inner.store.chat_outbox_initialized(chat_id)? {
-                let update = doc
-                    .doc()
-                    .export(loro::ExportMode::updates(&queue_reconcile_frontier))
-                    .map_err(|error| EngineError::Other(error.to_string()))?;
-                if !update.is_empty() {
-                    self.inner.store.enqueue_chat_update(
-                        chat_id,
-                        &format!("queue-reconcile-{}", uuid::Uuid::new_v4()),
-                        &update,
-                    )?;
-                }
-            }
+            let update = doc
+                .doc()
+                .export(loro::ExportMode::updates(&queue_reconcile_frontier))
+                .map_err(|error| EngineError::Other(error.to_string()))?;
+            let batch_id = format!("queue-reconcile-{}", uuid::Uuid::new_v4());
+            let updates = if room_gen >= 2
+                && !update.is_empty()
+                && self.inner.store.chat_outbox_initialized(chat_id)?
+            {
+                vec![(batch_id.as_str(), update.as_slice())]
+            } else {
+                Vec::new()
+            };
+            self.inner
+                .store
+                .save_snapshot_with_updates(chat_id, &snapshot, &updates)?;
         }
         let doc = Arc::new(doc);
 
@@ -1543,6 +1697,7 @@ impl DocHost {
             transcript_history,
             queue_tx,
             drain_lock: tokio::sync::Mutex::new(()),
+            queue_projection_lock: Mutex::new(()),
             queue_paused: AtomicBool::new(recovered_queue_pending),
             mirror_dirty: AtomicBool::new(true),
             last_access: AtomicI64::new(now_ms()),
@@ -2742,6 +2897,260 @@ impl DocHost {
         }
     }
 
+    /// Build a queue mutation on an isolated CRDT, never on the watched live
+    /// document. The returned projection may be persisted atomically before
+    /// its update is imported into the live handle.
+    fn prepare_queue_projection<T>(
+        &self,
+        handle: &ChatDocHandle,
+        batch_key: &str,
+        mutation: impl FnOnce(&SessionDoc) -> Result<T, EngineError>,
+    ) -> Result<PreparedQueueProjection<T>, EngineError> {
+        let live_snapshot = handle.doc.export_snapshot()?;
+        let base = if handle.retired.load(Ordering::Acquire) {
+            match self
+                .inner
+                .store
+                .load_snapshot_with_cursor(&handle.chat_id)?
+            {
+                Some((bytes, _, epoch)) if epoch >= crate::chat2_host::CHAT2_DOC_EPOCH => bytes,
+                _ => live_snapshot,
+            }
+        } else {
+            live_snapshot
+        };
+        let raw = loro::LoroDoc::new();
+        raw.import(&base).map_err(|error| {
+            EngineError::Other(format!("queue projection import failed: {error}"))
+        })?;
+        // A retired fat handle must mutate the durable thin lineage. Merge any
+        // unacknowledged thin-lineage batches before deriving the candidate so
+        // the full snapshot cannot discard a locally committed update.
+        if handle.retired.load(Ordering::Acquire) {
+            for (_, update) in self.inner.store.pending_chat_updates(&handle.chat_id)? {
+                raw.import(&update).map_err(|error| {
+                    EngineError::Other(format!("queue outbox replay failed: {error}"))
+                })?;
+            }
+        }
+        let candidate = SessionDoc::from_doc(raw);
+        let frontier = candidate.doc().oplog_vv();
+        let outcome = mutation(&candidate)?;
+        let snapshot = candidate.export_snapshot()?;
+        let update = candidate
+            .doc()
+            .export(loro::ExportMode::updates(&frontier))
+            .map_err(|error| EngineError::Other(format!("queue update export failed: {error}")))?;
+        let batch_id =
+            if !update.is_empty() && self.inner.store.chat_outbox_initialized(&handle.chat_id)? {
+                Some(format!("queue-projection:{batch_key}"))
+            } else {
+                None
+            };
+        Ok(PreparedQueueProjection {
+            outcome,
+            snapshot,
+            update,
+            batch_id,
+        })
+    }
+
+    fn queue_projection_updates<'a, T>(
+        handle: &'a ChatDocHandle,
+        prepared: &'a PreparedQueueProjection<T>,
+    ) -> Vec<(&'a str, &'a str, &'a [u8])> {
+        prepared
+            .batch_id
+            .as_deref()
+            .map(|batch_id| {
+                vec![(
+                    handle.chat_id.as_str(),
+                    batch_id,
+                    prepared.update.as_slice(),
+                )]
+            })
+            .unwrap_or_default()
+    }
+
+    /// Install and publish only a projection that is already durable. Imported
+    /// Loro updates do not echo through the local-update subscription; the
+    /// pre-journaled batch is handed to the client with the same stable id.
+    fn install_queue_projection<T>(
+        &self,
+        handle: &ChatDocHandle,
+        prepared: PreparedQueueProjection<T>,
+    ) -> Result<T, EngineError> {
+        if !prepared.update.is_empty() {
+            let status = handle.doc.doc().import(&prepared.update).map_err(|error| {
+                EngineError::Other(format!("queue update install failed: {error}"))
+            })?;
+            if status.pending.is_some() {
+                return Err(EngineError::Other(
+                    "queue update install is missing causal dependencies".into(),
+                ));
+            }
+        }
+        handle
+            .snapshot_bytes
+            .store(prepared.snapshot.len(), Ordering::Release);
+        if let Some(batch_id) = prepared.batch_id {
+            let client = lock(&handle.chat2);
+            match &*client {
+                Some(client) => client.enqueue_batch(batch_id, prepared.update),
+                None => lock(&handle.chat2_pending_local).push((batch_id, prepared.update)),
+            }
+        }
+        handle.publish_queue();
+        Ok(prepared.outcome)
+    }
+
+    fn persist_queue_projection<T>(
+        &self,
+        handle: &ChatDocHandle,
+        batch_key: &str,
+        mutation: impl FnOnce(&SessionDoc) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        self.persist_queue_projection_if(handle, batch_key, |doc| {
+            mutation(doc).map(|outcome| (outcome, true))
+        })
+    }
+
+    fn persist_queue_projection_if<T>(
+        &self,
+        handle: &ChatDocHandle,
+        batch_key: &str,
+        mutation: impl FnOnce(&SessionDoc) -> Result<(T, bool), EngineError>,
+    ) -> Result<T, EngineError> {
+        let _projection = lock(&handle.queue_projection_lock);
+        let prepared = self.prepare_queue_projection(handle, batch_key, mutation)?;
+        let (outcome, commit) = prepared.outcome;
+        if !commit {
+            return Ok(outcome);
+        }
+        let prepared = PreparedQueueProjection {
+            outcome,
+            snapshot: prepared.snapshot,
+            update: prepared.update,
+            batch_id: prepared.batch_id,
+        };
+        let update = prepared
+            .batch_id
+            .as_deref()
+            .map(|batch_id| vec![(batch_id, prepared.update.as_slice())])
+            .unwrap_or_default();
+        self.inner.store.save_snapshot_with_updates(
+            &handle.chat_id,
+            &prepared.snapshot,
+            &update,
+        )?;
+        self.install_queue_projection(handle, prepared)
+    }
+
+    fn commit_queue_task_projection<T>(
+        &self,
+        handle: &ChatDocHandle,
+        command_id: &str,
+        mutation: impl FnOnce(&SessionDoc) -> Result<(T, bool), EngineError>,
+    ) -> Result<(T, Option<CommandReceipt>), EngineError> {
+        let _projection = lock(&handle.queue_projection_lock);
+        let prepared = self.prepare_queue_projection(handle, command_id, mutation)?;
+        let (outcome, commit) = prepared.outcome;
+        if !commit {
+            return Ok((outcome, None));
+        }
+        let prepared = PreparedQueueProjection {
+            outcome,
+            snapshot: prepared.snapshot,
+            update: prepared.update,
+            batch_id: prepared.batch_id,
+        };
+        let pending = self
+            .inner
+            .store
+            .task_command_receipt(command_id)?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(handle, &prepared);
+        let receipt = self
+            .inner
+            .store
+            .complete_task_command_with_snapshot_changes_and_updates(
+                command_id,
+                CommandReceiptStatus::Applied,
+                true,
+                pending.snapshot.binding_id.as_deref(),
+                pending.snapshot.binding_generation,
+                pending.snapshot.active_turn_id.as_deref(),
+                None,
+                None,
+                &snapshots,
+                &[],
+                &updates,
+            )?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let outcome = self.install_queue_projection(handle, prepared)?;
+        Ok((outcome, Some(receipt)))
+    }
+
+    fn correlate_queue_task_projection<T>(
+        &self,
+        handle: &ChatDocHandle,
+        command_id: &str,
+        correlation_id: &str,
+        mutation: impl FnOnce(&SessionDoc) -> Result<(T, bool), EngineError>,
+    ) -> Result<(T, Option<CommandReceipt>), EngineError> {
+        let _projection = lock(&handle.queue_projection_lock);
+        let prepared = self.prepare_queue_projection(handle, command_id, mutation)?;
+        let (outcome, commit) = prepared.outcome;
+        if !commit {
+            return Ok((outcome, None));
+        }
+        let prepared = PreparedQueueProjection {
+            outcome,
+            snapshot: prepared.snapshot,
+            update: prepared.update,
+            batch_id: prepared.batch_id,
+        };
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(handle, &prepared);
+        let receipt = self
+            .inner
+            .store
+            .set_task_command_correlation_with_snapshot_changes(
+                command_id,
+                correlation_id,
+                &snapshots,
+                &updates,
+            )?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let outcome = self.install_queue_projection(handle, prepared)?;
+        self.publish_task_receipt(receipt.clone());
+        Ok((outcome, Some(receipt)))
+    }
+
+    fn mark_queue_task_unknown<T>(
+        &self,
+        handle: &ChatDocHandle,
+        command_id: &str,
+        message: &str,
+        mutation: impl FnOnce(&SessionDoc) -> Result<T, EngineError>,
+    ) -> Result<(T, CommandReceipt), EngineError> {
+        let _projection = lock(&handle.queue_projection_lock);
+        let prepared = self.prepare_queue_projection(handle, command_id, mutation)?;
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(handle, &prepared);
+        let receipt = self
+            .inner
+            .store
+            .mark_task_command_unknown_with_snapshot_changes(
+                command_id, message, &snapshots, &updates,
+            )?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let outcome = self.install_queue_projection(handle, prepared)?;
+        self.publish_task_receipt(receipt.clone());
+        Ok((outcome, receipt))
+    }
+
     /// Hold a message for later: append it to the doc's queue. Any device may
     /// write here (unlike `messages`), and the change subscription kicks
     /// [`Self::drain_queue`], so a queue that lands while the agent is already
@@ -2789,47 +3198,54 @@ impl DocHost {
         execution: Option<zeron_proto::ChatConfig>,
     ) -> Result<bool, EngineError> {
         let handle = self.open(chat_id)?;
-        if let Some(existing) = handle
-            .doc
-            .read_queue()?
-            .into_iter()
-            .find(|item| item.id == message_id)
-        {
-            return Ok(existing.text == text
-                && existing.attachments == attachments
-                && existing.hold_for_turn_end == hold_for_turn_end
-                && existing.execution == execution);
-        }
-        handle.doc.push_queued(&QueuedMessage {
-            id: message_id.to_string(),
-            text: text.to_string(),
-            attachments,
-            hold_for_turn_end,
-            issued_by: self.inner.config.device_id.clone(),
-            issued_at: now_ms(),
-            edited_at: None,
-            revision: 1,
-            execution,
-            status: QueueMessageStatus::Held,
-            delivery_gate: None,
-        })?;
-        handle.publish_queue();
-        self.save_snapshot(&handle);
+        let inserted = self.persist_queue_projection(
+            &handle,
+            &format!("legacy-enqueue:{message_id}"),
+            |doc| {
+                if let Some(existing) = doc
+                    .read_queue()?
+                    .into_iter()
+                    .find(|item| item.id == message_id)
+                {
+                    return Ok(existing.text == text
+                        && existing.attachments == attachments
+                        && existing.hold_for_turn_end == hold_for_turn_end
+                        && existing.execution == execution);
+                }
+                doc.push_queued(&QueuedMessage {
+                    id: message_id.to_string(),
+                    text: text.to_string(),
+                    attachments,
+                    hold_for_turn_end,
+                    issued_by: self.inner.config.device_id.clone(),
+                    issued_at: now_ms(),
+                    edited_at: None,
+                    revision: 1,
+                    execution,
+                    status: QueueMessageStatus::Held,
+                    delivery_gate: None,
+                })?;
+                Ok(true)
+            },
+        )?;
         // Same reasoning as a command: the user is acting in this chat again.
-        self.unarchive_on_send(chat_id);
-        self.nudge_remote_host(chat_id);
-        Ok(true)
+        if inserted {
+            self.unarchive_on_send(chat_id);
+            self.nudge_remote_host(chat_id);
+        }
+        Ok(inserted)
     }
 
     pub async fn enqueue_queued_message(
         &self,
+        command_id: &str,
         chat_id: &str,
         message_id: &str,
         text: &str,
         attachments: Vec<String>,
         hold_for_turn_end: bool,
         execution: Option<zeron_proto::ChatConfig>,
-    ) -> Result<QueueMutationOutcome, EngineError> {
+    ) -> Result<(QueueMutationOutcome, Option<CommandReceipt>), EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(format!(
                 "device {} does not host chat {chat_id}",
@@ -2838,41 +3254,43 @@ impl DocHost {
         }
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
-        if let Some(existing) = handle
-            .doc
-            .read_queue()?
-            .into_iter()
-            .find(|item| item.id == message_id)
-        {
-            return Ok(
-                if existing.text == text
-                    && existing.attachments == attachments
-                    && existing.hold_for_turn_end == hold_for_turn_end
-                    && existing.execution == execution
-                {
-                    QueueMutationOutcome::Duplicate
-                } else {
-                    QueueMutationOutcome::RevisionConflict(existing)
-                },
-            );
-        }
-        handle.doc.push_queued(&QueuedMessage {
-            id: message_id.to_string(),
-            text: text.to_string(),
-            attachments,
-            hold_for_turn_end,
-            issued_by: self.inner.config.device_id.clone(),
-            issued_at: now_ms(),
-            edited_at: None,
-            revision: 1,
-            execution,
-            status: QueueMessageStatus::Held,
-            delivery_gate: None,
+        let result = self.commit_queue_task_projection(&handle, command_id, |doc| {
+            if let Some(existing) = doc
+                .read_queue()?
+                .into_iter()
+                .find(|item| item.id == message_id)
+            {
+                return Ok(
+                    if existing.text == text
+                        && existing.attachments == attachments
+                        && existing.hold_for_turn_end == hold_for_turn_end
+                        && existing.execution == execution
+                    {
+                        (QueueMutationOutcome::Duplicate, true)
+                    } else {
+                        (QueueMutationOutcome::RevisionConflict(existing), false)
+                    },
+                );
+            }
+            doc.push_queued(&QueuedMessage {
+                id: message_id.to_string(),
+                text: text.to_string(),
+                attachments,
+                hold_for_turn_end,
+                issued_by: self.inner.config.device_id.clone(),
+                issued_at: now_ms(),
+                edited_at: None,
+                revision: 1,
+                execution,
+                status: QueueMessageStatus::Held,
+                delivery_gate: None,
+            })?;
+            Ok((QueueMutationOutcome::Applied, true))
         })?;
-        handle.publish_queue();
-        self.save_snapshot(&handle);
-        self.unarchive_on_send(chat_id);
-        Ok(QueueMutationOutcome::Applied)
+        if result.1.is_some() {
+            self.unarchive_on_send(chat_id);
+        }
+        Ok(result)
     }
 
     pub fn queued_message(
@@ -2897,11 +3315,14 @@ impl DocHost {
         text: &str,
     ) -> Result<bool, EngineError> {
         let handle = self.open(chat_id)?;
-        let changed = handle.doc.set_queued_text(id, text, now_ms())?;
-        if changed {
-            handle.publish_queue();
-        }
-        Ok(changed)
+        self.persist_queue_projection_if(
+            &handle,
+            &format!("legacy-edit:{}", uuid::Uuid::new_v4()),
+            |doc| {
+                let changed = doc.set_queued_text(id, text, now_ms())?;
+                Ok((changed, changed))
+            },
+        )
     }
 
     /// Reorder a queued message (drag, or the up/down buttons).
@@ -2912,11 +3333,14 @@ impl DocHost {
         to_index: usize,
     ) -> Result<bool, EngineError> {
         let handle = self.open(chat_id)?;
-        let changed = handle.doc.move_queued(id, to_index)?;
-        if changed {
-            handle.publish_queue();
-        }
-        Ok(changed)
+        self.persist_queue_projection_if(
+            &handle,
+            &format!("move:{}", uuid::Uuid::new_v4()),
+            |doc| {
+                let changed = doc.move_queued(id, to_index)?;
+                Ok((changed, changed))
+            },
+        )
     }
 
     /// Cancel one queued message at the chat host. Removal shares the same
@@ -2935,19 +3359,23 @@ impl DocHost {
         }
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
-        let removed = handle.doc.remove_queued(id)?;
-        if removed {
-            handle.publish_queue();
-        }
-        Ok(removed)
+        self.persist_queue_projection_if(
+            &handle,
+            &format!("legacy-remove:{}", uuid::Uuid::new_v4()),
+            |doc| {
+                let removed = doc.remove_queued(id)?;
+                Ok((removed, removed))
+            },
+        )
     }
 
     pub async fn remove_queued_message_at_revision(
         &self,
+        command_id: &str,
         chat_id: &str,
         id: &str,
         expected_revision: u64,
-    ) -> Result<QueueMutationOutcome, EngineError> {
+    ) -> Result<(QueueMutationOutcome, Option<CommandReceipt>), EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(format!(
                 "device {} does not host chat {chat_id}",
@@ -2956,26 +3384,23 @@ impl DocHost {
         }
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
-        let Some(item) = handle
-            .doc
-            .read_queue()?
-            .into_iter()
-            .find(|item| item.id == id)
-        else {
-            return Ok(QueueMutationOutcome::Missing);
-        };
-        if !matches!(item.status, QueueMessageStatus::Held) {
-            return Ok(QueueMutationOutcome::Claimed(item));
-        }
-        if item.revision != expected_revision {
-            return Ok(QueueMutationOutcome::RevisionConflict(item));
-        }
-        if !handle.doc.remove_queued(id)? {
-            return Ok(QueueMutationOutcome::Missing);
-        }
-        handle.publish_queue();
-        self.save_snapshot(&handle);
-        Ok(QueueMutationOutcome::Applied)
+        self.commit_queue_task_projection(&handle, command_id, |doc| {
+            let Some(item) = doc.read_queue()?.into_iter().find(|item| item.id == id) else {
+                // Removal is idempotent. The same command may have committed
+                // before an older build lost its receipt write.
+                return Ok((QueueMutationOutcome::Missing, true));
+            };
+            if !matches!(item.status, QueueMessageStatus::Held) {
+                return Ok((QueueMutationOutcome::Claimed(item), false));
+            }
+            if item.revision != expected_revision {
+                return Ok((QueueMutationOutcome::RevisionConflict(item), false));
+            }
+            if !doc.remove_queued(id)? {
+                return Ok((QueueMutationOutcome::Missing, true));
+            }
+            Ok((QueueMutationOutcome::Applied, true))
+        })
     }
 
     /// Acquire the host-side right to edit one queued row. This operation and
@@ -2997,63 +3422,68 @@ impl DocHost {
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
         let now = now_ms();
-        let Some(item) = handle
-            .doc
-            .read_queue()?
-            .into_iter()
-            .find(|item| item.id == id)
-        else {
-            return Ok(BeginQueueEditOutcome::Missing);
-        };
-        match &item.status {
-            QueueMessageStatus::Held => {}
-            QueueMessageStatus::Claimed { command_id, .. }
-            | QueueMessageStatus::DeliveryUnknown { command_id, .. } => {
-                return Ok(BeginQueueEditOutcome::Claimed {
-                    command_id: command_id.clone(),
-                });
-            }
-        }
-        if let Some(QueueDeliveryGate::Editing {
-            owner_device_id,
-            expires_at_ms,
-            ..
-        }) = &item.delivery_gate
-            && *expires_at_ms > now
-        {
-            return Ok(BeginQueueEditOutcome::Locked {
-                owner_device_id: owner_device_id.clone(),
-                expires_at_ms: *expires_at_ms,
-            });
-        }
-
         let lease_id = new_id();
         let expires_at_ms = now + QUEUE_EDIT_LEASE_MS;
-        let gate = QueueDeliveryGate::Editing {
-            lease_id: lease_id.clone(),
-            owner_device_id: owner_device_id.to_string(),
-            owner_instance_id: owner_instance_id.to_string(),
-            acquired_at_ms: now,
-            expires_at_ms,
-            base_text_hash: queue_text_hash(&item.text),
-        };
-        let base_text_hash = queue_text_hash(&item.text);
-        if !handle.doc.set_queued_delivery_gate(id, Some(&gate))? {
-            return Ok(BeginQueueEditOutcome::Missing);
+        let outcome =
+            self.persist_queue_projection_if(&handle, &format!("edit-begin:{lease_id}"), |doc| {
+                let Some(item) = doc.read_queue()?.into_iter().find(|item| item.id == id) else {
+                    return Ok((BeginQueueEditOutcome::Missing, false));
+                };
+                match &item.status {
+                    QueueMessageStatus::Held => {}
+                    QueueMessageStatus::Claimed { command_id, .. }
+                    | QueueMessageStatus::DeliveryUnknown { command_id, .. } => {
+                        return Ok((
+                            BeginQueueEditOutcome::Claimed {
+                                command_id: command_id.clone(),
+                            },
+                            false,
+                        ));
+                    }
+                }
+                if let Some(QueueDeliveryGate::Editing {
+                    owner_device_id,
+                    expires_at_ms,
+                    ..
+                }) = &item.delivery_gate
+                    && *expires_at_ms > now
+                {
+                    return Ok((
+                        BeginQueueEditOutcome::Locked {
+                            owner_device_id: owner_device_id.clone(),
+                            expires_at_ms: *expires_at_ms,
+                        },
+                        false,
+                    ));
+                }
+                let base_text_hash = queue_text_hash(&item.text);
+                let gate = QueueDeliveryGate::Editing {
+                    lease_id: lease_id.clone(),
+                    owner_device_id: owner_device_id.to_string(),
+                    owner_instance_id: owner_instance_id.to_string(),
+                    acquired_at_ms: now,
+                    expires_at_ms,
+                    base_text_hash: base_text_hash.clone(),
+                };
+                if !doc.set_queued_delivery_gate(id, Some(&gate))? {
+                    return Ok((BeginQueueEditOutcome::Missing, false));
+                }
+                Ok((
+                    BeginQueueEditOutcome::Acquired {
+                        lease_id: lease_id.clone(),
+                        text: item.text,
+                        attachments: item.attachments,
+                        base_text_hash,
+                        revision: item.revision,
+                        expires_at_ms,
+                    },
+                    true,
+                ))
+            })?;
+        if matches!(outcome, BeginQueueEditOutcome::Acquired { .. }) {
+            self.arm_queue_edit_expiry(&handle, id, &lease_id, expires_at_ms);
         }
-        handle.publish_queue();
-        // A crash immediately after the client sees Acquired must not reopen
-        // the row as sendable from a pre-lease snapshot.
-        self.save_snapshot(&handle);
-        self.arm_queue_edit_expiry(&handle, id, &lease_id, expires_at_ms);
-        Ok(BeginQueueEditOutcome::Acquired {
-            lease_id,
-            text: item.text,
-            attachments: item.attachments,
-            base_text_hash,
-            revision: item.revision,
-            expires_at_ms,
-        })
+        Ok(outcome)
     }
 
     /// Extend an edit lease. An already-expired generation is never revived;
@@ -3073,61 +3503,68 @@ impl DocHost {
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
         let now = now_ms();
-        let Some(item) = handle
-            .doc
-            .read_queue()?
-            .into_iter()
-            .find(|item| item.id == id)
-        else {
-            return Ok(RenewQueueEditOutcome::Missing);
-        };
-        let QueueDeliveryGate::Editing {
-            lease_id: current,
-            owner_device_id,
-            owner_instance_id,
-            acquired_at_ms,
-            expires_at_ms,
-            base_text_hash,
-        } = item
-            .delivery_gate
-            .unwrap_or(QueueDeliveryGate::ReviewRequired {
-                previous_lease_id: String::new(),
-                owner_device_id: String::new(),
-                since_ms: now,
-                base_text_hash: String::new(),
-            })
-        else {
-            return Ok(RenewQueueEditOutcome::Lost);
-        };
-        if current != lease_id || expires_at_ms <= now {
-            if current == lease_id && expires_at_ms <= now {
-                let review = QueueDeliveryGate::ReviewRequired {
-                    previous_lease_id: current,
+        let renewed_expires_at_ms = now + QUEUE_EDIT_LEASE_MS;
+        let outcome = self.persist_queue_projection_if(
+            &handle,
+            &format!("edit-renew:{}", uuid::Uuid::new_v4()),
+            |doc| {
+                let Some(item) = doc.read_queue()?.into_iter().find(|item| item.id == id) else {
+                    return Ok((RenewQueueEditOutcome::Missing, false));
+                };
+                let QueueDeliveryGate::Editing {
+                    lease_id: current,
                     owner_device_id,
-                    since_ms: now,
+                    owner_instance_id,
+                    acquired_at_ms,
+                    expires_at_ms,
+                    base_text_hash,
+                } = item
+                    .delivery_gate
+                    .unwrap_or(QueueDeliveryGate::ReviewRequired {
+                        previous_lease_id: String::new(),
+                        owner_device_id: String::new(),
+                        since_ms: now,
+                        base_text_hash: String::new(),
+                    })
+                else {
+                    return Ok((RenewQueueEditOutcome::Lost, false));
+                };
+                if current != lease_id || expires_at_ms <= now {
+                    if current == lease_id && expires_at_ms <= now {
+                        let review = QueueDeliveryGate::ReviewRequired {
+                            previous_lease_id: current,
+                            owner_device_id,
+                            since_ms: now,
+                            base_text_hash,
+                        };
+                        let changed = doc.set_queued_delivery_gate(id, Some(&review))?;
+                        return Ok((RenewQueueEditOutcome::Lost, changed));
+                    }
+                    return Ok((RenewQueueEditOutcome::Lost, false));
+                }
+                let renewed = QueueDeliveryGate::Editing {
+                    lease_id: current,
+                    owner_device_id,
+                    owner_instance_id,
+                    acquired_at_ms,
+                    expires_at_ms: renewed_expires_at_ms,
                     base_text_hash,
                 };
-                let _ = handle.doc.set_queued_delivery_gate(id, Some(&review));
-                handle.publish_queue();
-                self.save_snapshot(&handle);
-            }
-            return Ok(RenewQueueEditOutcome::Lost);
+                if !doc.set_queued_delivery_gate(id, Some(&renewed))? {
+                    return Ok((RenewQueueEditOutcome::Missing, false));
+                }
+                Ok((
+                    RenewQueueEditOutcome::Renewed {
+                        expires_at_ms: renewed_expires_at_ms,
+                    },
+                    true,
+                ))
+            },
+        )?;
+        if matches!(outcome, RenewQueueEditOutcome::Renewed { .. }) {
+            self.arm_queue_edit_expiry(&handle, id, lease_id, renewed_expires_at_ms);
         }
-        let expires_at_ms = now + QUEUE_EDIT_LEASE_MS;
-        let renewed = QueueDeliveryGate::Editing {
-            lease_id: current,
-            owner_device_id,
-            owner_instance_id,
-            acquired_at_ms,
-            expires_at_ms,
-            base_text_hash,
-        };
-        if !handle.doc.set_queued_delivery_gate(id, Some(&renewed))? {
-            return Ok(RenewQueueEditOutcome::Missing);
-        }
-        handle.publish_queue();
-        self.arm_queue_edit_expiry(&handle, id, lease_id, expires_at_ms);
-        Ok(RenewQueueEditOutcome::Renewed { expires_at_ms })
+        Ok(outcome)
     }
 
     /// Resolve an edit lease. A late finish may still resolve the matching
@@ -3188,6 +3625,61 @@ impl DocHost {
         attachments: Option<&[String]>,
         expected_revision: Option<u64>,
     ) -> Result<FinishQueueEditOutcome, EngineError> {
+        Ok(self
+            .finish_queued_message_edit_durable(
+                None,
+                chat_id,
+                id,
+                lease_id,
+                action,
+                text,
+                expected_text_hash,
+                attachments,
+                expected_revision,
+            )
+            .await?
+            .0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finish_queued_message_edit_task(
+        &self,
+        command_id: &str,
+        chat_id: &str,
+        id: &str,
+        lease_id: &str,
+        text: &str,
+        expected_text_hash: &str,
+        attachments: &[String],
+        expected_revision: u64,
+    ) -> Result<(FinishQueueEditOutcome, Option<CommandReceipt>), EngineError> {
+        self.finish_queued_message_edit_durable(
+            Some(command_id),
+            chat_id,
+            id,
+            lease_id,
+            FinishQueueEditAction::Commit,
+            Some(text),
+            Some(expected_text_hash),
+            Some(attachments),
+            Some(expected_revision),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_queued_message_edit_durable(
+        &self,
+        command_id: Option<&str>,
+        chat_id: &str,
+        id: &str,
+        lease_id: &str,
+        action: FinishQueueEditAction,
+        text: Option<&str>,
+        expected_text_hash: Option<&str>,
+        attachments: Option<&[String]>,
+        expected_revision: Option<u64>,
+    ) -> Result<(FinishQueueEditOutcome, Option<CommandReceipt>), EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(format!(
                 "device {} does not host chat {chat_id}",
@@ -3202,82 +3694,45 @@ impl DocHost {
             ));
         }
         let handle = self.open(chat_id)?;
-        let outcome = {
+        let result = {
             let _drain = handle.drain_lock.lock().await;
-            let Some(item) = handle
-                .doc
-                .read_queue()?
-                .into_iter()
-                .find(|item| item.id == id)
-            else {
-                return Ok(FinishQueueEditOutcome::Missing);
-            };
-            if let QueueMessageStatus::Claimed { command_id, .. }
-            | QueueMessageStatus::DeliveryUnknown { command_id, .. } = &item.status
-            {
-                return Ok(FinishQueueEditOutcome::Claimed {
-                    command_id: command_id.clone(),
-                });
-            }
-            if expected_revision.is_some_and(|revision| revision != item.revision) {
-                return Ok(FinishQueueEditOutcome::RevisionConflict {
-                    current_revision: item.revision,
-                });
-            }
-            let (current_lease, base_text_hash) = match &item.delivery_gate {
-                Some(QueueDeliveryGate::Editing {
-                    lease_id,
-                    base_text_hash,
-                    ..
-                }) => (lease_id, base_text_hash),
-                Some(QueueDeliveryGate::ReviewRequired {
-                    previous_lease_id,
-                    base_text_hash,
-                    ..
-                }) => (previous_lease_id, base_text_hash),
-                None => return Ok(FinishQueueEditOutcome::Lost),
-            };
-            if current_lease != lease_id {
-                return Ok(FinishQueueEditOutcome::Lost);
-            }
-            if action == FinishQueueEditAction::Commit
-                && (expected_text_hash != Some(base_text_hash.as_str())
-                    || queue_text_hash(&item.text) != *base_text_hash)
-            {
-                return Ok(FinishQueueEditOutcome::Conflict {
-                    current_text: item.text,
-                });
-            }
-
-            let replacement = match action {
-                FinishQueueEditAction::Commit => Some(text.unwrap_or_default()),
-                FinishQueueEditAction::Cancel | FinishQueueEditAction::ReleaseUnchanged => None,
-                FinishQueueEditAction::Discard => Some(""),
-            };
-            if !handle.doc.finish_queued_edit_with_attachments(
-                id,
-                replacement,
-                if action == FinishQueueEditAction::Commit {
-                    attachments
-                } else {
-                    None
-                },
-                now_ms(),
-            )? {
-                return Ok(FinishQueueEditOutcome::Missing);
-            }
-            handle.publish_queue();
-            self.save_snapshot(&handle);
-            match action {
-                FinishQueueEditAction::Commit => FinishQueueEditOutcome::Committed,
-                FinishQueueEditAction::Cancel => FinishQueueEditOutcome::Cancelled,
-                FinishQueueEditAction::Discard => FinishQueueEditOutcome::Discarded,
-                FinishQueueEditAction::ReleaseUnchanged => FinishQueueEditOutcome::Released,
+            if let Some(command_id) = command_id {
+                self.commit_queue_task_projection(&handle, command_id, |doc| {
+                    finish_queue_edit_projection(
+                        doc,
+                        id,
+                        lease_id,
+                        action,
+                        text,
+                        expected_text_hash,
+                        attachments,
+                        expected_revision,
+                    )
+                })?
+            } else {
+                let outcome = self.persist_queue_projection(
+                    &handle,
+                    &format!("edit:{}", uuid::Uuid::new_v4()),
+                    |doc| {
+                        finish_queue_edit_projection(
+                            doc,
+                            id,
+                            lease_id,
+                            action,
+                            text,
+                            expected_text_hash,
+                            attachments,
+                            expected_revision,
+                        )
+                        .map(|(outcome, _)| outcome)
+                    },
+                )?;
+                (outcome, None)
             }
         };
         // Turn-end may already have happened while the edit was open.
         self.drain_queue(&handle).await;
-        Ok(outcome)
+        Ok(result)
     }
 
     fn arm_existing_queue_edit_expiries(&self, handle: &Arc<ChatDocHandle>) {
@@ -3327,42 +3782,46 @@ impl DocHost {
     ) {
         let changed = {
             let _drain = handle.drain_lock.lock().await;
-            let Ok(queue) = handle.doc.read_queue() else {
-                return;
-            };
-            let Some(item) = queue.into_iter().find(|item| item.id == id) else {
-                return;
-            };
-            let Some(QueueDeliveryGate::Editing {
-                lease_id: current_lease_id,
-                owner_device_id,
-                expires_at_ms,
-                base_text_hash,
-                ..
-            }) = item.delivery_gate
-            else {
-                return;
-            };
-            if current_lease_id != lease_id
-                || expires_at_ms != scheduled_expires_at_ms
-                || expires_at_ms > now_ms()
-            {
-                return;
+            match self.persist_queue_projection_if(
+                handle,
+                &format!("edit-expire:{}", uuid::Uuid::new_v4()),
+                |doc| {
+                    let Some(item) = doc.read_queue()?.into_iter().find(|item| item.id == id)
+                    else {
+                        return Ok((false, false));
+                    };
+                    let Some(QueueDeliveryGate::Editing {
+                        lease_id: current_lease_id,
+                        owner_device_id,
+                        expires_at_ms,
+                        base_text_hash,
+                        ..
+                    }) = item.delivery_gate
+                    else {
+                        return Ok((false, false));
+                    };
+                    if current_lease_id != lease_id
+                        || expires_at_ms != scheduled_expires_at_ms
+                        || expires_at_ms > now_ms()
+                    {
+                        return Ok((false, false));
+                    }
+                    let review = QueueDeliveryGate::ReviewRequired {
+                        previous_lease_id: current_lease_id,
+                        owner_device_id,
+                        since_ms: now_ms(),
+                        base_text_hash,
+                    };
+                    let changed = doc.set_queued_delivery_gate(id, Some(&review))?;
+                    Ok((changed, changed))
+                },
+            ) {
+                Ok(changed) => changed,
+                Err(error) => {
+                    tracing::warn!(chat = %handle.chat_id, %error, "queue edit expiry persist failed");
+                    false
+                }
             }
-            let review = QueueDeliveryGate::ReviewRequired {
-                previous_lease_id: current_lease_id,
-                owner_device_id,
-                since_ms: now_ms(),
-                base_text_hash,
-            };
-            let Ok(changed) = handle.doc.set_queued_delivery_gate(id, Some(&review)) else {
-                return;
-            };
-            if changed {
-                handle.publish_queue();
-                self.save_snapshot(handle);
-            }
-            changed
         };
         if changed {
             // If this was the head, the drain now observes ReviewRequired. If
@@ -3377,48 +3836,61 @@ impl DocHost {
     /// only when the selected provider cannot steer the row. `false` when
     /// another device already took it.
     pub async fn send_queued_now(&self, chat_id: &str, id: &str) -> Result<bool, EngineError> {
-        if !self.is_host(chat_id) {
-            return Err(EngineError::Other(format!(
-                "device {} does not host chat {chat_id}",
-                self.inner.config.device_id
-            )));
-        }
-        let handle = self.open(chat_id)?;
-        // Sending one now sends ONE: the lock keeps the flush out of the idle
-        // window the interrupt opens, and out of the take itself.
-        let _drain = handle.drain_lock.lock().await;
-        let Some(candidate) = handle
-            .doc
-            .read_queue()?
-            .into_iter()
-            .find(|item| item.id == id)
-        else {
+        let Some(item) = self.queued_message(chat_id, id)? else {
             return Ok(false);
         };
-        if candidate.delivery_gate.is_some() {
+        if item.delivery_gate.is_some() {
             return Err(EngineError::Other(
                 "queued message is blocked for editing or review".into(),
             ));
         }
-        let Some(item) = handle.doc.take_queued(id)? else {
-            return Ok(false);
+        let command_id = self.begin_legacy_queue_delivery(chat_id, &item, "sendQueuedNow")?;
+        Ok(matches!(
+            self.send_queued_now_with_claim(chat_id, id, item.revision, &command_id, None)
+                .await?,
+            QueueDispatchOutcome::Started | QueueDispatchOutcome::AlreadyClaimed(_)
+        ))
+    }
+
+    fn begin_legacy_queue_delivery(
+        &self,
+        chat_id: &str,
+        item: &QueuedMessage,
+        intent: &str,
+    ) -> Result<String, EngineError> {
+        let command_id = format!("legacy-{intent}-{}", uuid::Uuid::new_v4());
+        let snapshot = self.task_command_snapshot(chat_id)?.snapshot;
+        let now = now_ms();
+        let pending = CommandReceipt {
+            command_id: command_id.clone(),
+            task_id: chat_id.to_string(),
+            intent: intent.to_string(),
+            payload_hash: format!(
+                "{:x}",
+                Sha256::digest(format!("{}:{}:{}", item.id, item.revision, item.text).as_bytes())
+            ),
+            status: CommandReceiptStatus::Pending,
+            snapshot,
+            event_sequence: None,
+            actor_id: self.inner.config.device_id.clone(),
+            client_id: "legacy-queue-rpc".into(),
+            client_session_id: "engine".into(),
+            execution_environment: Some(self.inner.config.device_id.clone()),
+            correlation_id: None,
+            reason: None,
+            recovery_action: None,
+            accepted_at_ms: now,
+            committed_at_ms: None,
+            observed_at_ms: now,
         };
-        let was_paused = handle.queue_paused.swap(false, Ordering::AcqRel);
-        handle.publish_queue();
-        if let Err(err) = self
-            .dispatch_queued(&handle, &item, QueueSend::Interrupt)
-            .await
-        {
-            if was_paused {
-                handle.queue_paused.store(true, Ordering::Release);
-            }
-            // Put it back rather than swallowing what the user typed — at the
-            // head, because the user just said this one was the urgent one.
-            let _ = handle.doc.insert_queued(0, &item);
-            handle.publish_queue();
-            return Err(err);
+        let begin = self.begin_task_command(pending, None, None, None)?;
+        if begin.kind != zeron_sync::TaskCommandBeginKind::Accepted {
+            return Err(EngineError::Other(
+                "legacy queue delivery command id unexpectedly collided".into(),
+            ));
         }
-        Ok(true)
+        self.publish_task_receipt(begin.receipt);
+        Ok(command_id)
     }
 
     /// L09 claim-first explicit delivery. The claimed row stays in the
@@ -3518,19 +3990,19 @@ impl DocHost {
                 "no live run and no prior run config".into(),
             ));
         }
-        let claim = handle
-            .doc
-            .claim_queued(id, expected_revision, command_id, mode, now_ms())?;
+        let (claim, committed) =
+            self.correlate_queue_task_projection(&handle, command_id, id, |doc| {
+                let outcome =
+                    doc.claim_queued(id, expected_revision, command_id, mode, now_ms())?;
+                let commit = matches!(outcome, QueueClaimOutcome::Claimed(_));
+                Ok((outcome, commit))
+            })?;
         let item = match claim {
-            QueueClaimOutcome::Claimed(item) => item,
+            QueueClaimOutcome::Claimed(item) => {
+                debug_assert!(committed.is_some());
+                item
+            }
             QueueClaimOutcome::AlreadyClaimed(item) => {
-                if handle
-                    .doc
-                    .mark_queued_claim_unknown(id, command_id, now_ms())?
-                {
-                    handle.publish_queue();
-                    self.save_snapshot(&handle);
-                }
                 return Ok(QueueDispatchOutcome::AlreadyClaimed(item));
             }
             QueueClaimOutcome::RevisionConflict(item) => {
@@ -3541,18 +4013,20 @@ impl DocHost {
             }
             QueueClaimOutcome::Missing => return Ok(QueueDispatchOutcome::Missing),
         };
-        handle.publish_queue();
-        self.save_snapshot(&handle);
         let was_paused = handle.queue_paused.swap(false, Ordering::AcqRel);
         if let Err(error) = self.dispatch_queued(&handle, &item, send).await {
             if was_paused {
                 handle.queue_paused.store(true, Ordering::Release);
             }
-            let _ = handle
-                .doc
-                .mark_queued_claim_unknown(id, command_id, now_ms());
-            handle.publish_queue();
-            self.save_snapshot(&handle);
+            self.mark_queue_task_unknown(
+                &handle,
+                command_id,
+                "provider dispatch returned without a provable acceptance result",
+                |doc| {
+                    doc.mark_queued_claim_unknown(id, command_id, now_ms())?;
+                    Ok(())
+                },
+            )?;
             return Err(error);
         }
         Ok(QueueDispatchOutcome::Started)
@@ -3569,17 +4043,10 @@ impl DocHost {
                 self.inner.config.device_id
             )));
         }
-        let handle = self.open(chat_id)?;
-        let _drain = handle.drain_lock.lock().await;
         let Some(sessions) = self.sessions() else {
             return Err(EngineError::Other("sessions engine not wired".into()));
         };
-        let Some(candidate) = handle
-            .doc
-            .read_queue()?
-            .into_iter()
-            .find(|item| item.id == id)
-        else {
+        let Some(candidate) = self.queued_message(chat_id, id)? else {
             return Ok(false);
         };
         let harness = candidate
@@ -3602,23 +4069,12 @@ impl DocHost {
                 "queued message is blocked for editing or review".into(),
             ));
         }
-        let Some(item) = handle.doc.take_queued(id)? else {
-            return Ok(false);
-        };
-        let was_paused = handle.queue_paused.swap(false, Ordering::AcqRel);
-        handle.publish_queue();
-        // Always attempt the non-interrupting path first. If no turn exists,
-        // `dispatch_queued` falls through to NextTurn; if a new turn appeared
-        // after our capability check, the prompt steers that turn instead.
-        if let Err(err) = self.dispatch_queued(&handle, &item, QueueSend::Steer).await {
-            if was_paused {
-                handle.queue_paused.store(true, Ordering::Release);
-            }
-            let _ = handle.doc.insert_queued(0, &item);
-            handle.publish_queue();
-            return Err(err);
-        }
-        Ok(true)
+        let command_id = self.begin_legacy_queue_delivery(chat_id, &candidate, "steerQueuedNow")?;
+        Ok(matches!(
+            self.steer_queued_now_with_claim(chat_id, id, candidate.revision, &command_id, None,)
+                .await?,
+            QueueDispatchOutcome::Started | QueueDispatchOutcome::AlreadyClaimed(_)
+        ))
     }
 
     /// Host-only: hand queued messages to the agent when there is somewhere to
@@ -3659,9 +4115,14 @@ impl DocHost {
                     since_ms: now_ms(),
                     base_text_hash: base_text_hash.clone(),
                 };
-                let _ = handle.doc.set_queued_delivery_gate(&head.id, Some(&review));
-                handle.publish_queue();
-                self.save_snapshot(handle);
+                let _ = self.persist_queue_projection_if(
+                    handle,
+                    &format!("edit-review:{}", uuid::Uuid::new_v4()),
+                    |doc| {
+                        let changed = doc.set_queued_delivery_gate(&head.id, Some(&review))?;
+                        Ok((changed, changed))
+                    },
+                );
                 return;
             }
             Some(QueueDeliveryGate::Editing {
@@ -3740,48 +4201,59 @@ impl DocHost {
             zeron_sync::TaskCommandBeginKind::Duplicate
                 if begin.receipt.status == CommandReceiptStatus::Applied =>
             {
-                if handle
-                    .doc
-                    .settle_queued_claim(&head.id, &command_id)
-                    .unwrap_or(false)
-                {
-                    handle.publish_queue();
-                    self.save_snapshot(handle);
-                }
+                let _ = self.persist_queue_projection_if(
+                    handle,
+                    &format!("settle:{command_id}"),
+                    |doc| {
+                        let changed = doc.settle_queued_claim(&head.id, &command_id)?;
+                        Ok((changed, changed))
+                    },
+                );
                 return;
             }
             zeron_sync::TaskCommandBeginKind::Duplicate => {
-                let _ = handle.doc.claim_queued(
-                    &head.id,
-                    head.revision,
-                    &command_id,
-                    QueueClaimMode::NextTurn,
-                    now,
-                );
-                let _ = handle
-                    .doc
-                    .mark_queued_claim_unknown(&head.id, &command_id, now);
-                handle.publish_queue();
-                self.save_snapshot(handle);
-                let _ = self.mark_task_command_unknown(
+                let _ = self.mark_queue_task_unknown(
+                    handle,
                     &command_id,
                     "engine restarted after queue claim; reconcile provider state before retry",
+                    |doc| {
+                        let _ = doc.claim_queued(
+                            &head.id,
+                            head.revision,
+                            &command_id,
+                            QueueClaimMode::NextTurn,
+                            now,
+                        )?;
+                        doc.mark_queued_claim_unknown(&head.id, &command_id, now)?;
+                        Ok(())
+                    },
                 );
                 return;
             }
             zeron_sync::TaskCommandBeginKind::Conflict => return,
         }
         self.publish_task_receipt(begin.receipt);
-        let _ = self.set_task_command_correlation(&command_id, &head.id);
-        let item = match handle.doc.claim_queued(
-            &head.id,
-            head.revision,
-            &command_id,
-            QueueClaimMode::NextTurn,
-            now,
-        ) {
-            Ok(QueueClaimOutcome::Claimed(item)) => item,
-            Ok(_) => {
+        let (claim, _) =
+            match self.correlate_queue_task_projection(handle, &command_id, &head.id, |doc| {
+                let outcome = doc.claim_queued(
+                    &head.id,
+                    head.revision,
+                    &command_id,
+                    QueueClaimMode::NextTurn,
+                    now,
+                )?;
+                let commit = matches!(outcome, QueueClaimOutcome::Claimed(_));
+                Ok((outcome, commit))
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    tracing::warn!(chat = %handle.chat_id, %error, "durable queue claim failed");
+                    return;
+                }
+            };
+        let item = match claim {
+            QueueClaimOutcome::Claimed(item) => item,
+            _ => {
                 let _ = self.complete_task_command(
                     &command_id,
                     CommandReceiptStatus::Conflict,
@@ -3797,24 +4269,18 @@ impl DocHost {
                 );
                 return;
             }
-            Err(error) => {
-                tracing::warn!(chat = %handle.chat_id, %error, "queue claim failed");
-                return;
-            }
         };
-        handle.publish_queue();
-        self.save_snapshot(handle);
         if let Err(err) = self.dispatch_queued(handle, &item, send).await {
             tracing::warn!(chat = %handle.chat_id, error = %err, "queued send failed");
             handle.queue_paused.store(true, Ordering::Release);
-            let _ = handle
-                .doc
-                .mark_queued_claim_unknown(&head.id, &command_id, now_ms());
-            handle.publish_queue();
-            self.save_snapshot(handle);
-            let _ = self.mark_task_command_unknown(
+            let _ = self.mark_queue_task_unknown(
+                handle,
                 &command_id,
                 "provider dispatch returned without a provable acceptance result",
+                |doc| {
+                    doc.mark_queued_claim_unknown(&head.id, &command_id, now_ms())?;
+                    Ok(())
+                },
             );
             return;
         }
@@ -5313,22 +5779,26 @@ impl DocHost {
             return Ok(false);
         }
         let handle = self.open(chat_id)?;
-        handle.doc.push_queued(&QueuedMessage {
-            id: message_id.map(str::to_string).unwrap_or_else(new_id),
-            text: prompt.to_string(),
-            attachments: Vec::new(),
-            hold_for_turn_end: false,
-            issued_by: self.inner.config.device_id.clone(),
-            issued_at: now_ms(),
-            edited_at: None,
-            revision: 1,
-            execution: self
-                .workspace()
-                .and_then(|workspace| workspace.chat_config(chat_id)),
-            status: QueueMessageStatus::Held,
-            delivery_gate: None,
+        let message_id = message_id.map(str::to_string).unwrap_or_else(new_id);
+        let execution = self
+            .workspace()
+            .and_then(|workspace| workspace.chat_config(chat_id));
+        self.persist_queue_projection(&handle, &format!("turn-end:{message_id}"), |doc| {
+            doc.push_queued(&QueuedMessage {
+                id: message_id,
+                text: prompt.to_string(),
+                attachments: Vec::new(),
+                hold_for_turn_end: false,
+                issued_by: self.inner.config.device_id.clone(),
+                issued_at: now_ms(),
+                edited_at: None,
+                revision: 1,
+                execution,
+                status: QueueMessageStatus::Held,
+                delivery_gate: None,
+            })?;
+            Ok(())
         })?;
-        handle.publish_queue();
         Ok(true)
     }
 
@@ -5856,6 +6326,69 @@ mod publication_eviction_tests {
         );
         assert_eq!(store.pending_chat_updates("evicted").unwrap(), before);
         drop(reopened);
+        host.shutdown_workers().await;
+    }
+
+    #[tokio::test]
+    async fn retired_fat_handle_commits_queue_rows_into_the_thin_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let fat = SessionDoc::init("retired-queue").unwrap();
+        store
+            .save_snapshot("retired-queue", &fat.export_snapshot().unwrap())
+            .unwrap();
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "writer".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let handle = host.open("retired-queue").unwrap();
+        let _watch = handle.watch_queue();
+
+        let thin = SessionDoc::init("retired-queue").unwrap();
+        store
+            .save_snapshot_with_cursor(
+                "retired-queue",
+                &thin.export_snapshot().unwrap(),
+                7,
+                crate::chat2_host::CHAT2_DOC_EPOCH,
+            )
+            .unwrap();
+        handle.retired.store(true, Ordering::Release);
+
+        assert!(
+            host.queue_message_with_id_and_execution(
+                "retired-queue",
+                "thin-queue-row",
+                "survive retirement",
+                Vec::new(),
+                true,
+                None,
+            )
+            .unwrap()
+        );
+        let (snapshot, cursor, epoch) = store
+            .load_snapshot_with_cursor("retired-queue")
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor, 7);
+        assert_eq!(epoch, crate::chat2_host::CHAT2_DOC_EPOCH);
+        let raw = loro::LoroDoc::new();
+        raw.import(&snapshot).unwrap();
+        let stored = SessionDoc::from_doc(raw);
+        assert_eq!(
+            stored
+                .read_queue()
+                .unwrap()
+                .into_iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec!["thin-queue-row"]
+        );
+        drop(handle);
         host.shutdown_workers().await;
     }
 }

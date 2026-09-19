@@ -286,12 +286,27 @@ impl DocsStore {
     pub fn save_snapshot(&self, doc_id: &str, bytes: &[u8]) -> Result<(), StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO snapshots (doc_id, bytes, saved_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(doc_id) DO UPDATE SET bytes = excluded.bytes, saved_at = excluded.saved_at",
-            params![doc_id, bytes, now_ms()],
-        )?;
-        self.invalidate_failed_publication(&tx, doc_id)?;
+        self.persist_snapshot_changes_tx(&tx, &[(doc_id, bytes)], &[], &[])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Persist a doc projection and its already-derived local CRDT batches in
+    /// one transaction. This is the non-receipt half of the queue durability
+    /// boundary: a caller may publish/apply the candidate only after success.
+    pub fn save_snapshot_with_updates(
+        &self,
+        doc_id: &str,
+        bytes: &[u8],
+        updates: &[(&str, &[u8])],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let updates = updates
+            .iter()
+            .map(|(batch_id, bytes)| (doc_id, *batch_id, *bytes))
+            .collect::<Vec<_>>();
+        self.persist_snapshot_changes_tx(&tx, &[(doc_id, bytes)], &[], &updates)?;
         tx.commit()?;
         Ok(())
     }
@@ -944,6 +959,38 @@ impl DocsStore {
         snapshots: &[(&str, &[u8])],
         deleted_snapshots: &[&str],
     ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.complete_task_command_with_snapshot_changes_and_updates(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            snapshots,
+            deleted_snapshots,
+            &[],
+        )
+    }
+
+    /// L09 queue projection boundary. The terminal receipt, durable session
+    /// snapshot, and any chat2 publication batches become visible together.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_task_command_with_snapshot_changes_and_updates(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        snapshots: &[(&str, &[u8])],
+        deleted_snapshots: &[&str],
+        updates: &[(&str, &str, &[u8])],
+    ) -> Result<Option<CommandReceipt>, StoreError> {
         self.complete_task_command_inner(
             command_id,
             status,
@@ -953,7 +1000,7 @@ impl DocsStore {
             active_turn_id,
             reason,
             recovery_action,
-            Some((snapshots, deleted_snapshots)),
+            Some((snapshots, deleted_snapshots, updates)),
         )
     }
 
@@ -968,7 +1015,7 @@ impl DocsStore {
         active_turn_id: Option<&str>,
         reason: Option<CommandReceiptReason>,
         recovery_action: Option<&str>,
-        snapshot_changes: Option<(&[(&str, &[u8])], &[&str])>,
+        snapshot_changes: Option<(&[(&str, &[u8])], &[&str], &[(&str, &str, &[u8])])>,
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -997,26 +1044,43 @@ impl DocsStore {
         receipt.committed_at_ms = Some(now_ms());
         receipt.observed_at_ms = now_ms();
         let receipt = commit_task_command_tx(&tx, receipt, applied)?;
-        if let Some((snapshots, deleted_snapshots)) = snapshot_changes {
-            for (doc_id, bytes) in snapshots {
-                tx.execute(
-                    "INSERT INTO snapshots (doc_id, bytes, saved_at) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(doc_id) DO UPDATE SET bytes=excluded.bytes,saved_at=excluded.saved_at",
-                    params![doc_id, bytes, now_ms()],
-                )?;
-                self.invalidate_failed_publication(&tx, doc_id)?;
-            }
-            for doc_id in deleted_snapshots {
-                tx.execute("DELETE FROM snapshots WHERE doc_id=?1", params![doc_id])?;
-                tx.execute("DELETE FROM chat_outbox WHERE doc_id=?1", params![doc_id])?;
-                tx.execute(
-                    "DELETE FROM chat_outbox_initialized WHERE doc_id=?1",
-                    params![doc_id],
-                )?;
-            }
+        if let Some((snapshots, deleted_snapshots, updates)) = snapshot_changes {
+            self.persist_snapshot_changes_tx(&tx, snapshots, deleted_snapshots, updates)?;
         }
         tx.commit()?;
         Ok(Some(receipt))
+    }
+
+    fn persist_snapshot_changes_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        snapshots: &[(&str, &[u8])],
+        deleted_snapshots: &[&str],
+        updates: &[(&str, &str, &[u8])],
+    ) -> Result<(), StoreError> {
+        for (doc_id, bytes) in snapshots {
+            tx.execute(
+                "INSERT INTO snapshots (doc_id, bytes, saved_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(doc_id) DO UPDATE SET bytes=excluded.bytes,saved_at=excluded.saved_at",
+                params![doc_id, bytes, now_ms()],
+            )?;
+            self.invalidate_failed_publication(tx, doc_id)?;
+        }
+        for (doc_id, batch_id, bytes) in updates {
+            tx.execute(
+                "INSERT OR IGNORE INTO chat_outbox(doc_id,batch_id,bytes) VALUES (?1,?2,?3)",
+                params![doc_id, batch_id, bytes],
+            )?;
+        }
+        for doc_id in deleted_snapshots {
+            tx.execute("DELETE FROM snapshots WHERE doc_id=?1", params![doc_id])?;
+            tx.execute("DELETE FROM chat_outbox WHERE doc_id=?1", params![doc_id])?;
+            tx.execute(
+                "DELETE FROM chat_outbox_initialized WHERE doc_id=?1",
+                params![doc_id],
+            )?;
+        }
+        Ok(())
     }
 
     /// Preserve an ambiguous provider outcome as pending. A retry with the same
@@ -1025,6 +1089,16 @@ impl DocsStore {
         &self,
         command_id: &str,
         message: &str,
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.mark_task_command_unknown_with_snapshot_changes(command_id, message, &[], &[])
+    }
+
+    pub fn mark_task_command_unknown_with_snapshot_changes(
+        &self,
+        command_id: &str,
+        message: &str,
+        snapshots: &[(&str, &[u8])],
+        updates: &[(&str, &str, &[u8])],
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -1056,6 +1130,7 @@ impl DocsStore {
                 params![command_id, serde_json::to_vec(&receipt)?, now_ms()],
             )?;
         }
+        self.persist_snapshot_changes_tx(&tx, snapshots, &[], updates)?;
         tx.commit()?;
         Ok(Some(receipt))
     }
@@ -1064,6 +1139,21 @@ impl DocsStore {
         &self,
         command_id: &str,
         correlation_id: &str,
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.set_task_command_correlation_with_snapshot_changes(
+            command_id,
+            correlation_id,
+            &[],
+            &[],
+        )
+    }
+
+    pub fn set_task_command_correlation_with_snapshot_changes(
+        &self,
+        command_id: &str,
+        correlation_id: &str,
+        snapshots: &[(&str, &[u8])],
+        updates: &[(&str, &str, &[u8])],
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -1095,6 +1185,7 @@ impl DocsStore {
                 params![command_id, serde_json::to_vec(&receipt)?, now_ms()],
             )?;
         }
+        self.persist_snapshot_changes_tx(&tx, snapshots, &[], updates)?;
         tx.commit()?;
         Ok(Some(receipt))
     }
@@ -1109,6 +1200,28 @@ impl DocsStore {
         active_turn_id: &str,
         binding_id: Option<&str>,
         binding_generation: Option<u32>,
+    ) -> Result<Vec<CommandReceipt>, StoreError> {
+        self.confirm_task_command_correlation_with_snapshot_changes(
+            task_id,
+            correlation_id,
+            active_turn_id,
+            binding_id,
+            binding_generation,
+            &[],
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn confirm_task_command_correlation_with_snapshot_changes(
+        &self,
+        task_id: &str,
+        correlation_id: &str,
+        active_turn_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        snapshots: &[(&str, &[u8])],
+        updates: &[(&str, &str, &[u8])],
     ) -> Result<Vec<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -1136,6 +1249,9 @@ impl DocsStore {
             receipt.committed_at_ms = Some(now_ms());
             receipt.observed_at_ms = now_ms();
             confirmed.push(commit_task_command_tx(&tx, receipt, true)?);
+        }
+        if !confirmed.is_empty() {
+            self.persist_snapshot_changes_tx(&tx, snapshots, &[], updates)?;
         }
         tx.commit()?;
         Ok(confirmed)
