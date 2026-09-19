@@ -101,6 +101,7 @@ const CODEX_SHARED_DIRECTORIES: &[&str] = &[
 ];
 const CODEX_PRIVATE_ENTRIES: &[&str] = &["auth.json", "models_cache.json"];
 const CODEX_SHADOW_LOCAL_ENTRIES: &[&str] = &["log", "memories", "tmp"];
+const DISABLE_CLAUDE_KEYCHAIN_FALLBACK: &str = ".disable-claude-keychain-fallback";
 
 /// Filesystem knobs — env-resolved in production ([`AgentAccountsConfig::detect`]),
 /// explicit in tests.
@@ -146,6 +147,26 @@ impl AgentAccountsConfig {
 
     fn claude_creds_file(&self) -> PathBuf {
         self.claude_config_dir.join(".credentials.json")
+    }
+
+    /// Seal a synthetic/test provider root against the macOS Claude Keychain.
+    /// The marker is checked even when the credentials file is absent, so a
+    /// cleanup or partial fixture seed fails closed instead of escaping to the
+    /// user's native login store.
+    #[doc(hidden)]
+    pub fn disable_claude_keychain_fallback(&self) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.claude_config_dir)?;
+        std::fs::write(
+            self.claude_config_dir
+                .join(DISABLE_CLAUDE_KEYCHAIN_FALLBACK),
+            b"fixture-only\n",
+        )
+    }
+
+    fn claude_keychain_fallback_disabled(&self) -> bool {
+        self.claude_config_dir
+            .join(DISABLE_CLAUDE_KEYCHAIN_FALLBACK)
+            .is_file()
     }
 
     fn codex_auth_file(&self) -> PathBuf {
@@ -1580,6 +1601,9 @@ impl AgentAccounts {
         if let Some(creds) = read_json(&self.inner.config.claude_creds_file()) {
             return (Some(creds), None);
         }
+        if self.inner.config.claude_keychain_fallback_disabled() {
+            return (None, None);
+        }
         #[cfg(target_os = "macos")]
         {
             keychain::read_credentials().await
@@ -1597,7 +1621,9 @@ impl AgentAccounts {
         {
             // claude-swap's primitive: update the Keychain item in place — but only
             // when no credentials FILE exists (the file wins when present).
-            if !self.inner.config.claude_creds_file().exists() {
+            if !self.inner.config.claude_creds_file().exists()
+                && !self.inner.config.claude_keychain_fallback_disabled()
+            {
                 let result = keychain::write_credentials(&json).await;
                 json.zeroize();
                 return result;
@@ -2613,6 +2639,15 @@ mod tests {
             codex_home: root.join("codex"),
             cursor_sdk_auth_file: root.join("cursor-auth.json"),
         }
+    }
+
+    #[test]
+    fn fixture_marker_disables_claude_keychain_fallback_even_without_credentials_file() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        config.disable_claude_keychain_fallback().unwrap();
+        assert!(config.claude_keychain_fallback_disabled());
+        assert!(!config.claude_creds_file().exists());
     }
 
     #[tokio::test]

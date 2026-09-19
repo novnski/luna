@@ -1,20 +1,27 @@
 //! Interactive L08 composer-draft QA fixture.
 //!
 //! The data root is an explicit command-line argument. Provider homes are
-//! synthetic paths below it, the mock harness is selected, no Auth object is
-//! installed, and no upstream provider or macOS Keychain path is consulted.
+//! synthetic paths below it, the fixture-only mock harness is selected, Auth
+//! uses an in-memory credential broker rooted below the fixture, and native
+//! provider/Keychain fallbacks are disabled.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use base64::Engine as _;
+use futures::StreamExt as _;
+use futures::stream::BoxStream;
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use sha2::{Digest, Sha256};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile};
+use zeron_engine::{
+    AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
+};
+use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    ChatConfig, ComposerDraft, DraftBlob, DraftBlobState, DraftContext, HarnessId, PermissionMode,
-    SandboxLevel,
+    AgentEvent, ChatConfig, ComposerDraft, DoneStatus, DraftBlob, DraftBlobState, DraftContext,
+    HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
 };
 use zeron_rpc::methods;
 use zeron_ui::*;
@@ -23,6 +30,109 @@ const TASK_A: &str = "l08-native-a";
 const TASK_B: &str = "l08-native-b";
 const PNG_B64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+struct L09FixtureHarness {
+    hold: Duration,
+}
+
+#[async_trait]
+impl Harness for L09FixtureHarness {
+    fn id(&self) -> HarnessId {
+        HarnessId::Mock
+    }
+
+    fn display_name(&self) -> &str {
+        "L09 QA Mock"
+    }
+
+    fn supports_steering(&self) -> bool {
+        true
+    }
+
+    fn steering_mode(&self) -> SteeringMode {
+        SteeringMode::StepBoundary
+    }
+
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[ReasoningLevel::Medium]
+    }
+
+    fn deterministic_turn_end(&self) -> bool {
+        true
+    }
+
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(vec![Model {
+            id: "mock-1".into(),
+            label: "L09 QA Mock".into(),
+            description: Some("bounded fixture-only synthetic harness".into()),
+            reasoning_levels: vec![ReasoningLevel::Medium],
+            options: Vec::new(),
+        }])
+    }
+
+    async fn run(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let hold = self.hold;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let session_id = format!("l09-qa-{}", uuid::Uuid::new_v4());
+            let _ = tx.send(Ok(AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: Vec::new(),
+                cwd: request.cwd,
+                session_id: session_id.clone(),
+                assistant_message_id: format!("l09-qa-assistant-{}", uuid::Uuid::new_v4()),
+            }));
+            let _ = tx.send(Ok(AgentEvent::TextDelta {
+                text: "L09 isolated synthetic turn accepted. No provider was contacted.".into(),
+            }));
+            let interrupt = controls.interrupt;
+            let mut steering = controls.steering;
+            let deadline = tokio::time::sleep(hold);
+            tokio::pin!(deadline);
+            let mut steering_open = true;
+            let status = loop {
+                tokio::select! {
+                    _ = interrupt.cancelled() => break DoneStatus::Interrupted,
+                    _ = &mut deadline => break DoneStatus::Completed,
+                    steer = steering.recv(), if steering_open => match steer {
+                        Some(steer) => {
+                            let _ = tx.send(Ok(AgentEvent::TextDelta {
+                                text: format!("\nSynthetic steer accepted: {}", steer.prompt),
+                            }));
+                        }
+                        None => steering_open = false,
+                    }
+                }
+            };
+            let _ = tx.send(Ok(AgentEvent::Done {
+                status,
+                result: None,
+                error: None,
+                session_id: Some(session_id),
+            }));
+        });
+        Ok(futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (event, rx))
+        })
+        .boxed())
+    }
+}
+
+fn fixture_hold() -> Duration {
+    Duration::from_millis(
+        std::env::var("L09_QA_MOCK_HOLD_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(8_000)
+            .clamp(1_000, 30_000),
+    )
+}
 
 fn unused_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -229,19 +339,38 @@ fn main() -> anyhow::Result<()> {
     let capture_path = std::env::args().nth(3).map(PathBuf::from);
     let engine_data = root.join("engine");
     let ui_data = root.join("ui");
+    let temp_data = root.join("tmp");
     std::fs::create_dir_all(&engine_data)?;
     std::fs::create_dir_all(&ui_data)?;
+    std::fs::create_dir_all(&temp_data)?;
+    // This happens before the runtime or any worker thread exists. Keep all
+    // library temp files under the explicit fixture boundary.
+    unsafe {
+        std::env::set_var("TMPDIR", &temp_data);
+        std::env::set_var("TMP", &temp_data);
+        std::env::set_var("TEMP", &temp_data);
+    }
 
     let runtime = tokio::runtime::Runtime::new()?;
+    let accounts = account_config(&root);
+    accounts.disable_claude_keychain_fallback()?;
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(L09FixtureHarness {
+        hold: fixture_hold(),
+    }));
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
             EngineProfile::development(&engine_data, "l08-native-org", "l08-native-user"),
-            Arc::new(zeron_engine::default_registry()),
+            Arc::new(registry),
             HarnessId::Mock,
             None,
-            account_config(&root),
+            accounts,
         )
     })?;
+    let mut auth_config = AuthConfig::new("http://127.0.0.1:1", root.join("auth"));
+    auth_config.dev_user_id = "l09-fixture-user".into();
+    auth_config.use_in_memory_credentials_for_tests();
+    core.set_auth(Auth::new(auth_config));
     let existing = core.workspace.read_chats()?;
     for (id, title) in [(TASK_A, "L08 Draft A"), (TASK_B, "L08 Draft B")] {
         if !existing.iter().any(|chat| chat.id == id) {
@@ -325,12 +454,8 @@ fn main() -> anyhow::Result<()> {
             composer::init(cx, settings.composer_send_behavior);
             terminal::panel::init(cx);
             app_menus::init(cx);
-            let state = cx.new(|_| {
+            let state = cx.new(|cx| {
                 let mut state = state::AppState::new();
-                state.fixture_attachment_engine(handle);
-                state.connection = zeron_proto::view::ConnectionStatus::Ready;
-                state.workspace_scope = Some(zeron_proto::WorkspaceScope::Development);
-                state.local_device_id = Some(device.clone());
                 state.devices = vec![
                     serde_json::from_value(serde_json::json!({
                         "id":device,
@@ -345,6 +470,10 @@ fn main() -> anyhow::Result<()> {
                 state.auto_selected = true;
                 state.chats_synced = true;
                 state.spaces_synced = true;
+                // Use the real attachment boundary after selection is known;
+                // it starts the transcript and queue watches exactly as the
+                // production reconnect path does.
+                state.fixture_attach_engine(handle, cx);
                 state
             });
             let window = cx

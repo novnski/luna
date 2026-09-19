@@ -555,7 +555,8 @@ async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
 
 /// Cancel is not a normal turn boundary: it freezes the visible queue instead
 /// of immediately promoting its head into a new inference. The freeze survives
-/// incidental queue edits and is lifted by an explicit send action.
+/// incidental queue edits; each explicit Send now selects one row without
+/// thawing its siblings.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelling_a_turn_freezes_the_queue_until_an_explicit_send() {
     let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
@@ -616,8 +617,31 @@ async fn cancelling_a_turn_freezes_the_queue_until_an_explicit_send() {
 
     let _ = harness.finish.send(());
     wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "selected turn to end",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(queue_texts(&core), vec!["third"]);
+    assert!(!prompts.lock().unwrap().iter().any(|p| p == "third"));
+    let third_id = core
+        .doc_host
+        .open(CHAT)
+        .unwrap()
+        .doc()
+        .read_queue()
+        .unwrap()[0]
+        .id
+        .clone();
+    assert!(
+        core.doc_host
+            .send_queued_now(CHAT, &third_id)
+            .await
+            .unwrap()
+    );
+    wait_for(
         || prompts.lock().unwrap().iter().any(|p| p == "third"),
-        "normal draining to resume after the explicit send",
+        "second explicitly selected row",
     )
     .await;
     let _ = harness.finish.send(());
@@ -985,6 +1009,79 @@ async fn send_now_interrupts_the_running_turn() {
     );
 
     let _ = harness.finish.send(());
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_now_from_a_paused_queue_does_not_claim_a_sibling_on_idle() {
+    let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
+    core.doc_host
+        .queue_message(CHAT, "opening", Vec::new())
+        .unwrap();
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|prompt| prompt == "opening")
+        },
+        "opening turn",
+    )
+    .await;
+    let sibling = core
+        .doc_host
+        .queue_message(CHAT, "remain held", Vec::new())
+        .unwrap();
+    let target = core
+        .doc_host
+        .queue_message(CHAT, "selected only", Vec::new())
+        .unwrap();
+    core.doc_host.pause_all_queues();
+
+    assert!(core.doc_host.send_queued_now(CHAT, &target).await.unwrap());
+    wait_for(
+        || {
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|prompt| prompt == "selected only")
+        },
+        "selected queue row",
+    )
+    .await;
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &target)
+                .unwrap()
+                .is_none()
+        },
+        "selected row correlation",
+    )
+    .await;
+    let _ = harness.finish.send(());
+    wait_for(
+        || !core.sessions.turn_in_flight(CHAT),
+        "selected turn completion",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let sibling_row = core
+        .doc_host
+        .queued_message(CHAT, &sibling)
+        .unwrap()
+        .expect("unrelated row remains queued");
+    assert!(matches!(sibling_row.status, QueueMessageStatus::Held));
+    assert!(
+        !prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|prompt| prompt == "remain held")
+    );
     core.shutdown().await;
 }
 

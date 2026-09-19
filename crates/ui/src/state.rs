@@ -4237,4 +4237,10 @@ impl AppState {
         self.engine = Some(engine);
         self.engine_generation = self.engine_generation.wrapping_add(1);
     }
+
+    /// Exercise the production attachment/reconnect boundary after the
+    /// fixture has populated its selected chat and static workspace rows.
+    pub fn fixture_attach_engine(&mut self, engine: EngineHandle, cx: &mut Context<Self>) {
+        self.attach_engine(engine, cx);
+    }
 }

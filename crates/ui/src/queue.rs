@@ -12,6 +12,7 @@ use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled, Window, div, prelude::*, px,
 };
+use sha2::{Digest, Sha256};
 
 use zeron_doc::{QueueDeliveryGate, QueueMessageStatus, QueuedMessage};
 use zeron_rpc::methods;
@@ -49,6 +50,17 @@ fn queue_mutation_acknowledged(method: &str, reply: &serde_json::Value) -> bool 
         _ => return true,
     };
     reply.get(field).and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+/// Stable retry identity for one attachment in one queue-edit command. The
+/// upload jail caps ids at 64 safe ASCII bytes; concatenating two UUIDs with a
+/// descriptive prefix exceeded that boundary in native QA.
+fn queue_edit_upload_id(command_id: &str, attachment_id: &str) -> String {
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(format!("{command_id}\0{attachment_id}").as_bytes())
+    );
+    format!("qe-{}", &digest[..40])
 }
 
 struct QueueActionTooltip {
@@ -1596,14 +1608,11 @@ impl Composer {
                 if action == "commit" {
                     let mut paths = Vec::new();
                     for attachment in &staged {
-                        let upload_id = format!(
-                            "queue-edit-{edit_command_id}-{}",
-                            attachment.id
-                        );
+                        let upload_id = queue_edit_upload_id(&edit_command_id, &attachment.id);
                         let path = crate::attachments::upload_attachment(
                             &engine, cx.background_executor(), Some(&host_device_id),
                             &upload_id, attachment, None,
-                        ).await.map_err(|err| err.to_string())?;
+                        ).await.map_err(|err| format!("attachment upload: {err}"))?;
                         paths.push(path);
                     }
                     let appshot_paths = staged.iter().zip(&paths)
@@ -1692,9 +1701,12 @@ impl Composer {
                     },
                     Err(err) => {
                         tracing::warn!(error = %err, "finish queue edit failed");
-                        composer.failure = Some(
-                            "Couldn't reach the chat host; your edit is still in the editor".into(),
-                        );
+                        composer.failure = Some(if err.starts_with("attachment upload:") {
+                            "Couldn't upload the attachment; your edit is still in the editor"
+                                .into()
+                        } else {
+                            "Couldn't save the queue edit; your edit is still in the editor".into()
+                        });
                     }
                 }
                 cx.notify();
@@ -1948,9 +1960,31 @@ mod tests {
     use super::{
         PANEL_PAD_TOP, QueuePrimaryAction, ROW_SLOT, available_queue_primary_action,
         latest_queued_message, one_line, queue_action_needs_host, queue_drag_offsets,
-        queue_drop_index, queue_latest_shortcut_visible, queue_mutation_acknowledged,
-        queue_visible_text, visible_queue_rows,
+        queue_drop_index, queue_edit_upload_id, queue_latest_shortcut_visible,
+        queue_mutation_acknowledged, queue_visible_text, visible_queue_rows,
     };
+
+    #[test]
+    fn queue_edit_upload_ids_are_stable_distinct_and_accepted_by_the_upload_jail() {
+        let command = "6b58f3ff-a0d8-4bf7-96b6-3f501f4d7cec";
+        let first = queue_edit_upload_id(command, "e9337085-cdad-40f7-9132-2286a21d6071");
+        let retry = queue_edit_upload_id(command, "e9337085-cdad-40f7-9132-2286a21d6071");
+        let second = queue_edit_upload_id(command, "ca5ee696-81b7-4791-b59f-2de48beffe36");
+        assert_eq!(first, retry);
+        assert_ne!(first, second);
+        assert!(first.len() <= 64);
+        assert!(
+            first
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let uploads = zeron_engine::Uploads::new(root.path());
+        uploads.append(&first, "QQ==", Some(0)).unwrap();
+        let committed = uploads.commit(&first, "queue-edit.png").unwrap();
+        assert!(std::path::Path::new(&committed).is_file());
+    }
 
     #[test]
     fn queue_preview_work_follows_the_visible_rows() {

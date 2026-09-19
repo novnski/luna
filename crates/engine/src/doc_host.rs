@@ -4029,6 +4029,13 @@ impl DocHost {
             )?;
             return Err(error);
         }
+        // Send/Steer now selects exactly one row. If Stop, restart recovery,
+        // or a prior ambiguous dispatch had frozen the queue, preserve that
+        // hold after starting the selected row; the idle transition must not
+        // immediately claim an unrelated sibling.
+        if was_paused {
+            handle.queue_paused.store(true, Ordering::Release);
+        }
         Ok(QueueDispatchOutcome::Started)
     }
 
