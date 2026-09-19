@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use base64::Engine as _;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
-use tokio::sync::watch;
+use tokio::sync::{OwnedMutexGuard, broadcast, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -34,8 +34,11 @@ use zeron_doc::{
     SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
     join_continuation_entries,
 };
-use zeron_proto::{ConversationSourceContext, HarnessId, UserInputAnswer, UserInputQuestion};
-use zeron_sync::DocsStore;
+use zeron_proto::{
+    CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus,
+    ConversationSourceContext, HarnessId, TaskCommandRead, UserInputAnswer, UserInputQuestion,
+};
+use zeron_sync::{DocsStore, TaskCommandBegin};
 
 use crate::http_error::describe_http_error;
 use crate::sessions::{SessionsEngine, SteerOutcome};
@@ -263,6 +266,12 @@ struct DocHostInner {
     /// terminalizes the latter as Rejected instead of leaving a forever-
     /// Pending entry no retry could ever reach (2026-08-19 swallowed-send).
     executing: Mutex<HashSet<String>>,
+    /// L07 execution lanes. SQLite receipts are the correctness boundary; this
+    /// gate only prevents avoidable local interleaving between acceptance and
+    /// effect finalization.
+    task_command_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Receipts publish only after their SQLite transaction commits.
+    task_receipts: broadcast::Sender<CommandReceipt>,
     /// Peer links (engine assembly, edge runtimes only) — the transport that
     /// pushes queued attachment bytes to a remote host.
     links: OnceLock<Arc<zeron_rpc::LinkCache>>,
@@ -754,6 +763,8 @@ impl DocHost {
                 transfers: watch::channel(Vec::new()).0,
                 connectivity_grace: Mutex::new(DegradeGrace::default()),
                 executing: Mutex::new(HashSet::new()),
+                task_command_gates: Mutex::new(HashMap::new()),
+                task_receipts: broadcast::channel(256).0,
                 links: OnceLock::new(),
                 http: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
@@ -799,6 +810,134 @@ impl DocHost {
     /// `shutdown_workers` — callers treat both as "executor unavailable".
     fn sessions(&self) -> Option<SessionsEngine> {
         lock(&self.inner.sessions).clone()
+    }
+
+    pub async fn task_command_gate(&self, task_id: &str) -> OwnedMutexGuard<()> {
+        let gate = lock(&self.inner.task_command_gates)
+            .entry(task_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        gate.lock_owned().await
+    }
+
+    pub fn begin_task_command(
+        &self,
+        receipt: CommandReceipt,
+        expected_revision: Option<u64>,
+        expected_binding_generation: Option<u32>,
+        expected_turn_id: Option<&str>,
+    ) -> Result<TaskCommandBegin, EngineError> {
+        Ok(self.inner.store.begin_task_command(
+            receipt,
+            expected_revision,
+            expected_binding_generation,
+            expected_turn_id,
+        )?)
+    }
+
+    pub fn task_command_receipt(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandReceipt>, EngineError> {
+        Ok(self.inner.store.task_command_receipt(command_id)?)
+    }
+
+    pub fn read_task_commands(
+        &self,
+        task_id: &str,
+        after_task_sequence: Option<u64>,
+    ) -> Result<TaskCommandRead, EngineError> {
+        Ok(self
+            .inner
+            .store
+            .read_task_commands(task_id, after_task_sequence)?)
+    }
+
+    pub fn subscribe_task_receipts(&self) -> broadcast::Receiver<CommandReceipt> {
+        self.inner.task_receipts.subscribe()
+    }
+
+    pub fn publish_task_receipt(&self, receipt: CommandReceipt) {
+        let _ = self.inner.task_receipts.send(receipt);
+    }
+
+    #[allow(clippy::too_many_arguments)] // one atomic receipt-finalization boundary
+    pub fn complete_task_command(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+    ) -> Result<Option<CommandReceipt>, EngineError> {
+        let receipt = self.inner.store.complete_task_command(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+        )?;
+        if let Some(receipt) = receipt.clone() {
+            self.publish_task_receipt(receipt);
+        }
+        Ok(receipt)
+    }
+
+    pub fn mark_task_command_unknown(
+        &self,
+        command_id: &str,
+        message: &str,
+    ) -> Result<Option<CommandReceipt>, EngineError> {
+        let receipt = self
+            .inner
+            .store
+            .mark_task_command_unknown(command_id, message)?;
+        if let Some(receipt) = receipt.clone() {
+            self.publish_task_receipt(receipt);
+        }
+        Ok(receipt)
+    }
+
+    pub fn set_task_command_correlation(
+        &self,
+        command_id: &str,
+        correlation_id: &str,
+    ) -> Result<Option<CommandReceipt>, EngineError> {
+        let receipt = self
+            .inner
+            .store
+            .set_task_command_correlation(command_id, correlation_id)?;
+        if let Some(receipt) = receipt.clone() {
+            self.publish_task_receipt(receipt);
+        }
+        Ok(receipt)
+    }
+
+    pub fn confirm_task_command_correlation(
+        &self,
+        task_id: &str,
+        correlation_id: &str,
+        active_turn_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+    ) -> Result<Vec<CommandReceipt>, EngineError> {
+        let receipts = self.inner.store.confirm_task_command_correlation(
+            task_id,
+            correlation_id,
+            active_turn_id,
+            binding_id,
+            binding_generation,
+        )?;
+        for receipt in &receipts {
+            self.publish_task_receipt(receipt.clone());
+        }
+        Ok(receipts)
     }
 
     /// Wire the sessions engine (engine assembly; see `SessionsEngine::set_doc_host`).
@@ -2416,8 +2555,21 @@ impl DocHost {
         payload: SessionCommandPayload,
         transfers: Vec<crate::uploads::AttachmentTransfer>,
     ) -> Result<String, EngineError> {
-        let handle = self.open(chat_id)?;
         let id = new_id();
+        self.queue_command_with_id_and_transfers(chat_id, &id, payload, transfers)?;
+        Ok(id)
+    }
+
+    /// L07 authoritative enqueue. The caller-minted id is both the durable
+    /// command receipt key and the existing session-doc command id.
+    pub fn queue_command_with_id_and_transfers(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+        payload: SessionCommandPayload,
+        transfers: Vec<crate::uploads::AttachmentTransfer>,
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
         let now = now_ms();
         let based_on = handle.doc.read_entries()?.last().map(|m| CommandBasedOn {
             turn_id: Some(m.id.clone()),
@@ -2428,7 +2580,7 @@ impl DocHost {
             SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
         );
         let entry = SessionCommandEntry {
-            id: id.clone(),
+            id: command_id.to_string(),
             payload,
             issued_by: self.inner.config.device_id.clone(),
             issued_at: now,
@@ -2450,7 +2602,7 @@ impl DocHost {
         // for any other reason still executes it).
         self.nudge_remote_host(chat_id);
         self.spawn_command_delivery(chat_id, entry, transfers);
-        Ok(id)
+        Ok(())
     }
 
     /// A send revives an archived chat on every device (best-effort).
@@ -3908,11 +4060,18 @@ impl DocHost {
                 {
                     tracing::warn!(chat = %handle.chat_id, command = %c.id,
                         "command consumed but never resolved (crash mid-execute?); rejecting");
+                    if let Err(error) = self.mark_task_command_unknown(
+                        &c.id,
+                        "the engine restarted after claiming this command; provider acceptance could not be proven",
+                    ) {
+                        tracing::warn!(chat = %handle.chat_id, command = %c.id, %error,
+                            "failed to preserve ambiguous command receipt");
+                    }
                     self.resolve_command(
                         handle,
                         &c.id,
                         SessionCommandStatus::Rejected,
-                        Some("interrupted before completion — retry to send again"),
+                        Some("delivery outcome unknown — reconcile before retrying"),
                     );
                     skipped.insert(c.id.clone());
                 }
@@ -4120,6 +4279,86 @@ impl DocHost {
                 "command outcome write failed"
             );
         }
+        let fence_conflict = resolution.and_then(|message| {
+            message
+                .strip_prefix("staleTurn: ")
+                .map(|message| (CommandReasonCode::StaleTurn, message))
+                .or_else(|| {
+                    message
+                        .strip_prefix("staleBindingGeneration: ")
+                        .map(|message| (CommandReasonCode::StaleBindingGeneration, message))
+                })
+        });
+        let receipt_status = if fence_conflict.is_some() {
+            CommandReceiptStatus::Conflict
+        } else {
+            match status {
+                SessionCommandStatus::Applied => CommandReceiptStatus::Applied,
+                SessionCommandStatus::Rejected | SessionCommandStatus::Cancelled => {
+                    CommandReceiptStatus::Rejected
+                }
+                SessionCommandStatus::Superseded => CommandReceiptStatus::Superseded,
+                SessionCommandStatus::Expired => CommandReceiptStatus::Failed,
+                SessionCommandStatus::Pending => return,
+            }
+        };
+        let Ok(Some(prior)) = self.task_command_receipt(command_id) else {
+            return;
+        };
+        // Run/steer receipts carry a correlation before dispatch. Their doc
+        // command is locally applied once it reaches the execution lane, but
+        // the durable receipt remains pending until SessionStarted/Steered
+        // proves provider acceptance for that exact correlation.
+        if receipt_status == CommandReceiptStatus::Applied && prior.correlation_id.is_some() {
+            return;
+        }
+        // A dead-command sweep already marked the durable outcome unknown. Its
+        // doc row is terminalized only to remove a stuck spinner; never turn
+        // that ambiguity into a replayable rejection receipt.
+        if prior.status == CommandReceiptStatus::Pending
+            && prior.committed_at_ms.is_some()
+            && prior
+                .reason
+                .as_ref()
+                .is_some_and(|reason| reason.code == CommandReasonCode::ProviderAcceptanceUnknown)
+        {
+            return;
+        }
+        let active_turn = self
+            .sessions()
+            .and_then(|sessions| sessions.active_turn_id(&handle.chat_id));
+        let reason = if let Some((code, message)) = fence_conflict {
+            Some(CommandReceiptReason {
+                code,
+                message: message.into(),
+            })
+        } else {
+            resolution.map(|message| CommandReceiptReason {
+                code: if receipt_status == CommandReceiptStatus::Rejected {
+                    CommandReasonCode::OperationRejected
+                } else {
+                    CommandReasonCode::OperationFailed
+                },
+                message: message.into(),
+            })
+        };
+        let recovery = fence_conflict
+            .is_some()
+            .then_some("Reload task state; never replay this control against a replacement binding or turn.")
+            .or(resolution);
+        if let Err(error) = self.complete_task_command(
+            command_id,
+            receipt_status,
+            receipt_status == CommandReceiptStatus::Applied,
+            prior.snapshot.binding_id.as_deref(),
+            prior.snapshot.binding_generation,
+            active_turn.as_deref(),
+            reason,
+            recovery,
+        ) {
+            tracing::error!(chat = %handle.chat_id, command = %command_id, %error,
+                "task command receipt finalization failed");
+        }
     }
 
     async fn execute(
@@ -4129,6 +4368,34 @@ impl DocHost {
         entry: &SessionCommandEntry,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
+        if let Some(receipt) = self.task_command_receipt(&entry.id)? {
+            if let Some(expected) = receipt.snapshot.binding_generation {
+                let current = sessions.task_binding_generation(chat_id);
+                if current != Some(expected) {
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some(format!(
+                            "staleBindingGeneration: expected {expected}, current {current:?}"
+                        )),
+                    ));
+                }
+            }
+            if matches!(
+                &entry.payload,
+                SessionCommandPayload::Steer { .. } | SessionCommandPayload::Interrupt {}
+            ) && let Some(expected) = receipt.snapshot.active_turn_id.as_deref()
+            {
+                let current = sessions.active_turn_id(chat_id);
+                if current.as_deref() != Some(expected) {
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some(format!(
+                            "staleTurn: expected {expected}, current {current:?}"
+                        )),
+                    ));
+                }
+            }
+        }
         match &entry.payload {
             SessionCommandPayload::Run {
                 request,
@@ -4576,9 +4843,7 @@ impl DocHost {
         Some(zeron_proto::RunRequest {
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),
-            provider_account_id: config
-                .as_ref()
-                .and_then(|c| c.provider_account_id.clone()),
+            provider_account_id: config.as_ref().and_then(|c| c.provider_account_id.clone()),
             model: config.as_ref().and_then(|c| c.model.clone()),
             reasoning: config.as_ref().and_then(|c| c.reasoning),
             model_options: config

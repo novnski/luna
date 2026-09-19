@@ -2019,8 +2019,8 @@ impl AppState {
         };
         let chat_id = chat_id.to_string();
         cx.spawn(async move |_, _| {
-            let params = serde_json::json!({ "op": "markChatSeen", "chatId": chat_id });
-            if let Err(err) = handle.client().call(methods::MUTATE, params).await {
+            let intent = serde_json::json!({ "kind": "markSeen" });
+            if let Err(err) = crate::task_commands::execute(&handle, &chat_id, intent).await {
                 tracing::warn!(chat = %chat_id, error = %err, "markChatSeen failed");
             }
         })

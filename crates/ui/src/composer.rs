@@ -597,9 +597,9 @@ fn retain_live_interrupts(pending: &mut HashSet<String>, mut is_live: impl FnMut
     pending.retain(|chat_id| is_live(chat_id));
 }
 
-fn interrupt_params(chat_id: &str) -> serde_json::Value {
+fn interrupt_intent() -> serde_json::Value {
     serde_json::json!({
-        "chatId": chat_id,
+        "kind": "session",
         "command": { "kind": "interrupt" },
     })
 }
@@ -6471,14 +6471,12 @@ impl Composer {
                             object.insert("config".into(), config);
                         }
                     }
-                    if let Err(err) = attachments::call_with_timeout(
-                        &engine,
-                        cx.background_executor(),
-                        methods::MUTATE,
-                        mutate,
-                        std::time::Duration::from_secs(30),
-                    )
-                    .await
+                    if let Some(object) = mutate.as_object_mut() {
+                        object.remove("op");
+                        object.remove("chatId");
+                        object.insert("kind".into(), "createChat".into());
+                    }
+                    if let Err(err) = crate::task_commands::execute(&engine, &chat_id, mutate).await
                     {
                         tracing::warn!(error = %err, "CreateChat mutate unavailable; doc host will materialize the chat");
                     }
@@ -6540,19 +6538,18 @@ impl Composer {
                 };
                 let command = serde_json::to_value(&command)
                     .map_err(|e| format!("Send failed: {e}"))?;
-                let mut params = serde_json::json!({ "chatId": chat_id, "command": command });
+                let mut intent = serde_json::json!({ "kind": "session", "command": command });
                 if !transfers.is_empty() {
-                    params["transfers"] = serde_json::Value::Array(transfers);
+                    intent["transfers"] = serde_json::Value::Array(transfers);
                 }
                 // Deadline-bounded: QueueCommand is a local write (in-process
                 // or IPC), but a deferred engine handle can park forever —
                 // the send task must never grind silently (2026-08-19).
-                attachments::call_with_timeout(
+                crate::task_commands::execute_with_id(
                     &engine,
-                    cx.background_executor(),
-                    methods::QUEUE_COMMAND,
-                    params,
-                    std::time::Duration::from_secs(30),
+                    &chat_id,
+                    message_id.clone(),
+                    intent,
                 )
                 .await
                 .map_err(|e| format!("Send failed: {e}"))?;
@@ -6566,12 +6563,10 @@ impl Composer {
                 // created — but a post-mutate failure (QueueCommand) still
                 // leaves a row. Best-effort delete; a no-op if the chat was
                 // never materialized.
-                let _ = attachments::call_with_timeout(
+                let _ = crate::task_commands::execute(
                     &engine,
-                    cx.background_executor(),
-                    methods::MUTATE,
-                    serde_json::json!({ "op": "deleteChat", "chatId": err_chat_id }),
-                    std::time::Duration::from_secs(5),
+                    &err_chat_id,
+                    serde_json::json!({ "kind": "delete" }),
                 )
                 .await;
             }
@@ -6664,11 +6659,11 @@ impl Composer {
         if !begin_interrupt(&mut self.interrupting, &chat_id) {
             return;
         }
-        let params = interrupt_params(&chat_id);
+        let intent = interrupt_intent();
         let task_chat_id = chat_id.clone();
         let failure_chat = chat_id.clone();
         let task = cx.spawn(async move |this, cx| {
-            let result = engine.client().call(methods::QUEUE_COMMAND, params).await;
+            let result = crate::task_commands::execute(&engine, &task_chat_id, intent).await;
             if let Err(err) = result {
                 this.update(cx, |composer, cx| {
                     composer.interrupting.remove(&task_chat_id);
@@ -6790,13 +6785,13 @@ impl Composer {
             }
         };
         let failure_chat = chat_id.clone();
-        let params = match serde_json::to_value(&command) {
-            Ok(value) => serde_json::json!({ "chatId": chat_id, "command": value }),
+        let intent = match serde_json::to_value(&command) {
+            Ok(value) => serde_json::json!({ "kind": "session", "command": value }),
             Err(_) => return,
         };
         // `action_task`, NOT `send_task` — see `interrupt`.
         self.action_task = Some(cx.spawn(async move |this, cx| {
-            let result = engine.client().call(methods::QUEUE_COMMAND, params).await;
+            let result = crate::task_commands::execute(&engine, &failure_chat, intent).await;
             if let Err(err) = result {
                 this.update(cx, |composer, cx| {
                     composer.failure = Some(format!("Answer failed: {err}").into());
@@ -9487,10 +9482,10 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_payload_keeps_the_captured_chat() {
-        let params = interrupt_params("chat-a");
-        assert_eq!(params["chatId"], "chat-a");
-        assert_eq!(params["command"]["kind"], "interrupt");
+    fn interrupt_payload_targets_the_active_turn_command() {
+        let intent = interrupt_intent();
+        assert_eq!(intent["kind"], "session");
+        assert_eq!(intent["command"]["kind"], "interrupt");
     }
 
     #[test]

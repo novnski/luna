@@ -5,13 +5,11 @@ use gpui::{
     AnyElement, Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px,
 };
 
-use zeron_proto::Chat;
-use zeron_rpc::methods;
-
 use crate::popover;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
+use zeron_proto::Chat;
 
 /// Archived rows in sidebar (recency) order. Pure.
 pub fn archived_chats(chats: &[Chat]) -> Vec<&Chat> {
@@ -51,13 +49,10 @@ impl ArchivedPage {
         };
         self.busy = Some(chat_id.clone());
         self.error = None;
-        let params = serde_json::json!({
-            "op": "setChatArchived",
-            "chatId": chat_id,
-            "archived": false,
-        });
+        let intent = serde_json::json!({ "kind": "setArchived", "archived": false });
+        let task_id = chat_id.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
-            let result = engine.client().call(methods::MUTATE, params).await;
+            let result = crate::task_commands::execute(&engine, &task_id, intent).await;
             this.update(cx, |page, cx| {
                 page.busy = None;
                 if let Err(err) = result {

@@ -3926,7 +3926,26 @@ impl Shell {
 
     // ---- sidebar mutations ----
 
-    /// Fire a Mutate op; failures surface in the sidebar notice strip.
+    /// Execute a durable task command; failures surface in the sidebar notice strip.
+    fn mutate_task(&mut self, task_id: String, intent: serde_json::Value, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.sidebar_notice = Some("Engine not connected".into());
+            cx.notify();
+            return;
+        };
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            if let Err(err) = crate::task_commands::execute(&engine, &task_id, intent).await {
+                this.update(cx, |shell, cx| {
+                    shell.sidebar_notice = Some(format!("{err}").into());
+                    cx.notify();
+                })
+                .ok();
+            }
+        }));
+    }
+
+    /// Non-task workspace mutations retain their existing owner. L07 does not
+    /// widen task receipts into project/device lifecycle behavior.
     fn mutate(&mut self, params: serde_json::Value, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.sidebar_notice = Some("Engine not connected".into());
@@ -3978,8 +3997,10 @@ impl Shell {
         };
         let title = dialog.input.read(cx).text().trim().to_string();
         if !title.is_empty() {
-            self.mutate(
-                serde_json::json!({ "op": "renameChat", "chatId": dialog.chat_id, "title": title }),
+            let chat_id = dialog.chat_id;
+            self.mutate_task(
+                chat_id,
+                serde_json::json!({ "kind": "rename", "title": title }),
                 cx,
             );
         }
@@ -4012,8 +4033,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_chat_menu(cx);
-        self.mutate(
-            serde_json::json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived }),
+        let task_id = chat_id;
+        self.mutate_task(
+            task_id,
+            serde_json::json!({ "kind": "setArchived", "archived": archived }),
             cx,
         );
         cx.notify();
@@ -4093,10 +4116,8 @@ impl Shell {
         }
         self.composer
             .update(cx, |composer, cx| composer.purge_chat(&chat_id, cx));
-        self.mutate(
-            serde_json::json!({ "op": "deleteChat", "chatId": chat_id }),
-            cx,
-        );
+        let task_id = chat_id;
+        self.mutate_task(task_id, serde_json::json!({ "kind": "delete" }), cx);
         cx.notify();
     }
 

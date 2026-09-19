@@ -52,6 +52,7 @@ pub mod sound;
 pub mod state;
 pub(crate) mod surface_chrome;
 pub mod syntax_cache;
+pub(crate) mod task_commands;
 pub mod terminal;
 pub mod theme;
 pub mod theme_library;

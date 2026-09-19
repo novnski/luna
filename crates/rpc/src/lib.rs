@@ -119,6 +119,11 @@ pub mod methods {
     pub const PREVIEW_PROVIDER_TASK_IMPORT: &str = "PreviewProviderTaskImport";
     /// Adopt a current preview; task and binding persist before chat visibility.
     pub const ADOPT_PROVIDER_TASK: &str = "AdoptProviderTask";
+    /// L07 authoritative path for every existing local task mutation.
+    pub const EXECUTE_TASK_COMMAND: &str = "ExecuteTaskCommand";
+    pub const GET_TASK_COMMAND_RECEIPT: &str = "GetTaskCommandReceipt";
+    pub const GET_TASK_COMMAND_SNAPSHOT: &str = "GetTaskCommandSnapshot";
+    pub const WATCH_TASK_COMMANDS: &str = "WatchTaskCommands";
     /// Ask a headless IPC owner to drain its runtime and exit successfully.
     /// Headed IPC owners do not implement this method: closing another app's
     /// engine behind its windows would leave that process unusable.

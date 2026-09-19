@@ -7,6 +7,7 @@ pub mod agent;
 pub mod entities;
 pub mod motion;
 pub mod preview;
+pub mod task_command;
 pub mod task_identity;
 pub mod view;
 pub mod workspace;
@@ -14,6 +15,7 @@ pub mod workspace;
 pub use agent::*;
 pub use entities::*;
 pub use preview::*;
+pub use task_command::*;
 pub use task_identity::*;
 pub use workspace::*;
 

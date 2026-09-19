@@ -392,6 +392,24 @@ impl SessionsEngine {
         lock(&self.inner.runs).contains_key(chat_id)
     }
 
+    /// The execution-lane fence for controls such as stop and steer. This is
+    /// intentionally the engine run id: a replacement provider runtime always
+    /// receives a new value even when it resumes the same native thread.
+    pub fn active_turn_id(&self, chat_id: &str) -> Option<String> {
+        lock(&self.inner.runs)
+            .get(chat_id)
+            .map(|run| run.run_id.clone())
+    }
+
+    pub fn task_binding_generation(&self, chat_id: &str) -> Option<u32> {
+        self.inner
+            .task_identity
+            .get()
+            .and_then(|identity| identity.view(chat_id))
+            .and_then(|view| view.current_binding)
+            .map(|binding| binding.generation)
+    }
+
     /// Whether this harness takes a prompt *during* a turn, rather than only at
     /// the boundary between turns. The queue drain's central question: a
     /// mid-turn agent gets the message now, everything else holds it until the
@@ -2666,11 +2684,34 @@ async fn drive_run(
             inner.set_status(&chat_id, SessionStatus::Working, true);
             // The boundary confirms delivery of the oldest accepted steer —
             // retire its at-least-once ledger entry.
-            if let Some(h) = lock(&inner.runs)
+            let confirmed_message = if let Some(h) = lock(&inner.runs)
                 .get(&chat_id)
                 .filter(|h| h.run_id == run_id)
             {
-                lock(&h.routed_steers).pop_front();
+                lock(&h.routed_steers)
+                    .pop_front()
+                    .map(|steer| steer.message_id)
+            } else {
+                None
+            };
+            if let Some(message_id) = confirmed_message
+                && let Some(host) = inner.doc_host()
+            {
+                let binding = inner
+                    .task_identity
+                    .get()
+                    .and_then(|identity| identity.view(&chat_id))
+                    .and_then(|view| view.current_binding);
+                if let Err(error) = host.confirm_task_command_correlation(
+                    &chat_id,
+                    &message_id,
+                    &run_id,
+                    binding.as_ref().map(|binding| binding.binding_id.as_str()),
+                    binding.as_ref().map(|binding| binding.generation),
+                ) {
+                    tracing::error!(chat = %chat_id, run = %run_id, %error,
+                        "steer acceptance receipt finalization failed");
+                }
             }
             continue;
         }
@@ -2744,6 +2785,23 @@ async fn drive_run(
                     return;
                 }
                 inner.remember_harness_session(&chat_id, session_id, cwd);
+                if let Some(host) = inner.doc_host() {
+                    let binding = inner
+                        .task_identity
+                        .get()
+                        .and_then(|identity| identity.view(&chat_id))
+                        .and_then(|view| view.current_binding);
+                    if let Err(error) = host.confirm_task_command_correlation(
+                        &chat_id,
+                        &resume_state.user_message_id,
+                        &run_id,
+                        binding.as_ref().map(|binding| binding.binding_id.as_str()),
+                        binding.as_ref().map(|binding| binding.generation),
+                    ) {
+                        tracing::error!(chat = %chat_id, run = %run_id, %error,
+                            "provider acceptance receipt finalization failed");
+                    }
+                }
                 if harness_id == HarnessId::Codex
                     && let Some(task_identity) = inner.task_identity.get()
                     && let Some(title) = inner

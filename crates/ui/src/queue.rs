@@ -1714,6 +1714,22 @@ impl Composer {
                 cx.notify();
             });
         }
+        let local_task_intent =
+            if host_device_id.as_deref() == Some(engine.engine_info().device_id.as_str()) {
+                pending_message.as_ref().and_then(|id| match method {
+                    methods::SEND_QUEUED_MESSAGE_NOW => Some(serde_json::json!({
+                        "kind": "sendQueuedNow",
+                        "messageId": id,
+                    })),
+                    methods::STEER_QUEUED_MESSAGE_NOW => Some(serde_json::json!({
+                        "kind": "steerQueuedNow",
+                        "messageId": id,
+                    })),
+                    _ => None,
+                })
+            } else {
+                None
+            };
         let mut params = params;
         if let Some(object) = params.as_object_mut() {
             object.insert("chatId".into(), serde_json::Value::String(chat_id.clone()));
@@ -1725,8 +1741,14 @@ impl Composer {
         // parking them in a single slot meant the next arrow tap dropped — and
         // so cancelled — the move still in flight, leaving the optimistic list
         // showing an order the doc never got.
-        cx.spawn(
-            async move |this, cx| match engine.client().call(method, params).await {
+        cx.spawn(async move |this, cx| {
+            match if let Some(intent) = local_task_intent {
+                crate::task_commands::execute(&engine, &chat_id, intent)
+                    .await
+                    .map(|receipt| serde_json::json!({ "sent": true, "receipt": receipt }))
+            } else {
+                engine.client().call(method, params).await
+            } {
                 Ok(reply) if queue_mutation_acknowledged(method, &reply) => {
                     // The host has adopted this message. Clear even if the
                     // user switched chats and its transcript is no longer watched.
@@ -1776,8 +1798,8 @@ impl Composer {
                     })
                     .ok();
                 }
-            },
-        )
+            }
+        })
         .detach();
     }
 }

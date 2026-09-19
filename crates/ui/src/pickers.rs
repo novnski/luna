@@ -1854,12 +1854,11 @@ impl Pickers {
             return;
         };
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
-            let params = serde_json::json!({
-                "op": "setThreadProviderAccount",
-                "chatId": chat_id,
+            let intent = serde_json::json!({
+                "kind": "setProviderAccount",
                 "accountId": account_id,
             });
-            let result = engine.client().call(methods::MUTATE, params).await;
+            let result = crate::task_commands::execute(&engine, &chat_id, intent).await;
             this.update(cx, |pickers, cx| {
                 match result {
                     Ok(_) => {
@@ -2008,13 +2007,12 @@ impl Pickers {
             return;
         };
         self.mutate_task = Some(cx.spawn(async move |_, _| {
-            let params = serde_json::json!({
-                "op": "setThreadPermissionMode",
-                "chatId": chat_id,
+            let intent = serde_json::json!({
+                "kind": "setPermission",
                 "mode": mode,
                 "actor": actor,
             });
-            if let Err(error) = engine.client().call(methods::MUTATE, params).await {
+            if let Err(error) = crate::task_commands::execute(&engine, &chat_id, intent).await {
                 tracing::warn!(%error, "setThreadPermissionMode mutate failed");
             }
         }));
@@ -2120,12 +2118,8 @@ impl Pickers {
             return;
         };
         self.mutate_task = Some(cx.spawn(async move |_, _| {
-            let params = serde_json::json!({
-                "op": "setChatConfig",
-                "chatId": chat_id,
-                "config": config,
-            });
-            if let Err(err) = engine.client().call(methods::MUTATE, params).await {
+            let intent = serde_json::json!({ "kind": "setConfig", "config": config });
+            if let Err(err) = crate::task_commands::execute(&engine, &chat_id, intent).await {
                 tracing::warn!(error = %err, "setChatConfig mutate failed");
             }
         }));

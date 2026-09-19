@@ -54,15 +54,17 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use serde::Deserialize;
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 use tokio::sync::watch;
 
 use zeron_doc::{MessagePart, SessionCommandPayload};
 use zeron_proto::{
-    ChatConfig, EngineInfo, HarnessId, ImportOwnership, PermissionMode, TaskLineage, ToolCall,
-    WorkspaceScope,
+    ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus,
+    EngineInfo, HarnessId, ImportOwnership, PermissionMode, TaskCommandSnapshot, TaskLineage,
+    ToolCall, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 
@@ -166,6 +168,204 @@ struct QueueCommandParams {
     /// durably queued — never as a gate in front of it.
     #[serde(default)]
     transfers: Vec<crate::uploads::AttachmentTransfer>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskCommandParams {
+    command_id: String,
+    #[serde(default = "default_actor")]
+    actor_id: String,
+    #[serde(default = "default_client")]
+    client_id: String,
+    #[serde(default = "default_client_session")]
+    client_session_id: String,
+    task_id: String,
+    #[serde(default)]
+    expected_task_revision: Option<u64>,
+    #[serde(default)]
+    expected_binding_generation: Option<u32>,
+    #[serde(default)]
+    expected_turn_id: Option<String>,
+    #[serde(default = "crate::now_ms")]
+    issued_at_ms: i64,
+    intent: TaskCommandIntent,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum TaskCommandIntent {
+    #[serde(rename_all = "camelCase")]
+    CreateChat {
+        #[serde(default)]
+        space_id: Option<String>,
+        #[serde(default)]
+        device_id: Option<String>,
+        #[serde(default)]
+        config: Option<ChatConfig>,
+        #[serde(default)]
+        branch: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        lineage: TaskLineage,
+    },
+    #[serde(rename_all = "camelCase")]
+    Session {
+        command: SessionCommandPayload,
+        #[serde(default)]
+        transfers: Vec<crate::uploads::AttachmentTransfer>,
+    },
+    Rename {
+        title: String,
+    },
+    SetArchived {
+        archived: bool,
+    },
+    Delete {},
+    #[serde(rename_all = "camelCase")]
+    SetBranch {
+        branch: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SetCwd {
+        cwd: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SetActivity {
+        #[serde(default)]
+        last_message_at: Option<i64>,
+        #[serde(default)]
+        created_at: Option<i64>,
+    },
+    #[serde(rename_all = "camelCase")]
+    SetHost {
+        device_id: String,
+    },
+    SetConfig {
+        config: ChatConfig,
+    },
+    #[serde(rename_all = "camelCase")]
+    SetPermission {
+        mode: PermissionMode,
+        #[serde(default)]
+        actor: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    SetProviderAccount {
+        account_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SendQueuedNow {
+        message_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SteerQueuedNow {
+        message_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    MarkSeen {
+        #[serde(default)]
+        at: Option<i64>,
+    },
+}
+
+impl TaskCommandIntent {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::CreateChat { .. } => "createChat",
+            Self::Session { command, .. } => match command {
+                SessionCommandPayload::Run { .. } => "run",
+                SessionCommandPayload::Steer { .. } => "steer",
+                SessionCommandPayload::Interrupt {} => "stop",
+                SessionCommandPayload::RespondInput { .. } => "respondInput",
+                SessionCommandPayload::RespondApproval { .. } => "respondApproval",
+            },
+            Self::Rename { .. } => "rename",
+            Self::SetArchived { .. } => "setArchived",
+            Self::Delete {} => "delete",
+            Self::SetBranch { .. } => "setBranch",
+            Self::SetCwd { .. } => "setCwd",
+            Self::SetActivity { .. } => "setActivity",
+            Self::SetHost { .. } => "setHost",
+            Self::SetConfig { .. } => "setConfig",
+            Self::SetPermission { .. } => "setPermission",
+            Self::SetProviderAccount { .. } => "setProviderAccount",
+            Self::SendQueuedNow { .. } => "sendQueuedNow",
+            Self::SteerQueuedNow { .. } => "steerQueuedNow",
+            Self::MarkSeen { .. } => "markSeen",
+        }
+    }
+
+    fn requires_revision(&self) -> bool {
+        matches!(
+            self,
+            Self::Rename { .. }
+                | Self::SetArchived { .. }
+                | Self::Delete {}
+                | Self::SetBranch { .. }
+                | Self::SetCwd { .. }
+                | Self::SetHost { .. }
+                | Self::SetConfig { .. }
+                | Self::SetPermission { .. }
+                | Self::SetProviderAccount { .. }
+        )
+    }
+
+    fn requires_turn(&self) -> bool {
+        matches!(
+            self,
+            Self::Session {
+                command: SessionCommandPayload::Steer { .. } | SessionCommandPayload::Interrupt {},
+                ..
+            } | Self::SteerQueuedNow { .. }
+        )
+    }
+
+    fn requires_binding_fence(&self) -> bool {
+        !matches!(
+            self,
+            Self::CreateChat { .. } | Self::SetActivity { .. } | Self::MarkSeen { .. }
+        )
+    }
+
+    fn conflicts_with_active_turn(&self) -> bool {
+        matches!(
+            self,
+            Self::SetArchived { .. }
+                | Self::Delete {}
+                | Self::SetBranch { .. }
+                | Self::SetCwd { .. }
+                | Self::SetHost { .. }
+                | Self::SetConfig { .. }
+        )
+    }
+}
+
+fn default_actor() -> String {
+    "local-user".into()
+}
+
+fn default_client() -> String {
+    "local-ui".into()
+}
+
+fn default_client_session() -> String {
+    "legacy".into()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskCommandReceiptParams {
+    command_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskCommandSnapshotParams {
+    task_id: String,
+    #[serde(default)]
+    after_task_sequence: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -853,40 +1053,6 @@ impl EngineRpc {
     async fn mutate(&self, params: MutateParams) -> Result<(), RpcError> {
         let failed = |e: crate::EngineError| RpcError::Failed(e.to_string());
         match params {
-            MutateParams::CreateChat {
-                chat_id,
-                space_id,
-                device_id,
-                config,
-                branch,
-                cwd,
-                lineage,
-            } => {
-                self.task_identity
-                    .register_new_task(
-                        &chat_id,
-                        space_id.as_deref(),
-                        device_id.as_deref(),
-                        cwd.as_deref(),
-                        lineage,
-                    )
-                    .map_err(failed)?;
-                self.workspace
-                    .create_chat(
-                        &chat_id,
-                        space_id.as_deref(),
-                        device_id.as_deref(),
-                        config,
-                        cwd,
-                    )
-                    .map_err(failed)?;
-                if let Some(branch) = branch.as_deref().filter(|b| !b.is_empty()) {
-                    self.workspace
-                        .set_chat_branch(&chat_id, branch)
-                        .map_err(failed)?;
-                }
-                Ok(())
-            }
             MutateParams::CreateSpace {
                 space_id,
                 device_id,
@@ -923,128 +1089,568 @@ impl EngineRpc {
                 });
                 Ok(())
             }
-            MutateParams::RenameChat { chat_id, title } => {
-                let native_codex = self.task_identity.has_native_codex_binding(&chat_id);
-                if native_codex {
-                    self.task_identity
-                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
-                        .await
-                        .map_err(failed)?;
-                    self.task_identity
-                        .set_provider_name(&chat_id, &title)
-                        .await
-                        .map_err(failed)?;
-                }
-                self.workspace
-                    .rename_chat(&chat_id, &title)
-                    .map_err(failed)?;
-                if native_codex {
-                    self.task_identity
-                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
-                        .await
-                        .map_err(failed)?;
-                }
-                Ok(())
-            }
-            MutateParams::SetChatBranch { chat_id, branch } => self
-                .workspace
-                .set_chat_branch(&chat_id, &branch)
-                .map_err(failed)
-                .map(drop),
-            MutateParams::SetChatCwd { chat_id, cwd } => self
-                .workspace
-                .set_chat_cwd(&chat_id, &cwd)
-                .map_err(failed)
-                .map(drop),
-            MutateParams::SetChatActivity {
-                chat_id,
-                last_message_at,
-                created_at,
-            } => self
-                .workspace
-                .set_chat_activity(&chat_id, last_message_at, created_at)
-                .map_err(failed)
-                .map(drop),
-            MutateParams::SetChatHost { chat_id, device_id } => self
-                .workspace
-                .set_chat_host(&chat_id, &device_id)
-                .map_err(failed)
-                .map(drop),
-            MutateParams::SetChatArchived { chat_id, archived } => {
-                let native_codex = self.task_identity.has_native_codex_binding(&chat_id);
-                if native_codex {
-                    self.task_identity
-                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
-                        .await
-                        .map_err(failed)?;
-                    self.task_identity
-                        .set_provider_archived(&chat_id, archived)
-                        .await
-                        .map_err(failed)?;
-                }
-                self.workspace
-                    .set_chat_archived(&chat_id, archived)
-                    .map_err(failed)?;
-                if native_codex {
-                    self.task_identity
-                        .reconcile_task(&chat_id, self.sessions.has_live_run(&chat_id))
-                        .await
-                        .map_err(failed)?;
-                }
-                Ok(())
-            }
-            MutateParams::SetChatConfig { chat_id, config } => self
-                .workspace
-                .set_chat_config(&chat_id, &config)
-                .map_err(failed)
-                .map(drop),
-            MutateParams::SetThreadPermissionMode {
-                chat_id,
-                mode,
-                actor,
-            } => self
-                .sessions
-                .set_permission_mode(&chat_id, mode, actor)
-                .await
-                .map_err(failed),
-            MutateParams::SetThreadProviderAccount {
-                chat_id,
-                account_id,
-            } => self
-                .sessions
-                .set_provider_account(&chat_id, &account_id)
-                .await
-                .map_err(failed),
-            MutateParams::DeleteChat { chat_id } => {
-                self.workspace.delete_chat(&chat_id).map_err(failed)?;
-                self.task_identity
-                    .tombstone_task(&chat_id)
-                    .map_err(failed)?;
-                self.doc_host.purge_chat(&chat_id);
-                Ok(())
-            }
             MutateParams::RenameDevice { device_id, name } => self
                 .workspace
                 .rename_device(&device_id, &name)
                 .map_err(failed)
                 .map(drop),
-            MutateParams::MarkChatSeen { chat_id, at } => {
+            _ => Err(RpcError::BadParams(
+                "task mutations must use ExecuteTaskCommand".into(),
+            )),
+        }
+    }
+
+    fn current_task_command_snapshot(
+        &self,
+        task_id: &str,
+    ) -> Result<TaskCommandSnapshot, RpcError> {
+        let mut snapshot = self
+            .doc_host
+            .read_task_commands(task_id, None)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .snapshot;
+        if let Some(binding) = self
+            .task_identity
+            .view(task_id)
+            .and_then(|view| view.current_binding)
+        {
+            snapshot.binding_id = Some(binding.binding_id);
+            snapshot.binding_generation = Some(binding.generation);
+        }
+        snapshot.active_turn_id = self.sessions.active_turn_id(task_id);
+        Ok(snapshot)
+    }
+
+    async fn execute_task_command(
+        &self,
+        mut command: TaskCommandParams,
+        legacy: bool,
+    ) -> Result<CommandReceipt, RpcError> {
+        let _lane = self.doc_host.task_command_gate(&command.task_id).await;
+        let current = self.current_task_command_snapshot(&command.task_id)?;
+        if legacy {
+            if command.intent.requires_revision() {
+                command.expected_task_revision = Some(current.task_revision);
+            }
+            command.expected_binding_generation = current.binding_generation;
+            if command.intent.requires_turn()
+                || (matches!(&command.intent, TaskCommandIntent::SendQueuedNow { .. })
+                    && current.active_turn_id.is_some())
+            {
+                command.expected_turn_id = current.active_turn_id.clone();
+            }
+        }
+        let payload_hash = canonical_payload_hash(&command.intent)
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let now = crate::now_ms();
+        let pending = CommandReceipt {
+            command_id: command.command_id.clone(),
+            task_id: command.task_id.clone(),
+            intent: command.intent.name().into(),
+            payload_hash,
+            status: CommandReceiptStatus::Pending,
+            snapshot: current.clone(),
+            event_sequence: None,
+            actor_id: command.actor_id.clone(),
+            client_id: command.client_id.clone(),
+            client_session_id: command.client_session_id.clone(),
+            execution_environment: Some(self.engine_info.device_id.clone()),
+            correlation_id: None,
+            reason: None,
+            recovery_action: None,
+            accepted_at_ms: command.issued_at_ms.min(now),
+            committed_at_ms: None,
+            observed_at_ms: now,
+        };
+        let begin = self
+            .doc_host
+            .begin_task_command(
+                pending,
+                command.expected_task_revision,
+                command.expected_binding_generation,
+                command.expected_turn_id.as_deref(),
+            )
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        match begin.kind {
+            zeron_sync::TaskCommandBeginKind::Duplicate => return Ok(begin.receipt),
+            zeron_sync::TaskCommandBeginKind::Conflict => {
+                self.doc_host.publish_task_receipt(begin.receipt.clone());
+                return Ok(begin.receipt);
+            }
+            zeron_sync::TaskCommandBeginKind::Accepted => {
+                self.doc_host.publish_task_receipt(begin.receipt.clone());
+            }
+        }
+
+        let needs_turn_fence = command.intent.requires_turn()
+            || (matches!(&command.intent, TaskCommandIntent::SendQueuedNow { .. })
+                && current.active_turn_id.is_some());
+        let missing_fence = if !legacy
+            && command.intent.requires_revision()
+            && command.expected_task_revision.is_none()
+        {
+            Some("this mutation requires expectedTaskRevision")
+        } else if !legacy && needs_turn_fence && command.expected_turn_id.is_none() {
+            Some("this control requires expectedTurnId")
+        } else if !legacy
+            && command.intent.requires_binding_fence()
+            && current.binding_generation.is_some()
+            && command.expected_binding_generation.is_none()
+        {
+            Some("this provider-bound task requires expectedBindingGeneration")
+        } else {
+            None
+        };
+        if let Some(message) = missing_fence {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Conflict,
+                false,
+                CommandReasonCode::UnsupportedOperation,
+                message,
+                "Reload the task command snapshot and retry with a new command id.",
+            );
+        }
+        if command.intent.conflicts_with_active_turn()
+            && self.sessions.active_turn_id(&command.task_id).is_some()
+        {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Conflict,
+                false,
+                CommandReasonCode::ActiveTurnConflict,
+                "the task has an active turn",
+                "Stop the expected active turn, wait for settlement, then retry with a new command id.",
+            );
+        }
+        let revalidated = self.current_task_command_snapshot(&command.task_id)?;
+        if command.expected_binding_generation.is_some()
+            && command.expected_binding_generation != revalidated.binding_generation
+        {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Conflict,
+                false,
+                CommandReasonCode::StaleBindingGeneration,
+                "the provider binding changed after command acceptance",
+                "Reload task identity; do not replay this command against the replacement binding.",
+            );
+        }
+        if command.expected_turn_id.is_some()
+            && command.expected_turn_id != revalidated.active_turn_id
+        {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Conflict,
+                false,
+                CommandReasonCode::StaleTurn,
+                "the active turn changed after command acceptance",
+                "Reload active task state; do not replay this control against the replacement turn.",
+            );
+        }
+
+        if let TaskCommandIntent::Session {
+            command: mut payload,
+            transfers,
+        } = command.intent
+        {
+            if let SessionCommandPayload::Steer { message_id, .. } = &mut payload
+                && message_id.is_none()
+            {
+                *message_id = Some(command.command_id.clone());
+            }
+            let correlation = match &payload {
+                SessionCommandPayload::Run { message_id, .. } => Some(message_id.as_str()),
+                SessionCommandPayload::Steer {
+                    message_id: Some(message_id),
+                    ..
+                } => Some(message_id.as_str()),
+                _ => None,
+            };
+            if let Some(correlation) = correlation {
+                self.doc_host
+                    .set_task_command_correlation(&command.command_id, correlation)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+            }
+            if let Err(error) = self.doc_host.queue_command_with_id_and_transfers(
+                &command.task_id,
+                &command.command_id,
+                payload,
+                transfers,
+            ) {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Failed,
+                    false,
+                    CommandReasonCode::OperationFailed,
+                    &error.to_string(),
+                    "Fix the local validation or storage failure and retry with a new command id.",
+                );
+            }
+            // The durable session-doc executor owns finalization. It may have
+            // completed before this read; otherwise the honest result is pending.
+            return self
+                .doc_host
+                .task_command_receipt(&command.command_id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .ok_or_else(|| RpcError::Failed("task command receipt vanished".into()));
+        }
+
+        let provider_effect = self
+            .task_identity
+            .has_native_codex_binding(&command.task_id)
+            && matches!(
+                command.intent,
+                TaskCommandIntent::Rename { .. } | TaskCommandIntent::SetArchived { .. }
+            );
+        let provider_correlation = match &command.intent {
+            TaskCommandIntent::SendQueuedNow { message_id }
+            | TaskCommandIntent::SteerQueuedNow { message_id } => Some(message_id.clone()),
+            _ => None,
+        };
+        if let Some(correlation) = provider_correlation.as_deref() {
+            self.doc_host
+                .set_task_command_correlation(&command.command_id, correlation)
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+        }
+        let outcome = self
+            .apply_task_command_intent(&command.task_id, command.intent)
+            .await;
+        if let Err(error) = outcome {
+            if provider_effect {
+                return self
+                    .doc_host
+                    .mark_task_command_unknown(
+                        &command.command_id,
+                        &format!(
+                            "provider mutation returned without a provable final state: {error}"
+                        ),
+                    )
+                    .map_err(|store| RpcError::Failed(store.to_string()))?
+                    .ok_or_else(|| RpcError::Failed("task command receipt vanished".into()));
+            }
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Failed,
+                false,
+                CommandReasonCode::OperationFailed,
+                &error.to_string(),
+                "Review the current task state and retry with a new command id if still needed.",
+            );
+        }
+        if provider_correlation.is_some() {
+            return self
+                .doc_host
+                .task_command_receipt(&command.command_id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .ok_or_else(|| RpcError::Failed("task command receipt vanished".into()));
+        }
+        self.finish_task_command(
+            &command.command_id,
+            CommandReceiptStatus::Applied,
+            true,
+            CommandReasonCode::OperationFailed,
+            "",
+            "",
+        )
+    }
+
+    fn finish_task_command(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        reason_code: CommandReasonCode,
+        message: &str,
+        recovery: &str,
+    ) -> Result<CommandReceipt, RpcError> {
+        let prior = self
+            .doc_host
+            .task_command_receipt(command_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .ok_or_else(|| RpcError::Failed("task command receipt vanished".into()))?;
+        let current = self.current_task_command_snapshot(&prior.task_id)?;
+        let reason = (!message.is_empty()).then(|| CommandReceiptReason {
+            code: reason_code,
+            message: message.into(),
+        });
+        self.doc_host
+            .complete_task_command(
+                command_id,
+                status,
+                applied,
+                current.binding_id.as_deref(),
+                current.binding_generation,
+                current.active_turn_id.as_deref(),
+                reason,
+                (!recovery.is_empty()).then_some(recovery),
+            )
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .ok_or_else(|| RpcError::Failed("task command receipt vanished".into()))
+    }
+
+    async fn apply_task_command_intent(
+        &self,
+        task_id: &str,
+        intent: TaskCommandIntent,
+    ) -> Result<(), crate::EngineError> {
+        match intent {
+            TaskCommandIntent::CreateChat {
+                space_id,
+                device_id,
+                config,
+                branch,
+                cwd,
+                lineage,
+            } => {
+                self.task_identity.register_new_task(
+                    task_id,
+                    space_id.as_deref(),
+                    device_id.as_deref(),
+                    cwd.as_deref(),
+                    lineage,
+                )?;
+                self.workspace.create_chat(
+                    task_id,
+                    space_id.as_deref(),
+                    device_id.as_deref(),
+                    config,
+                    cwd,
+                )?;
+                if let Some(branch) = branch.as_deref().filter(|branch| !branch.is_empty()) {
+                    self.workspace.set_chat_branch(task_id, branch)?;
+                }
+                Ok(())
+            }
+            TaskCommandIntent::Rename { title } => {
+                let native = self.task_identity.has_native_codex_binding(task_id);
+                if native {
+                    self.task_identity
+                        .reconcile_task(task_id, self.sessions.has_live_run(task_id))
+                        .await?;
+                    self.task_identity
+                        .set_provider_name(task_id, &title)
+                        .await?;
+                }
+                self.workspace.rename_chat(task_id, &title)?;
+                if native {
+                    self.task_identity
+                        .reconcile_task(task_id, self.sessions.has_live_run(task_id))
+                        .await?;
+                }
+                Ok(())
+            }
+            TaskCommandIntent::SetArchived { archived } => {
+                let native = self.task_identity.has_native_codex_binding(task_id);
+                if native {
+                    self.task_identity
+                        .reconcile_task(task_id, self.sessions.has_live_run(task_id))
+                        .await?;
+                    self.task_identity
+                        .set_provider_archived(task_id, archived)
+                        .await?;
+                }
+                self.workspace.set_chat_archived(task_id, archived)?;
+                if native {
+                    self.task_identity
+                        .reconcile_task(task_id, self.sessions.has_live_run(task_id))
+                        .await?;
+                }
+                Ok(())
+            }
+            TaskCommandIntent::Delete {} => {
+                self.workspace.delete_chat(task_id)?;
+                self.task_identity.tombstone_task(task_id)?;
+                self.doc_host.purge_chat(task_id);
+                Ok(())
+            }
+            TaskCommandIntent::SetBranch { branch } => {
+                self.workspace.set_chat_branch(task_id, &branch).map(drop)
+            }
+            TaskCommandIntent::SetCwd { cwd } => {
+                self.workspace.set_chat_cwd(task_id, &cwd).map(drop)
+            }
+            TaskCommandIntent::SetActivity {
+                last_message_at,
+                created_at,
+            } => self
+                .workspace
+                .set_chat_activity(task_id, last_message_at, created_at)
+                .map(drop),
+            TaskCommandIntent::SetHost { device_id } => {
+                self.workspace.set_chat_host(task_id, &device_id).map(drop)
+            }
+            TaskCommandIntent::SetConfig { config } => {
+                self.workspace.set_chat_config(task_id, &config).map(drop)
+            }
+            TaskCommandIntent::SetPermission { mode, actor } => {
+                self.sessions
+                    .set_permission_mode(task_id, mode, actor)
+                    .await
+            }
+            TaskCommandIntent::SetProviderAccount { account_id } => {
+                self.sessions
+                    .set_provider_account(task_id, &account_id)
+                    .await
+            }
+            TaskCommandIntent::SendQueuedNow { message_id } => {
+                if self.doc_host.send_queued_now(task_id, &message_id).await? {
+                    Ok(())
+                } else {
+                    Err(crate::EngineError::Other(
+                        "queued message was already handled".into(),
+                    ))
+                }
+            }
+            TaskCommandIntent::SteerQueuedNow { message_id } => {
+                if self.doc_host.steer_queued_now(task_id, &message_id).await? {
+                    Ok(())
+                } else {
+                    Err(crate::EngineError::Other(
+                        "queued message was already handled".into(),
+                    ))
+                }
+            }
+            TaskCommandIntent::MarkSeen { at } => {
                 let at = at
                     .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
                     .unwrap_or_else(chrono::Utc::now);
-                self.workspace
-                    .mark_chat_seen(&chat_id, at)
-                    .map_err(failed)
-                    .map(drop)
+                self.workspace.mark_chat_seen(task_id, at).map(drop)
+            }
+            TaskCommandIntent::Session { .. } => unreachable!("session handled by command queue"),
+        }
+    }
+}
+
+fn canonical_payload_hash(intent: &TaskCommandIntent) -> Result<String, serde_json::Error> {
+    fn canonical(value: &serde_json::Value, out: &mut String) {
+        match value {
+            serde_json::Value::Null => out.push_str("null"),
+            serde_json::Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+            serde_json::Value::Number(value) => out.push_str(&value.to_string()),
+            serde_json::Value::String(value) => {
+                out.push_str(&serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into()));
+            }
+            serde_json::Value::Array(values) => {
+                out.push('[');
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    canonical(value, out);
+                }
+                out.push(']');
+            }
+            serde_json::Value::Object(values) => {
+                out.push('{');
+                let sorted = values.iter().collect::<BTreeMap<_, _>>();
+                for (index, (key, value)) in sorted.into_iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into()));
+                    out.push(':');
+                    canonical(value, out);
+                }
+                out.push('}');
             }
         }
     }
+    let value = serde_json::to_value(intent)?;
+    let mut encoded = String::new();
+    canonical(&value, &mut encoded);
+    let digest = Sha256::digest(encoded.as_bytes());
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// An RPC rejection is scoped to the requested capability. Only a broken
 /// transport means the shared device link itself cannot carry other calls.
 fn should_invalidate_link(error: &RpcError) -> bool {
     matches!(error, RpcError::Closed | RpcError::Transport(_))
+}
+
+fn legacy_task_command(task_id: String, intent: TaskCommandIntent) -> TaskCommandParams {
+    TaskCommandParams {
+        command_id: crate::new_id(),
+        actor_id: "legacy-local-user".into(),
+        client_id: "legacy-local-rpc".into(),
+        client_session_id: "legacy".into(),
+        task_id,
+        expected_task_revision: None,
+        expected_binding_generation: None,
+        expected_turn_id: None,
+        issued_at_ms: crate::now_ms(),
+        intent,
+    }
+}
+
+fn task_intent_from_mutation(mutation: MutateParams) -> Option<(String, TaskCommandIntent)> {
+    Some(match mutation {
+        MutateParams::CreateChat {
+            chat_id,
+            space_id,
+            device_id,
+            config,
+            branch,
+            cwd,
+            lineage,
+        } => (
+            chat_id,
+            TaskCommandIntent::CreateChat {
+                space_id,
+                device_id,
+                config,
+                branch,
+                cwd,
+                lineage,
+            },
+        ),
+        MutateParams::RenameChat { chat_id, title } => {
+            (chat_id, TaskCommandIntent::Rename { title })
+        }
+        MutateParams::SetChatBranch { chat_id, branch } => {
+            (chat_id, TaskCommandIntent::SetBranch { branch })
+        }
+        MutateParams::SetChatCwd { chat_id, cwd } => (chat_id, TaskCommandIntent::SetCwd { cwd }),
+        MutateParams::SetChatActivity {
+            chat_id,
+            last_message_at,
+            created_at,
+        } => (
+            chat_id,
+            TaskCommandIntent::SetActivity {
+                last_message_at,
+                created_at,
+            },
+        ),
+        MutateParams::SetChatHost { chat_id, device_id } => {
+            (chat_id, TaskCommandIntent::SetHost { device_id })
+        }
+        MutateParams::SetChatArchived { chat_id, archived } => {
+            (chat_id, TaskCommandIntent::SetArchived { archived })
+        }
+        MutateParams::SetChatConfig { chat_id, config } => {
+            (chat_id, TaskCommandIntent::SetConfig { config })
+        }
+        MutateParams::SetThreadPermissionMode {
+            chat_id,
+            mode,
+            actor,
+        } => (chat_id, TaskCommandIntent::SetPermission { mode, actor }),
+        MutateParams::SetThreadProviderAccount {
+            chat_id,
+            account_id,
+        } => (
+            chat_id,
+            TaskCommandIntent::SetProviderAccount { account_id },
+        ),
+        MutateParams::DeleteChat { chat_id } => (chat_id, TaskCommandIntent::Delete {}),
+        MutateParams::MarkChatSeen { chat_id, at } => (chat_id, TaskCommandIntent::MarkSeen { at }),
+        MutateParams::CreateSpace { .. }
+        | MutateParams::RenameSpace { .. }
+        | MutateParams::DeleteSpace { .. }
+        | MutateParams::RenameDevice { .. } => return None,
+    })
 }
 
 /// Reply deadline for a relay-forwarded unary call. The relay is WebSocket
@@ -1459,6 +2065,75 @@ impl RpcService for EngineRpc {
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&view)
             }
+            methods::EXECUTE_TASK_COMMAND => {
+                let command: TaskCommandParams = parse_params(params)?;
+                let receipt = self.execute_task_command(command, false).await?;
+                RpcReply::value(&receipt)
+            }
+            methods::GET_TASK_COMMAND_RECEIPT => {
+                let p: TaskCommandReceiptParams = parse_params(params)?;
+                RpcReply::value(
+                    &self
+                        .doc_host
+                        .task_command_receipt(&p.command_id)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?,
+                )
+            }
+            methods::GET_TASK_COMMAND_SNAPSHOT => {
+                let p: TaskCommandSnapshotParams = parse_params(params)?;
+                let mut read = self
+                    .doc_host
+                    .read_task_commands(&p.task_id, p.after_task_sequence)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let current = self.current_task_command_snapshot(&p.task_id)?;
+                read.snapshot.binding_id = current.binding_id;
+                read.snapshot.binding_generation = current.binding_generation;
+                read.snapshot.active_turn_id = current.active_turn_id;
+                RpcReply::value(&read)
+            }
+            methods::WATCH_TASK_COMMANDS => {
+                let p: TaskCommandSnapshotParams = parse_params(params)?;
+                let mut read = self
+                    .doc_host
+                    .read_task_commands(&p.task_id, p.after_task_sequence)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let current = self.current_task_command_snapshot(&p.task_id)?;
+                read.snapshot.binding_id = current.binding_id;
+                read.snapshot.binding_generation = current.binding_generation;
+                read.snapshot.active_turn_id = current.active_turn_id;
+                let rx = self.doc_host.subscribe_task_receipts();
+                let task_id = p.task_id;
+                Ok(RpcReply::Stream(
+                    futures::stream::unfold((Some(read), rx), move |(initial, mut rx)| {
+                        let task_id = task_id.clone();
+                        async move {
+                            if let Some(read) = initial {
+                                return Some((
+                                    serde_json::json!({ "kind": "snapshot", "read": read }),
+                                    (None, rx),
+                                ));
+                            }
+                            loop {
+                                match rx.recv().await {
+                                    Ok(receipt) if receipt.task_id == task_id => {
+                                        let value = serde_json::json!({
+                                            "kind": "receipt",
+                                            "receipt": receipt,
+                                        });
+                                        return Some((value, (None, rx)));
+                                    }
+                                    Ok(_)
+                                    | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                        return None;
+                                    }
+                                }
+                            }
+                        }
+                    })
+                    .boxed(),
+                ))
+            }
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {
@@ -1527,11 +2202,18 @@ impl RpcService for EngineRpc {
             }
             methods::QUEUE_COMMAND => {
                 let p: QueueCommandParams = parse_params(params)?;
-                let command_id = self
-                    .doc_host
-                    .queue_command_with_transfers(&p.chat_id, p.command, p.transfers)
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(&serde_json::json!({ "commandId": command_id }))
+                let command = legacy_task_command(
+                    p.chat_id,
+                    TaskCommandIntent::Session {
+                        command: p.command,
+                        transfers: p.transfers,
+                    },
+                );
+                let receipt = self.execute_task_command(command, true).await?;
+                RpcReply::value(&serde_json::json!({
+                    "commandId": receipt.command_id,
+                    "receipt": receipt,
+                }))
             }
             methods::RETRY_DELIVERY => {
                 let p: ChatParams = parse_params(params)?;
@@ -1694,21 +2376,35 @@ impl RpcService for EngineRpc {
             }
             methods::SEND_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;
-                let sent = self
-                    .doc_host
-                    .send_queued_now(&p.chat_id, &p.id)
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(&serde_json::json!({ "sent": sent }))
+                let receipt = self
+                    .execute_task_command(
+                        legacy_task_command(
+                            p.chat_id,
+                            TaskCommandIntent::SendQueuedNow { message_id: p.id },
+                        ),
+                        true,
+                    )
+                    .await?;
+                RpcReply::value(&serde_json::json!({
+                    "sent": matches!(receipt.status, CommandReceiptStatus::Pending | CommandReceiptStatus::Applied),
+                    "receipt": receipt,
+                }))
             }
             methods::STEER_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;
-                let sent = self
-                    .doc_host
-                    .steer_queued_now(&p.chat_id, &p.id)
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(&serde_json::json!({ "sent": sent }))
+                let receipt = self
+                    .execute_task_command(
+                        legacy_task_command(
+                            p.chat_id,
+                            TaskCommandIntent::SteerQueuedNow { message_id: p.id },
+                        ),
+                        true,
+                    )
+                    .await?;
+                RpcReply::value(&serde_json::json!({
+                    "sent": matches!(receipt.status, CommandReceiptStatus::Pending | CommandReceiptStatus::Applied),
+                    "receipt": receipt,
+                }))
             }
             methods::PROBE_SYNC => {
                 // Focus probes remain cheap. An explicit Retry may also allow
@@ -1907,9 +2603,21 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&serde_json::json!({ "ok": true, "version": version }))
             }
             methods::MUTATE => {
-                let p: MutateParams = parse_params(params)?;
-                self.mutate(p).await?;
-                RpcReply::value(&serde_json::json!({ "ok": true }))
+                let p: MutateParams = parse_params(params.clone())?;
+                match task_intent_from_mutation(p) {
+                    Some((task_id, intent)) => {
+                        let receipt = self
+                            .execute_task_command(legacy_task_command(task_id, intent), true)
+                            .await?;
+                        RpcReply::value(&serde_json::json!({ "ok": true, "receipt": receipt }))
+                    }
+                    None => {
+                        // Non-task project/device mutations remain on their existing
+                        // owner; L07 deliberately does not pretend they are task commands.
+                        self.mutate(parse_params(params)?).await?;
+                        RpcReply::value(&serde_json::json!({ "ok": true }))
+                    }
+                }
             }
             methods::WATCH_CHECKOUT_DIFFS => {
                 Ok(RpcReply::Stream(watch_stream(self.diff_sync.watch_diffs())))
