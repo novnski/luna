@@ -2530,11 +2530,17 @@ impl DocHost {
     /// chat is gone (DeleteChat / DeleteSpace cascade). Watchers see the
     /// stream end; a racing writer keeps its orphaned doc until the run ends.
     pub fn purge_chat(&self, chat_id: &str) {
-        let removed = lock(&self.inner.handles).remove(chat_id);
-        drop(removed);
+        self.evict_chat(chat_id);
         if let Err(err) = self.inner.store.delete_snapshot(chat_id) {
             tracing::warn!(chat = %chat_id, error = %err, "snapshot delete failed");
         }
+    }
+
+    /// Finish an atomic task-command delete after its local snapshot/outbox
+    /// rows were removed in the receipt transaction.
+    pub(crate) fn evict_chat(&self, chat_id: &str) {
+        let removed = lock(&self.inner.handles).remove(chat_id);
+        drop(removed);
     }
 
     /// Composer path: append an immutable pending command entry (rule 1). Durable by

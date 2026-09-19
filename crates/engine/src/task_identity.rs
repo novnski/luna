@@ -22,7 +22,7 @@ use zeron_proto::{
 };
 use zeron_sync::DocsStore;
 
-use crate::workspace_host::WorkspaceHost;
+use crate::workspace_host::{TaskProjectionError, WorkspaceHost};
 use crate::{EngineError, new_id, now_ms};
 
 const TASK_IDENTITY_LOG_ID: &str = "luna-task-identity-events-v1";
@@ -484,6 +484,81 @@ impl TaskIdentityService {
             TaskIdentityEvent::TaskRegistered { task },
         ])?;
         Ok(true)
+    }
+
+    /// L07 lifecycle boundary for create: stage the identity log in memory,
+    /// let the caller commit it with registry/receipt state, and expose the
+    /// new identity projection only after that transaction succeeds.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_new_task_with_command<R>(
+        &self,
+        task_id: &str,
+        space_id: Option<&str>,
+        device_id: Option<&str>,
+        cwd: Option<&str>,
+        lineage: TaskLineage,
+        commit: impl FnOnce(Option<(&str, &[u8])>) -> Result<R, TaskProjectionError>,
+    ) -> Result<R, TaskProjectionError> {
+        if uuid::Uuid::parse_str(task_id).is_err() {
+            return commit(None);
+        }
+        if let Some(existing) = self.view(task_id) {
+            if existing.task.tombstoned {
+                return Err(TaskProjectionError::Mutation(EngineError::Other(format!(
+                    "task {task_id} is tombstoned and cannot be recreated"
+                ))));
+            }
+            if existing.task.lineage != lineage {
+                return Err(TaskProjectionError::Mutation(EngineError::Other(format!(
+                    "task {task_id} already has different lineage"
+                ))));
+            }
+            return commit(None);
+        }
+        let workspace = self
+            .workspace_for_target(space_id, device_id, cwd)
+            .map_err(TaskProjectionError::Mutation)?;
+        let task = LunaTaskIdentity {
+            schema_version: TASK_IDENTITY_SCHEMA_VERSION,
+            task_id: task_id.to_string(),
+            origin: TaskOrigin::LunaCreated,
+            lineage,
+            workspace_id: workspace.workspace_id.clone(),
+            current_binding_id: None,
+            external_import_key: None,
+            tombstoned: false,
+            created_at_ms: now_ms(),
+        };
+        self.commit_events_with_task_command(
+            vec![
+                TaskIdentityEvent::WorkspaceObserved { workspace },
+                TaskIdentityEvent::TaskRegistered { task },
+            ],
+            commit,
+        )
+    }
+
+    /// L07 lifecycle boundary for delete. This never deletes provider-private
+    /// data; it only stages the LUNA-owned identity tombstone.
+    pub(crate) fn tombstone_task_with_command<R>(
+        &self,
+        task_id: &str,
+        commit: impl FnOnce(Option<(&str, &[u8])>) -> Result<R, TaskProjectionError>,
+    ) -> Result<R, TaskProjectionError> {
+        let Some(view) = self.view(task_id) else {
+            return commit(None);
+        };
+        if view.task.tombstoned {
+            return commit(None);
+        }
+        self.commit_events_with_task_command(
+            vec![TaskIdentityEvent::TaskTombstoned {
+                task_id: task_id.to_string(),
+                external_import_key: view.task.external_import_key,
+                at_ms: now_ms(),
+            }],
+            commit,
+        )
     }
 
     pub fn record_session_binding(
@@ -1590,6 +1665,31 @@ impl TaskIdentityService {
         state.log = log;
         state.projection = projection;
         Ok(())
+    }
+
+    fn commit_events_with_task_command<R>(
+        &self,
+        events: Vec<TaskIdentityEvent>,
+        commit: impl FnOnce(Option<(&str, &[u8])>) -> Result<R, TaskProjectionError>,
+    ) -> Result<R, TaskProjectionError> {
+        let mut state = lock(&self.inner.state);
+        let mut projection = state.projection.clone();
+        for event in &events {
+            projection
+                .apply(event)
+                .map_err(TaskProjectionError::Mutation)?;
+        }
+        let mut log = state.log.clone();
+        log.events.extend(events);
+        let bytes = serde_json::to_vec(&log).map_err(|error| {
+            TaskProjectionError::Mutation(EngineError::Other(format!(
+                "task identity log encode failed: {error}"
+            )))
+        })?;
+        let result = commit(Some((TASK_IDENTITY_LOG_ID, &bytes)))?;
+        state.log = log;
+        state.projection = projection;
+        Ok(result)
     }
 
     fn workspace_for_target(

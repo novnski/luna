@@ -563,7 +563,7 @@ impl DocsStore {
     /// transaction. Callers publish the in-memory projection only after this
     /// returns successfully.
     #[allow(clippy::too_many_arguments)]
-    pub fn complete_task_command_with_snapshot(
+    pub fn complete_task_command_with_snapshot_changes(
         &self,
         command_id: &str,
         status: CommandReceiptStatus,
@@ -573,8 +573,8 @@ impl DocsStore {
         active_turn_id: Option<&str>,
         reason: Option<CommandReceiptReason>,
         recovery_action: Option<&str>,
-        doc_id: &str,
-        snapshot_bytes: &[u8],
+        snapshots: &[(&str, &[u8])],
+        deleted_snapshots: &[&str],
     ) -> Result<Option<CommandReceipt>, StoreError> {
         self.complete_task_command_inner(
             command_id,
@@ -585,7 +585,7 @@ impl DocsStore {
             active_turn_id,
             reason,
             recovery_action,
-            Some((doc_id, snapshot_bytes)),
+            Some((snapshots, deleted_snapshots)),
         )
     }
 
@@ -600,7 +600,7 @@ impl DocsStore {
         active_turn_id: Option<&str>,
         reason: Option<CommandReceiptReason>,
         recovery_action: Option<&str>,
-        snapshot: Option<(&str, &[u8])>,
+        snapshot_changes: Option<(&[(&str, &[u8])], &[&str])>,
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -629,13 +629,23 @@ impl DocsStore {
         receipt.committed_at_ms = Some(now_ms());
         receipt.observed_at_ms = now_ms();
         let receipt = commit_task_command_tx(&tx, receipt, applied)?;
-        if let Some((doc_id, bytes)) = snapshot {
-            tx.execute(
-                "INSERT INTO snapshots (doc_id, bytes, saved_at) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(doc_id) DO UPDATE SET bytes=excluded.bytes,saved_at=excluded.saved_at",
-                params![doc_id, bytes, now_ms()],
-            )?;
-            self.invalidate_failed_publication(&tx, doc_id)?;
+        if let Some((snapshots, deleted_snapshots)) = snapshot_changes {
+            for (doc_id, bytes) in snapshots {
+                tx.execute(
+                    "INSERT INTO snapshots (doc_id, bytes, saved_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(doc_id) DO UPDATE SET bytes=excluded.bytes,saved_at=excluded.saved_at",
+                    params![doc_id, bytes, now_ms()],
+                )?;
+                self.invalidate_failed_publication(&tx, doc_id)?;
+            }
+            for doc_id in deleted_snapshots {
+                tx.execute("DELETE FROM snapshots WHERE doc_id=?1", params![doc_id])?;
+                tx.execute("DELETE FROM chat_outbox WHERE doc_id=?1", params![doc_id])?;
+                tx.execute(
+                    "DELETE FROM chat_outbox_initialized WHERE doc_id=?1",
+                    params![doc_id],
+                )?;
+            }
         }
         tx.commit()?;
         Ok(Some(receipt))

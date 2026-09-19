@@ -640,6 +640,30 @@ impl WorkspaceHost {
         active_turn_id: Option<&str>,
         mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
     ) -> Result<(R, CommandReceipt), TaskProjectionError> {
+        self.commit_task_command_projection_with_changes(
+            command_id,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            None,
+            None,
+            mutation,
+        )
+    }
+
+    /// The lifecycle form additionally commits the task-identity snapshot and
+    /// optional local chat-doc purge in the same transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_task_command_projection_with_changes<R>(
+        &self,
+        command_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        identity_snapshot: Option<(&str, &[u8])>,
+        deleted_chat_snapshot: Option<&str>,
+        mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
+    ) -> Result<(R, CommandReceipt), TaskProjectionError> {
         let mut reg = lock(&self.inner.reg);
         let before = reg.to_bytes().map_err(|error| {
             TaskProjectionError::Commit(EngineError::Other(format!(
@@ -674,18 +698,26 @@ impl WorkspaceHost {
                 ))));
             }
         };
-        let receipt = match self.inner.store.complete_task_command_with_snapshot(
-            command_id,
-            CommandReceiptStatus::Applied,
-            true,
-            binding_id,
-            binding_generation,
-            active_turn_id,
-            None::<CommandReceiptReason>,
-            None,
-            REGISTRY_DOC_ID,
-            &after,
-        ) {
+        let mut snapshots = vec![(REGISTRY_DOC_ID, after.as_slice())];
+        if let Some(snapshot) = identity_snapshot {
+            snapshots.push(snapshot);
+        }
+        let deleted_snapshots = deleted_chat_snapshot.into_iter().collect::<Vec<_>>();
+        let receipt = match self
+            .inner
+            .store
+            .complete_task_command_with_snapshot_changes(
+                command_id,
+                CommandReceiptStatus::Applied,
+                true,
+                binding_id,
+                binding_generation,
+                active_turn_id,
+                None::<CommandReceiptReason>,
+                None,
+                &snapshots,
+                &deleted_snapshots,
+            ) {
             Ok(Some(receipt)) => receipt,
             Ok(None) => {
                 *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
@@ -711,11 +743,16 @@ impl WorkspaceHost {
             }
         };
         drop(reg);
+        Ok((result, receipt))
+    }
+
+    /// Publish a task projection only after every durable lifecycle projection
+    /// and required local cleanup has completed.
+    pub(crate) fn publish_task_command_projection(&self) {
         self.inner.bump_changed();
         if let Some(room) = lock(&self.inner.room).as_ref() {
             room.nudge();
         }
-        Ok((result, receipt))
     }
 
     fn read<R>(&self, f: impl FnOnce(&RegistryDoc) -> R) -> R {

@@ -213,6 +213,181 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
     assert_eq!(receipt.status, CommandReceiptStatus::Applied);
 }
 
+fn snapshot_row_exists(db_path: &std::path::Path, doc_id: &str) -> bool {
+    rusqlite::Connection::open(db_path)
+        .unwrap()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM snapshots WHERE doc_id=?1)",
+            [doc_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let initial = snapshot(&client, &task_id).await;
+    let create = envelope(
+        "atomic-create-lifecycle",
+        &task_id,
+        Some(&initial),
+        serde_json::json!({ "kind": "createChat", "deviceId": core.device_id }),
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_create_lifecycle BEFORE INSERT ON task_command_events
+             WHEN NEW.command_id='atomic-create-lifecycle'
+             BEGIN SELECT RAISE(ABORT, 'forced create lifecycle failure'); END;",
+        )
+        .unwrap();
+    }
+    assert!(
+        client
+            .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, create.clone())
+            .await
+            .is_err()
+    );
+    assert!(core.workspace.chat(&task_id).unwrap().is_none());
+    assert!(
+        core.task_identity.view(&task_id).is_none(),
+        "failed create must not pre-register a task identity"
+    );
+    let create_pending: Option<CommandReceipt> = client
+        .call_as(
+            methods::GET_TASK_COMMAND_RECEIPT,
+            serde_json::json!({ "commandId": "atomic-create-lifecycle" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        create_pending.unwrap().status,
+        CommandReceiptStatus::Pending
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_create_lifecycle")
+            .unwrap();
+    }
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    assert!(core.workspace.chat(&task_id).unwrap().is_none());
+    assert!(core.task_identity.view(&task_id).is_none());
+    let created = execute(&client, create).await;
+    assert_eq!(created.status, CommandReceiptStatus::Applied);
+    assert!(core.workspace.chat(&task_id).unwrap().is_some());
+    assert!(!core.task_identity.view(&task_id).unwrap().task.tombstoned);
+    let handle = core.doc_host.open(&task_id).unwrap();
+    core.doc_host.flush_all();
+    drop(handle);
+    assert!(snapshot_row_exists(&db_path, &task_id));
+
+    let before_delete = snapshot(&client, &task_id).await;
+    let delete = envelope(
+        "atomic-delete-lifecycle",
+        &task_id,
+        Some(&before_delete),
+        serde_json::json!({ "kind": "delete" }),
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_delete_lifecycle BEFORE INSERT ON task_command_events
+             WHEN NEW.command_id='atomic-delete-lifecycle'
+             BEGIN SELECT RAISE(ABORT, 'forced delete lifecycle failure'); END;",
+        )
+        .unwrap();
+    }
+    assert!(
+        client
+            .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, delete.clone())
+            .await
+            .is_err()
+    );
+    assert!(core.workspace.chat(&task_id).unwrap().is_some());
+    assert!(
+        !core.task_identity.view(&task_id).unwrap().task.tombstoned,
+        "failed delete must not tombstone a surviving task"
+    );
+    assert!(snapshot_row_exists(&db_path, &task_id));
+    let failed_delete_read = snapshot(&client, &task_id).await;
+    assert_eq!(
+        failed_delete_read.snapshot.task_revision,
+        before_delete.snapshot.task_revision
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_delete_lifecycle")
+            .unwrap();
+    }
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    assert!(core.workspace.chat(&task_id).unwrap().is_some());
+    assert!(!core.task_identity.view(&task_id).unwrap().task.tombstoned);
+    assert!(snapshot_row_exists(&db_path, &task_id));
+    let deleted = execute(&client, delete).await;
+    assert_eq!(deleted.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        deleted.snapshot.task_revision,
+        before_delete.snapshot.task_revision + 1
+    );
+    assert!(deleted.snapshot.binding_id.is_none());
+    assert!(deleted.snapshot.binding_generation.is_none());
+    assert!(core.workspace.chat(&task_id).unwrap().is_none());
+    assert!(core.task_identity.view(&task_id).unwrap().task.tombstoned);
+    assert!(
+        !snapshot_row_exists(&db_path, &task_id),
+        "local chat snapshot cleanup commits before the applied receipt returns"
+    );
+
+    // A process loss after the durable commit has no remaining persistent
+    // cleanup step to strand: registry, identity, chat doc, and receipt agree.
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+    let final_core = assemble(root.path(), runs, false);
+    let final_client = zeron_rpc::memory_client(final_core.rpc_service());
+    assert!(final_core.workspace.chat(&task_id).unwrap().is_none());
+    assert!(
+        final_core
+            .task_identity
+            .view(&task_id)
+            .unwrap()
+            .task
+            .tombstoned
+    );
+    assert!(!snapshot_row_exists(&db_path, &task_id));
+    let final_receipt: Option<CommandReceipt> = final_client
+        .call_as(
+            methods::GET_TASK_COMMAND_RECEIPT,
+            serde_json::json!({ "commandId": "atomic-delete-lifecycle" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(final_receipt.unwrap(), deleted);
+    let final_read = snapshot(&final_client, &task_id).await;
+    assert_eq!(
+        final_read.snapshot.task_revision,
+        deleted.snapshot.task_revision
+    );
+    assert!(final_read.snapshot.binding_id.is_none());
+    final_core.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_projection_rolls_back_with_terminal_receipt_failure_and_recovers_after_reopen() {
     let root = tempfile::tempdir().unwrap();

@@ -1373,7 +1373,11 @@ impl EngineRpc {
                 .map_err(|error| RpcError::Failed(error.to_string()))?
                 .ok_or_else(|| RpcError::Failed("task command receipt vanished".into()));
         }
-        outcome.ok_or_else(|| RpcError::Failed("task command did not produce a receipt".into()))
+        let receipt = outcome
+            .ok_or_else(|| RpcError::Failed("task command did not produce a receipt".into()))?;
+        self.workspace.publish_task_command_projection();
+        self.doc_host.publish_task_receipt(receipt.clone());
+        Ok(receipt)
     }
 
     fn finish_task_command(
@@ -1440,8 +1444,27 @@ impl EngineRpc {
             current.active_turn_id.as_deref(),
             mutation,
         )?;
-        self.doc_host.publish_task_receipt(committed.1.clone());
         Ok(committed)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn commit_task_projection_with_changes<R>(
+        &self,
+        command_id: &str,
+        current: &TaskCommandSnapshot,
+        identity_snapshot: Option<(&str, &[u8])>,
+        deleted_chat_snapshot: Option<&str>,
+        mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, crate::EngineError>,
+    ) -> Result<(R, CommandReceipt), TaskProjectionError> {
+        self.workspace.commit_task_command_projection_with_changes(
+            command_id,
+            current.binding_id.as_deref(),
+            current.binding_generation,
+            current.active_turn_id.as_deref(),
+            identity_snapshot,
+            deleted_chat_snapshot,
+            mutation,
+        )
     }
 
     async fn apply_task_command_intent(
@@ -1459,66 +1482,84 @@ impl EngineRpc {
                 cwd,
                 lineage,
             } => {
-                self.task_identity
-                    .register_new_task(
-                        task_id,
-                        space_id.as_deref(),
-                        device_id.as_deref(),
-                        cwd.as_deref(),
-                        lineage,
-                    )
-                    .map_err(TaskProjectionError::Mutation)?;
+                let identity_space_id = space_id.clone();
+                let identity_device_id = device_id.clone();
+                let identity_cwd = cwd.clone();
                 let owned_task_id = task_id.to_string();
-                let (_, receipt) =
-                    self.commit_task_projection(command_id, task_id, move |doc| {
-                        if doc.chat(&owned_task_id)?.is_some() {
-                            return Ok(());
-                        }
-                        let space = match space_id.as_deref() {
-                            Some(space_id) => Some(doc.space(space_id)?.ok_or_else(|| {
-                                crate::EngineError::Other(format!("no such space: {space_id}"))
-                            })?),
-                            None => None,
-                        };
-                        let host_device = match (&space, device_id.as_deref()) {
-                            (Some(space), _) => space.device_id.clone(),
-                            (None, Some(device_id)) => device_id.to_string(),
-                            (None, None) => {
-                                return Err(crate::EngineError::Other(
-                                    "createChat needs a spaceId or a deviceId".into(),
-                                ));
-                            }
-                        };
-                        doc.upsert_chat(&Chat {
-                            id: owned_task_id.clone(),
-                            device_id: host_device,
-                            title: None,
-                            archived: false,
-                            cwd: Some(cwd.unwrap_or_else(|| {
-                                space
-                                    .as_ref()
-                                    .map(|space| space.path.clone())
-                                    .unwrap_or_else(|| "~".into())
-                            })),
-                            branch: None,
-                            checkout_id: None,
-                            source_context: None,
-                            config,
-                            last_message_preview: None,
-                            last_message_at: None,
-                            created_at: chrono::Utc::now(),
-                            harness_session_id: None,
-                            room_gen: Some(2),
-                            harness_session_cwd: None,
-                            space_id: space.as_ref().map(|space| space.id.clone()),
-                            last_seen_at: None,
-                        })?;
-                        if let Some(branch) = branch.as_deref().filter(|branch| !branch.is_empty())
-                        {
-                            doc.set_chat_branch(&owned_task_id, branch)?;
-                        }
-                        Ok(())
+                let current = self
+                    .current_task_command_snapshot(task_id)
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
                     })?;
+                let (_, receipt) = self.task_identity.register_new_task_with_command(
+                    task_id,
+                    identity_space_id.as_deref(),
+                    identity_device_id.as_deref(),
+                    identity_cwd.as_deref(),
+                    lineage,
+                    move |identity_snapshot| {
+                        self.commit_task_projection_with_changes(
+                            command_id,
+                            &current,
+                            identity_snapshot,
+                            None,
+                            move |doc| {
+                                if doc.chat(&owned_task_id)?.is_some() {
+                                    return Ok(());
+                                }
+                                let space = match space_id.as_deref() {
+                                    Some(space_id) => {
+                                        Some(doc.space(space_id)?.ok_or_else(|| {
+                                            crate::EngineError::Other(format!(
+                                                "no such space: {space_id}"
+                                            ))
+                                        })?)
+                                    }
+                                    None => None,
+                                };
+                                let host_device = match (&space, device_id.as_deref()) {
+                                    (Some(space), _) => space.device_id.clone(),
+                                    (None, Some(device_id)) => device_id.to_string(),
+                                    (None, None) => {
+                                        return Err(crate::EngineError::Other(
+                                            "createChat needs a spaceId or a deviceId".into(),
+                                        ));
+                                    }
+                                };
+                                doc.upsert_chat(&Chat {
+                                    id: owned_task_id.clone(),
+                                    device_id: host_device,
+                                    title: None,
+                                    archived: false,
+                                    cwd: Some(cwd.unwrap_or_else(|| {
+                                        space
+                                            .as_ref()
+                                            .map(|space| space.path.clone())
+                                            .unwrap_or_else(|| "~".into())
+                                    })),
+                                    branch: None,
+                                    checkout_id: None,
+                                    source_context: None,
+                                    config,
+                                    last_message_preview: None,
+                                    last_message_at: None,
+                                    created_at: chrono::Utc::now(),
+                                    harness_session_id: None,
+                                    room_gen: Some(2),
+                                    harness_session_cwd: None,
+                                    space_id: space.as_ref().map(|space| space.id.clone()),
+                                    last_seen_at: None,
+                                })?;
+                                if let Some(branch) =
+                                    branch.as_deref().filter(|branch| !branch.is_empty())
+                                {
+                                    doc.set_chat_branch(&owned_task_id, branch)?;
+                                }
+                                Ok(())
+                            },
+                        )
+                    },
+                )?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::Rename { title } => {
@@ -1578,16 +1619,31 @@ impl EngineRpc {
                 Ok(Some(receipt))
             }
             TaskCommandIntent::Delete {} => {
-                self.task_identity
-                    .tombstone_task(task_id)
-                    .map_err(TaskProjectionError::Mutation)?;
                 let owned_task_id = task_id.to_string();
-                let (_, receipt) =
-                    self.commit_task_projection(command_id, task_id, move |doc| {
-                        doc.delete_chat(&owned_task_id)?;
-                        Ok(())
+                let mut current = self
+                    .current_task_command_snapshot(task_id)
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
                     })?;
-                self.doc_host.purge_chat(task_id);
+                current.binding_id = None;
+                current.binding_generation = None;
+                current.active_turn_id = None;
+                let (_, receipt) = self.task_identity.tombstone_task_with_command(
+                    task_id,
+                    move |identity_snapshot| {
+                        self.commit_task_projection_with_changes(
+                            command_id,
+                            &current,
+                            identity_snapshot,
+                            Some(task_id),
+                            move |doc| {
+                                doc.delete_chat(&owned_task_id)?;
+                                Ok(())
+                            },
+                        )
+                    },
+                )?;
+                self.doc_host.evict_chat(task_id);
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetBranch { branch } => {
