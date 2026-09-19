@@ -834,6 +834,7 @@ actions!(
         Paste,
         Newline,
         MessageNewlineOrAccept,
+        ModifierSubmit,
         OppositeSubmit,
         Submit,
         Undo,
@@ -1345,6 +1346,7 @@ const PALETTE_SEARCH_CONTEXT: &str = "PaletteSearch";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MessageEnterBindingAction {
     Submit,
+    ModifierSubmit,
     OppositeSubmit,
     NewlineOrAccept,
 }
@@ -1367,7 +1369,7 @@ fn message_enter_bindings(
             },
             MessageEnterBinding {
                 keystroke: modifier_combo.into(),
-                action: MessageEnterBindingAction::Submit,
+                action: MessageEnterBindingAction::ModifierSubmit,
             },
         ],
         ComposerSendBehavior::ModEnter => vec![
@@ -1377,7 +1379,7 @@ fn message_enter_bindings(
             },
             MessageEnterBinding {
                 keystroke: modifier_combo.into(),
-                action: MessageEnterBindingAction::Submit,
+                action: MessageEnterBindingAction::ModifierSubmit,
             },
         ],
     };
@@ -1510,6 +1512,11 @@ pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
                 Submit,
                 Some(MESSAGE_COMPOSER_CONTEXT),
             )),
+            MessageEnterBindingAction::ModifierSubmit => message_bindings.push(KeyBinding::new(
+                &binding.keystroke,
+                ModifierSubmit,
+                Some(MESSAGE_COMPOSER_CONTEXT),
+            )),
             MessageEnterBindingAction::OppositeSubmit => message_bindings.push(KeyBinding::new(
                 &binding.keystroke,
                 OppositeSubmit,
@@ -1596,6 +1603,7 @@ pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComposerInputEvent {
     Submitted,
+    ModifierSubmitted,
     OppositeSubmitted,
     Edited,
     CursorMoved,
@@ -2626,6 +2634,14 @@ impl ComposerInput {
         match enter_outcome(self.mention_has_selection, EnterOutcome::Submit) {
             EnterOutcome::AcceptCompletion => cx.emit(ComposerInputEvent::MentionAccept),
             EnterOutcome::Submit => cx.emit(ComposerInputEvent::Submitted),
+            EnterOutcome::Newline => unreachable!("submit action cannot insert a newline"),
+        }
+    }
+
+    fn modifier_submit(&mut self, _: &ModifierSubmit, _: &mut Window, cx: &mut Context<Self>) {
+        match enter_outcome(self.mention_has_selection, EnterOutcome::Submit) {
+            EnterOutcome::AcceptCompletion => cx.emit(ComposerInputEvent::MentionAccept),
+            EnterOutcome::Submit => cx.emit(ComposerInputEvent::ModifierSubmitted),
             EnterOutcome::Newline => unreachable!("submit action cannot insert a newline"),
         }
     }
@@ -3784,6 +3800,7 @@ impl Render for ComposerInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::message_newline_or_accept))
+            .on_action(cx.listener(Self::modifier_submit))
             .on_action(cx.listener(Self::opposite_submit))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::undo))
@@ -4279,6 +4296,7 @@ impl Composer {
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));
         let input_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.on_submit(cx),
+            ComposerInputEvent::ModifierSubmitted => this.on_modifier_submit(cx),
             ComposerInputEvent::OppositeSubmitted => this.on_opposite_submit(cx),
             ComposerInputEvent::Edited => {
                 this.on_input_edited(cx);
@@ -7405,6 +7423,22 @@ impl Composer {
         }
     }
 
+    /// Cmd/Ctrl+Enter is the explicit empty-composer queue shortcut. Keep it
+    /// distinct from plain Enter so issue #406's no-op/never-stop boundary
+    /// remains intact. With content it is the ordinary configured submit.
+    fn on_modifier_submit(&mut self, cx: &mut Context<Self>) {
+        let no_content = !composer_has_content(
+            self.input.read(cx).text(),
+            self.staged().len() + self.staged_appshots().len(),
+            self.staged_comments(cx).len(),
+        );
+        if no_content && self.wizard.is_none() && self.editing_queued.is_none() {
+            self.activate_latest_queued_primary(cx);
+        } else {
+            self.on_submit(cx);
+        }
+    }
+
     /// Cmd/Ctrl+Shift+Enter performs the opposite active-turn follow-up once
     /// without changing the persisted preference. Outside a live run it is
     /// just a normal submit, and an empty chord never interrupts.
@@ -10519,7 +10553,7 @@ mod tests {
                 },
                 MessageEnterBinding {
                     keystroke: "cmd-enter".into(),
-                    action: MessageEnterBindingAction::Submit,
+                    action: MessageEnterBindingAction::ModifierSubmit,
                 },
                 MessageEnterBinding {
                     keystroke: "shift-cmd-enter".into(),
@@ -10536,7 +10570,7 @@ mod tests {
                 },
                 MessageEnterBinding {
                     keystroke: "cmd-enter".into(),
-                    action: MessageEnterBindingAction::Submit,
+                    action: MessageEnterBindingAction::ModifierSubmit,
                 },
                 MessageEnterBinding {
                     keystroke: "shift-cmd-enter".into(),
@@ -10553,7 +10587,7 @@ mod tests {
                 },
                 MessageEnterBinding {
                     keystroke: "ctrl-enter".into(),
-                    action: MessageEnterBindingAction::Submit,
+                    action: MessageEnterBindingAction::ModifierSubmit,
                 },
                 MessageEnterBinding {
                     keystroke: "shift-ctrl-enter".into(),

@@ -107,7 +107,7 @@ enum QueuePrimaryAction {
 impl QueuePrimaryAction {
     fn tooltip(self) -> &'static str {
         match self {
-            Self::SendNow => "Send now (interrupt)",
+            Self::SendNow => "Send now (interrupts an active response)",
             Self::SteerNow => "Steer now (without interrupting)",
         }
     }
@@ -117,6 +117,51 @@ impl QueuePrimaryAction {
             Self::SendNow => "Send now",
             Self::SteerNow => "Steer now",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueuePrimaryBlock {
+    HostUnsupported,
+    Removing,
+    Editing,
+    ReviewRequired,
+    DeliveryPending,
+    Claimed,
+    SteeringAccepted,
+    DeliveryUnknown,
+}
+
+impl QueuePrimaryBlock {
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::HostUnsupported => "The chat host does not support queue actions",
+            Self::Removing => "Removal is already in progress",
+            Self::Editing => "Finish editing before sending",
+            Self::ReviewRequired => "Review this message before sending",
+            Self::DeliveryPending => "A delivery is already in progress",
+            Self::Claimed => "This message is already being delivered",
+            Self::SteeringAccepted => "Waiting for provider incorporation",
+            Self::DeliveryUnknown => "Delivery outcome is unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueuePrimaryResolution {
+    action: QueuePrimaryAction,
+    blocked: Option<QueuePrimaryBlock>,
+}
+
+impl QueuePrimaryResolution {
+    fn enabled(self) -> bool {
+        self.blocked.is_none()
+    }
+
+    fn tooltip(self) -> &'static str {
+        self.blocked
+            .map(QueuePrimaryBlock::tooltip)
+            .unwrap_or_else(|| self.action.tooltip())
     }
 }
 
@@ -131,30 +176,29 @@ fn queue_hold_reason_label(reason: QueueHoldReason) -> &'static str {
     }
 }
 
-/// Resolve the one action this row advertises. Steer is deliberately narrower
-/// than Send now: it requires a live turn, a mid-turn-capable row harness, and
-/// an attachment-free held row. The engine repeats every restriction and owns
-/// the revision/turn/binding fences; this is only the truthful presentation.
-fn available_queue_primary_action(
+/// Resolve the one explicit action this row advertises. Native Steer is
+/// deliberately narrow; outside that safe boundary, a Held row still exposes
+/// Send now as a user-authorized override. Submitting the original Steer never
+/// reaches this resolver, so there is no automatic interrupt/fresh-turn
+/// fallback. The engine owns the revision/turn/binding fences.
+fn resolve_queue_primary_action(
     behavior: zeron_proto::FollowUpBehavior,
-    delivery_blocked: bool,
-    host_supports_actions: bool,
     run_live: bool,
     harness_steers_mid_turn: bool,
     has_attachments: bool,
-) -> Option<QueuePrimaryAction> {
-    if delivery_blocked || !host_supports_actions {
-        return None;
-    }
-    match behavior {
-        zeron_proto::FollowUpBehavior::Queue => Some(QueuePrimaryAction::SendNow),
+    has_hold_reason: bool,
+    blocked: Option<QueuePrimaryBlock>,
+) -> QueuePrimaryResolution {
+    let action = match behavior {
+        zeron_proto::FollowUpBehavior::Queue => QueuePrimaryAction::SendNow,
         zeron_proto::FollowUpBehavior::Steer
-            if run_live && harness_steers_mid_turn && !has_attachments =>
+            if run_live && harness_steers_mid_turn && !has_attachments && !has_hold_reason =>
         {
-            Some(QueuePrimaryAction::SteerNow)
+            QueuePrimaryAction::SteerNow
         }
-        zeron_proto::FollowUpBehavior::Steer => None,
-    }
+        zeron_proto::FollowUpBehavior::Steer => QueuePrimaryAction::SendNow,
+    };
+    QueuePrimaryResolution { action, blocked }
 }
 
 /// Translate a pointer inside the whole panel into a row slot. The top pad
@@ -315,6 +359,101 @@ fn visible_queue_rows(offset: f32, height: f32, count: usize) -> std::ops::Range
 }
 
 impl Composer {
+    fn resolve_queued_primary(
+        &self,
+        chat_id: &str,
+        item: &QueuedMessage,
+        being_removed: bool,
+        host_supports_actions: bool,
+        cx: &gpui::App,
+    ) -> QueuePrimaryResolution {
+        let blocked = if being_removed {
+            Some(QueuePrimaryBlock::Removing)
+        } else if matches!(
+            item.delivery_gate.as_ref(),
+            Some(QueueDeliveryGate::Editing { .. })
+        ) {
+            Some(QueuePrimaryBlock::Editing)
+        } else if matches!(
+            item.delivery_gate.as_ref(),
+            Some(QueueDeliveryGate::ReviewRequired { .. })
+        ) {
+            Some(QueuePrimaryBlock::ReviewRequired)
+        } else {
+            match &item.status {
+                QueueMessageStatus::Held => None,
+                QueueMessageStatus::Claimed { .. } => Some(QueuePrimaryBlock::Claimed),
+                QueueMessageStatus::SteeringAccepted { .. } => {
+                    Some(QueuePrimaryBlock::SteeringAccepted)
+                }
+                QueueMessageStatus::DeliveryUnknown { .. } => {
+                    Some(QueuePrimaryBlock::DeliveryUnknown)
+                }
+            }
+        }
+        .or_else(|| {
+            self.state
+                .read(cx)
+                .send_pending(chat_id, chrono::Utc::now())
+                .then_some(QueuePrimaryBlock::DeliveryPending)
+        })
+        .or_else(|| (!host_supports_actions).then_some(QueuePrimaryBlock::HostUnsupported));
+
+        let run_live = self.run_live(cx);
+        let harness = item
+            .execution
+            .as_ref()
+            .map(|execution| execution.harness)
+            .or_else(|| self.pickers().read(cx).resolved(cx).harness);
+        resolve_queue_primary_action(
+            item.follow_up_behavior,
+            run_live,
+            self.pickers().read(cx).harness_steers_mid_turn(harness),
+            !item.attachments.is_empty(),
+            item.hold_reason.is_some(),
+            blocked,
+        )
+    }
+
+    /// Cmd/Ctrl+Enter on an empty composer explicitly authorizes the newest
+    /// queue row through the same resolver and L07 receipt path as its pointer
+    /// action. Plain Enter remains an empty-composer no-op.
+    pub(crate) fn activate_latest_queued_primary(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((chat_id, item, host_supports_actions)) = ({
+            let state = self.state.read(cx);
+            state.selected_chat.clone().and_then(|chat_id| {
+                state
+                    .queue
+                    .iter()
+                    .max_by_key(|item| item.issued_at)
+                    .cloned()
+                    .map(|item| {
+                        let supported = state.chat_host_supports(
+                            &chat_id,
+                            zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
+                        );
+                        (chat_id, item, supported)
+                    })
+            })
+        }) else {
+            return false;
+        };
+        let resolution = self.resolve_queued_primary(
+            &chat_id,
+            &item,
+            self.queue_removing.contains(&item.id),
+            host_supports_actions,
+            cx,
+        );
+        if let Some(blocked) = resolution.blocked {
+            self.failure = Some(blocked.tooltip().into());
+            cx.notify();
+            return false;
+        }
+        self.activate_queued_primary(item.id, resolution.action, cx);
+        true
+    }
+
     /// The queue panel, or `None` when nothing is waiting. Like the composer,
     /// it is one frosted surface; rows use spacing and hover wash rather than
     /// nesting raised cards inside it.
@@ -517,27 +656,13 @@ impl Composer {
                 this.remove_queued(drop_id.clone(), cx);
             }),
         );
-        let run_live = self.run_live(cx);
-        let harness = item
-            .execution
-            .as_ref()
-            .map(|execution| execution.harness)
-            .or_else(|| self.pickers().read(cx).resolved(cx).harness);
-        let harness_steers_mid_turn = self.pickers().read(cx).harness_steers_mid_turn(harness);
-        let resolved_primary = available_queue_primary_action(
-            item.follow_up_behavior,
-            interaction_blocked,
-            host_supports_actions,
-            run_live,
-            harness_steers_mid_turn,
-            !item.attachments.is_empty(),
-        );
-        let primary_action = resolved_primary.unwrap_or(QueuePrimaryAction::SendNow);
+        let resolved_primary =
+            self.resolve_queued_primary(chat_id, item, being_removed, host_supports_actions, cx);
+        let primary_action = resolved_primary.action;
         let primary_id = item.id.clone();
         let primary = self.queue_primary_action_button(
             &key,
-            primary_action,
-            resolved_primary.is_some(),
+            resolved_primary,
             theme,
             cx.listener(move |this, _, _, cx| {
                 this.activate_queued_primary(primary_id.clone(), primary_action, cx);
@@ -1054,16 +1179,13 @@ impl Composer {
     fn queue_primary_action_button(
         &self,
         key: &SharedString,
-        action: QueuePrimaryAction,
-        enabled: bool,
+        resolution: QueuePrimaryResolution,
         theme: &Theme,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> AnyElement {
-        let tooltip = if enabled {
-            action.tooltip()
-        } else {
-            "Waiting for provider capabilities"
-        };
+        let action = resolution.action;
+        let enabled = resolution.enabled();
+        let tooltip = resolution.tooltip();
         let accent = theme.accent;
         let compact = self.queue_preview_limit() == 1;
         div()
@@ -1984,13 +2106,127 @@ impl Composer {
 
 #[cfg(test)]
 mod tests {
-    use zeron_rpc::methods;
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use gpui::AppContext as _;
+    use zeron_doc::{QueueClaimMode, QueueHoldReason, QueueMessageStatus, QueuedMessage};
+    use zeron_proto::{
+        Chat, CommandReceipt, CommandReceiptStatus, Device, FollowUpBehavior, TaskCommandRead,
+        TaskCommandSnapshot,
+    };
+    use zeron_rpc::{RpcError, RpcReply, RpcService, methods};
 
     use super::{
-        PANEL_PAD_TOP, QueuePrimaryAction, ROW_SLOT, available_queue_primary_action, one_line,
-        queue_action_needs_host, queue_drag_offsets, queue_drop_index, queue_edit_upload_id,
-        queue_mutation_acknowledged, queue_visible_text, visible_queue_rows,
+        PANEL_PAD_TOP, QueuePrimaryAction, QueuePrimaryBlock, QueuePrimaryResolution, ROW_SLOT,
+        one_line, queue_action_needs_host, queue_drag_offsets, queue_drop_index,
+        queue_edit_upload_id, queue_mutation_acknowledged, queue_visible_text,
+        resolve_queue_primary_action, visible_queue_rows,
     };
+    use crate::composer::Composer;
+    use crate::state::{AppState, EngineHandle};
+
+    #[derive(Default)]
+    struct QueueActionRpc {
+        executes: Mutex<Vec<serde_json::Value>>,
+    }
+
+    #[async_trait]
+    impl RpcService for QueueActionRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            match method {
+                methods::GET_TASK_COMMAND_SNAPSHOT => RpcReply::value(&TaskCommandRead {
+                    snapshot: TaskCommandSnapshot {
+                        task_id: "chat".into(),
+                        task_revision: 3,
+                        task_sequence: 4,
+                        binding_id: Some("binding".into()),
+                        binding_generation: Some(5),
+                        active_turn_id: None,
+                    },
+                    events: Vec::new(),
+                    reload_required: false,
+                    next_task_sequence: None,
+                    has_more: false,
+                }),
+                methods::EXECUTE_TASK_COMMAND => {
+                    self.executes.lock().unwrap().push(params.clone());
+                    RpcReply::value(&CommandReceipt {
+                        command_id: params["commandId"].as_str().unwrap().into(),
+                        task_id: "chat".into(),
+                        intent: "sendQueuedNow".into(),
+                        payload_hash: "fixture".into(),
+                        status: CommandReceiptStatus::Applied,
+                        snapshot: TaskCommandSnapshot {
+                            task_id: "chat".into(),
+                            task_revision: 3,
+                            task_sequence: 4,
+                            binding_id: Some("binding".into()),
+                            binding_generation: Some(5),
+                            active_turn_id: None,
+                        },
+                        event_sequence: Some(5),
+                        actor_id: "local".into(),
+                        client_id: "local".into(),
+                        client_session_id: "fixture".into(),
+                        execution_environment: Some("host".into()),
+                        correlation_id: Some("held-steer".into()),
+                        reason: None,
+                        recovery_action: None,
+                        accepted_at_ms: 1,
+                        committed_at_ms: Some(2),
+                        observed_at_ms: 2,
+                    })
+                }
+                other => Err(RpcError::UnknownMethod(other.into())),
+            }
+        }
+    }
+
+    fn test_chat() -> Chat {
+        Chat {
+            id: "chat".into(),
+            device_id: "host".into(),
+            title: None,
+            archived: false,
+            cwd: None,
+            branch: None,
+            checkout_id: None,
+            source_context: None,
+            config: None,
+            last_message_preview: None,
+            last_message_at: None,
+            created_at: Utc::now(),
+            harness_session_id: None,
+            harness_session_cwd: None,
+            space_id: None,
+            last_seen_at: None,
+            room_gen: None,
+        }
+    }
+
+    fn held_steer(status: QueueMessageStatus) -> QueuedMessage {
+        QueuedMessage {
+            id: "held-steer".into(),
+            text: "explicitly authorize me".into(),
+            attachments: Vec::new(),
+            hold_for_turn_end: true,
+            follow_up_behavior: FollowUpBehavior::Steer,
+            hold_reason: Some(QueueHoldReason::ProviderRejected),
+            issued_by: "local".into(),
+            issued_at: 7,
+            edited_at: None,
+            revision: 9,
+            execution: None,
+            status,
+            delivery_gate: None,
+        }
+    }
 
     #[test]
     fn queue_edit_upload_ids_are_stable_distinct_and_accepted_by_the_upload_jail() {
@@ -2028,72 +2264,188 @@ mod tests {
     }
 
     #[test]
-    fn available_primary_action_obeys_row_and_host_gates() {
-        assert_eq!(
-            available_queue_primary_action(
-                zeron_proto::FollowUpBehavior::Queue,
+    fn primary_action_distinguishes_explicit_override_from_delivery_fences() {
+        for (behavior, live, steerable, attachments, held, action, case) in [
+            (
+                FollowUpBehavior::Queue,
                 false,
                 true,
                 false,
-                true,
-                false
+                false,
+                QueuePrimaryAction::SendNow,
+                "ordinary Queue",
             ),
-            Some(QueuePrimaryAction::SendNow)
-        );
+            (
+                FollowUpBehavior::Steer,
+                true,
+                true,
+                false,
+                false,
+                QueuePrimaryAction::SteerNow,
+                "live safe Steer",
+            ),
+            (
+                FollowUpBehavior::Steer,
+                false,
+                false,
+                false,
+                true,
+                QueuePrimaryAction::SendNow,
+                "idle rejected Steer",
+            ),
+            (
+                FollowUpBehavior::Steer,
+                true,
+                true,
+                true,
+                true,
+                QueuePrimaryAction::SendNow,
+                "attachment Steer",
+            ),
+            (
+                FollowUpBehavior::Steer,
+                true,
+                true,
+                false,
+                true,
+                QueuePrimaryAction::SendNow,
+                "live rejected Steer",
+            ),
+        ] {
+            assert_eq!(
+                resolve_queue_primary_action(behavior, live, steerable, attachments, held, None,),
+                QueuePrimaryResolution {
+                    action,
+                    blocked: None,
+                },
+                "{case}"
+            );
+        }
         assert_eq!(
-            available_queue_primary_action(
+            resolve_queue_primary_action(
                 zeron_proto::FollowUpBehavior::Steer,
                 false,
+                false,
+                false,
                 true,
-                true,
-                true,
-                false
+                Some(QueuePrimaryBlock::DeliveryUnknown),
             ),
-            Some(QueuePrimaryAction::SteerNow)
+            QueuePrimaryResolution {
+                action: QueuePrimaryAction::SendNow,
+                blocked: Some(QueuePrimaryBlock::DeliveryUnknown),
+            },
+            "unknown delivery remains fenced despite the Send now presentation"
         );
-        assert_eq!(
-            available_queue_primary_action(
-                zeron_proto::FollowUpBehavior::Steer,
-                false,
-                true,
-                true,
-                false,
-                false
+        for (block, tooltip) in [
+            (
+                QueuePrimaryBlock::HostUnsupported,
+                "The chat host does not support queue actions",
             ),
-            None
+            (
+                QueuePrimaryBlock::Removing,
+                "Removal is already in progress",
+            ),
+            (QueuePrimaryBlock::Editing, "Finish editing before sending"),
+            (
+                QueuePrimaryBlock::ReviewRequired,
+                "Review this message before sending",
+            ),
+            (
+                QueuePrimaryBlock::DeliveryPending,
+                "A delivery is already in progress",
+            ),
+            (
+                QueuePrimaryBlock::Claimed,
+                "This message is already being delivered",
+            ),
+            (
+                QueuePrimaryBlock::SteeringAccepted,
+                "Waiting for provider incorporation",
+            ),
+            (
+                QueuePrimaryBlock::DeliveryUnknown,
+                "Delivery outcome is unknown",
+            ),
+        ] {
+            assert_eq!(block.tooltip(), tooltip);
+        }
+    }
+
+    #[gpui::test]
+    fn empty_modifier_queue_action_executes_one_fenced_send_now_and_blocks_unknown(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let rpc = Arc::new(QueueActionRpc::default());
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.set_test_engine(EngineHandle::from_test_client(zeron_rpc::memory_client(
+                rpc.clone(),
+            )));
+            state.chats = vec![test_chat()];
+            state.devices = vec![Device {
+                id: "host".into(),
+                name: "Synthetic host".into(),
+                platform: "macos".into(),
+                last_seen_at: None,
+                created_at: None,
+                version: None,
+                capabilities: vec![zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1.into()],
+            }];
+            state.selected_chat = Some("chat".into());
+            state.queue = vec![held_steer(QueueMessageStatus::Held)];
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+
+        composer.update(cx, |composer, cx| {
+            assert!(composer.activate_latest_queued_primary(cx));
+        });
+        for _ in 0..100 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            if rpc.executes.lock().unwrap().len() == 1 {
+                break;
+            }
+        }
+        let calls = rpc.executes.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            1,
+            "the shortcut must create one receipt command"
         );
+        assert_eq!(calls[0]["intent"]["kind"], "sendQueuedNow");
+        assert_eq!(calls[0]["intent"]["messageId"], "held-steer");
+        assert_eq!(calls[0]["intent"]["expectedQueueRevision"], 9);
+        assert_eq!(calls[0]["expectedBindingGeneration"], 5);
+        assert_eq!(calls[0]["targetDeviceId"], "host");
+        drop(calls);
+        runtime.block_on(tokio::task::yield_now());
+        cx.run_until_parked();
+
+        state.update(cx, |state, _| {
+            state.queue = vec![held_steer(QueueMessageStatus::DeliveryUnknown {
+                command_id: "unknown".into(),
+                mode: QueueClaimMode::SteerNow,
+                since_ms: 10,
+            })];
+        });
+        composer.update(cx, |composer, cx| {
+            assert!(!composer.activate_latest_queued_primary(cx));
+            assert_eq!(
+                composer.failure.as_deref(),
+                Some("Delivery outcome is unknown")
+            );
+        });
+        cx.run_until_parked();
         assert_eq!(
-            available_queue_primary_action(
-                zeron_proto::FollowUpBehavior::Steer,
-                false,
-                true,
-                true,
-                true,
-                true
-            ),
-            None
-        );
-        assert_eq!(
-            available_queue_primary_action(
-                zeron_proto::FollowUpBehavior::Queue,
-                true,
-                true,
-                true,
-                true,
-                false
-            ),
-            None
-        );
-        assert_eq!(
-            available_queue_primary_action(
-                zeron_proto::FollowUpBehavior::Queue,
-                false,
-                false,
-                true,
-                true,
-                false
-            ),
-            None
+            rpc.executes.lock().unwrap().len(),
+            1,
+            "unknown delivery must not create another command"
         );
     }
 

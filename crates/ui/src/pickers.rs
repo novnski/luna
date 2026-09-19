@@ -763,9 +763,9 @@ impl Pickers {
                 }
                 cx.notify();
             }
-            ComposerInputEvent::Submitted | ComposerInputEvent::OppositeSubmitted => {
-                this.on_search_submit(cx)
-            }
+            ComposerInputEvent::Submitted
+            | ComposerInputEvent::ModifierSubmitted
+            | ComposerInputEvent::OppositeSubmitted => this.on_search_submit(cx),
             // Pasted images/files don't apply to a search box.
             ComposerInputEvent::PastedImages(_)
             | ComposerInputEvent::PastedPaths(_)
