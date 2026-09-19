@@ -1409,6 +1409,9 @@ async fn run_session(session: Session) {
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
                     let text = msg.prompt;
+                    let require_active =
+                        msg.delivery == crate::SteerDelivery::RequireActiveTurn;
+                    let mut acceptance = msg.acceptance;
                     if let Some(expected) = router.active.clone() {
                         let steer_params = json!({
                             "threadId": thread_id,
@@ -1417,6 +1420,9 @@ async fn run_session(session: Session) {
                         });
                         match client.request("turn/steer", steer_params).await {
                             Ok(_) => {
+                                if let Some(tx) = acceptance.take() {
+                                    let _ = tx.send(Ok(()));
+                                }
                                 let (prev, next) = rotate(&mut assistant_message_id);
                                 if !send(
                                     &event_tx,
@@ -1437,6 +1443,12 @@ async fn run_session(session: Session) {
                             // expected turn's end arrives (also the safe
                             // fallback for older Codex without steering).
                             Err(e) => {
+                                if require_active {
+                                    if let Some(tx) = acceptance.take() {
+                                        let _ = tx.send(Err(e.to_string()));
+                                    }
+                                    continue 'main;
+                                }
                                 tracing::debug!(
                                     target: "zeron_harness::codex",
                                     "turn/steer rejected (queued as next turn): {e}"
@@ -1458,6 +1470,10 @@ async fn run_session(session: Session) {
                                     break 'main;
                                 }
                             }
+                        }
+                    } else if require_active {
+                        if let Some(tx) = acceptance.take() {
+                            let _ = tx.send(Err("no active Codex turn to steer".into()));
                         }
                     } else if !steer_as_new_turn(
                         &client,

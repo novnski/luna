@@ -31,7 +31,7 @@ use tokio_util::task::TaskTracker;
 use zeron_doc::{
     COMMAND_DEFAULT_TTL_MS, CommandBasedOn, CommandDisposition, DocError, EvaluationContext,
     MessagePart, MessageRole, MessageStatus, QueueClaimMode, QueueClaimOutcome, QueueDeliveryGate,
-    QueueMessageStatus, QueuedMessage, SessionCommandEntry, SessionCommandPayload,
+    QueueHoldReason, QueueMessageStatus, QueuedMessage, SessionCommandEntry, SessionCommandPayload,
     SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
     join_continuation_entries,
 };
@@ -397,6 +397,13 @@ enum QueueSend {
     Interrupt,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueProviderOutcome {
+    Accepted,
+    Rejected,
+    Unknown,
+}
+
 const ATTACHMENT_ONLY_PROMPT: &str = "See the attached image(s).";
 const ATTACHMENT_PROMPT_HEADER: &str = "Attached images (local files — open them to view):";
 
@@ -504,6 +511,8 @@ pub enum QueueMutationOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueueDispatchOutcome {
     Started,
+    Rejected(QueuedMessage),
+    Unknown(QueuedMessage),
     AlreadyClaimed(QueuedMessage),
     RevisionConflict(QueuedMessage),
     Blocked(QueuedMessage),
@@ -3151,6 +3160,87 @@ impl DocHost {
         Ok((outcome, receipt))
     }
 
+    fn reject_queue_task(
+        &self,
+        handle: &ChatDocHandle,
+        message_id: &str,
+        command_id: &str,
+        hold_reason: QueueHoldReason,
+    ) -> Result<QueuedMessage, EngineError> {
+        let _projection = lock(&handle.queue_projection_lock);
+        let prepared = self.prepare_queue_projection(handle, command_id, |doc| {
+            doc.reject_queued_steer_claim(message_id, command_id, hold_reason)?
+                .ok_or_else(|| EngineError::Other("queued steer claim vanished".into()))
+        })?;
+        let pending = self
+            .inner
+            .store
+            .task_command_receipt(command_id)?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(handle, &prepared);
+        let receipt = self
+            .inner
+            .store
+            .complete_task_command_with_snapshot_changes_and_updates(
+                command_id,
+                CommandReceiptStatus::Rejected,
+                false,
+                pending.snapshot.binding_id.as_deref(),
+                pending.snapshot.binding_generation,
+                pending.snapshot.active_turn_id.as_deref(),
+                Some(CommandReceiptReason {
+                    code: CommandReasonCode::OperationRejected,
+                    message: "the provider rejected native in-turn steering".into(),
+                }),
+                Some("The message remains queued; retry only after a new active turn is visible."),
+                &snapshots,
+                &[],
+                &updates,
+            )?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let row = self.install_queue_projection(handle, prepared)?;
+        self.publish_task_receipt(receipt);
+        Ok(row)
+    }
+
+    /// A provider run ended after an explicit steer was handed to the adapter
+    /// but before provider acceptance was confirmed. Preserve the claimed row
+    /// as recoverable/unknown; never turn it into a fresh turn automatically.
+    pub fn mark_steer_correlation_unknown(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        let Some(command_id) = handle
+            .doc
+            .read_queue()?
+            .into_iter()
+            .find(|item| item.id == message_id)
+            .and_then(|item| match item.status {
+                QueueMessageStatus::Claimed {
+                    command_id,
+                    mode: QueueClaimMode::SteerNow,
+                    ..
+                } => Some(command_id),
+                _ => None,
+            })
+        else {
+            return Ok(());
+        };
+        self.mark_queue_task_unknown(
+            &handle,
+            &command_id,
+            "the provider ended before native steer acceptance could be confirmed",
+            |doc| {
+                doc.mark_queued_claim_unknown(message_id, &command_id, now_ms())?;
+                Ok(())
+            },
+        )?;
+        Ok(())
+    }
+
     /// Hold a message for later: append it to the doc's queue. Any device may
     /// write here (unlike `messages`), and the change subscription kicks
     /// [`Self::drain_queue`], so a queue that lands while the agent is already
@@ -3181,6 +3271,7 @@ impl DocHost {
             text,
             attachments,
             hold_for_turn_end,
+            zeron_proto::FollowUpBehavior::Queue,
             None,
         )?;
         Ok(id)
@@ -3195,6 +3286,7 @@ impl DocHost {
         text: &str,
         attachments: Vec<String>,
         hold_for_turn_end: bool,
+        follow_up_behavior: zeron_proto::FollowUpBehavior,
         execution: Option<zeron_proto::ChatConfig>,
     ) -> Result<bool, EngineError> {
         let handle = self.open(chat_id)?;
@@ -3210,6 +3302,7 @@ impl DocHost {
                     return Ok(existing.text == text
                         && existing.attachments == attachments
                         && existing.hold_for_turn_end == hold_for_turn_end
+                        && existing.follow_up_behavior == follow_up_behavior
                         && existing.execution == execution);
                 }
                 doc.push_queued(&QueuedMessage {
@@ -3217,6 +3310,8 @@ impl DocHost {
                     text: text.to_string(),
                     attachments,
                     hold_for_turn_end,
+                    follow_up_behavior,
+                    hold_reason: None,
                     issued_by: self.inner.config.device_id.clone(),
                     issued_at: now_ms(),
                     edited_at: None,
@@ -3244,6 +3339,7 @@ impl DocHost {
         text: &str,
         attachments: Vec<String>,
         hold_for_turn_end: bool,
+        follow_up_behavior: zeron_proto::FollowUpBehavior,
         execution: Option<zeron_proto::ChatConfig>,
     ) -> Result<(QueueMutationOutcome, Option<CommandReceipt>), EngineError> {
         if !self.is_host(chat_id) {
@@ -3264,6 +3360,7 @@ impl DocHost {
                     if existing.text == text
                         && existing.attachments == attachments
                         && existing.hold_for_turn_end == hold_for_turn_end
+                        && existing.follow_up_behavior == follow_up_behavior
                         && existing.execution == execution
                     {
                         (QueueMutationOutcome::Duplicate, true)
@@ -3277,6 +3374,8 @@ impl DocHost {
                 text: text.to_string(),
                 attachments,
                 hold_for_turn_end,
+                follow_up_behavior,
+                hold_reason: None,
                 issued_by: self.inner.config.device_id.clone(),
                 issued_at: now_ms(),
                 edited_at: None,
@@ -3955,6 +4054,64 @@ impl DocHost {
         }
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
+        if send == QueueSend::Steer {
+            let Some(candidate) = handle
+                .doc
+                .read_queue()?
+                .into_iter()
+                .find(|item| item.id == id)
+            else {
+                return Ok(QueueDispatchOutcome::Missing);
+            };
+            let reason = if candidate.follow_up_behavior != zeron_proto::FollowUpBehavior::Steer {
+                Some(QueueHoldReason::SteeringUnavailable)
+            } else if !candidate.attachments.is_empty() {
+                Some(QueueHoldReason::AttachmentsUnsupported)
+            } else {
+                let Some(sessions) = self.sessions() else {
+                    return Err(EngineError::Other("sessions engine not wired".into()));
+                };
+                if expected_turn_id.is_some()
+                    && sessions.active_turn_id(chat_id).as_deref() != expected_turn_id
+                {
+                    Some(QueueHoldReason::StaleTurn)
+                } else {
+                    match sessions
+                        .session_status(chat_id)
+                        .map(|session| session.status)
+                    {
+                        Some(zeron_proto::SessionStatus::Working) => {
+                            let harness = candidate
+                                .execution
+                                .as_ref()
+                                .map(|execution| execution.harness)
+                                .unwrap_or_else(|| self.harness_for(chat_id));
+                            (!sessions.steers_mid_turn(harness))
+                                .then_some(QueueHoldReason::SteeringUnavailable)
+                        }
+                        Some(zeron_proto::SessionStatus::AwaitingApproval) => {
+                            Some(QueueHoldReason::AwaitingApproval)
+                        }
+                        Some(zeron_proto::SessionStatus::AwaitingInput) => {
+                            Some(QueueHoldReason::AwaitingInput)
+                        }
+                        _ => Some(QueueHoldReason::SteeringUnavailable),
+                    }
+                }
+            };
+            if let Some(reason) = reason {
+                let held = self.persist_queue_projection(
+                    &handle,
+                    &format!("steer-hold:{id}:{}", uuid::Uuid::new_v4()),
+                    |doc| {
+                        doc.set_queued_hold_reason(id, reason)?.ok_or_else(|| {
+                            EngineError::Other("queued message is not steerable".into())
+                        })
+                    },
+                )?;
+                return Ok(QueueDispatchOutcome::Blocked(held));
+            }
+        }
         if expected_turn_id.is_some() && handle.queue_paused.load(Ordering::Acquire) {
             let item = handle
                 .doc
@@ -4014,21 +4171,24 @@ impl DocHost {
             QueueClaimOutcome::Missing => return Ok(QueueDispatchOutcome::Missing),
         };
         let was_paused = handle.queue_paused.swap(false, Ordering::AcqRel);
-        if let Err(error) = self.dispatch_queued(&handle, &item, send).await {
-            if was_paused {
-                handle.queue_paused.store(true, Ordering::Release);
+        let provider_outcome = match self.dispatch_queued(&handle, &item, send).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if was_paused {
+                    handle.queue_paused.store(true, Ordering::Release);
+                }
+                self.mark_queue_task_unknown(
+                    &handle,
+                    command_id,
+                    "provider dispatch returned without a provable acceptance result",
+                    |doc| {
+                        doc.mark_queued_claim_unknown(id, command_id, now_ms())?;
+                        Ok(())
+                    },
+                )?;
+                return Err(error);
             }
-            self.mark_queue_task_unknown(
-                &handle,
-                command_id,
-                "provider dispatch returned without a provable acceptance result",
-                |doc| {
-                    doc.mark_queued_claim_unknown(id, command_id, now_ms())?;
-                    Ok(())
-                },
-            )?;
-            return Err(error);
-        }
+        };
         // Send/Steer now selects exactly one row. If Stop, restart recovery,
         // or a prior ambiguous dispatch had frozen the queue, preserve that
         // hold after starting the selected row; the idle transition must not
@@ -4036,50 +4196,98 @@ impl DocHost {
         if was_paused {
             handle.queue_paused.store(true, Ordering::Release);
         }
-        Ok(QueueDispatchOutcome::Started)
+        match provider_outcome {
+            QueueProviderOutcome::Accepted => Ok(QueueDispatchOutcome::Started),
+            QueueProviderOutcome::Unknown => {
+                let (row, _) = self.mark_queue_task_unknown(
+                    &handle,
+                    command_id,
+                    "native steer acceptance is unknown; the queued row will not be replayed automatically",
+                    |doc| {
+                        if !doc.mark_queued_claim_unknown(id, command_id, now_ms())? {
+                            return Err(EngineError::Other("queued steer claim vanished".into()));
+                        }
+                        doc.read_queue()?
+                            .into_iter()
+                            .find(|item| item.id == id)
+                            .ok_or_else(|| EngineError::Other("queued steer row vanished".into()))
+                    },
+                )?;
+                Ok(QueueDispatchOutcome::Unknown(row))
+            }
+            QueueProviderOutcome::Rejected => {
+                let row = self.reject_queue_task(
+                    &handle,
+                    id,
+                    command_id,
+                    QueueHoldReason::ProviderRejected,
+                )?;
+                Ok(QueueDispatchOutcome::Rejected(row))
+            }
+        }
     }
 
-    /// Promote one held row without ever interrupting a turn. A live,
-    /// steerable turn receives it as steering; if that turn has already ended,
-    /// it starts normally as the next turn. Unsupported harnesses and
-    /// attachment-bearing rows stay untouched.
+    /// Attempt native in-turn steering for a row whose persisted intent is
+    /// Steer. It never falls back to interrupt or a fresh turn.
     pub async fn steer_queued_now(&self, chat_id: &str, id: &str) -> Result<bool, EngineError> {
+        self.steer_queued_now_for_turn(chat_id, id, None).await
+    }
+
+    pub async fn steer_queued_now_for_turn(
+        &self,
+        chat_id: &str,
+        id: &str,
+        expected_turn_id: Option<&str>,
+    ) -> Result<bool, EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(format!(
                 "device {} does not host chat {chat_id}",
                 self.inner.config.device_id
             )));
         }
-        let Some(sessions) = self.sessions() else {
-            return Err(EngineError::Other("sessions engine not wired".into()));
-        };
         let Some(candidate) = self.queued_message(chat_id, id)? else {
             return Ok(false);
         };
-        let harness = candidate
-            .execution
-            .as_ref()
-            .map(|execution| execution.harness)
-            .unwrap_or_else(|| self.harness_for(chat_id));
-        if !sessions.steers_mid_turn(harness) {
-            return Err(EngineError::Other(
-                "the selected agent cannot accept mid-turn steering".into(),
-            ));
-        }
-        if !candidate.attachments.is_empty() {
-            return Err(EngineError::Other(
-                "messages with attachments cannot be steered mid-turn".into(),
-            ));
-        }
         if candidate.delivery_gate.is_some() {
             return Err(EngineError::Other(
                 "queued message is blocked for editing or review".into(),
             ));
         }
         let command_id = self.begin_legacy_queue_delivery(chat_id, &candidate, "steerQueuedNow")?;
+        let outcome = self
+            .steer_queued_now_with_claim(
+                chat_id,
+                id,
+                candidate.revision,
+                &command_id,
+                expected_turn_id,
+            )
+            .await?;
+        if matches!(
+            outcome,
+            QueueDispatchOutcome::Blocked(_)
+                | QueueDispatchOutcome::RevisionConflict(_)
+                | QueueDispatchOutcome::Missing
+        ) {
+            let active_turn_id = self
+                .sessions()
+                .and_then(|sessions| sessions.active_turn_id(chat_id));
+            let _ = self.complete_task_command(
+                &command_id,
+                CommandReceiptStatus::Rejected,
+                false,
+                None,
+                None,
+                active_turn_id.as_deref(),
+                Some(CommandReceiptReason {
+                    code: CommandReasonCode::UnsupportedOperation,
+                    message: "native in-turn steering is not currently safe for this row".into(),
+                }),
+                Some("The message remains queued; retry after the hold reason changes."),
+            );
+        }
         Ok(matches!(
-            self.steer_queued_now_with_claim(chat_id, id, candidate.revision, &command_id, None,)
-                .await?,
+            outcome,
             QueueDispatchOutcome::Started | QueueDispatchOutcome::AlreadyClaimed(_)
         ))
     }
@@ -4328,7 +4536,7 @@ impl DocHost {
         handle: &Arc<ChatDocHandle>,
         item: &QueuedMessage,
         send: QueueSend,
-    ) -> Result<(), EngineError> {
+    ) -> Result<QueueProviderOutcome, EngineError> {
         let Some(sessions) = self.sessions() else {
             return Err(EngineError::Other("sessions engine not wired".into()));
         };
@@ -4344,10 +4552,11 @@ impl DocHost {
                 .steer(chat_id, &prompt, Some(message_id.clone()))
                 .await?
             {
-                SteerOutcome::Accepted => return Ok(()),
-                // The run died under us between the status read and the send;
-                // fall through and start a fresh turn with it.
-                SteerOutcome::NotSteerable => {}
+                SteerOutcome::Accepted => return Ok(QueueProviderOutcome::Accepted),
+                SteerOutcome::Rejected | SteerOutcome::NotSteerable => {
+                    return Ok(QueueProviderOutcome::Rejected);
+                }
+                SteerOutcome::Unknown => return Ok(QueueProviderOutcome::Unknown),
             }
         }
         // Same reading of "busy" as the drain: a turn parked on a question is
@@ -4386,7 +4595,7 @@ impl DocHost {
         let harness = self.harness_for_request(chat_id, &request);
         self.dispatch_with_source_context(&sessions, chat_id, harness, request, Some(message_id))
             .await?;
-        Ok(())
+        Ok(QueueProviderOutcome::Accepted)
     }
 
     /// POST `{edge}/device/{host}/nudge {chatId}` when the chat's workspace row names
@@ -5752,6 +5961,14 @@ impl DocHost {
                     Some("queued as new turn".into()),
                 ))
             }
+            SteerOutcome::Rejected => Ok((
+                SessionCommandStatus::Rejected,
+                Some("the provider rejected native in-turn steering".into()),
+            )),
+            SteerOutcome::Unknown => Ok((
+                SessionCommandStatus::Pending,
+                Some("native steer acceptance is unknown; it was not replayed".into()),
+            )),
         }
     }
 
@@ -5796,6 +6013,8 @@ impl DocHost {
                 text: prompt.to_string(),
                 attachments: Vec::new(),
                 hold_for_turn_end: false,
+                follow_up_behavior: zeron_proto::FollowUpBehavior::Queue,
+                hold_reason: None,
                 issued_by: self.inner.config.device_id.clone(),
                 issued_at: now_ms(),
                 edited_at: None,
@@ -6373,6 +6592,7 @@ mod publication_eviction_tests {
                 "survive retirement",
                 Vec::new(),
                 true,
+                zeron_proto::FollowUpBehavior::Queue,
                 None,
             )
             .unwrap()

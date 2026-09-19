@@ -49,10 +49,15 @@ pub struct JournaledEvent {
 /// Outcome of a steer attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SteerOutcome {
-    /// Delivered into the live run's steering mailbox.
+    /// The provider accepted a native in-turn steering request.
     Accepted,
-    /// No live steerable run — the caller should dispatch the prompt as a new turn.
+    /// No live steerable run.
     NotSteerable,
+    /// The provider definitively rejected native in-turn steering.
+    Rejected,
+    /// Acceptance could not be proved; callers must preserve the durable row
+    /// and must not replay it automatically.
+    Unknown,
 }
 
 /// Prepared registry metadata plus the transition guards that keep runtime
@@ -242,6 +247,7 @@ struct RunHandle {
 struct RoutedSteer {
     prompt: String,
     message_id: String,
+    delivery: zeron_harness::SteerDelivery,
 }
 
 struct Inner {
@@ -840,11 +846,14 @@ impl SessionsEngine {
                 let message = SteerMessage {
                     prompt: request.prompt.clone(),
                     message_id: Some(user_id.clone()),
+                    delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                    acceptance: None,
                 };
                 if steer_tx.try_send(message).is_ok() {
                     pending.push_back(RoutedSteer {
                         prompt: request.prompt.clone(),
                         message_id: user_id.clone(),
+                        delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
                     });
                     true
                 } else {
@@ -1070,9 +1079,12 @@ impl SessionsEngine {
             return Ok(SteerOutcome::NotSteerable);
         };
         let user_id = message_id.unwrap_or_else(new_id);
+        let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
         let message = SteerMessage {
             prompt: prompt.to_string(),
             message_id: Some(user_id.clone()),
+            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(acceptance_tx),
         };
         {
             // Serialize mailbox acceptance with confirmation and Done-time
@@ -1084,35 +1096,20 @@ impl SessionsEngine {
             pending.push_back(RoutedSteer {
                 prompt: prompt.to_string(),
                 message_id: user_id.clone(),
+                delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
             });
         }
-        let handle = self.doc_handle(chat_id)?;
-        handle.write_user_message(&user_id, prompt, now_ms())?;
-        // A routed steer is a turn too. Fired here (not only on the confirmed
-        // path) — a reclaim falls back to dispatch, which just re-snapshots.
-        if let Some(request) = self.last_request(chat_id) {
-            self.note_turn_start(chat_id, &request.cwd);
+        let acceptance =
+            tokio::time::timeout(std::time::Duration::from_secs(5), acceptance_rx).await;
+        match acceptance {
+            Ok(Ok(Ok(()))) if self.is_live(chat_id, &run_id) => Ok(SteerOutcome::Accepted),
+            Ok(Ok(Err(_))) => {
+                let mut ledger = lock(&ledger);
+                ledger.retain(|steer| steer.message_id != user_id);
+                Ok(SteerOutcome::Rejected)
+            }
+            Ok(Err(_)) | Err(_) | Ok(Ok(Ok(()))) => Ok(SteerOutcome::Unknown),
         }
-        if self.is_live(chat_id, &run_id) {
-            self.set_status(chat_id, SessionStatus::Working, false);
-            self.inner.note_message(chat_id, prompt);
-            return Ok(SteerOutcome::Accepted);
-        }
-        // The run died around the send. Exit drain claimed the entry → its
-        // re-dispatch owns the message; still ours → reclaim and report
-        // NotSteerable so the executor falls back to a fresh dispatch
-        // (same message id — the doc entry dedupes).
-        let reclaimed = {
-            let mut ledger = lock(&ledger);
-            let before = ledger.len();
-            ledger.retain(|s| s.message_id != user_id);
-            ledger.len() != before
-        };
-        if reclaimed {
-            return Ok(SteerOutcome::NotSteerable);
-        }
-        self.inner.note_message(chat_id, prompt);
-        Ok(SteerOutcome::Accepted)
     }
 
     /// Interrupt the live run, if any. The run settles with a synthetic
@@ -2749,19 +2746,49 @@ async fn drive_run(
             inner.set_status(&chat_id, SessionStatus::Working, true);
             // The boundary confirms delivery of the oldest accepted steer —
             // retire its at-least-once ledger entry.
-            let confirmed_message = if let Some(h) = lock(&inner.runs)
+            let confirmed_steer = if let Some(h) = lock(&inner.runs)
                 .get(&chat_id)
                 .filter(|h| h.run_id == run_id)
             {
-                lock(&h.routed_steers)
-                    .pop_front()
-                    .map(|steer| steer.message_id)
+                lock(&h.routed_steers).pop_front()
             } else {
                 None
             };
-            if let Some(message_id) = confirmed_message
+            if let Some(steer) = confirmed_steer
                 && let Some(host) = inner.doc_host()
             {
+                if steer.delivery == zeron_harness::SteerDelivery::RequireActiveTurn {
+                    let transcript_written = match host.open(&chat_id) {
+                        Ok(handle) => handle
+                            .write_user_message(&steer.message_id, &steer.prompt, now_ms())
+                            .map_err(|error| {
+                                tracing::error!(chat = %chat_id, run = %run_id, %error,
+                                    "confirmed steer transcript write failed");
+                            })
+                            .is_ok(),
+                        Err(error) => {
+                            tracing::error!(chat = %chat_id, run = %run_id, %error,
+                                "confirmed steer transcript unavailable");
+                            false
+                        }
+                    };
+                    if !transcript_written {
+                        if let Err(error) =
+                            host.mark_steer_correlation_unknown(&chat_id, &steer.message_id)
+                        {
+                            tracing::error!(chat = %chat_id, run = %run_id, %error,
+                                "confirmed steer unknown-state persistence failed");
+                        }
+                        continue;
+                    }
+                    if let Some(request) = lock(&inner.last_requests).get(&chat_id) {
+                        SessionsEngine {
+                            inner: inner.clone(),
+                        }
+                        .note_turn_start(&chat_id, &request.cwd);
+                    }
+                    inner.note_message(&chat_id, &steer.prompt);
+                }
                 let binding = inner
                     .task_identity
                     .get()
@@ -2769,7 +2796,7 @@ async fn drive_run(
                     .and_then(|view| view.current_binding);
                 if let Err(error) = host.confirm_task_command_correlation(
                     &chat_id,
-                    &message_id,
+                    &steer.message_id,
                     &run_id,
                     binding.as_ref().map(|binding| binding.binding_id.as_str()),
                     binding.as_ref().map(|binding| binding.generation),
@@ -3068,7 +3095,18 @@ async fn drive_run(
         .unwrap_or_default();
     inner.remove_run(&chat_id, &run_id);
     inner.set_status_with_completion(&chat_id, final_status, false, final_completed_turn);
-    if !interrupted && !orphans.is_empty() {
+    let (redispatch, explicit): (Vec<_>, Vec<_>) = orphans
+        .into_iter()
+        .partition(|steer| steer.delivery == zeron_harness::SteerDelivery::AllowFollowUpTurn);
+    if let Some(host) = inner.doc_host() {
+        for steer in explicit {
+            if let Err(error) = host.mark_steer_correlation_unknown(&chat_id, &steer.message_id) {
+                tracing::error!(chat = %chat_id, %error,
+                    "explicit steer unknown-state persistence failed");
+            }
+        }
+    }
+    if !interrupted && !redispatch.is_empty() {
         // The dying run accepted these into its mailbox but never confirmed a
         // Steered boundary (idle-reaper race, a mid-turn error discarding
         // queued boundary steers, a parked child death). Their user entries
@@ -3080,7 +3118,7 @@ async fn drive_run(
         };
         let chat = chat_id.clone();
         tokio::spawn(async move {
-            for steer in orphans {
+            for steer in redispatch {
                 let Some(mut request) = engine.last_request(&chat) else {
                     tracing::warn!(chat = %chat, "orphaned steer lost: no run config to re-dispatch");
                     break;

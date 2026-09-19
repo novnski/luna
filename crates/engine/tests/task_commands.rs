@@ -76,8 +76,13 @@ impl Harness for CountingHarness {
                     tokio::select! {
                         _ = interrupt.cancelled() => break DoneStatus::Interrupted,
                         steer = steering.recv() => {
-                            if steer.is_none() {
-                                break DoneStatus::Completed;
+                            match steer {
+                                Some(mut steer) => {
+                                    if let Some(tx) = steer.acceptance.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                }
+                                None => break DoneStatus::Completed,
                             }
                         }
                     }
@@ -286,7 +291,7 @@ async fn steer_queue_case(
         CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
     ));
     wait_for_receipt(&client, "steer-caller-run", CommandReceiptStatus::Applied).await;
-    let active = tokio::time::timeout(Duration::from_secs(5), async {
+    let _active = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let read = snapshot(&client, &task_id).await;
             if read.snapshot.active_turn_id.is_some() {
@@ -298,27 +303,21 @@ async fn steer_queue_case(
     .await
     .unwrap();
     let attachments = if with_attachment {
-        vec!["/synthetic/queued.png"]
+        vec!["/synthetic/queued.png".to_string()]
     } else {
         Vec::new()
     };
-    let queued = execute(
-        &client,
-        envelope(
-            "steer-caller-enqueue",
+    core.doc_host
+        .queue_message_with_id_and_execution(
             &task_id,
-            Some(&active),
-            serde_json::json!({
-                "kind": "queueMessage",
-                "messageId": "steer-caller-row",
-                "text": "steer this row",
-                "attachments": attachments,
-                "holdForTurnEnd": true
-            }),
-        ),
-    )
-    .await;
-    assert_eq!(queued.status, CommandReceiptStatus::Applied);
+            "steer-caller-row",
+            "steer this row",
+            attachments,
+            true,
+            zeron_proto::FollowUpBehavior::Steer,
+            None,
+        )
+        .unwrap();
     let row = core
         .doc_host
         .queued_message(&task_id, "steer-caller-row")

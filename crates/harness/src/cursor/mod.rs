@@ -600,6 +600,15 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
+                    if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
+                        if let Some(tx) = msg.acceptance {
+                            let _ = tx.send(Err(
+                                "Cursor supports follow-up turns, not native in-turn steering"
+                                    .into(),
+                            ));
+                        }
+                        continue 'main;
+                    }
                     if parked {
                         parked = false;
                         let prev = std::mem::replace(&mut assistant_message_id, new_message_id());

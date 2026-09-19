@@ -190,6 +190,8 @@ async fn steer_after_done_becomes_the_next_turn() {
                         .send(SteerMessage {
                             prompt: "follow up".into(),
                             message_id: None,
+                            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                            acceptance: None,
                         })
                         .await
                         .expect("steer sent");

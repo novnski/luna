@@ -556,6 +556,8 @@ async fn steer_queues_mid_turn_and_delivers_at_idle() {
         .send(SteerMessage {
             prompt: "also do this".into(),
             message_id: None,
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
         })
         .await
         .unwrap();

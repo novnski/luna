@@ -47,8 +47,7 @@ use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, JUMP_SLOTS, KeymapConfig, RIGHT_PANE_DEFAULT,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
     SidebarOrganization, SidebarSort, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MAX_VH,
-    TERMINAL_MIN_HEIGHT, UiSettings, badge_combo, jump_hints_visible, modifier_send_hint_visible,
-    platform_combo,
+    TERMINAL_MIN_HEIGHT, UiSettings, badge_combo, jump_hints_visible, platform_combo,
 };
 use crate::state::{
     AppState, ConnectionStatus, EngineBootConfig, EngineMode, GatePhase, Indicator, OrgRow,
@@ -3854,6 +3853,7 @@ impl Shell {
                     let keymap = self.settings.keymap.clone();
                     let escape_stops_active_agent = self.settings.escape_stops_active_agent;
                     let composer_send_behavior = self.settings.composer_send_behavior;
+                    let follow_up_behavior = self.settings.follow_up_behavior;
                     let appshots_enabled = self.settings.appshots_enabled;
                     let appshot_sound_enabled = self.settings.appshot_sound_enabled;
                     let appshot_destination = self.settings.appshot_destination;
@@ -3863,6 +3863,7 @@ impl Shell {
                             keymap,
                             escape_stops_active_agent,
                             composer_send_behavior,
+                            follow_up_behavior,
                             appshots_enabled,
                             appshot_sound_enabled,
                             appshot_destination,
@@ -3882,6 +3883,9 @@ impl Shell {
                                 }
                                 ShortcutsEvent::ComposerSendBehaviorChanged(behavior) => {
                                     this.settings.composer_send_behavior = *behavior;
+                                }
+                                ShortcutsEvent::FollowUpBehaviorChanged(behavior) => {
+                                    this.settings.follow_up_behavior = *behavior;
                                 }
                                 ShortcutsEvent::AppshotsChanged {
                                     enabled,
@@ -4089,12 +4093,6 @@ impl Shell {
             && !self.overlay_owns_keyboard(cx)
             && jump_hints_visible(&self.settings.keymap, primary, mods.alt, mods.shift);
         self.set_jump_hints(visible, cx);
-        let queue_shortcut_revealed = matches!(self.route, Route::Chat)
-            && !self.overlay_owns_keyboard(cx)
-            && modifier_send_hint_visible(primary, mods.alt, mods.shift);
-        self.composer.update(cx, |composer, cx| {
-            composer.set_queue_shortcut_revealed(queue_shortcut_revealed, cx)
-        });
     }
 
     pub(super) fn set_jump_hints(&mut self, visible: bool, cx: &mut Context<Self>) {
@@ -9701,9 +9699,6 @@ impl Render for Shell {
                     if !window.is_window_active() {
                         this.reset_command_palette_key_state();
                         this.set_jump_hints(false, cx);
-                        this.composer.update(cx, |composer, cx| {
-                            composer.set_queue_shortcut_revealed(false, cx)
-                        });
                     }
                 },
             ));

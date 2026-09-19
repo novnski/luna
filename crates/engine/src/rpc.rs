@@ -63,8 +63,9 @@ use tokio::sync::watch;
 use zeron_doc::{MessagePart, RegistryDoc, SessionCommandPayload};
 use zeron_proto::{
     Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
-    CommandReceiptStatus, ComposerDraft, ComposerDraftRead, DraftBlobState, EngineInfo, HarnessId,
-    ImportOwnership, PermissionMode, TaskCommandSnapshot, TaskLineage, ToolCall, WorkspaceScope,
+    CommandReceiptStatus, ComposerDraft, ComposerDraftRead, DraftBlobState, EngineInfo,
+    FollowUpBehavior, HarnessId, ImportOwnership, PermissionMode, TaskCommandSnapshot, TaskLineage,
+    ToolCall, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 use zeron_sync::DocsStore;
@@ -264,6 +265,8 @@ enum TaskCommandIntent {
         attachments: Vec<String>,
         #[serde(default)]
         hold_for_turn_end: bool,
+        #[serde(default)]
+        follow_up_behavior: FollowUpBehavior,
         #[serde(default)]
         execution: Option<ChatConfig>,
     },
@@ -470,6 +473,8 @@ struct QueueMessageParams {
     /// supports mid-turn steering.
     #[serde(default)]
     hold_for_turn_end: bool,
+    #[serde(default)]
+    follow_up_behavior: FollowUpBehavior,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1999,6 +2004,7 @@ impl EngineRpc {
                 text,
                 attachments,
                 hold_for_turn_end,
+                follow_up_behavior,
                 execution,
             } => {
                 use crate::doc_host::QueueMutationOutcome;
@@ -2011,11 +2017,27 @@ impl EngineRpc {
                         &text,
                         attachments,
                         hold_for_turn_end,
+                        follow_up_behavior,
                         execution,
                     )
                     .await
                     .map_err(TaskProjectionError::Mutation)?;
                 if let Some(receipt) = committed {
+                    let accepted_turn_id = receipt.snapshot.active_turn_id.clone();
+                    if matches!(outcome, QueueMutationOutcome::Applied)
+                        && follow_up_behavior == FollowUpBehavior::Steer
+                        && let Err(error) = self
+                            .doc_host
+                            .steer_queued_now_for_turn(
+                                task_id,
+                                &message_id,
+                                accepted_turn_id.as_deref(),
+                            )
+                            .await
+                    {
+                        tracing::warn!(task = task_id, message = %message_id, %error,
+                            "preferred native steer attempt stayed queued");
+                    }
                     return Ok(Some(receipt));
                 }
                 let (status, applied, code, message, recovery) = match outcome {
@@ -2208,7 +2230,9 @@ impl EngineRpc {
                     .map_err(TaskProjectionError::Mutation)?
                 {
                     crate::doc_host::QueueDispatchOutcome::Started
-                    | crate::doc_host::QueueDispatchOutcome::AlreadyClaimed(_) => Ok(None),
+                    | crate::doc_host::QueueDispatchOutcome::AlreadyClaimed(_)
+                    | crate::doc_host::QueueDispatchOutcome::Rejected(_)
+                    | crate::doc_host::QueueDispatchOutcome::Unknown(_) => Ok(None),
                     crate::doc_host::QueueDispatchOutcome::RevisionConflict(_) => {
                         let receipt = self.finish_task_command(
                             command_id,
@@ -2282,7 +2306,9 @@ impl EngineRpc {
                     .map_err(TaskProjectionError::Mutation)?
                 {
                     crate::doc_host::QueueDispatchOutcome::Started
-                    | crate::doc_host::QueueDispatchOutcome::AlreadyClaimed(_) => Ok(None),
+                    | crate::doc_host::QueueDispatchOutcome::AlreadyClaimed(_)
+                    | crate::doc_host::QueueDispatchOutcome::Rejected(_)
+                    | crate::doc_host::QueueDispatchOutcome::Unknown(_) => Ok(None),
                     crate::doc_host::QueueDispatchOutcome::RevisionConflict(_) => {
                         let receipt = self.finish_task_command(
                             command_id,
@@ -3201,6 +3227,7 @@ impl RpcService for EngineRpc {
                         text: p.text,
                         attachments: p.attachments,
                         hold_for_turn_end: p.hold_for_turn_end,
+                        follow_up_behavior: p.follow_up_behavior,
                         execution: None,
                     },
                 );

@@ -48,6 +48,18 @@ pub enum HarnessError {
 pub struct SteerMessage {
     pub prompt: String,
     pub message_id: Option<String>,
+    /// Ordinary warm routing may become a fresh provider turn when it loses
+    /// the boundary race. Explicit queue steering must not.
+    pub delivery: SteerDelivery,
+    /// Provider-level acceptance for explicit steering. `None` for ordinary
+    /// warm routing, whose existing boundary fallback remains valid.
+    pub acceptance: Option<oneshot::Sender<Result<(), String>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteerDelivery {
+    AllowFollowUpTurn,
+    RequireActiveTurn,
 }
 
 /// Host-side controls handed to a run: input-request bridge + steering mailbox.

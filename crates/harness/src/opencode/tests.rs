@@ -173,6 +173,8 @@ impl TurnWire {
                 .send(crate::SteerMessage {
                     prompt: "second".into(),
                     message_id: None,
+                    delivery: crate::SteerDelivery::AllowFollowUpTurn,
+                    acceptance: None,
                 })
                 .await
                 .unwrap();

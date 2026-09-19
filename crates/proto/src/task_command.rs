@@ -6,6 +6,26 @@
 
 use serde::{Deserialize, Serialize};
 
+/// User-selected behavior for a follow-up submitted while a turn is active.
+/// Persisted both in device-local UI settings and on each durable queue row so
+/// changing the preference never rewrites work that was already accepted.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FollowUpBehavior {
+    #[default]
+    Queue,
+    Steer,
+}
+
+impl FollowUpBehavior {
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::Queue => Self::Steer,
+            Self::Steer => Self::Queue,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CommandReceiptStatus {

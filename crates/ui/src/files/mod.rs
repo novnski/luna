@@ -506,7 +506,7 @@ impl FilesSurface {
         let search_events = cx.subscribe(&search, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Edited => this.on_search_edited(cx),
             ComposerInputEvent::Submitted
-            | ComposerInputEvent::ModifiedSubmitted
+            | ComposerInputEvent::OppositeSubmitted
             | ComposerInputEvent::MentionAccept => this.activate_search_result(cx),
             ComposerInputEvent::MentionNavigate(delta) => {
                 let len = this.search_state.visible_len();

@@ -466,10 +466,12 @@ fn main() -> anyhow::Result<()> {
                     .unwrap(),
                 ];
                 state.chats = chats;
-                state.selected_chat = Some(TASK_A.into());
-                state.auto_selected = true;
                 state.chats_synced = true;
                 state.spaces_synced = true;
+                // Use the production selection transition so project-less
+                // task state (`no_project`, selected device, empty-body
+                // visibility) is initialized before the first frame.
+                state.select_chat(Some(TASK_A.into()), cx);
                 // Use the real attachment boundary after selection is known;
                 // it starts the transcript and queue watches exactly as the
                 // production reconnect path does.

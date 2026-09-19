@@ -1610,6 +1610,15 @@ async fn run_session(session: Session) {
             steer = steering.recv(), if steering_open => {
                 match steer {
                     Some(steer) => {
+                        if steer.delivery == crate::SteerDelivery::RequireActiveTurn {
+                            if let Some(tx) = steer.acceptance {
+                                let _ = tx.send(Err(
+                                    "OpenCode supports follow-up turns, not native in-turn steering"
+                                        .into(),
+                                ));
+                            }
+                            continue 'main;
+                        }
                         if turn.active {
                             queued_steers.push_back(steer.prompt);
                         } else {

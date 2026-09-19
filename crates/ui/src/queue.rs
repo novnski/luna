@@ -15,13 +15,12 @@ use gpui::{
 };
 use sha2::{Digest, Sha256};
 
-use zeron_doc::{QueueDeliveryGate, QueueMessageStatus, QueuedMessage};
+use zeron_doc::{QueueDeliveryGate, QueueHoldReason, QueueMessageStatus, QueuedMessage};
 use zeron_rpc::methods;
 
 use crate::composer::{Composer, QUEUE_COMPOSER_OVERLAP};
 use crate::icons::{self, icon};
 use crate::motion::{self, AnimationExt as _, TAB_SLIDE};
-use crate::settings::shortcuts::modifier_send_label;
 use crate::terminal::panel::{drop_index, slide_offset};
 use crate::theme::Theme;
 
@@ -121,11 +120,23 @@ impl QueuePrimaryAction {
     }
 }
 
+fn queue_hold_reason_label(reason: QueueHoldReason) -> &'static str {
+    match reason {
+        QueueHoldReason::SteeringUnavailable => "Steer unavailable",
+        QueueHoldReason::AttachmentsUnsupported => "Attachments cannot be steered",
+        QueueHoldReason::AwaitingApproval => "Waiting for approval",
+        QueueHoldReason::AwaitingInput => "Waiting for an answer",
+        QueueHoldReason::StaleTurn => "The active turn changed",
+        QueueHoldReason::ProviderRejected => "Provider rejected steer",
+    }
+}
+
 /// Resolve the one action this row advertises. Steer is deliberately narrower
 /// than Send now: it requires a live turn, a mid-turn-capable row harness, and
 /// an attachment-free held row. The engine repeats every restriction and owns
 /// the revision/turn/binding fences; this is only the truthful presentation.
 fn available_queue_primary_action(
+    behavior: zeron_proto::FollowUpBehavior,
     delivery_blocked: bool,
     host_supports_actions: bool,
     run_live: bool,
@@ -135,24 +146,15 @@ fn available_queue_primary_action(
     if delivery_blocked || !host_supports_actions {
         return None;
     }
-    Some(if run_live && harness_steers_mid_turn && !has_attachments {
-        QueuePrimaryAction::SteerNow
-    } else {
-        QueuePrimaryAction::SendNow
-    })
-}
-
-fn queue_latest_shortcut_visible(
-    index: usize,
-    count: usize,
-    reveal_requested: bool,
-    action_available: bool,
-) -> bool {
-    index.checked_add(1) == Some(count) && reveal_requested && action_available
-}
-
-fn latest_queued_message(items: &[QueuedMessage]) -> Option<&QueuedMessage> {
-    items.last()
+    match behavior {
+        zeron_proto::FollowUpBehavior::Queue => Some(QueuePrimaryAction::SendNow),
+        zeron_proto::FollowUpBehavior::Steer
+            if run_live && harness_steers_mid_turn && !has_attachments =>
+        {
+            Some(QueuePrimaryAction::SteerNow)
+        }
+        zeron_proto::FollowUpBehavior::Steer => None,
+    }
 }
 
 /// Translate a pointer inside the whole panel into a row slot. The top pad
@@ -318,7 +320,6 @@ impl Composer {
     /// nesting raised cards inside it.
     pub(crate) fn render_queue_panel(
         &mut self,
-        show_latest_shortcut: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -357,12 +358,10 @@ impl Composer {
                 self.queue_row(
                     &chat_id,
                     ix,
-                    count,
                     item,
                     drag,
                     &editing,
                     host_supports_actions,
-                    show_latest_shortcut,
                     &theme,
                     cx,
                 )
@@ -418,12 +417,10 @@ impl Composer {
         &self,
         chat_id: &str,
         ix: usize,
-        count: usize,
         item: &QueuedMessage,
         drag: Option<(usize, usize, usize, usize)>,
         editing: &Option<String>,
         host_supports_actions: bool,
-        show_latest_shortcut: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -433,14 +430,14 @@ impl Composer {
         let claim_blocked = !matches!(item.status, QueueMessageStatus::Held);
         let delivery_blocked = item.delivery_gate.is_some() || claim_blocked;
         let interaction_blocked = delivery_blocked || being_removed;
-        let text = match (&item.status, &item.delivery_gate) {
-            (QueueMessageStatus::Claimed { .. }, _) if !being_edited => {
+        let text = match (&item.status, &item.delivery_gate, item.hold_reason) {
+            (QueueMessageStatus::Claimed { .. }, _, _) if !being_edited => {
                 SharedString::from(format!(
                     "Sending… · {}",
                     one_line(&queue_visible_text(&item.text, &item.attachments))
                 ))
             }
-            (QueueMessageStatus::DeliveryUnknown { .. }, _) if !being_edited => {
+            (QueueMessageStatus::DeliveryUnknown { .. }, _, _) if !being_edited => {
                 SharedString::from(format!(
                     "Delivery unknown · {}",
                     one_line(&queue_visible_text(&item.text, &item.attachments))
@@ -451,10 +448,16 @@ impl Composer {
                 Some(QueueDeliveryGate::Editing {
                     owner_device_id, ..
                 }),
+                _,
             ) if !being_edited => SharedString::from(format!("Editing on {owner_device_id}")),
-            (_, Some(QueueDeliveryGate::ReviewRequired { .. })) if !being_edited => {
+            (_, Some(QueueDeliveryGate::ReviewRequired { .. }), _) if !being_edited => {
                 SharedString::from("Needs review")
             }
+            (_, _, Some(reason)) if !being_edited => SharedString::from(format!(
+                "{} · {}",
+                queue_hold_reason_label(reason),
+                one_line(&queue_visible_text(&item.text, &item.attachments))
+            )),
             _ => one_line(&queue_visible_text(&item.text, &item.attachments)),
         };
 
@@ -494,6 +497,7 @@ impl Composer {
             .or_else(|| self.pickers().read(cx).resolved(cx).harness);
         let harness_steers_mid_turn = self.pickers().read(cx).harness_steers_mid_turn(harness);
         let resolved_primary = available_queue_primary_action(
+            item.follow_up_behavior,
             interaction_blocked,
             host_supports_actions,
             run_live,
@@ -506,12 +510,6 @@ impl Composer {
             &key,
             primary_action,
             resolved_primary.is_some(),
-            queue_latest_shortcut_visible(
-                ix,
-                count,
-                show_latest_shortcut,
-                resolved_primary.is_some() && !being_removed,
-            ),
             theme,
             cx.listener(move |this, _, _, cx| {
                 this.activate_queued_primary(primary_id.clone(), primary_action, cx);
@@ -1030,7 +1028,6 @@ impl Composer {
         key: &SharedString,
         action: QueuePrimaryAction,
         enabled: bool,
-        show_shortcut: bool,
         theme: &Theme,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> AnyElement {
@@ -1075,19 +1072,7 @@ impl Composer {
                 .into()
             })
             .tooltip_show_delay(std::time::Duration::from_millis(350))
-            .child(if show_shortcut {
-                div()
-                    .child(if compact {
-                        if cfg!(target_os = "macos") {
-                            "⌘↵"
-                        } else {
-                            "⌃↵"
-                        }
-                    } else {
-                        modifier_send_label(cfg!(target_os = "macos"))
-                    })
-                    .into_any_element()
-            } else if compact {
+            .child(if compact {
                 icon(icons::QUEUE_SEND)
                     .size(px(QUEUE_ICON_SIZE))
                     .text_color(theme.text_muted)
@@ -1307,45 +1292,6 @@ impl Composer {
             QueuePrimaryAction::SendNow => self.send_queued_now(id, cx),
             QueuePrimaryAction::SteerNow => self.steer_queued_now(id, cx),
         }
-    }
-
-    /// Cmd/Ctrl+Enter on an empty composer activates the same action shown on
-    /// the most recently queued row. An edit/review gate or an old chat host
-    /// makes it a no-op.
-    pub(crate) fn activate_latest_queued(&mut self, cx: &mut Context<Self>) {
-        if self.editing_queued.is_some() {
-            return;
-        }
-        let (id, delivery_blocked, host_supports_actions, has_attachments, harness) = {
-            let state = self.state.read(cx);
-            let Some(chat_id) = state.selected_chat.as_deref() else {
-                return;
-            };
-            let Some(item) = latest_queued_message(&state.queue) else {
-                return;
-            };
-            (
-                item.id.clone(),
-                item.delivery_gate.is_some() || !matches!(item.status, QueueMessageStatus::Held),
-                state.chat_host_supports(
-                    chat_id,
-                    zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
-                ),
-                !item.attachments.is_empty(),
-                item.execution.as_ref().map(|execution| execution.harness),
-            )
-        };
-        let harness = harness.or_else(|| self.pickers().read(cx).resolved(cx).harness);
-        let Some(action) = available_queue_primary_action(
-            delivery_blocked,
-            host_supports_actions,
-            self.run_live(cx),
-            self.pickers().read(cx).harness_steers_mid_turn(harness),
-            has_attachments,
-        ) else {
-            return;
-        };
-        self.activate_queued_primary(id, action, cx);
     }
 
     /// Borrow the composer while the leased row reserves its queue position.
@@ -1960,7 +1906,6 @@ impl Composer {
                         this.update(cx, |composer, cx| {
                             composer.state.update(cx, |state, cx| {
                                 state.end_pending_send(&chat_id, id);
-                                state.refresh_selected_live_views_for(&chat_id, cx);
                                 cx.notify();
                             });
                         })
@@ -2014,9 +1959,8 @@ mod tests {
     use zeron_rpc::methods;
 
     use super::{
-        PANEL_PAD_TOP, QueuePrimaryAction, ROW_SLOT, available_queue_primary_action,
-        latest_queued_message, one_line, queue_action_needs_host, queue_drag_offsets,
-        queue_drop_index, queue_edit_upload_id, queue_latest_shortcut_visible,
+        PANEL_PAD_TOP, QueuePrimaryAction, ROW_SLOT, available_queue_primary_action, one_line,
+        queue_action_needs_host, queue_drag_offsets, queue_drop_index, queue_edit_upload_id,
         queue_mutation_acknowledged, queue_visible_text, visible_queue_rows,
     };
 
@@ -2058,48 +2002,71 @@ mod tests {
     #[test]
     fn available_primary_action_obeys_row_and_host_gates() {
         assert_eq!(
-            available_queue_primary_action(false, true, false, true, false),
+            available_queue_primary_action(
+                zeron_proto::FollowUpBehavior::Queue,
+                false,
+                true,
+                false,
+                true,
+                false
+            ),
             Some(QueuePrimaryAction::SendNow)
         );
         assert_eq!(
-            available_queue_primary_action(false, true, true, true, false),
+            available_queue_primary_action(
+                zeron_proto::FollowUpBehavior::Steer,
+                false,
+                true,
+                true,
+                true,
+                false
+            ),
             Some(QueuePrimaryAction::SteerNow)
         );
         assert_eq!(
-            available_queue_primary_action(false, true, true, false, false),
-            Some(QueuePrimaryAction::SendNow)
-        );
-        assert_eq!(
-            available_queue_primary_action(false, true, true, true, true),
-            Some(QueuePrimaryAction::SendNow)
-        );
-        assert_eq!(
-            available_queue_primary_action(true, true, true, true, false),
+            available_queue_primary_action(
+                zeron_proto::FollowUpBehavior::Steer,
+                false,
+                true,
+                true,
+                false,
+                false
+            ),
             None
         );
         assert_eq!(
-            available_queue_primary_action(false, false, true, true, false),
+            available_queue_primary_action(
+                zeron_proto::FollowUpBehavior::Steer,
+                false,
+                true,
+                true,
+                true,
+                true
+            ),
             None
         );
-    }
-
-    #[test]
-    fn queue_shortcut_only_appears_on_the_actionable_latest_row_when_revealed() {
-        assert!(!queue_latest_shortcut_visible(0, 2, true, true));
-        assert!(queue_latest_shortcut_visible(1, 2, true, true));
-        assert!(!queue_latest_shortcut_visible(1, 2, false, true));
-        assert!(!queue_latest_shortcut_visible(1, 2, true, false));
-        assert!(!queue_latest_shortcut_visible(0, 0, true, true));
-    }
-
-    #[test]
-    fn queue_shortcut_targets_the_most_recently_added_row() {
-        let items = vec![
-            zeron_doc::QueuedMessage::new("older", "first", "device"),
-            zeron_doc::QueuedMessage::new("newer", "second", "device"),
-        ];
-        assert_eq!(latest_queued_message(&items).unwrap().id, "newer");
-        assert!(latest_queued_message(&[]).is_none());
+        assert_eq!(
+            available_queue_primary_action(
+                zeron_proto::FollowUpBehavior::Queue,
+                true,
+                true,
+                true,
+                true,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            available_queue_primary_action(
+                zeron_proto::FollowUpBehavior::Queue,
+                false,
+                false,
+                true,
+                true,
+                false
+            ),
+            None
+        );
     }
 
     #[test]

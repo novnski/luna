@@ -1973,33 +1973,6 @@ impl AppState {
         }
     }
 
-    /// Re-arm both selected-doc projections after an accepted delivery
-    /// command. Keep the current rows mounted until the opening reset/list
-    /// frames arrive; this is the same authoritative refresh a task switch
-    /// performs, without requiring navigation or flashing an empty body.
-    pub(crate) fn refresh_selected_live_views_for(
-        &mut self,
-        expected_chat_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        if self.selected_chat.as_deref() != Some(expected_chat_id) {
-            return;
-        }
-        self.transcript_task = None;
-        self.queue_task = None;
-        let (Some(chat_id), Some(handle)) = (self.selected_chat.clone(), self.engine.clone())
-        else {
-            return;
-        };
-        self.transcript_task = Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
-        if handle
-            .engine_info()
-            .supports(zeron_proto::capabilities::MESSAGE_QUEUE_V1)
-        {
-            self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id));
-        }
-    }
-
     /// Select a project; the caller (shell) decides which chat to land on.
     /// `Some` clears a "Don't work in a project" opt-out and re-aims the
     /// device pick at the project's host; `None` IS that opt-out.
@@ -3634,6 +3607,84 @@ mod tests {
             state.select_device("empty-device".into(), cx);
             assert!(state.selected_space.is_none());
             assert_eq!(state.effective_device_id().as_deref(), Some("empty-device"));
+        });
+    }
+
+    #[gpui::test]
+    fn selected_transcript_watch_applies_later_doc_changes_without_rearming(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        const CHAT_ID: &str = "continuous-watch";
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime_guard = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let core = EngineCore::assemble(
+            dir.path(),
+            Arc::new(default_registry()),
+            HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_chat(CHAT_ID, None, Some(&core.device_id), None, None)
+            .unwrap();
+        let handle = EngineHandle::from_test_client(memory_client(core.rpc_service()));
+        let chats = core.workspace.read_chats().unwrap();
+        let state = cx.new(|cx| {
+            let mut state = AppState::new();
+            state.chats = chats;
+            state.chats_synced = true;
+            state.engine = Some(handle);
+            state.engine_generation = state.engine_generation.wrapping_add(1);
+            state.select_chat(Some(CHAT_ID.into()), cx);
+            state
+        });
+        cx.run_until_parked();
+        for _ in 0..200 {
+            if state.update(cx, |state, _| state.transcript_replayed) {
+                break;
+            }
+            runtime.block_on(tokio::time::sleep(std::time::Duration::from_millis(5)));
+            cx.run_until_parked();
+        }
+        state.update(cx, |state, _| {
+            assert_eq!(state.selected_chat.as_deref(), Some(CHAT_ID));
+            assert!(
+                state.transcript_replayed,
+                "opening transcript reset never arrived"
+            );
+        });
+
+        core.doc_host
+            .open(CHAT_ID)
+            .unwrap()
+            .write_user_message(
+                "m1",
+                "arrived on the standing watch",
+                Utc::now().timestamp_millis(),
+            )
+            .unwrap();
+        cx.run_until_parked();
+        for _ in 0..200 {
+            let arrived = state.update(cx, |state, _| !state.transcript.is_empty());
+            if arrived {
+                break;
+            }
+            runtime.block_on(tokio::time::sleep(std::time::Duration::from_millis(5)));
+            cx.run_until_parked();
+        }
+
+        state.update(cx, |state, _| {
+            assert_eq!(state.transcript.len(), 1);
+            assert_eq!(state.transcript[0].id, "m1");
+            assert!(matches!(
+                state.transcript[0].parts.first(),
+                Some(zeron_doc::MessagePart::Text { text, .. })
+                    if text == "arrived on the standing watch"
+            ));
         });
     }
 

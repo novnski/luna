@@ -514,20 +514,6 @@ pub fn composer_has_content(text: &str, attachments: usize, comments: usize) -> 
     !text.trim().is_empty() || attachments > 0 || comments > 0
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModifiedSubmitTarget {
-    SubmitContent,
-    ActivateLatestQueued,
-}
-
-fn modified_submit_target(has_content: bool) -> ModifiedSubmitTarget {
-    if has_content {
-        ModifiedSubmitTarget::SubmitContent
-    } else {
-        ModifiedSubmitTarget::ActivateLatestQueued
-    }
-}
-
 pub const APPSHOT_TILE_MIN_WIDTH: f32 = 96.0;
 pub const APPSHOT_IMAGE_INSET: f32 = 12.0;
 pub const APPSHOT_PREVIEW_HEIGHT: f32 = 148.0;
@@ -848,7 +834,7 @@ actions!(
         Paste,
         Newline,
         MessageNewlineOrAccept,
-        ModifiedSubmit,
+        OppositeSubmit,
         Submit,
         Undo,
         Redo,
@@ -1359,7 +1345,7 @@ const PALETTE_SEARCH_CONTEXT: &str = "PaletteSearch";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MessageEnterBindingAction {
     Submit,
-    ModifiedSubmit,
+    OppositeSubmit,
     NewlineOrAccept,
 }
 
@@ -1373,7 +1359,7 @@ fn message_enter_bindings(
     behavior: ComposerSendBehavior,
     modifier_combo: &str,
 ) -> Vec<MessageEnterBinding> {
-    match behavior {
+    let mut bindings = match behavior {
         ComposerSendBehavior::Enter => vec![
             MessageEnterBinding {
                 keystroke: "enter".into(),
@@ -1381,7 +1367,7 @@ fn message_enter_bindings(
             },
             MessageEnterBinding {
                 keystroke: modifier_combo.into(),
-                action: MessageEnterBindingAction::ModifiedSubmit,
+                action: MessageEnterBindingAction::Submit,
             },
         ],
         ComposerSendBehavior::ModEnter => vec![
@@ -1391,10 +1377,15 @@ fn message_enter_bindings(
             },
             MessageEnterBinding {
                 keystroke: modifier_combo.into(),
-                action: MessageEnterBindingAction::ModifiedSubmit,
+                action: MessageEnterBindingAction::Submit,
             },
         ],
-    }
+    };
+    bindings.push(MessageEnterBinding {
+        keystroke: format!("shift-{modifier_combo}"),
+        action: MessageEnterBindingAction::OppositeSubmit,
+    });
+    bindings
 }
 
 fn message_input_context(wizard_active: bool) -> &'static str {
@@ -1519,9 +1510,9 @@ pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
                 Submit,
                 Some(MESSAGE_COMPOSER_CONTEXT),
             )),
-            MessageEnterBindingAction::ModifiedSubmit => message_bindings.push(KeyBinding::new(
+            MessageEnterBindingAction::OppositeSubmit => message_bindings.push(KeyBinding::new(
                 &binding.keystroke,
-                ModifiedSubmit,
+                OppositeSubmit,
                 Some(MESSAGE_COMPOSER_CONTEXT),
             )),
             MessageEnterBindingAction::NewlineOrAccept => message_bindings.push(KeyBinding::new(
@@ -1605,7 +1596,7 @@ pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComposerInputEvent {
     Submitted,
-    ModifiedSubmitted,
+    OppositeSubmitted,
     Edited,
     CursorMoved,
     ViewportChanged,
@@ -2639,10 +2630,10 @@ impl ComposerInput {
         }
     }
 
-    fn modified_submit(&mut self, _: &ModifiedSubmit, _: &mut Window, cx: &mut Context<Self>) {
+    fn opposite_submit(&mut self, _: &OppositeSubmit, _: &mut Window, cx: &mut Context<Self>) {
         match enter_outcome(self.mention_has_selection, EnterOutcome::Submit) {
             EnterOutcome::AcceptCompletion => cx.emit(ComposerInputEvent::MentionAccept),
-            EnterOutcome::Submit => cx.emit(ComposerInputEvent::ModifiedSubmitted),
+            EnterOutcome::Submit => cx.emit(ComposerInputEvent::OppositeSubmitted),
             EnterOutcome::Newline => unreachable!("submit action cannot insert a newline"),
         }
     }
@@ -3793,7 +3784,7 @@ impl Render for ComposerInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::message_newline_or_accept))
-            .on_action(cx.listener(Self::modified_submit))
+            .on_action(cx.listener(Self::opposite_submit))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
@@ -4113,9 +4104,6 @@ pub struct Composer {
     /// Rows awaiting a host-authoritative removal acknowledgement. They stay
     /// visible but inert until the host wins the race against queue delivery.
     pub(crate) queue_removing: HashSet<String>,
-    /// Whether the modifier overlay should currently reveal the queue hint.
-    /// The shell owns modifier tracking and clears this on window deactivation.
-    queue_shortcut_revealed: bool,
     /// Interrupt/answer commands get their own slot: assigning `send_task`
     /// DROPPED an in-flight send future mid-upload — no banner, no cleanup,
     /// `sending` stuck true forever (2026-08-19 incident, "press Stop while
@@ -4259,13 +4247,6 @@ impl Composer {
         }
     }
 
-    pub(crate) fn set_queue_shortcut_revealed(&mut self, revealed: bool, cx: &mut Context<Self>) {
-        if self.queue_shortcut_revealed != revealed {
-            self.queue_shortcut_revealed = revealed;
-            cx.notify();
-        }
-    }
-
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.on_release(|this, cx| this.release_queue_previews(cx))
             .detach();
@@ -4298,7 +4279,7 @@ impl Composer {
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));
         let input_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.on_submit(cx),
-            ComposerInputEvent::ModifiedSubmitted => this.on_modified_submit(cx),
+            ComposerInputEvent::OppositeSubmitted => this.on_opposite_submit(cx),
             ComposerInputEvent::Edited => {
                 this.on_input_edited(cx);
                 if this.wizard.is_none() && !std::mem::take(&mut this.suppress_next_draft_edit) {
@@ -4415,7 +4396,6 @@ impl Composer {
             queue_full_preview: None,
             queue_previews: HashMap::new(),
             queue_removing: HashSet::new(),
-            queue_shortcut_revealed: false,
             expanded_mode: false,
             flip_epoch: 0,
             compact_capacity: 0.0,
@@ -7416,27 +7396,36 @@ impl Composer {
             SendButtonMode::Stop => {}
             _ if no_content => {}
             _ if self.send_blocked(cx) => {}
-            SendButtonMode::Send => self.send(text, false, cx),
+            SendButtonMode::Send => self.send(text, None, cx),
             // Busy: keep the message queued until the current turn ends.
-            SendButtonMode::Queue => self.send(text, true, cx),
+            SendButtonMode::Queue => {
+                let behavior = crate::settings::current(cx).follow_up_behavior;
+                self.send(text, Some(behavior), cx)
+            }
         }
     }
 
-    /// Cmd/Ctrl+Enter remains an ordinary submit while the composer carries
-    /// content. With a truly empty composer it instead activates the most
-    /// recently queued row, and never turns an empty chord into Stop.
-    fn on_modified_submit(&mut self, cx: &mut Context<Self>) {
+    /// Cmd/Ctrl+Shift+Enter performs the opposite active-turn follow-up once
+    /// without changing the persisted preference. Outside a live run it is
+    /// just a normal submit, and an empty chord never interrupts.
+    fn on_opposite_submit(&mut self, cx: &mut Context<Self>) {
         if self.commit_queue_edit(cx) {
             return;
         }
+        let text = self.input.read(cx).text().trim().to_string();
         let has_content = composer_has_content(
-            self.input.read(cx).text(),
+            &text,
             self.staged().len() + self.staged_appshots().len(),
             self.staged_comments(cx).len(),
         );
-        match modified_submit_target(has_content) {
-            ModifiedSubmitTarget::SubmitContent => self.on_submit(cx),
-            ModifiedSubmitTarget::ActivateLatestQueued => self.activate_latest_queued(cx),
+        if !has_content || self.send_blocked(cx) {
+            return;
+        }
+        if self.run_live(cx) {
+            let behavior = crate::settings::current(cx).follow_up_behavior.opposite();
+            self.send(text, Some(behavior), cx);
+        } else {
+            self.on_submit(cx);
         }
     }
 
@@ -7445,7 +7434,13 @@ impl Composer {
     /// thread the picked config in: worktree creation (when the isolated toggle
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
-    fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+    fn send(
+        &mut self,
+        text: String,
+        follow_up_behavior: Option<zeron_proto::FollowUpBehavior>,
+        cx: &mut Context<Self>,
+    ) {
+        let queue = follow_up_behavior.is_some();
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.failure = Some("Engine not connected".into());
             self.failure_key = None; // global — meaningful on every chat
@@ -8058,6 +8053,7 @@ impl Composer {
                         "text": queue_text,
                         "attachments": attachment_paths,
                         "holdForTurnEnd": true,
+                        "followUpBehavior": follow_up_behavior.unwrap_or_default(),
                         "execution": resolved.chat_config(),
                     });
                     let receipt = crate::task_commands::execute_receipt_on_with_id(
@@ -8223,10 +8219,6 @@ impl Composer {
                     .state
                     .update(cx, |s, _| s.end_upload_progress());
                 if let Ok(ComposerSendOutcome::Queued(message_id)) = &result {
-                    composer.state.update(cx, |state, cx| {
-                        state.refresh_selected_live_views_for(&err_chat_id, cx);
-                        cx.notify();
-                    });
                     cx.emit(ComposerEvent::Queued {
                         chat_id: err_chat_id.clone(),
                         message_id: message_id.clone(),
@@ -9116,28 +9108,17 @@ impl Render for Composer {
         // What is waiting to be sent, stacked directly above the box it was
         // typed in — the queue is a property of this composer, not a panel
         // somewhere else.
-        let show_queue_latest_shortcut = self.queue_shortcut_revealed
-            && self.editing_queued.is_none()
-            && !self.pickers.read(cx).is_open()
-            && !composer_has_content(
-                self.input.read(cx).text(),
-                self.staged().len() + self.staged_appshots().len(),
-                self.staged_comments(cx).len(),
-            );
-        let container = container.when_some(
-            self.render_queue_panel(show_queue_latest_shortcut, window, cx),
-            |el, panel| {
-                el.child(motion::fade_quick(
-                    "composer-queue",
-                    div()
-                        .mx(px(QUEUE_SIDE_INSET))
-                        // Cancel the column gap, then tuck the tray one pixel
-                        // behind the composer painted after it.
-                        .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))
-                        .child(panel),
-                ))
-            },
-        );
+        let container = container.when_some(self.render_queue_panel(window, cx), |el, panel| {
+            el.child(motion::fade_quick(
+                "composer-queue",
+                div()
+                    .mx(px(QUEUE_SIDE_INSET))
+                    // Cancel the column gap, then tuck the tray one pixel
+                    // behind the composer painted after it.
+                    .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))
+                    .child(panel),
+            ))
+        });
         // Escape backs out of a queue-row edit (the row keeps its old text).
         // Bound here rather than in the input: the input's own Escape belongs
         // to the mention/slash popups, which outrank this while they're open.
@@ -10538,7 +10519,11 @@ mod tests {
                 },
                 MessageEnterBinding {
                     keystroke: "cmd-enter".into(),
-                    action: MessageEnterBindingAction::ModifiedSubmit,
+                    action: MessageEnterBindingAction::Submit,
+                },
+                MessageEnterBinding {
+                    keystroke: "shift-cmd-enter".into(),
+                    action: MessageEnterBindingAction::OppositeSubmit,
                 },
             ]
         );
@@ -10551,7 +10536,11 @@ mod tests {
                 },
                 MessageEnterBinding {
                     keystroke: "cmd-enter".into(),
-                    action: MessageEnterBindingAction::ModifiedSubmit,
+                    action: MessageEnterBindingAction::Submit,
+                },
+                MessageEnterBinding {
+                    keystroke: "shift-cmd-enter".into(),
+                    action: MessageEnterBindingAction::OppositeSubmit,
                 },
             ]
         );
@@ -10564,20 +10553,25 @@ mod tests {
                 },
                 MessageEnterBinding {
                     keystroke: "ctrl-enter".into(),
-                    action: MessageEnterBindingAction::ModifiedSubmit,
+                    action: MessageEnterBindingAction::Submit,
+                },
+                MessageEnterBinding {
+                    keystroke: "shift-ctrl-enter".into(),
+                    action: MessageEnterBindingAction::OppositeSubmit,
                 },
             ]
         );
     }
 
     #[test]
-    fn message_enter_never_adds_extra_modifier_bindings() {
+    fn message_enter_adds_only_the_fixed_opposite_modifier_binding() {
         let bindings = message_enter_bindings(ComposerSendBehavior::ModEnter, "cmd-enter");
+        assert!(bindings.iter().any(|binding| {
+            binding.keystroke == "shift-cmd-enter"
+                && binding.action == MessageEnterBindingAction::OppositeSubmit
+        }));
         assert!(!bindings.iter().any(|binding| {
-            matches!(
-                binding.keystroke.as_str(),
-                "ctrl-enter" | "shift-cmd-enter" | "alt-cmd-enter"
-            )
+            matches!(binding.keystroke.as_str(), "ctrl-enter" | "alt-cmd-enter")
         }));
     }
 
@@ -11555,26 +11549,6 @@ mod tests {
         assert!(composer_has_content("hi", 0, 0));
         assert!(composer_has_content("", 1, 0));
         assert!(composer_has_content("", 0, 1));
-    }
-
-    #[test]
-    fn modified_submit_sends_content_and_activates_latest_queue_row_when_empty() {
-        assert_eq!(
-            modified_submit_target(composer_has_content("message", 0, 0)),
-            ModifiedSubmitTarget::SubmitContent
-        );
-        assert_eq!(
-            modified_submit_target(composer_has_content("", 1, 0)),
-            ModifiedSubmitTarget::SubmitContent
-        );
-        assert_eq!(
-            modified_submit_target(composer_has_content("", 0, 1)),
-            ModifiedSubmitTarget::SubmitContent
-        );
-        assert_eq!(
-            modified_submit_target(composer_has_content("  ", 0, 0)),
-            ModifiedSubmitTarget::ActivateLatestQueued
-        );
     }
 
     #[test]

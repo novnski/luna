@@ -610,6 +610,8 @@ pub struct UiSettings {
     pub window_geometry: Option<WindowGeometry>,
     /// Submit using Enter or the platform modifier plus Enter.
     pub composer_send_behavior: ComposerSendBehavior,
+    /// What a primary submit does while the selected task has a live turn.
+    pub follow_up_behavior: zeron_proto::FollowUpBehavior,
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
     /// Legacy: the grouped-by-project toggle predates spaces (which group by
@@ -770,6 +772,7 @@ impl Default for UiSettings {
             keymap: KeymapConfig::default(),
             escape_stops_active_agent: false,
             composer_send_behavior: ComposerSendBehavior::default(),
+            follow_up_behavior: zeron_proto::FollowUpBehavior::default(),
             appshots_enabled: false,
             appshot_sound_enabled: true,
             appshot_destination: crate::appshots::AppshotDestination::Automatic,
@@ -1441,6 +1444,10 @@ mod tests {
 
         let loaded = UiSettings::load(dir.path());
         assert_eq!(loaded.composer_send_behavior, ComposerSendBehavior::Enter);
+        assert_eq!(
+            loaded.follow_up_behavior,
+            zeron_proto::FollowUpBehavior::Queue
+        );
         assert!(loaded.open_web_links_in_zeron);
         assert!(loaded.new_thread_composer_background.is_none());
         assert_eq!(
@@ -1939,6 +1946,7 @@ mod tests {
             },
             escape_stops_active_agent: true,
             composer_send_behavior: ComposerSendBehavior::ModEnter,
+            follow_up_behavior: zeron_proto::FollowUpBehavior::Steer,
             appshots_enabled: false,
             appshot_sound_enabled: true,
             // The destination is only persisted where Appshots exist (macOS and

@@ -17,7 +17,7 @@
 
 use loro::ToJson;
 use serde::{Deserialize, Serialize};
-use zeron_proto::ChatConfig;
+use zeron_proto::{ChatConfig, FollowUpBehavior};
 
 use crate::schema::{DocError, SessionDoc};
 
@@ -38,6 +38,13 @@ pub struct QueuedMessage {
     /// visible until turn end or an explicit Steer now / Send now action.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hold_for_turn_end: bool,
+    /// The behavior chosen when this row was submitted. This is immutable
+    /// across preference changes; legacy rows default to Queue.
+    #[serde(default)]
+    pub follow_up_behavior: FollowUpBehavior,
+    /// Why a requested steer is still held instead of appearing sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_reason: Option<QueueHoldReason>,
     /// Device that queued it.
     pub issued_by: String,
     /// Epoch millis.
@@ -88,6 +95,17 @@ pub enum QueueDeliveryGate {
         since_ms: i64,
         base_text_hash: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QueueHoldReason {
+    SteeringUnavailable,
+    AttachmentsUnsupported,
+    AwaitingApproval,
+    AwaitingInput,
+    StaleTurn,
+    ProviderRejected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -147,6 +165,8 @@ impl QueuedMessage {
             text: text.into(),
             attachments: Vec::new(),
             hold_for_turn_end: false,
+            follow_up_behavior: FollowUpBehavior::Queue,
+            hold_reason: None,
             issued_by: issued_by.into(),
             issued_at: 0,
             edited_at: None,
@@ -319,6 +339,7 @@ impl SessionDoc {
         }
         map.insert("revision", current_revision(&map).saturating_add(1) as i64)?;
         map.delete("deliveryGate")?;
+        map.delete("holdReason")?;
         self.doc().commit();
         Ok(true)
     }
@@ -412,6 +433,7 @@ impl SessionDoc {
             "status",
             crate::schema::loro_value_from_json(&serde_json::to_value(&item.status)?),
         )?;
+        map.delete("holdReason")?;
         self.doc().commit();
         Ok(QueueClaimOutcome::Claimed(item))
     }
@@ -486,6 +508,71 @@ impl SessionDoc {
         Ok(true)
     }
 
+    /// Return an explicitly rejected steer to Held without changing its
+    /// content revision. Only the matching claim may be released.
+    pub fn reject_queued_steer_claim(
+        &self,
+        id: &str,
+        command_id: &str,
+        reason: QueueHoldReason,
+    ) -> Result<Option<QueuedMessage>, DocError> {
+        let queue = self.doc().get_movable_list("queue");
+        let Some(index) = index_of(&queue, id) else {
+            return Ok(None);
+        };
+        let Some(item) = self.read_queue()?.into_iter().find(|item| item.id == id) else {
+            return Ok(None);
+        };
+        if !matches!(
+            &item.status,
+            QueueMessageStatus::Claimed {
+                command_id: current,
+                mode: QueueClaimMode::SteerNow,
+                ..
+            } if current == command_id
+        ) {
+            return Ok(None);
+        }
+        let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) = queue.get(index)
+        else {
+            return Ok(None);
+        };
+        map.delete("status")?;
+        map.insert(
+            "holdReason",
+            crate::schema::loro_value_from_json(&serde_json::to_value(reason)?),
+        )?;
+        self.doc().commit();
+        Ok(self.read_queue()?.into_iter().find(|item| item.id == id))
+    }
+
+    pub fn set_queued_hold_reason(
+        &self,
+        id: &str,
+        reason: QueueHoldReason,
+    ) -> Result<Option<QueuedMessage>, DocError> {
+        let queue = self.doc().get_movable_list("queue");
+        let Some(index) = index_of(&queue, id) else {
+            return Ok(None);
+        };
+        let Some(item) = self.read_queue()?.into_iter().find(|item| item.id == id) else {
+            return Ok(None);
+        };
+        if !matches!(item.status, QueueMessageStatus::Held) || item.delivery_gate.is_some() {
+            return Ok(None);
+        }
+        let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) = queue.get(index)
+        else {
+            return Ok(None);
+        };
+        map.insert(
+            "holdReason",
+            crate::schema::loro_value_from_json(&serde_json::to_value(reason)?),
+        )?;
+        self.doc().commit();
+        Ok(self.read_queue()?.into_iter().find(|item| item.id == id))
+    }
+
     /// Remove a row and hand it back — the host's "send this one" path.
     /// `None` when it is already gone, which is the race we want: two devices
     /// popping the same row means exactly one of them gets it.
@@ -546,6 +633,18 @@ fn write_queued_map(map: &loro::LoroMap, item: &QueuedMessage) -> Result<(), Doc
     if item.hold_for_turn_end {
         map.insert("holdForTurnEnd", true)?;
     }
+    if item.follow_up_behavior != FollowUpBehavior::Queue {
+        map.insert(
+            "followUpBehavior",
+            crate::schema::loro_value_from_json(&serde_json::to_value(item.follow_up_behavior)?),
+        )?;
+    }
+    if let Some(reason) = item.hold_reason {
+        map.insert(
+            "holdReason",
+            crate::schema::loro_value_from_json(&serde_json::to_value(reason)?),
+        )?;
+    }
     if let Some(edited_at) = item.edited_at {
         map.insert("editedAt", edited_at)?;
     }
@@ -590,6 +689,13 @@ fn queued_from_json(v: serde_json::Value) -> Option<QueuedMessage> {
             .get("holdForTurnEnd")
             .and_then(|value| value.as_bool())
             .unwrap_or(false),
+        follow_up_behavior: v
+            .get("followUpBehavior")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default(),
+        hold_reason: v
+            .get("holdReason")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
         issued_by: v
             .get("issuedBy")
             .and_then(|d| d.as_str())
@@ -655,6 +761,8 @@ mod tests {
             text: text.into(),
             attachments: Vec::new(),
             hold_for_turn_end: false,
+            follow_up_behavior: FollowUpBehavior::Queue,
+            hold_reason: None,
             issued_by: "device-a".into(),
             issued_at: 1_000,
             edited_at: None,
@@ -708,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn hold_policy_round_trips_and_old_rows_default_to_automatic_steering() {
+    fn hold_policy_round_trips_and_old_rows_default_to_queue() {
         let doc = doc();
         let mut held = item("q1", "hold this");
         held.hold_for_turn_end = true;
@@ -718,6 +826,50 @@ mod tests {
         let rows = doc.read_queue().unwrap();
         assert!(rows[0].hold_for_turn_end);
         assert!(!rows[1].hold_for_turn_end);
+        assert_eq!(rows[1].follow_up_behavior, FollowUpBehavior::Queue);
+    }
+
+    #[test]
+    fn steer_intent_and_hold_reason_round_trip_without_rewriting_content() {
+        let doc = doc();
+        let mut steered = item("q1", "steer this");
+        steered.follow_up_behavior = FollowUpBehavior::Steer;
+        steered.hold_reason = Some(QueueHoldReason::AttachmentsUnsupported);
+        doc.push_queued(&steered).unwrap();
+
+        let restored = {
+            let copy = loro::LoroDoc::new();
+            copy.import(&doc.export_snapshot().unwrap()).unwrap();
+            SessionDoc::from_doc(copy)
+        };
+        assert_eq!(restored.read_queue().unwrap(), vec![steered]);
+    }
+
+    #[test]
+    fn rejected_native_steer_releases_the_same_row_with_reason() {
+        let doc = doc();
+        let mut row = item("q1", "keep me");
+        row.follow_up_behavior = FollowUpBehavior::Steer;
+        doc.push_queued(&row).unwrap();
+        assert!(matches!(
+            doc.claim_queued("q1", 1, "steer-1", QueueClaimMode::SteerNow, 2_000)
+                .unwrap(),
+            QueueClaimOutcome::Claimed(_)
+        ));
+
+        let released = doc
+            .reject_queued_steer_claim("q1", "steer-1", QueueHoldReason::ProviderRejected)
+            .unwrap()
+            .expect("same row retained");
+        assert_eq!(released.id, "q1");
+        assert_eq!(released.text, "keep me");
+        assert_eq!(released.revision, 1);
+        assert_eq!(released.follow_up_behavior, FollowUpBehavior::Steer);
+        assert_eq!(
+            released.hold_reason,
+            Some(QueueHoldReason::ProviderRejected)
+        );
+        assert!(matches!(released.status, QueueMessageStatus::Held));
     }
 
     #[test]

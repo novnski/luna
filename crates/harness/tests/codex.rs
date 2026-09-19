@@ -489,6 +489,8 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: None,
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
         })
         .await
         .expect("steer queued");
@@ -526,12 +528,70 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
 }
 
 #[tokio::test]
+async fn explicit_steer_confirms_native_turn_steer_acceptance() {
+    let (controls, steer, _token) = controls("Yes");
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "redirect please".into(),
+            message_id: Some("queued-steer".into()),
+            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(accepted_tx),
+        })
+        .await
+        .expect("steer queued");
+    let events = run_to_end(&harness(), request("scenario:steer"), controls).await;
+
+    assert_eq!(accepted_rx.await.expect("acceptance response"), Ok(()));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. }))
+    );
+    assert!(events.contains(&AgentEvent::TextDelta {
+        text: "steered".into()
+    }));
+}
+
+#[tokio::test]
+async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
+    let (controls, steer, _token) = controls("Yes");
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "redirect please".into(),
+            message_id: Some("queued-steer".into()),
+            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(accepted_tx),
+        })
+        .await
+        .expect("steer queued");
+    drop(steer);
+    let events = run_to_end(&harness(), request("scenario:steer-race"), controls).await;
+
+    assert!(accepted_rx.await.expect("acceptance response").is_err());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::Done { .. }))
+            .count(),
+        1,
+        "explicit steering must not manufacture a second provider turn: {events:?}"
+    );
+    assert!(!events.contains(&AgentEvent::TextDelta {
+        text: "fallback".into()
+    }));
+}
+
+#[tokio::test]
 async fn rejected_steer_falls_back_to_a_follow_up_turn() {
     let (controls, steer, _token) = controls("Yes");
     steer
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: None,
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
         })
         .await
         .expect("steer queued");
@@ -1173,6 +1233,8 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
             steer.send(SteerMessage {
                 prompt: "Reuse the SAME existing subagent for one more task: reply exactly child-second. Use followup_task if available, otherwise send_input. Do not spawn a new agent. Wait for it to finish, then reply exactly parent-second. Do not inspect or change files.".into(),
                 message_id: None,
+                delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                acceptance: None,
             }).await.unwrap();
         }
         if turn == 2 {

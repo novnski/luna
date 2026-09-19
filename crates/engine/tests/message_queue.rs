@@ -25,7 +25,7 @@ use zeron_engine::doc_host::{
 use zeron_engine::{EngineCore, HarnessRegistry};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode, ToolCall,
     UserInputQuestion,
 };
 
@@ -41,18 +41,28 @@ struct HeldHarness {
     /// Park the first turn on a question instead of just hanging, so the chat
     /// sits in `AwaitingInput` rather than `Working`.
     asks: bool,
+    /// Use the same input bridge with typed approval metadata.
+    approves: bool,
 }
 
 impl HeldHarness {
     fn new(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, false)
+        Self::build(steering, false, false)
     }
 
     fn asking(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
-        Self::build(steering, true)
+        Self::build(steering, true, false)
     }
 
-    fn build(steering: SteeringMode, asks: bool) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
+    fn approving(steering: SteeringMode) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
+        Self::build(steering, true, true)
+    }
+
+    fn build(
+        steering: SteeringMode,
+        asks: bool,
+        approves: bool,
+    ) -> (Arc<Self>, Arc<Mutex<Vec<String>>>) {
         let (finish, _) = tokio::sync::broadcast::channel(16);
         let prompts = Arc::new(Mutex::new(Vec::new()));
         (
@@ -62,6 +72,7 @@ impl HeldHarness {
                 prompts: prompts.clone(),
                 requests: Mutex::new(Vec::new()),
                 asks,
+                approves,
             }),
             prompts,
         )
@@ -104,43 +115,76 @@ impl Harness for HeldHarness {
                 question: "which one?".into(),
                 options: vec!["a".into(), "b".into()],
                 multi_select: false,
-                approval: None,
+                approval: self.approves.then(|| zeron_proto::ApprovalRequest {
+                    provider_request_id: "approval-1".into(),
+                    provider: HarnessId::Mock,
+                    turn_id: None,
+                    machine_name: "synthetic".into(),
+                    action_kind: zeron_proto::ApprovalActionKind::Command,
+                    summary: "synthetic approval".into(),
+                    requested_scope: zeron_proto::PermissionScope::Workspace,
+                    expires_at_ms: i64::MAX,
+                    supports_task_allowance: false,
+                }),
             }]);
         }
-        let mut finish = self.finish.subscribe();
-        let mut steering = controls.steering;
-        let started = futures::stream::iter(vec![Ok(AgentEvent::SessionStarted {
-            harness: HarnessId::Mock,
-            model: "mock-1".into(),
-            tools: vec![],
-            cwd: request.cwd.clone(),
-            session_id: "sess-queue".into(),
-            assistant_message_id: format!("a-{}", request.prompt),
-        })]);
-        let done = futures::stream::once(async move {
-            loop {
+        let finish = self.finish.subscribe();
+        let steering = controls.steering;
+        let started = futures::stream::iter(vec![
+            Ok(AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: vec![],
+                cwd: request.cwd.clone(),
+                session_id: "sess-queue".into(),
+                assistant_message_id: format!("a-{}", request.prompt),
+            }),
+            Ok(AgentEvent::ToolCall {
+                id: "completed-tool".into(),
+                call: ToolCall::Unknown {
+                    name: "synthetic".into(),
+                    input: Some(serde_json::json!({})),
+                },
+            }),
+            Ok(AgentEvent::ToolResult {
+                id: "completed-tool".into(),
+                is_error: false,
+                output: None,
+                diff: None,
+            }),
+        ]);
+        let done = futures::stream::unfold(
+            (finish, steering, false),
+            |(mut finish, mut steering, ended)| async move {
+                if ended {
+                    return None;
+                }
                 tokio::select! {
                     _ = finish.recv() => {
-                        return Ok(AgentEvent::Done {
+                        return Some((Ok(AgentEvent::Done {
                             status: DoneStatus::Completed,
                             result: None,
                             error: None,
                             session_id: Some("sess-queue".into()),
-                        });
+                        }), (finish, steering, true)));
                     }
                     steer = steering.recv() => {
-                        if steer.is_none() {
-                            return Ok(AgentEvent::Done {
-                                status: DoneStatus::Completed,
-                                result: None,
-                                error: None,
-                                session_id: Some("sess-queue".into()),
-                            });
+                        match steer {
+                            Some(mut steer) => {
+                                if let Some(tx) = steer.acceptance.take() {
+                                    let _ = tx.send(Ok(()));
+                                }
+                                return Some((Ok(AgentEvent::Steered {
+                                    assistant_message_id: Some("a-before-steer".into()),
+                                    next_assistant_message_id: Some("a-after-steer".into()),
+                                }), (finish, steering, false)));
+                            }
+                            None => return None,
                         }
                     }
                 }
-            }
-        });
+            },
+        );
         Ok(started.chain(done).boxed())
     }
 }
@@ -219,6 +263,12 @@ async fn setup_asking(
     steering: SteeringMode,
 ) -> (EngineCore, Arc<HeldHarness>, Arc<Mutex<Vec<String>>>) {
     setup_with(HeldHarness::asking(steering)).await
+}
+
+async fn setup_approving(
+    steering: SteeringMode,
+) -> (EngineCore, Arc<HeldHarness>, Arc<Mutex<Vec<String>>>) {
+    setup_with(HeldHarness::approving(steering)).await
 }
 
 async fn setup_with(
@@ -313,7 +363,8 @@ async fn queue_holds_during_a_turn_and_flushes_in_order_at_its_end() {
         .queue_message(CHAT, "third", Vec::new())
         .expect("queue third");
 
-    // Both must still be sitting there: the agent is busy and cannot be steered.
+    // Both still sit there even though the harness has already emitted a full
+    // tool-call/result boundary: only the run's terminal Done releases Queue.
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(queue_texts(&core), vec!["second", "third"]);
     assert!(!prompts.lock().unwrap().iter().any(|p| p == "second"));
@@ -513,6 +564,8 @@ async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
             text: "accepted once".into(),
             attachments: Vec::new(),
             hold_for_turn_end: true,
+            follow_up_behavior: zeron_proto::FollowUpBehavior::Queue,
+            hold_reason: None,
             issued_by: core.device_id.clone(),
             issued_at: 1,
             edited_at: None,
@@ -751,10 +804,10 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
     core.shutdown().await;
 }
 
-/// The explicit-steer RPC remains compatible with older clients and backs the
-/// capability-gated native Steer now action.
+/// A Steer-preferring submit is first persisted, then delivered through the
+/// harness-native acceptance path and settled only on its Steered boundary.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn steer_now_keeps_the_claim_until_the_provider_observes_a_boundary() {
+async fn steer_preference_uses_native_acceptance_and_settles_the_same_row() {
     let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
     let client = zeron_rpc::memory_client(core.rpc_service());
 
@@ -774,45 +827,37 @@ async fn steer_now_keeps_the_claim_until_the_provider_observes_a_boundary() {
                 "chatId": CHAT,
                 "text": "hold this",
                 "holdForTurnEnd": true,
+                "followUpBehavior": "steer",
             }),
         )
         .await
         .expect("queue held message");
     let id = reply["id"].as_str().expect("queue id").to_string();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(queue_texts(&core), vec!["hold this"]);
-    assert!(!user_messages(&core).iter().any(|m| m == "hold this"));
-
-    let reply = client
-        .call(
-            zeron_rpc::methods::STEER_QUEUED_MESSAGE_NOW,
-            serde_json::json!({ "chatId": CHAT, "id": id }),
-        )
-        .await
-        .expect("steer now");
-    assert_eq!(reply["sent"], true);
     wait_for(
         || user_messages(&core).iter().any(|m| m == "hold this"),
-        "the held message to enter the provider mailbox",
+        "the provider-confirmed steer to enter the transcript",
     )
     .await;
-    assert_eq!(queue_texts(&core), vec!["hold this"]);
-    let row = core
-        .doc_host
-        .queued_message(CHAT, &id)
-        .unwrap()
-        .expect("unconfirmed steer stays visible");
-    assert!(matches!(
-        row.status,
-        zeron_doc::QueueMessageStatus::Claimed { .. }
-    ));
-
-    let _ = harness.finish.send(());
     wait_for(
         || queue_texts(&core).is_empty(),
-        "the unconfirmed steer to reconcile as a fresh correlated turn",
+        "the confirmed native steer to settle its durable row",
     )
     .await;
+    assert_eq!(
+        user_message_id(&core, "hold this").as_deref(),
+        Some(id.as_str())
+    );
+    assert_eq!(
+        prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.as_str() == "hold this")
+            .count(),
+        0,
+        "native steer must not start a second harness run"
+    );
+    let _ = harness.finish.send(());
     core.shutdown().await;
 }
 
@@ -828,23 +873,38 @@ async fn steer_now_leaves_the_row_when_the_agent_cannot_steer_mid_turn() {
         "the first turn to start",
     )
     .await;
-    let id = core
-        .doc_host
-        .queue_message(CHAT, "still queued", Vec::new())
+    let id = "unsupported-steer".to_string();
+    core.doc_host
+        .queue_message_with_id_and_execution(
+            CHAT,
+            &id,
+            "still queued",
+            Vec::new(),
+            true,
+            zeron_proto::FollowUpBehavior::Steer,
+            None,
+        )
         .expect("queue held message");
 
-    assert!(core.doc_host.steer_queued_now(CHAT, &id).await.is_err());
+    assert!(!core.doc_host.steer_queued_now(CHAT, &id).await.unwrap());
     assert_eq!(queue_texts(&core), vec!["still queued"]);
+    assert_eq!(
+        core.doc_host
+            .queued_message(CHAT, &id)
+            .unwrap()
+            .unwrap()
+            .hold_reason,
+        Some(zeron_doc::QueueHoldReason::SteeringUnavailable)
+    );
 
     let _ = harness.finish.send(());
     core.shutdown().await;
 }
 
-/// A provider's queue action remains `Steer` even if the active turn finishes
-/// before the click lands. With nothing left to interrupt, the selected row
-/// becomes the next turn and unpauses normal queue draining.
+/// A stale explicit Steer never turns itself into a fresh turn after the
+/// original active turn has ended.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn steer_now_starts_the_next_turn_when_the_previous_turn_is_already_idle() {
+async fn stale_steer_remains_queued_when_the_previous_turn_is_already_idle() {
     let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
 
     core.doc_host
@@ -856,19 +916,18 @@ async fn steer_now_starts_the_next_turn_when_the_previous_turn_is_already_idle()
     )
     .await;
 
-    let client = zeron_rpc::memory_client(core.rpc_service());
-    let reply = client
-        .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
-            serde_json::json!({
-                "chatId": CHAT,
-                "text": "after cancel",
-                "holdForTurnEnd": true,
-            }),
+    let id = "stale-steer".to_string();
+    core.doc_host
+        .queue_message_with_id_and_execution(
+            CHAT,
+            &id,
+            "after cancel",
+            Vec::new(),
+            true,
+            zeron_proto::FollowUpBehavior::Steer,
+            None,
         )
-        .await
         .expect("queue held message");
-    let id = reply["id"].as_str().expect("queue id").to_string();
 
     core.doc_host
         .queue_command(CHAT, SessionCommandPayload::Interrupt {})
@@ -881,26 +940,22 @@ async fn steer_now_starts_the_next_turn_when_the_previous_turn_is_already_idle()
     assert_eq!(queue_texts(&core), vec!["after cancel"]);
 
     assert!(
-        core.doc_host
-            .steer_queued_now(CHAT, &id)
+        !core
+            .doc_host
+            .steer_queued_now_for_turn(CHAT, &id, Some("replaced-turn"))
             .await
-            .expect("non-interrupting queue promotion")
+            .unwrap()
     );
-    wait_for(
-        || prompts.lock().unwrap().iter().any(|p| p == "after cancel"),
-        "the selected row to start the next turn",
-    )
-    .await;
+    assert_eq!(queue_texts(&core), vec!["after cancel"]);
+    assert!(!prompts.lock().unwrap().iter().any(|p| p == "after cancel"));
     assert_eq!(
-        user_message_id(&core, "after cancel").as_deref(),
-        Some(id.as_str()),
-        "promoting an idle queued row preserves its transcript identity"
+        core.doc_host
+            .queued_message(CHAT, &id)
+            .unwrap()
+            .unwrap()
+            .hold_reason,
+        Some(zeron_doc::QueueHoldReason::StaleTurn)
     );
-    wait_for(
-        || queue_texts(&core).is_empty(),
-        "the promoted queue claim to correlate",
-    )
-    .await;
 
     let _ = harness.finish.send(());
     core.shutdown().await;
@@ -921,14 +976,38 @@ async fn a_message_with_attachments_holds_even_for_a_steerable_agent() {
     )
     .await;
 
+    let attachment_id = "attachment-steer";
     core.doc_host
-        .queue_message(CHAT, "with a file", vec!["att-1".into()])
+        .queue_message_with_id_and_execution(
+            CHAT,
+            attachment_id,
+            "with a file",
+            vec!["att-1".into()],
+            true,
+            zeron_proto::FollowUpBehavior::Steer,
+            None,
+        )
         .expect("queue attachment message");
+    assert!(
+        !core
+            .doc_host
+            .steer_queued_now(CHAT, attachment_id)
+            .await
+            .unwrap()
+    );
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(
         queue_texts(&core),
         vec!["with a file"],
         "a message carrying files must not be steered"
+    );
+    assert_eq!(
+        core.doc_host
+            .queued_message(CHAT, attachment_id)
+            .unwrap()
+            .unwrap()
+            .hold_reason,
+        Some(zeron_doc::QueueHoldReason::AttachmentsUnsupported)
     );
     assert!(
         user_messages(&core)
@@ -1334,7 +1413,7 @@ async fn concurrent_drains_release_one_message() {
 /// idle sends the follow-up as a fresh turn and abandons the question.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_message_holds_while_the_agent_waits_on_a_question() {
-    let (core, harness, prompts) = setup_asking(SteeringMode::TurnBoundary).await;
+    let (core, harness, prompts) = setup_asking(SteeringMode::StepBoundary).await;
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -1354,9 +1433,19 @@ async fn a_message_holds_while_the_agent_waits_on_a_question() {
     )
     .await;
 
+    let id = "question-steer";
     core.doc_host
-        .queue_message(CHAT, "follow-up", Vec::new())
+        .queue_message_with_id_and_execution(
+            CHAT,
+            id,
+            "follow-up",
+            Vec::new(),
+            true,
+            zeron_proto::FollowUpBehavior::Steer,
+            None,
+        )
         .expect("queue follow-up");
+    assert!(!core.doc_host.steer_queued_now(CHAT, id).await.unwrap());
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
@@ -1367,6 +1456,63 @@ async fn a_message_holds_while_the_agent_waits_on_a_question() {
     assert!(
         !prompts.lock().unwrap().iter().any(|p| p == "follow-up"),
         "no fresh turn started under the parked question"
+    );
+    assert_eq!(
+        core.doc_host
+            .queued_message(CHAT, id)
+            .unwrap()
+            .unwrap()
+            .hold_reason,
+        Some(zeron_doc::QueueHoldReason::AwaitingInput)
+    );
+
+    let _ = harness.finish.send(());
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_steer_request_stays_queued_while_approval_is_pending() {
+    let (core, harness, prompts) = setup_approving(SteeringMode::StepBoundary).await;
+    core.doc_host
+        .queue_message(CHAT, "opening", Vec::new())
+        .expect("queue opening");
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).is_some_and(|session| {
+                session.status == zeron_proto::SessionStatus::AwaitingApproval
+            })
+        },
+        "the agent to park on approval",
+    )
+    .await;
+
+    let id = "approval-steer";
+    core.doc_host
+        .queue_message_with_id_and_execution(
+            CHAT,
+            id,
+            "after approval",
+            Vec::new(),
+            true,
+            zeron_proto::FollowUpBehavior::Steer,
+            None,
+        )
+        .unwrap();
+    assert!(!core.doc_host.steer_queued_now(CHAT, id).await.unwrap());
+    assert_eq!(
+        core.doc_host
+            .queued_message(CHAT, id)
+            .unwrap()
+            .unwrap()
+            .hold_reason,
+        Some(zeron_doc::QueueHoldReason::AwaitingApproval)
+    );
+    assert!(
+        !prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|prompt| prompt == "after approval")
     );
 
     let _ = harness.finish.send(());

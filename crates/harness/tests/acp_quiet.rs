@@ -130,6 +130,8 @@ async fn delayed_turn(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "second".into(),
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
         })
         .await
         .unwrap();
@@ -137,6 +139,8 @@ async fn delayed_turn(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "third".into(),
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
         })
         .await
         .unwrap();
@@ -163,6 +167,8 @@ async fn delayed_turn(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "fourth".into(),
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
         })
         .await
         .unwrap();
@@ -227,6 +233,8 @@ async fn cancel_quiet(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "must not run".into(),
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
         })
         .await
         .unwrap();
