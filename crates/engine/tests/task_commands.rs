@@ -21,6 +21,7 @@ use zeron_rpc::{RpcClient, methods};
 struct CountingHarness {
     runs: Arc<AtomicUsize>,
     hold: bool,
+    steering: SteeringMode,
 }
 
 #[async_trait]
@@ -38,7 +39,7 @@ impl Harness for CountingHarness {
     }
 
     fn steering_mode(&self) -> SteeringMode {
-        SteeringMode::StepBoundary
+        self.steering
     }
 
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
@@ -69,8 +70,18 @@ impl Harness for CountingHarness {
                 }))
                 .await;
             let status = if hold {
-                controls.interrupt.cancelled().await;
-                DoneStatus::Interrupted
+                let interrupt = controls.interrupt;
+                let mut steering = controls.steering;
+                loop {
+                    tokio::select! {
+                        _ = interrupt.cancelled() => break DoneStatus::Interrupted,
+                        steer = steering.recv() => {
+                            if steer.is_none() {
+                                break DoneStatus::Completed;
+                            }
+                        }
+                    }
+                }
             } else {
                 DoneStatus::Completed
             };
@@ -101,8 +112,21 @@ fn account_config(root: &std::path::Path) -> AgentAccountsConfig {
 }
 
 fn assemble(root: &std::path::Path, runs: Arc<AtomicUsize>, hold: bool) -> EngineCore {
+    assemble_with_steering(root, runs, hold, SteeringMode::StepBoundary)
+}
+
+fn assemble_with_steering(
+    root: &std::path::Path,
+    runs: Arc<AtomicUsize>,
+    hold: bool,
+    steering: SteeringMode,
+) -> EngineCore {
     let registry = HarnessRegistry::new();
-    registry.register(Arc::new(CountingHarness { runs, hold }));
+    registry.register(Arc::new(CountingHarness {
+        runs,
+        hold,
+        steering,
+    }));
     EngineCore::assemble_with_profile_and_agent_accounts_config(
         EngineProfile::development(&root.join("data"), "l07-org", "l07-user"),
         Arc::new(registry),
@@ -227,6 +251,102 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
     )
     .await;
     assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+}
+
+async fn steer_queue_case(
+    steering: SteeringMode,
+    with_attachment: bool,
+) -> (CommandReceipt, QueueMessageStatus) {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble_with_steering(root.path(), runs, true, steering);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+
+    let run = execute(
+        &client,
+        envelope(
+            "steer-caller-run",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": request("hold active turn"),
+                    "messageId": "steer-caller-run-message"
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        run.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+    wait_for_receipt(&client, "steer-caller-run", CommandReceiptStatus::Applied).await;
+    let active = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let read = snapshot(&client, &task_id).await;
+            if read.snapshot.active_turn_id.is_some() {
+                break read;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let attachments = if with_attachment {
+        vec!["/synthetic/queued.png"]
+    } else {
+        Vec::new()
+    };
+    let queued = execute(
+        &client,
+        envelope(
+            "steer-caller-enqueue",
+            &task_id,
+            Some(&active),
+            serde_json::json!({
+                "kind": "queueMessage",
+                "messageId": "steer-caller-row",
+                "text": "steer this row",
+                "attachments": attachments,
+                "holdForTurnEnd": true
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(queued.status, CommandReceiptStatus::Applied);
+    let row = core
+        .doc_host
+        .queued_message(&task_id, "steer-caller-row")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(row.status, QueueMessageStatus::Held));
+
+    let current = snapshot(&client, &task_id).await;
+    let mut steer = envelope(
+        "steer-caller-deliver",
+        &task_id,
+        Some(&current),
+        serde_json::json!({
+            "kind": "steerQueuedNow",
+            "messageId": "steer-caller-row",
+            "expectedQueueRevision": row.revision
+        }),
+    );
+    steer["expectedTurnId"] = current.snapshot.active_turn_id.unwrap().into();
+    let receipt = execute(&client, steer).await;
+    let status = core
+        .doc_host
+        .queued_message(&task_id, "steer-caller-row")
+        .unwrap()
+        .expect("steer keeps the row until provider correlation")
+        .status;
+    core.shutdown().await;
+    (receipt, status)
 }
 
 fn snapshot_row_exists(db_path: &std::path::Path, doc_id: &str) -> bool {
@@ -1446,6 +1566,34 @@ async fn failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_re
         CommandReceiptStatus::Applied
     );
     reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_steer_caller_applies_only_for_supported_attachment_free_held_rows() {
+    let (supported, supported_row) = steer_queue_case(SteeringMode::StepBoundary, false).await;
+    assert_eq!(supported.status, CommandReceiptStatus::Pending);
+    assert!(matches!(supported_row, QueueMessageStatus::Claimed { .. }));
+
+    let (unsupported_harness, harness_row) =
+        steer_queue_case(SteeringMode::TurnBoundary, false).await;
+    assert_eq!(unsupported_harness.status, CommandReceiptStatus::Rejected);
+    assert_eq!(
+        unsupported_harness.reason.unwrap().code,
+        CommandReasonCode::UnsupportedOperation
+    );
+    assert!(matches!(harness_row, QueueMessageStatus::Held));
+
+    let (unsupported_attachment, attachment_row) =
+        steer_queue_case(SteeringMode::StepBoundary, true).await;
+    assert_eq!(
+        unsupported_attachment.status,
+        CommandReceiptStatus::Rejected
+    );
+    assert_eq!(
+        unsupported_attachment.reason.unwrap().code,
+        CommandReasonCode::UnsupportedOperation
+    );
+    assert!(matches!(attachment_row, QueueMessageStatus::Held));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

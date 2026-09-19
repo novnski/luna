@@ -751,8 +751,8 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
     core.shutdown().await;
 }
 
-/// The legacy explicit-steer RPC remains compatible with older clients;
-/// current clients offer only Send now.
+/// The explicit-steer RPC remains compatible with older clients and backs the
+/// capability-gated native Steer now action.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steer_now_keeps_the_claim_until_the_provider_observes_a_boundary() {
     let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;

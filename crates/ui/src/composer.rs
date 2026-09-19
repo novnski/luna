@@ -8223,6 +8223,10 @@ impl Composer {
                     .state
                     .update(cx, |s, _| s.end_upload_progress());
                 if let Ok(ComposerSendOutcome::Queued(message_id)) = &result {
+                    composer.state.update(cx, |state, cx| {
+                        state.refresh_selected_live_views_for(&err_chat_id, cx);
+                        cx.notify();
+                    });
                     cx.emit(ComposerEvent::Queued {
                         chat_id: err_chat_id.clone(),
                         message_id: message_id.clone(),

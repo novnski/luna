@@ -1973,6 +1973,33 @@ impl AppState {
         }
     }
 
+    /// Re-arm both selected-doc projections after an accepted delivery
+    /// command. Keep the current rows mounted until the opening reset/list
+    /// frames arrive; this is the same authoritative refresh a task switch
+    /// performs, without requiring navigation or flashing an empty body.
+    pub(crate) fn refresh_selected_live_views_for(
+        &mut self,
+        expected_chat_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_chat.as_deref() != Some(expected_chat_id) {
+            return;
+        }
+        self.transcript_task = None;
+        self.queue_task = None;
+        let (Some(chat_id), Some(handle)) = (self.selected_chat.clone(), self.engine.clone())
+        else {
+            return;
+        };
+        self.transcript_task = Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+        if handle
+            .engine_info()
+            .supports(zeron_proto::capabilities::MESSAGE_QUEUE_V1)
+        {
+            self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id));
+        }
+    }
+
     /// Select a project; the caller (shell) decides which chat to land on.
     /// `Some` clears a "Don't work in a project" opt-out and re-aims the
     /// device pick at the project's host; `None` IS that opt-out.

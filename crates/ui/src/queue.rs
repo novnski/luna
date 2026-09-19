@@ -4,7 +4,8 @@
 //! The rows live on the session doc ([`zeron_doc::QueuedMessage`]), so the phone
 //! shows the same queue and either device can reorder it.
 //!
-//! Each row exposes a `Send now` control that interrupts the active response.
+//! Each row exposes either explicit `Steer now` (when the running harness can
+//! accept it) or `Send now`, which interrupts the active response.
 //! Editing moves the message into the composer while its leased row reserves
 //! its position.
 
@@ -101,23 +102,44 @@ const QUEUE_ICON_SIZE: f32 = 13.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueuePrimaryAction {
     SendNow,
+    SteerNow,
 }
 
 impl QueuePrimaryAction {
     fn tooltip(self) -> &'static str {
         match self {
             Self::SendNow => "Send now (interrupt)",
+            Self::SteerNow => "Steer now (without interrupting)",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::SendNow => "Send now",
+            Self::SteerNow => "Steer now",
         }
     }
 }
 
-/// All providers use Send now. Only host support and edit/review gates
-/// determine whether the action is available.
+/// Resolve the one action this row advertises. Steer is deliberately narrower
+/// than Send now: it requires a live turn, a mid-turn-capable row harness, and
+/// an attachment-free held row. The engine repeats every restriction and owns
+/// the revision/turn/binding fences; this is only the truthful presentation.
 fn available_queue_primary_action(
     delivery_blocked: bool,
     host_supports_actions: bool,
+    run_live: bool,
+    harness_steers_mid_turn: bool,
+    has_attachments: bool,
 ) -> Option<QueuePrimaryAction> {
-    (!delivery_blocked && host_supports_actions).then_some(QueuePrimaryAction::SendNow)
+    if delivery_blocked || !host_supports_actions {
+        return None;
+    }
+    Some(if run_live && harness_steers_mid_turn && !has_attachments {
+        QueuePrimaryAction::SteerNow
+    } else {
+        QueuePrimaryAction::SendNow
+    })
 }
 
 fn queue_latest_shortcut_visible(
@@ -464,8 +486,20 @@ impl Composer {
                 this.remove_queued(drop_id.clone(), cx);
             }),
         );
-        let resolved_primary =
-            available_queue_primary_action(interaction_blocked, host_supports_actions);
+        let run_live = self.run_live(cx);
+        let harness = item
+            .execution
+            .as_ref()
+            .map(|execution| execution.harness)
+            .or_else(|| self.pickers().read(cx).resolved(cx).harness);
+        let harness_steers_mid_turn = self.pickers().read(cx).harness_steers_mid_turn(harness);
+        let resolved_primary = available_queue_primary_action(
+            interaction_blocked,
+            host_supports_actions,
+            run_live,
+            harness_steers_mid_turn,
+            !item.attachments.is_empty(),
+        );
         let primary_action = resolved_primary.unwrap_or(QueuePrimaryAction::SendNow);
         let primary_id = item.id.clone();
         let primary = self.queue_primary_action_button(
@@ -1059,7 +1093,7 @@ impl Composer {
                     .text_color(theme.text_muted)
                     .into_any_element()
             } else {
-                div().child("Send now").into_any_element()
+                div().child(action.label()).into_any_element()
             })
             .into_any_element()
     }
@@ -1249,6 +1283,18 @@ impl Composer {
         );
     }
 
+    pub(crate) fn steer_queued_now(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.editing_queued.as_deref() == Some(id.as_str()) {
+            self.clear_queue_edit(cx);
+        }
+        self.queue_rpc(
+            methods::STEER_QUEUED_MESSAGE_NOW,
+            serde_json::json!({ "id": id }),
+            "Couldn't steer that message",
+            cx,
+        );
+    }
+
     /// Execute the same resolved action advertised on the row. Both pointer
     /// clicks and the empty-composer Enter gesture come through here.
     fn activate_queued_primary(
@@ -1259,17 +1305,18 @@ impl Composer {
     ) {
         match action {
             QueuePrimaryAction::SendNow => self.send_queued_now(id, cx),
+            QueuePrimaryAction::SteerNow => self.steer_queued_now(id, cx),
         }
     }
 
     /// Cmd/Ctrl+Enter on an empty composer activates the same action shown on
-    /// the most recently queued row: Send now, interrupting the current response.
-    /// An edit/review gate or an old chat host makes it a no-op.
+    /// the most recently queued row. An edit/review gate or an old chat host
+    /// makes it a no-op.
     pub(crate) fn activate_latest_queued(&mut self, cx: &mut Context<Self>) {
         if self.editing_queued.is_some() {
             return;
         }
-        let (id, delivery_blocked, host_supports_actions) = {
+        let (id, delivery_blocked, host_supports_actions, has_attachments, harness) = {
             let state = self.state.read(cx);
             let Some(chat_id) = state.selected_chat.as_deref() else {
                 return;
@@ -1284,10 +1331,18 @@ impl Composer {
                     chat_id,
                     zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
                 ),
+                !item.attachments.is_empty(),
+                item.execution.as_ref().map(|execution| execution.harness),
             )
         };
-        let Some(action) = available_queue_primary_action(delivery_blocked, host_supports_actions)
-        else {
+        let harness = harness.or_else(|| self.pickers().read(cx).resolved(cx).harness);
+        let Some(action) = available_queue_primary_action(
+            delivery_blocked,
+            host_supports_actions,
+            self.run_live(cx),
+            self.pickers().read(cx).harness_steers_mid_turn(harness),
+            has_attachments,
+        ) else {
             return;
         };
         self.activate_queued_primary(id, action, cx);
@@ -1905,6 +1960,7 @@ impl Composer {
                         this.update(cx, |composer, cx| {
                             composer.state.update(cx, |state, cx| {
                                 state.end_pending_send(&chat_id, id);
+                                state.refresh_selected_live_views_for(&chat_id, cx);
                                 cx.notify();
                             });
                         })
@@ -2002,11 +2058,29 @@ mod tests {
     #[test]
     fn available_primary_action_obeys_row_and_host_gates() {
         assert_eq!(
-            available_queue_primary_action(false, true),
+            available_queue_primary_action(false, true, false, true, false),
             Some(QueuePrimaryAction::SendNow)
         );
-        assert_eq!(available_queue_primary_action(true, true), None);
-        assert_eq!(available_queue_primary_action(false, false), None);
+        assert_eq!(
+            available_queue_primary_action(false, true, true, true, false),
+            Some(QueuePrimaryAction::SteerNow)
+        );
+        assert_eq!(
+            available_queue_primary_action(false, true, true, false, false),
+            Some(QueuePrimaryAction::SendNow)
+        );
+        assert_eq!(
+            available_queue_primary_action(false, true, true, true, true),
+            Some(QueuePrimaryAction::SendNow)
+        );
+        assert_eq!(
+            available_queue_primary_action(true, true, true, true, false),
+            None
+        );
+        assert_eq!(
+            available_queue_primary_action(false, false, true, true, false),
+            None
+        );
     }
 
     #[test]

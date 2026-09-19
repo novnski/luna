@@ -1220,6 +1220,19 @@ impl Pickers {
             .is_some_and(|list| offered_harnesses(list).is_empty())
     }
 
+    /// Whether the selected host catalog says this harness accepts a prompt
+    /// inside the current turn. Unknown/loading catalogs fail closed so the
+    /// queue never advertises Steer on an assumption.
+    pub(crate) fn harness_steers_mid_turn(&self, harness: Option<HarnessId>) -> bool {
+        let Some(harness) = harness else {
+            return false;
+        };
+        self.harnesses
+            .ready()
+            .and_then(|list| list.iter().find(|descriptor| descriptor.id == harness))
+            .is_some_and(HarnessDescriptor::steers_mid_turn)
+    }
+
     /// The fully-resolved config the composer threads into the Run request and
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
