@@ -283,6 +283,22 @@ case "$turnline" in
   ;;
 
 # NOTE: specific steer scenarios before steer — `case` takes the first match.
+*scenario:steer-correlation-ambiguous*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  read -r steerline || exit 1
+  sid=$(rid "$steerline")
+  has "$steerline" '"method":"turn/steer"' || exit 1
+  emit "{\"id\":$sid,\"result\":{}}"
+  # None of these identity-free text echoes can prove which durable request
+  # was incorporated: one is stale, two are duplicate same-turn content.
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-stale","item":{"id":"u-stale","type":"userMessage","text":"same prompt"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"id":"u-first","type":"userMessage","text":"same prompt"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"id":"u-duplicate","type":"userMessage","text":"same prompt"}}}'
+  emit '{"method":"item/agentMessage/delta","params":{"threadId":"th-1","turnId":"t-1","itemId":"m1","delta":"ambiguous-echoes-observed"}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  ;;
+
 *scenario:steer-lost-response*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'

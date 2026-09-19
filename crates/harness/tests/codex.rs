@@ -529,7 +529,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
 }
 
 #[tokio::test]
-async fn explicit_steer_confirms_native_turn_steer_acceptance() {
+async fn explicit_steer_ack_does_not_claim_incorporation_from_a_text_echo() {
     let (controls, steer, _token) = controls("Yes");
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
@@ -548,13 +548,62 @@ async fn explicit_steer_confirms_native_turn_steer_acceptance() {
         SteerAcceptance::Accepted
     );
     assert!(
-        events
+        !events
             .iter()
-            .any(|event| matches!(event, AgentEvent::Steered { .. }))
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "an identity-free user echo cannot settle an explicit steer: {events:?}"
     );
     assert!(events.contains(&AgentEvent::TextDelta {
         text: "steered".into()
     }));
+}
+
+#[tokio::test]
+async fn explicit_steers_are_single_flight_across_stale_and_duplicate_echoes() {
+    let (controls, steer, _token) = controls("Yes");
+    let (first_tx, first_rx) = oneshot::channel();
+    let (second_tx, second_rx) = oneshot::channel();
+    for (message_id, acceptance) in [("queued-steer-a", first_tx), ("queued-steer-b", second_tx)] {
+        steer
+            .send(SteerMessage {
+                prompt: "same prompt".into(),
+                message_id: Some(message_id.into()),
+                delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+                acceptance: Some(acceptance),
+            })
+            .await
+            .expect("steer queued");
+    }
+    drop(steer);
+    let events = run_to_end(
+        &harness(),
+        request("scenario:steer-correlation-ambiguous"),
+        controls,
+    )
+    .await;
+
+    assert_eq!(
+        first_rx.await.expect("first acceptance"),
+        SteerAcceptance::Accepted
+    );
+    assert!(matches!(
+        second_rx.await.expect("second acceptance"),
+        SteerAcceptance::Rejected(_)
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "stale/duplicate identity-free echoes must not prove incorporation: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::Done { .. }))
+            .count(),
+        1,
+        "single-flight rejection must not create a fallback turn: {events:?}"
+    );
 }
 
 #[tokio::test]

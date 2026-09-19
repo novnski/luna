@@ -2696,6 +2696,7 @@ type PendingSteeringCall = (
 #[derive(Debug)]
 enum AcpSteeringResult {
     Incorporated,
+    Accepted,
     Rejected {
         message: String,
         no_running_turn: bool,
@@ -2714,7 +2715,15 @@ fn classify_steering_result(result: Result<Value, RpcRequestFailure>) -> AcpStee
                 message: "ACP provider rejected in-turn steering".into(),
             }
         }
-        Ok(_) => AcpSteeringResult::Incorporated,
+        Ok(response) if response.get("outcome").and_then(Value::as_str) == Some("injected") => {
+            AcpSteeringResult::Incorporated
+        }
+        Ok(response) if response.get("outcome").and_then(Value::as_str) == Some("accepted") => {
+            AcpSteeringResult::Accepted
+        }
+        Ok(_) => AcpSteeringResult::Unknown(
+            "ACP steering response did not confirm an injected outcome".into(),
+        ),
         Err(RpcRequestFailure::Rejected(message)) => AcpSteeringResult::Rejected {
             message,
             no_running_turn: false,
@@ -3168,11 +3177,17 @@ async fn run_session(session: Session) {
                                     let _ = tx.send(SteerAcceptance::Rejected(message));
                                 }
                             }
+                            (true, AcpSteeringResult::Accepted) => {
+                                if let Some(tx) = acceptance {
+                                    let _ = tx.send(SteerAcceptance::Accepted);
+                                }
+                            }
                             (true, AcpSteeringResult::Unknown(message)) => {
                                 if let Some(tx) = acceptance {
                                     let _ = tx.send(SteerAcceptance::Unknown(message));
                                 }
                             }
+                            (false, AcpSteeringResult::Accepted) => {}
                             (false, _) => queued_steers.push_back(text),
                             (true, AcpSteeringResult::Incorporated) => unreachable!(),
                         }
@@ -3522,6 +3537,7 @@ async fn run_session(session: Session) {
                             AcpSteeringResult::Rejected { message, .. } => {
                                 SteerAcceptance::Rejected(message)
                             }
+                            AcpSteeringResult::Accepted => SteerAcceptance::Accepted,
                             AcpSteeringResult::Unknown(message) => {
                                 SteerAcceptance::Unknown(message)
                             }
@@ -3529,6 +3545,10 @@ async fn run_session(session: Session) {
                         };
                         let _ = tx.send(acceptance);
                     }
+                } else if matches!(&outcome, AcpSteeringResult::Accepted) {
+                    // The provider acknowledged the request but did not prove
+                    // model incorporation. Do not emit a Steered boundary or
+                    // replay it as a follow-up turn.
                 } else if turn.is_some() {
                     // Raced the turn end: redeliver at the boundary the
                     // loop is about to hit. `noRunningTurn` is stronger —
@@ -3940,6 +3960,26 @@ async fn run_session(session: Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn steering_requires_an_explicit_injected_outcome_for_incorporation() {
+        assert!(matches!(
+            classify_steering_result(Ok(json!({ "outcome": "injected" }))),
+            AcpSteeringResult::Incorporated
+        ));
+        assert!(matches!(
+            classify_steering_result(Ok(json!({ "outcome": "accepted" }))),
+            AcpSteeringResult::Accepted
+        ));
+        assert!(matches!(
+            classify_steering_result(Ok(json!({}))),
+            AcpSteeringResult::Unknown(_)
+        ));
+        assert!(matches!(
+            classify_steering_result(Ok(json!({ "outcome": "futureValue" }))),
+            AcpSteeringResult::Unknown(_)
+        ));
+    }
 
     fn all_antigravity_auth_methods() -> Value {
         json!({

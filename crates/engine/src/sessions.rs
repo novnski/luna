@@ -234,15 +234,15 @@ struct RunHandle {
     engine_tx: mpsc::UnboundedSender<AgentEvent>,
     pending_inputs: PendingInputs,
     /// Steers accepted into the mailbox but not yet confirmed by a `Steered`
-    /// event — the at-least-once ledger. A run can die with accepted steers
-    /// still in its mailbox (idle reaper vs. a routed send; a mid-turn error
-    /// discarding queued boundary steers): the run task drains this at exit
-    /// and re-dispatches each entry as a fresh turn, so an accepted message
-    /// can never silently evaporate from a transcript that shows it as sent.
+    /// event. Ordinary warm routes retain their at-least-once follow-up-turn
+    /// fallback. Explicit native steers never replay: the run task converts
+    /// any unconfirmed explicit entry to delivery-unknown at exit.
     routed_steers: Arc<Mutex<std::collections::VecDeque<RoutedSteer>>>,
 }
 
-/// One accepted-but-unconfirmed steer: enough to re-dispatch it verbatim.
+/// One accepted-but-unconfirmed steer. `delivery` decides whether run exit may
+/// re-dispatch it (ordinary warm route) or must preserve it as unknown
+/// (explicit native steer).
 #[derive(Debug, Clone)]
 struct RoutedSteer {
     prompt: String,
@@ -826,8 +826,6 @@ impl SessionsEngine {
                 explicit_resume,
             )?;
         }
-        // Every dispatched prompt is a turn — routed steer or fresh run alike.
-        self.note_turn_start(chat_id, &request.cwd);
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
             (
                 h.run_id.clone(),
@@ -837,6 +835,19 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
+        if routed.as_ref().is_some_and(|(_, _, _, _, ledger)| {
+            lock(ledger)
+                .iter()
+                .any(|steer| steer.delivery == zeron_harness::SteerDelivery::RequireActiveTurn)
+        }) {
+            return Err(EngineError::Other(
+                "native steer incorporation is still unconfirmed; wait for the current turn boundary"
+                    .into(),
+            ));
+        }
+        // Every accepted dispatched prompt is a turn — routed steer or fresh
+        // run alike. A single-flight rejection above is not a turn.
+        self.note_turn_start(chat_id, &request.cwd);
         if let Some((run_id, steerable, same_runtime, steer_tx, ledger)) = routed {
             let user_id = message_id.clone().unwrap_or_else(new_id);
             let accepted = if steerable && same_runtime {
@@ -1089,7 +1100,14 @@ impl SessionsEngine {
         {
             // Serialize mailbox acceptance with confirmation and Done-time
             // inspection: a fast consumer must never outrun its ledger entry.
+            // Explicit native steering is intentionally single-flight. The
+            // native Codex/Claude wires expose no correlation id on echoed
+            // user content, so allowing a second pending row would let an
+            // identity-free boundary retire the wrong durable receipt.
             let mut pending = lock(&ledger);
+            if !pending.is_empty() {
+                return Ok(SteerOutcome::NotSteerable);
+            }
             if steer_tx.try_send(message).is_err() {
                 return Ok(SteerOutcome::NotSteerable);
             }

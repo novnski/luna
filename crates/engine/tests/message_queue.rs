@@ -941,6 +941,46 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
         0
     );
 
+    let second_reply = client
+        .call(
+            zeron_rpc::methods::QUEUE_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT,
+                "text": "accepted only",
+                "holdForTurnEnd": true,
+                "followUpBehavior": "steer",
+            }),
+        )
+        .await
+        .expect("queue second identical steer");
+    let second_id = second_reply["id"]
+        .as_str()
+        .expect("second queue id")
+        .to_string();
+    wait_for(
+        || {
+            core.doc_host
+                .queued_message(CHAT, &second_id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| {
+                    matches!(row.status, QueueMessageStatus::Held)
+                        && row.hold_reason == Some(zeron_doc::QueueHoldReason::SteeringUnavailable)
+                })
+        },
+        "second identical steer to remain honestly held",
+    )
+    .await;
+    assert!(
+        core.doc_host
+            .queued_message(CHAT, &id)
+            .unwrap()
+            .is_some_and(|row| {
+                matches!(row.status, QueueMessageStatus::SteeringAccepted { .. })
+            }),
+        "rejecting a second single-flight steer must not settle the first"
+    );
+
     harness.finish.send(()).unwrap();
     wait_for(
         || {
@@ -968,6 +1008,16 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
         row.status,
         QueueMessageStatus::DeliveryUnknown { .. }
     ));
+    let second = restarted
+        .doc_host
+        .queued_message(CHAT, &second_id)
+        .unwrap()
+        .expect("second identical steer survives restart");
+    assert!(matches!(second.status, QueueMessageStatus::Held));
+    assert_eq!(
+        second.hold_reason,
+        Some(zeron_doc::QueueHoldReason::SteeringUnavailable)
+    );
     restarted
         .doc_host
         .drain_queue(&restarted.doc_host.open(CHAT).unwrap())

@@ -400,7 +400,7 @@ enum QueueSend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueueProviderOutcome {
     Accepted,
-    Rejected,
+    Rejected(QueueHoldReason),
     Unknown,
 }
 
@@ -3182,6 +3182,20 @@ impl DocHost {
             .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
         let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
         let updates = Self::queue_projection_updates(handle, &prepared);
+        let (reason_message, recovery_action) = match hold_reason {
+            QueueHoldReason::ProviderRejected => (
+                "the provider rejected native in-turn steering",
+                "The message remains queued; retry only after a new active turn is visible.",
+            ),
+            QueueHoldReason::SteeringUnavailable => (
+                "native steering is unavailable while another steer remains unconfirmed",
+                "The message remains queued; wait for the current steer to settle before retrying.",
+            ),
+            _ => (
+                "native in-turn steering is unavailable",
+                "The message remains queued; review its hold reason before retrying.",
+            ),
+        };
         let receipt = self
             .inner
             .store
@@ -3194,9 +3208,9 @@ impl DocHost {
                 pending.snapshot.active_turn_id.as_deref(),
                 Some(CommandReceiptReason {
                     code: CommandReasonCode::OperationRejected,
-                    message: "the provider rejected native in-turn steering".into(),
+                    message: reason_message.into(),
                 }),
-                Some("The message remains queued; retry only after a new active turn is visible."),
+                Some(recovery_action),
                 &snapshots,
                 &[],
                 &updates,
@@ -4245,13 +4259,8 @@ impl DocHost {
                 )?;
                 Ok(QueueDispatchOutcome::Unknown(row))
             }
-            QueueProviderOutcome::Rejected => {
-                let row = self.reject_queue_task(
-                    &handle,
-                    id,
-                    command_id,
-                    QueueHoldReason::ProviderRejected,
-                )?;
+            QueueProviderOutcome::Rejected(reason) => {
+                let row = self.reject_queue_task(&handle, id, command_id, reason)?;
                 Ok(QueueDispatchOutcome::Rejected(row))
             }
         }
@@ -4583,8 +4592,15 @@ impl DocHost {
                 .await?
             {
                 SteerOutcome::Accepted => return Ok(QueueProviderOutcome::Accepted),
-                SteerOutcome::Rejected | SteerOutcome::NotSteerable => {
-                    return Ok(QueueProviderOutcome::Rejected);
+                SteerOutcome::Rejected => {
+                    return Ok(QueueProviderOutcome::Rejected(
+                        QueueHoldReason::ProviderRejected,
+                    ));
+                }
+                SteerOutcome::NotSteerable => {
+                    return Ok(QueueProviderOutcome::Rejected(
+                        QueueHoldReason::SteeringUnavailable,
+                    ));
                 }
                 SteerOutcome::Unknown => return Ok(QueueProviderOutcome::Unknown),
             }

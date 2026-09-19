@@ -397,7 +397,7 @@ async fn steering_lines_are_written_to_stdin_mid_run() {
 }
 
 #[tokio::test]
-async fn explicit_steer_uses_provider_echo_as_incorporation_evidence() {
+async fn explicit_steer_does_not_claim_incorporation_from_a_text_echo() {
     let (controls, steer, _token) = controls("A");
     let (acceptance_tx, acceptance_rx) = oneshot::channel();
     steer
@@ -416,9 +416,10 @@ async fn explicit_steer_uses_provider_echo_as_incorporation_evidence() {
         SteerAcceptance::Accepted
     );
     assert!(
-        events
+        !events
             .iter()
-            .any(|event| matches!(event, AgentEvent::Steered { .. }))
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "Claude root user echoes carry no durable steer correlation id: {events:?}"
     );
 }
 

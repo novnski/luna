@@ -683,8 +683,10 @@ async fn run_session(session: Session) {
     let request_input = Arc::new(request_input);
 
     let mut norm = Normalizer::new();
-    let mut awaiting_steer_incorporation: std::collections::VecDeque<String> =
-        std::collections::VecDeque::new();
+    // Claude's root user echo carries no correlation id. Explicit steering is
+    // single-flight and a successful stdin write remains unconfirmed; text
+    // equality alone must never settle a durable queue row.
+    let mut explicit_steer_unconfirmed = false;
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
@@ -724,18 +726,6 @@ async fn run_session(session: Session) {
                         }
                         continue;
                     }
-                    let incorporated_position = match &frame {
-                        Frame::User(user) if user.parent_tool_use_id.is_none() => user
-                            .message
-                            .blocks()
-                            .filter(|block| block.kind == "text")
-                            .find_map(|block| {
-                                awaiting_steer_incorporation
-                                    .iter()
-                                    .position(|pending| pending == &block.text)
-                            }),
-                        _ => None,
-                    };
                     for ev in norm.normalize(frame, interrupted) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
                         if event_tx.send(Ok(ev)).await.is_err() {
@@ -747,20 +737,6 @@ async fn run_session(session: Session) {
                                 done_after_interrupt = true;
                                 break 'main;
                             }
-                        }
-                    }
-                    if let Some(position) = incorporated_position {
-                        awaiting_steer_incorporation.remove(position);
-                        let (prev, next) = norm.rotate_for_steer();
-                        if event_tx
-                            .send(Ok(AgentEvent::Steered {
-                                assistant_message_id: Some(prev),
-                                next_assistant_message_id: Some(next),
-                            }))
-                            .await
-                            .is_err()
-                        {
-                            break 'main;
                         }
                     }
                 }
@@ -776,6 +752,15 @@ async fn run_session(session: Session) {
                     let prompt = apply_ultrathink(reasoning, &msg.prompt);
                     let line = wire::user_message_line(&prompt);
                     if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
+                        if explicit_steer_unconfirmed {
+                            if let Some(tx) = msg.acceptance {
+                                let _ = tx.send(crate::SteerAcceptance::Rejected(
+                                    "another Claude steer is accepted but incorporation is unconfirmed"
+                                        .into(),
+                                ));
+                            }
+                            continue 'main;
+                        }
                         let (written_tx, written_rx) = tokio::sync::oneshot::channel();
                         if stdin_tx.send(StdinMsg::Line {
                             line,
@@ -790,7 +775,7 @@ async fn run_session(session: Session) {
                         }
                         match written_rx.await {
                             Ok(Ok(())) => {
-                                awaiting_steer_incorporation.push_back(prompt);
+                                explicit_steer_unconfirmed = true;
                                 if let Some(tx) = msg.acceptance {
                                     let _ = tx.send(crate::SteerAcceptance::Accepted);
                                 }

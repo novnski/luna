@@ -64,7 +64,7 @@ use crate::{Harness, HarnessError, RunControls, SteerAcceptance};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
 use normalize::{
     ChildRoute, Phase, ReasoningStream, delta_text, item_id, item_type, notification_thread_id,
-    route_child_notification, turn_error_message, turn_id, usage_event, user_message_text,
+    route_child_notification, turn_error_message, turn_id, usage_event,
 };
 
 /// Engine-only model-option keys. They are consumed by this adapter and never
@@ -1114,10 +1114,11 @@ async fn run_session(session: Session) {
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
     // next `turn/start` when the expected turn's end notification arrives.
     let mut queued_steers: VecDeque<String> = VecDeque::new();
-    // A successful `turn/steer` response proves provider acceptance, not that
-    // the model incorporated the prompt. The echoed user item is the latter
-    // boundary; until it arrives the engine keeps the queue row unsettled.
-    let mut awaiting_steer_incorporation: VecDeque<String> = VecDeque::new();
+    // The Codex wire does not correlate echoed user items to `turn/steer`
+    // request ids. Keep explicit steering single-flight and never manufacture
+    // incorporation from a text match; a successful RPC response is only an
+    // accepted-but-unconfirmed delivery.
+    let mut explicit_steer_unconfirmed = false;
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
@@ -1200,28 +1201,6 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
-                        if phase == Phase::Completed
-                            && matches!(item_type(item), "userMessage" | "user_message")
-                            && let Some(text) = user_message_text(item)
-                            && let Some(position) = awaiting_steer_incorporation
-                                .iter()
-                                .position(|pending| pending == &text)
-                        {
-                            awaiting_steer_incorporation.remove(position);
-                            let (prev, next) = rotate(&mut assistant_message_id);
-                            if !send(
-                                &event_tx,
-                                AgentEvent::Steered {
-                                    assistant_message_id: Some(prev),
-                                    next_assistant_message_id: Some(next),
-                                },
-                            )
-                            .await
-                            {
-                                break 'main;
-                            }
-                            continue 'main;
-                        }
                         if matches!(item_type(item), "agentMessage" | "agent_message") {
                             if phase == Phase::Completed {
                                 // Fallback for non-streamed messages only.
@@ -1438,6 +1417,15 @@ async fn run_session(session: Session) {
                     let require_active =
                         msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let mut acceptance = msg.acceptance;
+                    if require_active && explicit_steer_unconfirmed {
+                        if let Some(tx) = acceptance.take() {
+                            let _ = tx.send(SteerAcceptance::Rejected(
+                                "another Codex steer is accepted but incorporation is unconfirmed"
+                                    .into(),
+                            ));
+                        }
+                        continue 'main;
+                    }
                     if let Some(expected) = router.active.clone() {
                         let steer_params = json!({
                             "threadId": thread_id,
@@ -1446,10 +1434,28 @@ async fn run_session(session: Session) {
                         });
                         match client.request_classified("turn/steer", steer_params).await {
                             Ok(_) => {
-                                if let Some(tx) = acceptance.take() {
-                                    let _ = tx.send(SteerAcceptance::Accepted);
+                                if require_active {
+                                    explicit_steer_unconfirmed = true;
+                                    if let Some(tx) = acceptance.take() {
+                                        let _ = tx.send(SteerAcceptance::Accepted);
+                                    }
+                                } else {
+                                    // Ordinary warm routing retains its legacy
+                                    // segment boundary policy. It has no durable
+                                    // explicit-steer receipt to settle.
+                                    let (prev, next) = rotate(&mut assistant_message_id);
+                                    if !send(
+                                        &event_tx,
+                                        AgentEvent::Steered {
+                                            assistant_message_id: Some(prev),
+                                            next_assistant_message_id: Some(next),
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        break 'main;
+                                    }
                                 }
-                                awaiting_steer_incorporation.push_back(text);
                             }
                             // A failed `turn/steer` does NOT mean the text is
                             // bad: most commonly the active turn finished
