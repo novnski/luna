@@ -1435,9 +1435,6 @@ pub struct Shell {
     chat_menu: popover::Popup<ChatMenuState>,
     rename_dialog: Option<RenameChatDialog>,
     move_project_dialog: Option<MoveProjectDialog>,
-    /// When New project is entered from Move to project, return to the move
-    /// preview instead of changing the new-task canvas.
-    pending_move_after_create: Option<String>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
     /// Space-row context menu (dropdown rows): (space id, window position).
@@ -1448,6 +1445,9 @@ pub struct Shell {
     /// The add-space palette (device tabs + folder search), `Some`
     /// while open.
     add_space: Option<AddSpaceFlow>,
+    /// Monotonic identity for one Add Project flow. Async completions may only
+    /// affect the still-open flow that created them.
+    add_space_flow_seq: u64,
     command_palette: Option<command_palette::CommandPalette>,
     /// The sidebar's space-filter dropdown.
     spaces_menu: popover::Popup<spaces::SpacesMenu>,
@@ -1811,12 +1811,12 @@ impl Shell {
             chat_menu: popover::Popup::default(),
             rename_dialog: None,
             move_project_dialog: None,
-            pending_move_after_create: None,
             delete_confirm: None,
             space_menu: popover::Popup::default(),
             rename_space_dialog: None,
             delete_space_confirm: None,
             add_space: None,
+            add_space_flow_seq: 0,
             command_palette: None,
             spaces_menu: popover::Popup::default(),
             spaces_menu_bar: popover::MenuScrollbarState::default(),
@@ -4082,7 +4082,13 @@ impl Shell {
             .filter(|chat| !chat.archived && chat.pinned_order.is_some())
             .cloned()
             .collect();
-        pinned.sort_by_key(|chat| (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone()));
+        pinned.sort_by(|left, right| {
+            zeron_proto::compare_pin_order(
+                left.pinned_order.as_deref().expect("filtered pin key"),
+                right.pinned_order.as_deref().expect("filtered pin key"),
+            )
+            .then_with(|| left.id.cmp(&right.id))
+        });
         let Some(index) = pinned.iter().position(|chat| chat.id == chat_id) else {
             return;
         };
@@ -7065,8 +7071,7 @@ impl Shell {
             return true;
         }
         if self.add_space.is_some() {
-            self.add_space = None;
-            cx.notify();
+            self.dismiss_add_space(cx);
             return true;
         }
         if self.spaces_menu.is_open() {
@@ -7179,11 +7184,17 @@ impl Shell {
                     .iter()
                     .filter(|chat| !chat.archived && chat.pinned_order.is_some())
                     .collect();
-                pins.sort_by_key(|chat| (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone()));
+                pins.sort_by(|left, right| {
+                    zeron_proto::compare_pin_order(
+                        left.pinned_order.as_deref().expect("filtered pin key"),
+                        right.pinned_order.as_deref().expect("filtered pin key"),
+                    )
+                    .then_with(|| left.id.cmp(&right.id))
+                });
                 let pin_index = pins.iter().position(|chat| chat.id == chat_id);
                 (
                     chat.is_some_and(|chat| chat.archived),
-                    chat.and_then(|chat| chat.pinned_order).is_some(),
+                    chat.is_some_and(|chat| chat.pinned_order.is_some()),
                     chat.is_some_and(zeron_proto::Chat::unseen),
                     pin_index.is_some_and(|index| index > 0),
                     pin_index.is_some_and(|index| index + 1 < pins.len()),
@@ -7497,7 +7508,7 @@ impl Shell {
                 )
             };
             let query = search.read(cx).text().to_string();
-            let (chat, spaces, source_name) = {
+            let (chat, spaces, source_space) = {
                 let state = self.state.read(cx);
                 let chat = state.chats.iter().find(|chat| chat.id == chat_id).cloned();
                 let spaces = state
@@ -7505,12 +7516,11 @@ impl Shell {
                     .into_iter()
                     .cloned()
                     .collect::<Vec<_>>();
-                let source_name = chat
+                let source_space = chat
                     .as_ref()
                     .and_then(|chat| state.space_for_chat(chat))
-                    .map(|space| space.display_name().to_string())
-                    .unwrap_or_else(|| "Personal / no project".into());
-                (chat, spaces, source_name)
+                    .cloned();
+                (chat, spaces, source_space)
             };
             let names: Vec<_> = spaces
                 .iter()
@@ -7548,40 +7558,64 @@ impl Shell {
                 {
                     (false, "Already in this project".into())
                 }
-                (Some(chat), Some(destination)) if chat.device_id != destination.device_id => (
-                    false,
-                    "Unavailable: another machine/environment requires X03 handoff".into(),
-                ),
-                (Some(chat), Some(destination))
-                    if chat.checkout_id.is_some()
-                        && destination.checkout_id.is_some()
-                        && chat.checkout_id != destination.checkout_id =>
-                {
-                    (
-                        false,
-                        "Unavailable: a different checkout/worktree requires X03".into(),
-                    )
-                }
                 (Some(chat), Some(destination)) => {
                     let cwd = chat.cwd.as_deref().unwrap_or("Unavailable");
+                    let source_name = source_space
+                        .as_ref()
+                        .map(|space| space.display_name())
+                        .unwrap_or("Personal / no project");
+                    let source_root = source_space
+                        .as_ref()
+                        .map(|space| space.path.as_str())
+                        .or(chat.cwd.as_deref())
+                        .unwrap_or("Unavailable");
+                    let source_checkout = source_space
+                        .as_ref()
+                        .and_then(|space| space.checkout_id.as_deref())
+                        .or(chat.checkout_id.as_deref())
+                        .unwrap_or("Unavailable / non-Git");
+                    let destination_checkout = destination
+                        .checkout_id
+                        .as_deref()
+                        .unwrap_or("Unavailable / non-Git");
                     let provider = if chat
                         .harness_session_id
                         .as_deref()
                         .is_some_and(|id| !id.is_empty())
                     {
-                        "Provider session retained after canonical validation"
+                        "Provider session: retained only after engine validation succeeds"
                     } else {
-                        "Provider session unavailable; task identity/history remain"
+                        "Provider session: unavailable; task identity/history remain unchanged"
+                    };
+                    let known_incompatible_machine = chat.device_id != destination.device_id;
+                    let known_incompatible_checkout = chat.checkout_id.is_some()
+                        && destination.checkout_id.is_some()
+                        && chat.checkout_id != destination.checkout_id;
+                    let (available, validation) = if known_incompatible_machine {
+                        (
+                            false,
+                            "Unavailable: another machine/environment requires X03 handoff",
+                        )
+                    } else if known_incompatible_checkout {
+                        (
+                            false,
+                            "Unavailable: a different checkout/worktree requires X03",
+                        )
+                    } else {
+                        (
+                            true,
+                            "Pending: the engine will canonicalize both roots and verify the live workspace/checkout at confirmation",
+                        )
                     };
                     (
-                        true,
+                        available,
                         format!(
-                            "Destination: {}\nMachine: {}\nCanonical root: {}\nCurrent cwd: {}\nBranch: {}\n{}",
+                            "Source: {source_name}\nSource environment/machine: owning engine @ {}\nConfigured source root (not yet canonicalized): {source_root}\nCurrent cwd: {cwd}\nCurrent branch: {}\nSource checkout/worktree: {source_checkout}\nDestination: {}\nDestination environment/machine: owning engine @ {}\nConfigured destination root (not yet canonicalized): {}\nDestination checkout/worktree: {destination_checkout}\nValidation: {validation}\n{}\nUnchanged effects: task ID/history, read/pin state, permissions, running terminals, browser tabs, scheduled work, and remote scopes. Terminals and browser tabs remain in their current cwd/scope.",
+                            chat.device_id,
+                            chat.branch.as_deref().unwrap_or("Unavailable"),
                             destination.display_name(),
                             destination.device_id,
                             destination.path,
-                            cwd,
-                            chat.branch.as_deref().unwrap_or("Unavailable"),
                             provider,
                         )
                         .into(),
@@ -7601,7 +7635,13 @@ impl Shell {
                 .child(popover::dialog_title(&theme, "Move to project"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(
                     &theme,
-                    format!("Source: {source_name}"),
+                    format!(
+                        "Source: {}",
+                        source_space
+                            .as_ref()
+                            .map(|space| space.display_name())
+                            .unwrap_or("Personal / no project")
+                    ),
                 )))
                 .child(
                     div()
@@ -7623,9 +7663,8 @@ impl Shell {
                     popover::menu_row(&theme, false, "move-project-new")
                         .id("move-project-new")
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.pending_move_after_create = Some(new_project_chat.clone());
                             this.move_project_dialog = None;
-                            this.open_add_space(cx);
+                            this.open_add_space_for_move(new_project_chat.clone(), cx);
                         }))
                         .child(
                             icon(icons::PLUS)
@@ -10273,8 +10312,7 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &AddSpacePalette, _, cx| {
                 if this.add_space.is_some() {
-                    this.add_space = None;
-                    cx.notify();
+                    this.dismiss_add_space(cx);
                 } else {
                     this.open_add_space(cx);
                 }

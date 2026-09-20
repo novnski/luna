@@ -19,6 +19,7 @@ const TASK_PINNED_B: &str = "23232323-2323-4232-8232-232323232323";
 const TASK_PERSONAL: &str = "34343434-3434-4343-8343-343434343434";
 const TASK_ARCHIVED: &str = "45454545-4545-4454-8454-454545454545";
 const TASK_REMOTE: &str = "56565656-5656-4565-8565-565656565656";
+const TASK_NON_GIT: &str = "67676767-6767-4676-8676-676767676767";
 const REMOTE_DEVICE: &str = "fixture-offline-machine";
 
 fn account_config(root: &Path) -> AgentAccountsConfig {
@@ -108,9 +109,13 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     let repo = root.join("workspaces/fieldnotes");
     let app = repo.join("apps/desktop");
     let other = root.join("workspaces/unrelated");
+    let notes = root.join("workspaces/notes");
+    let other_notes = root.join("workspaces/other-notes");
     init_git_repo(&repo)?;
     init_git_repo(&other)?;
     std::fs::create_dir_all(&app)?;
+    std::fs::create_dir_all(&notes)?;
+    std::fs::create_dir_all(&other_notes)?;
     core.workspace.create_space(
         "fixture-app",
         &core.device_id,
@@ -138,6 +143,20 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
         "/synthetic/remote/archived-client",
         Some("Offline client project".into()),
         true,
+    )?;
+    core.workspace.create_space(
+        "fixture-notes",
+        &core.device_id,
+        notes.to_str().unwrap(),
+        Some("Notes (non-Git)".into()),
+        false,
+    )?;
+    core.workspace.create_space(
+        "fixture-other-notes",
+        &core.device_id,
+        other_notes.to_str().unwrap(),
+        Some("Other notes (different root)".into()),
+        false,
     )?;
 
     for (id, space, cwd, title) in [
@@ -179,6 +198,15 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     )?;
     core.workspace
         .rename_chat(TASK_REMOTE, "Disconnected project task")?;
+    core.workspace.create_chat(
+        TASK_NON_GIT,
+        None,
+        Some(&core.device_id),
+        Some(task_config()),
+        Some(notes.to_string_lossy().into_owned()),
+    )?;
+    core.workspace
+        .rename_chat(TASK_NON_GIT, "Non-Git workspace task")?;
     core.workspace.set_chat_harness_session(
         TASK_PINNED_A,
         "fixture-provider-session-a",

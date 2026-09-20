@@ -453,7 +453,7 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
     let receipt = execute(
         client,
         envelope(
-            "create-command",
+            &format!("create-command-{task_id}"),
             task_id,
             None,
             serde_json::json!({ "kind": "createChat", "deviceId": device_id }),
@@ -2314,7 +2314,13 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
     assert_eq!(duplicate, reorder);
 
     let mut pinned = core.workspace.read_chats().unwrap();
-    pinned.sort_by_key(|chat| (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone()));
+    pinned.sort_by(|left, right| {
+        zeron_proto::compare_pin_order(
+            left.pinned_order.as_deref().expect("filtered pin key"),
+            right.pinned_order.as_deref().expect("filtered pin key"),
+        )
+        .then_with(|| left.id.cmp(&right.id))
+    });
     assert_eq!(
         pinned
             .iter()
@@ -2390,7 +2396,191 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
     assert!(!persisted.archived);
     assert!(persisted.manually_unread);
     assert_eq!(persisted.pinned_order, None);
+    let mut persisted_pins: Vec<_> = reopened
+        .workspace
+        .read_chats()
+        .unwrap()
+        .into_iter()
+        .filter(|chat| chat.pinned_order.is_some())
+        .collect();
+    persisted_pins.sort_by(|left, right| {
+        zeron_proto::compare_pin_order(
+            left.pinned_order.as_deref().unwrap(),
+            right.pinned_order.as_deref().unwrap(),
+        )
+    });
+    assert_eq!(
+        persisted_pins
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect::<Vec<_>>(),
+        ["org-c", "org-b"]
+    );
     reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dense_pin_insertion_changes_only_requested_tasks_and_rejects_stale_neighbors() {
+    let root = tempfile::tempdir().unwrap();
+    let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    for task_id in ["pin-left", "pin-right"] {
+        create_task(&client, task_id, &core.device_id).await;
+        let receipt = execute(
+            &client,
+            envelope(
+                &format!("pin-{task_id}"),
+                task_id,
+                Some(&snapshot(&client, task_id).await),
+                serde_json::json!({ "kind": "setPinned", "pinned": true }),
+            ),
+        )
+        .await;
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+    }
+    let left_revision = snapshot(&client, "pin-left").await.snapshot.task_revision;
+    let right_revision = snapshot(&client, "pin-right").await.snapshot.task_revision;
+    let left_key = core
+        .workspace
+        .chat("pin-left")
+        .unwrap()
+        .unwrap()
+        .pinned_order
+        .unwrap();
+    let right_key = core
+        .workspace
+        .chat("pin-right")
+        .unwrap()
+        .unwrap()
+        .pinned_order
+        .unwrap();
+
+    let mut next = "pin-right".to_string();
+    let mut replay = None;
+    for index in 0..16 {
+        let task_id = format!("pin-dense-{index}");
+        create_task(&client, &task_id, &core.device_id).await;
+        let command_id = format!("pin-dense-command-{index}");
+        let read = snapshot(&client, &task_id).await;
+        let receipt = execute(
+            &client,
+            envelope(
+                &command_id,
+                &task_id,
+                Some(&read),
+                serde_json::json!({
+                    "kind": "setPinned",
+                    "pinned": true,
+                    "afterTaskId": "pin-left",
+                    "beforeTaskId": next,
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+        if index == 15 {
+            let duplicate = execute(
+                &client,
+                envelope(
+                    &command_id,
+                    &task_id,
+                    Some(&read),
+                    serde_json::json!({
+                        "kind": "setPinned",
+                        "pinned": true,
+                        "afterTaskId": "pin-left",
+                        "beforeTaskId": next,
+                    }),
+                ),
+            )
+            .await;
+            assert_eq!(duplicate, receipt);
+            replay = Some(task_id.clone());
+        }
+        next = task_id;
+    }
+
+    assert_eq!(
+        snapshot(&client, "pin-left").await.snapshot.task_revision,
+        left_revision,
+        "inserting between pins must not revise the left neighbor"
+    );
+    assert_eq!(
+        snapshot(&client, "pin-right").await.snapshot.task_revision,
+        right_revision,
+        "inserting between pins must not revise the right neighbor"
+    );
+    assert_eq!(
+        core.workspace
+            .chat("pin-left")
+            .unwrap()
+            .unwrap()
+            .pinned_order
+            .as_deref(),
+        Some(left_key.as_str())
+    );
+    assert_eq!(
+        core.workspace
+            .chat("pin-right")
+            .unwrap()
+            .unwrap()
+            .pinned_order
+            .as_deref(),
+        Some(right_key.as_str())
+    );
+    let replay_key = core
+        .workspace
+        .chat(replay.as_deref().unwrap())
+        .unwrap()
+        .unwrap()
+        .pinned_order
+        .unwrap();
+    assert!(replay_key.len() > 10, "dense insertions extend the key");
+
+    create_task(&client, "pin-stale", &core.device_id).await;
+    let stale_read = snapshot(&client, "pin-stale").await;
+    create_task(&client, "pin-neighbor", &core.device_id).await;
+    let changed = execute(
+        &client,
+        envelope(
+            "pin-new-neighbor",
+            "pin-neighbor",
+            Some(&snapshot(&client, "pin-neighbor").await),
+            serde_json::json!({
+                "kind": "setPinned",
+                "pinned": true,
+                "afterTaskId": "pin-left",
+                "beforeTaskId": next,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(changed.status, CommandReceiptStatus::Applied);
+    let stale = execute(
+        &client,
+        envelope(
+            "pin-stale-neighbors",
+            "pin-stale",
+            Some(&stale_read),
+            serde_json::json!({
+                "kind": "setPinned",
+                "pinned": true,
+                "afterTaskId": "pin-left",
+                "beforeTaskId": next,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(stale.status, CommandReceiptStatus::Failed);
+    assert!(
+        core.workspace
+            .chat("pin-stale")
+            .unwrap()
+            .unwrap()
+            .pinned_order
+            .is_none()
+    );
+    core.shutdown().await;
 }
 
 fn init_git_repo(path: &std::path::Path) {
@@ -2541,6 +2731,103 @@ async fn same_workspace_project_move_is_atomic_and_preserves_task_state() {
             .as_deref(),
         Some("root-project"),
         "failed move leaves original ownership untouched"
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exact_non_git_workspace_move_succeeds_and_different_root_is_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("notes");
+    let other = root.path().join("other-notes");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), false);
+    core.workspace
+        .create_space(
+            "notes-project",
+            &core.device_id,
+            workspace.to_str().unwrap(),
+            Some("Notes".into()),
+            false,
+        )
+        .unwrap();
+    core.workspace
+        .create_space(
+            "other-project",
+            &core.device_id,
+            other.to_str().unwrap(),
+            Some("Other".into()),
+            false,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let created = execute(
+        &client,
+        envelope(
+            "create-personal-notes",
+            "non-git-task",
+            None,
+            serde_json::json!({
+                "kind": "createChat",
+                "deviceId": core.device_id,
+                "cwd": workspace,
+                "config": task_config("synthetic")
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(created.status, CommandReceiptStatus::Applied);
+    let moved = execute(
+        &client,
+        envelope(
+            "move-non-git-same-root",
+            "non-git-task",
+            Some(&snapshot(&client, "non-git-task").await),
+            serde_json::json!({
+                "kind": "moveProject",
+                "destinationSpaceId": "notes-project"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(moved.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        core.workspace
+            .chat("non-git-task")
+            .unwrap()
+            .unwrap()
+            .space_id
+            .as_deref(),
+        Some("notes-project")
+    );
+
+    let rejected = execute(
+        &client,
+        envelope(
+            "move-non-git-other-root",
+            "non-git-task",
+            Some(&snapshot(&client, "non-git-task").await),
+            serde_json::json!({
+                "kind": "moveProject",
+                "destinationSpaceId": "other-project"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(rejected.status, CommandReceiptStatus::Rejected);
+    assert_eq!(
+        rejected.reason.unwrap().code,
+        CommandReasonCode::IncompatibleWorkspace
+    );
+    assert_eq!(
+        core.workspace
+            .chat("non-git-task")
+            .unwrap()
+            .unwrap()
+            .space_id
+            .as_deref(),
+        Some("notes-project")
     );
     core.shutdown().await;
 }

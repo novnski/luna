@@ -245,7 +245,7 @@ impl WorkspaceDoc {
         row.insert("deviceId", chat.device_id.as_str())?;
         set_opt_str(&row, "title", chat.title.as_deref())?;
         row.insert("archived", chat.archived)?;
-        match chat.pinned_order {
+        match chat.pinned_order.as_deref() {
             Some(order) => row.insert("pinnedOrder", order)?,
             None => row.delete("pinnedOrder")?,
         }
@@ -320,7 +320,7 @@ impl WorkspaceDoc {
     pub fn set_chat_pinned_order(
         &self,
         chat_id: &str,
-        order: Option<i64>,
+        order: Option<&str>,
     ) -> Result<bool, DocError> {
         let Some(row) = self.existing_row("chats", chat_id) else {
             return Ok(false);
@@ -714,8 +714,8 @@ pub(crate) struct RawChat {
     title: Option<String>,
     #[serde(default)]
     archived: bool,
-    #[serde(default)]
-    pinned_order: Option<i64>,
+    #[serde(default, deserialize_with = "zeron_proto::deserialize_pin_order")]
+    pinned_order: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]

@@ -339,6 +339,35 @@ enum TaskCommandIntent {
     },
 }
 
+#[derive(Debug, Clone)]
+struct ValidatedProjectMove {
+    destination: zeron_proto::Space,
+}
+
+fn commit_validated_project_move(
+    doc: &mut RegistryDoc,
+    task_id: &str,
+    validated: &ValidatedProjectMove,
+) -> Result<(), crate::EngineError> {
+    let current = doc
+        .space(&validated.destination.id)?
+        .ok_or_else(|| crate::EngineError::Other("the validated destination disappeared".into()))?;
+    if current.device_id != validated.destination.device_id
+        || current.path != validated.destination.path
+        || current.checkout_id != validated.destination.checkout_id
+    {
+        return Err(crate::EngineError::Other(
+            "the destination topology changed after validation".into(),
+        ));
+    }
+    if !doc.set_chat_space(task_id, &validated.destination.id)? {
+        return Err(crate::EngineError::Other(
+            "the task or validated destination changed before commit".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl TaskCommandIntent {
     fn name(&self) -> &'static str {
         match self {
@@ -1463,22 +1492,29 @@ impl EngineRpc {
                 "Stop the expected active turn, wait for settlement, then retry with a new command id.",
             );
         }
-        if let TaskCommandIntent::MoveProject {
+        let validated_project_move = if let TaskCommandIntent::MoveProject {
             destination_space_id,
         } = &command.intent
-            && let Err((code, message, recovery)) = self
+        {
+            match self
                 .validate_project_move(&command.task_id, destination_space_id)
                 .await
-        {
-            return self.finish_task_command(
-                &command.command_id,
-                CommandReceiptStatus::Rejected,
-                false,
-                code,
-                &message,
-                &recovery,
-            );
-        }
+            {
+                Ok(validated) => Some(validated),
+                Err((code, message, recovery)) => {
+                    return self.finish_task_command(
+                        &command.command_id,
+                        CommandReceiptStatus::Rejected,
+                        false,
+                        code,
+                        &message,
+                        &recovery,
+                    );
+                }
+            }
+        } else {
+            None
+        };
         let revalidated = self.current_task_command_snapshot(&command.task_id)?;
         if command.expected_binding_generation.is_some()
             && command.expected_binding_generation != revalidated.binding_generation
@@ -1502,6 +1538,16 @@ impl EngineRpc {
                 CommandReasonCode::StaleTurn,
                 "the active turn changed after command acceptance",
                 "Reload active task state; do not replay this control against the replacement turn.",
+            );
+        }
+        if validated_project_move.is_some() && self.sessions.has_live_run(&command.task_id) {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Conflict,
+                false,
+                CommandReasonCode::ActiveTurnConflict,
+                "the task became active while its project move was being validated",
+                "Stop the active turn or pending interaction, wait for settlement, and retry with a new command id.",
             );
         }
 
@@ -1677,6 +1723,7 @@ impl EngineRpc {
                 &command.task_id,
                 command.intent,
                 expected_turn_id.as_deref(),
+                validated_project_move,
             )
             .await;
         let outcome = match outcome {
@@ -1776,7 +1823,7 @@ impl EngineRpc {
         &self,
         task_id: &str,
         destination_space_id: &str,
-    ) -> Result<(), (CommandReasonCode, String, String)> {
+    ) -> Result<ValidatedProjectMove, (CommandReasonCode, String, String)> {
         let task = self
             .workspace
             .chat(task_id)
@@ -1794,18 +1841,17 @@ impl EngineRpc {
                     "Reload the task list; no project metadata was changed.".into(),
                 )
             })?;
-        let destination = self
-            .workspace
-            .read_spaces()
-            .map_err(|error| {
-                (
-                    CommandReasonCode::OperationFailed,
-                    error.to_string(),
-                    "Reload the project catalog and retry.".into(),
-                )
-            })?
-            .into_iter()
+        let spaces = self.workspace.read_spaces().map_err(|error| {
+            (
+                CommandReasonCode::OperationFailed,
+                error.to_string(),
+                "Reload the project catalog and retry.".into(),
+            )
+        })?;
+        let destination = spaces
+            .iter()
             .find(|space| space.id == destination_space_id)
+            .cloned()
             .ok_or_else(|| {
                 (
                     CommandReasonCode::InvalidDestination,
@@ -1815,9 +1861,6 @@ impl EngineRpc {
                 )
             })?;
 
-        if task.space_id.as_deref() == Some(destination_space_id) {
-            return Ok(());
-        }
         if destination.device_id != task.device_id
             || destination.device_id != self.engine_info.device_id
         {
@@ -1848,6 +1891,27 @@ impl EngineRpc {
                 "Choose an existing accessible folder; the original task is unchanged.".into(),
             )
         })?;
+        let source_space = task
+            .space_id
+            .as_deref()
+            .and_then(|space_id| spaces.iter().find(|space| space.id == space_id));
+        let source_root = source_space
+            .map(|space| std::path::PathBuf::from(&space.path))
+            .unwrap_or_else(|| canonical_cwd.clone());
+        let canonical_source = std::fs::canonicalize(&source_root).map_err(|error| {
+            (
+                CommandReasonCode::InvalidDestination,
+                format!("the source workspace cannot be validated: {error}"),
+                "Restore access to the current workspace; the original task is unchanged.".into(),
+            )
+        })?;
+        if !canonical_cwd.starts_with(&canonical_source) {
+            return Err((
+                CommandReasonCode::InvalidDestination,
+                "the task cwd no longer belongs to its source project".into(),
+                "Refresh the source project catalog before retrying the move.".into(),
+            ));
+        }
         if !canonical_cwd.starts_with(&canonical_destination) {
             return Err((
                 CommandReasonCode::IncompatibleWorkspace,
@@ -1857,51 +1921,84 @@ impl EngineRpc {
                     .into(),
             ));
         }
-        let current_checkout =
-            self.repos
-                .checkout_identity(&canonical_cwd)
-                .await
-                .map_err(|_| {
-                    (
+        let source_is_git = self.repos.is_repo(&canonical_source).await;
+        let destination_is_git = self.repos.is_repo(&canonical_destination).await;
+        match (source_is_git, destination_is_git) {
+            (true, true) => {
+                let current_checkout =
+                    self.repos
+                        .checkout_identity(&canonical_cwd)
+                        .await
+                        .map_err(|error| {
+                            (
+                                CommandReasonCode::IncompatibleWorkspace,
+                                format!("the current checkout cannot be validated: {error}"),
+                                "Restore the current checkout before retrying the move.".into(),
+                            )
+                        })?;
+                let destination_checkout = self
+                    .repos
+                    .checkout_identity(&canonical_destination)
+                    .await
+                    .map_err(|error| {
+                        (
+                            CommandReasonCode::IncompatibleWorkspace,
+                            format!("the destination checkout cannot be validated: {error}"),
+                            "Restore the destination checkout before retrying the move.".into(),
+                        )
+                    })?;
+                if current_checkout.id != destination_checkout.id {
+                    return Err((
                         CommandReasonCode::IncompatibleWorkspace,
-                        "the current task is not in a compatible Git workspace".into(),
-                        "L12 can only preserve the provider session inside one canonical checkout."
+                        "the destination resolves to a different checkout or worktree; cross-workspace moves require X03"
                             .into(),
-                    )
-                })?;
-        let destination_checkout = self
-            .repos
-            .checkout_identity(&canonical_destination)
-            .await
-            .map_err(|_| {
-                (
+                        "Choose a project in the same canonical checkout; the original task is unchanged."
+                            .into(),
+                    ));
+                }
+                if destination
+                    .checkout_id
+                    .as_deref()
+                    .is_some_and(|id| id != destination_checkout.id)
+                {
+                    return Err((
+                        CommandReasonCode::InvalidDestination,
+                        "the destination project catalog is stale for its current checkout".into(),
+                        "Wait for the owning machine to refresh the project catalog and retry."
+                            .into(),
+                    ));
+                }
+                if source_space
+                    .and_then(|space| space.checkout_id.as_deref())
+                    .is_some_and(|id| id != current_checkout.id)
+                {
+                    return Err((
+                        CommandReasonCode::InvalidDestination,
+                        "the source project catalog is stale for its current checkout".into(),
+                        "Wait for the owning machine to refresh the project catalog and retry."
+                            .into(),
+                    ));
+                }
+            }
+            (false, false) if canonical_source == canonical_destination => {}
+            (false, false) => {
+                return Err((
                     CommandReasonCode::IncompatibleWorkspace,
-                    "the destination project is not in a compatible Git workspace".into(),
-                    "L12 can only preserve the provider session inside one canonical checkout."
+                    "non-Git project reassignment requires the exact same canonical workspace root"
                         .into(),
-                )
-            })?;
-        if current_checkout.id != destination_checkout.id {
-            return Err((
-                CommandReasonCode::IncompatibleWorkspace,
-                "the destination resolves to a different checkout or worktree; cross-workspace moves require X03"
-                    .into(),
-                "Choose a project in the same canonical checkout; the original task is unchanged."
-                    .into(),
-            ));
+                    "Choose the same physical workspace root; different roots require X03.".into(),
+                ));
+            }
+            _ => {
+                return Err((
+                    CommandReasonCode::IncompatibleWorkspace,
+                    "the source and destination do not share one compatible workspace type".into(),
+                    "Choose a destination in the same canonical workspace; the original task is unchanged."
+                        .into(),
+                ));
+            }
         }
-        if destination
-            .checkout_id
-            .as_deref()
-            .is_some_and(|id| id != destination_checkout.id)
-        {
-            return Err((
-                CommandReasonCode::InvalidDestination,
-                "the destination project catalog is stale for its current checkout".into(),
-                "Wait for the owning machine to refresh the project catalog and retry.".into(),
-            ));
-        }
-        Ok(())
+        Ok(ValidatedProjectMove { destination })
     }
 
     fn commit_task_projection<R>(
@@ -2545,6 +2642,7 @@ impl EngineRpc {
         task_id: &str,
         intent: TaskCommandIntent,
         expected_turn_id: Option<&str>,
+        validated_project_move: Option<ValidatedProjectMove>,
     ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
         match intent {
             TaskCommandIntent::CreateChat {
@@ -2686,8 +2784,12 @@ impl EngineRpc {
                                     && chat.pinned_order.is_some()
                             })
                             .collect();
-                        pinned.sort_by_key(|chat| {
-                            (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone())
+                        pinned.sort_by(|left, right| {
+                            zeron_proto::compare_pin_order(
+                                left.pinned_order.as_deref().expect("filtered pin key"),
+                                right.pinned_order.as_deref().expect("filtered pin key"),
+                            )
+                            .then_with(|| left.id.cmp(&right.id))
                         });
 
                         let insertion = match (after_task_id.as_deref(), before_task_id.as_deref())
@@ -2735,46 +2837,13 @@ impl EngineRpc {
                         };
                         let left = insertion
                             .checked_sub(1)
-                            .and_then(|ix| pinned[ix].pinned_order);
-                        let right = pinned.get(insertion).and_then(|chat| chat.pinned_order);
-                        let mut order = match (left, right) {
-                            (Some(left), Some(right)) if right - left > 1 => {
-                                left + (right - left) / 2
-                            }
-                            (Some(left), None) => left.saturating_add(1024),
-                            (None, Some(right)) => right.saturating_sub(1024),
-                            (None, None) => 0,
-                            _ => {
-                                // Fractional integer space was exhausted. Rebalance only on
-                                // this rare collision, never on ordinary reorders.
-                                for (ix, chat) in pinned.iter_mut().enumerate() {
-                                    let key = (ix as i64) * 1024;
-                                    if chat.pinned_order != Some(key) {
-                                        doc.set_chat_pinned_order(&chat.id, Some(key))?;
-                                        chat.pinned_order = Some(key);
-                                    }
-                                }
-                                let left = insertion
-                                    .checked_sub(1)
-                                    .and_then(|ix| pinned[ix].pinned_order);
-                                let right =
-                                    pinned.get(insertion).and_then(|chat| chat.pinned_order);
-                                match (left, right) {
-                                    (Some(left), Some(right)) => left + (right - left) / 2,
-                                    (Some(left), None) => left + 1024,
-                                    (None, Some(right)) => right - 1024,
-                                    (None, None) => 0,
-                                }
-                            }
-                        };
-                        if pinned.iter().any(|chat| chat.pinned_order == Some(order)) {
-                            order = pinned
-                                .last()
-                                .and_then(|chat| chat.pinned_order)
-                                .unwrap_or(0)
-                                + 1024;
-                        }
-                        doc.set_chat_pinned_order(&owned_task_id, Some(order))?;
+                            .and_then(|ix| pinned[ix].pinned_order.as_deref());
+                        let right = pinned
+                            .get(insertion)
+                            .and_then(|chat| chat.pinned_order.as_deref());
+                        let order = zeron_proto::pin_order_between(left, right)
+                            .map_err(|error| crate::EngineError::Other(error.into()))?;
+                        doc.set_chat_pinned_order(&owned_task_id, Some(&order))?;
                         Ok(())
                     })?;
                 Ok(Some(receipt))
@@ -2824,14 +2893,29 @@ impl EngineRpc {
                 destination_space_id,
             } => {
                 let owned_task_id = task_id.to_string();
+                let validated = validated_project_move.ok_or_else(|| {
+                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "project move reached commit without a validated destination".into(),
+                    ))
+                })?;
+                if validated.destination.id != destination_space_id {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "validated project move does not match the command destination".into(),
+                    )));
+                }
+                let sessions = self.sessions.clone();
                 let (_, receipt) =
                     self.commit_task_projection(command_id, task_id, move |doc| {
-                        if !doc.set_chat_space(&owned_task_id, &destination_space_id)? {
+                        // Recheck while the registry commit lock is held. This
+                        // covers turns parked on approval/input as well as
+                        // streaming work without introducing the later L28
+                        // computer-control lease system.
+                        if sessions.has_live_run(&owned_task_id) {
                             return Err(crate::EngineError::Other(
-                                "the task or destination project changed before commit".into(),
+                                "the task became active before the project move committed".into(),
                             ));
                         }
-                        Ok(())
+                        commit_validated_project_move(doc, &owned_task_id, &validated)
                     })?;
                 Ok(Some(receipt))
             }
@@ -5531,6 +5615,66 @@ impl RpcService for EngineRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn move_test_space(path: &str) -> zeron_proto::Space {
+        zeron_proto::Space {
+            id: "destination".into(),
+            device_id: "device".into(),
+            path: path.into(),
+            name: Some("Destination".into()),
+            git_detected: false,
+            git_checked_at: None,
+            checkout_id: None,
+            created_at: chrono::DateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn move_test_chat() -> Chat {
+        Chat {
+            id: "task".into(),
+            device_id: "device".into(),
+            title: Some("Task".into()),
+            archived: false,
+            pinned_order: None,
+            cwd: Some("/workspace".into()),
+            branch: None,
+            checkout_id: None,
+            source_context: None,
+            config: None,
+            last_message_preview: None,
+            last_message_at: None,
+            created_at: chrono::DateTime::UNIX_EPOCH,
+            harness_session_id: Some("provider-session".into()),
+            harness_session_cwd: Some("/workspace".into()),
+            space_id: None,
+            last_seen_at: None,
+            manually_unread: false,
+            room_gen: Some(2),
+        }
+    }
+
+    #[test]
+    fn validated_move_rejects_changed_or_missing_topology_without_relabeling() {
+        let mut changed = RegistryDoc::new("device");
+        let destination = move_test_space("/workspace");
+        changed.upsert_space(&destination).unwrap();
+        changed.upsert_chat(&move_test_chat()).unwrap();
+        let validated = ValidatedProjectMove {
+            destination: destination.clone(),
+        };
+        changed
+            .upsert_space(&move_test_space("/workspace/replaced"))
+            .unwrap();
+        assert!(commit_validated_project_move(&mut changed, "task", &validated).is_err());
+        assert_eq!(changed.chat("task").unwrap().unwrap().space_id, None);
+
+        let mut missing = RegistryDoc::new("device");
+        missing.upsert_space(&destination).unwrap();
+        missing.upsert_chat(&move_test_chat()).unwrap();
+        missing.delete_space("destination").unwrap();
+        assert!(commit_validated_project_move(&mut missing, "task", &validated).is_err());
+        assert_eq!(missing.chat("task").unwrap().unwrap().space_id, None);
+    }
 
     #[tokio::test]
     async fn antigravity_sign_out_failure_stays_enabled_and_can_be_retried() {

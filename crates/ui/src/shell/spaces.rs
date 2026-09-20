@@ -27,10 +27,9 @@ pub(super) fn compare_sidebar_chats(
     left: &zeron_proto::Chat,
     right: &zeron_proto::Chat,
 ) -> std::cmp::Ordering {
-    match (left.pinned_order, right.pinned_order) {
+    match (&left.pinned_order, &right.pinned_order) {
         (Some(left_order), Some(right_order)) => {
-            return left_order
-                .cmp(&right_order)
+            return zeron_proto::compare_pin_order(left_order, right_order)
                 .then_with(|| left.id.cmp(&right.id));
         }
         (Some(_), None) => return std::cmp::Ordering::Less,
@@ -202,7 +201,15 @@ enum ProjectStep {
     Folders,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AddSpaceOrigin {
+    Standalone,
+    MoveTask { chat_id: String },
+}
+
 pub(super) struct AddSpaceFlow {
+    id: u64,
+    origin: AddSpaceOrigin,
     step: ProjectStep,
     location: Option<(String, Option<String>)>,
     /// The selected device.
@@ -535,7 +542,6 @@ impl Shell {
             SpacesMenuRow::Space(id) => self.set_space_filter(Some(id), cx),
             SpacesMenuRow::AddSpace => {
                 self.close_spaces_menu(cx);
-                self.pending_move_after_create = None;
                 self.open_add_space(cx);
             }
         }
@@ -1728,7 +1734,17 @@ impl Shell {
     // ---- add-space flow ----
 
     pub(super) fn open_add_space(&mut self, cx: &mut Context<Self>) {
+        self.open_add_space_with_origin(AddSpaceOrigin::Standalone, cx);
+    }
+
+    pub(super) fn open_add_space_for_move(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.open_add_space_with_origin(AddSpaceOrigin::MoveTask { chat_id }, cx);
+    }
+
+    fn open_add_space_with_origin(&mut self, origin: AddSpaceOrigin, cx: &mut Context<Self>) {
         self.command_palette = None;
+        self.add_space_flow_seq = self.add_space_flow_seq.wrapping_add(1);
+        let flow_id = self.add_space_flow_seq;
         // "PaletteSearch" context: navigation keys stay unbound so ↑↓/←/→/⏎
         // bubble to the palette frame (`add_space_key`) instead of moving the
         // text caret — Enter and ⌘Enter are both handled there.
@@ -1751,6 +1767,8 @@ impl Shell {
             }
         });
         self.add_space = Some(AddSpaceFlow {
+            id: flow_id,
+            origin,
             step: ProjectStep::Devices,
             location: None,
             device: None,
@@ -1771,6 +1789,11 @@ impl Shell {
             submit_task: None,
             _search_events: search_events,
         });
+        cx.notify();
+    }
+
+    pub(super) fn dismiss_add_space(&mut self, cx: &mut Context<Self>) {
+        self.add_space = None;
         cx.notify();
     }
 
@@ -2200,6 +2223,8 @@ impl Shell {
         };
         let path = listing.path.clone();
         let git_detected = flow.browser_repo;
+        let flow_id = flow.id;
+        let origin = flow.origin.clone();
         // Same (device, folder) already has a space → just switch to it. The
         // engine dedupes this case too (a createSpace for a duplicate pair
         // no-ops), so creating would leave the minted id dangling.
@@ -2211,12 +2236,7 @@ impl Shell {
             .find(|s| s.device_id == device.id && s.path == path)
             .map(|s| s.id.clone())
         {
-            self.add_space = None;
-            if let Some(chat_id) = self.pending_move_after_create.take() {
-                self.open_move_project_to(chat_id, existing, cx);
-            } else {
-                self.land_in_space(existing, cx);
-            }
+            self.finish_add_space_submission(flow_id, origin, existing, Ok(()), cx);
             return;
         }
         let Some(flow) = self.add_space.as_mut() else {
@@ -2252,35 +2272,60 @@ impl Shell {
         });
         let submit_id = space_id.clone();
         let task = cx.spawn(async move |this, cx| {
-            let result = engine.client().call(methods::MUTATE, params).await;
+            let result = engine
+                .client()
+                .call(methods::MUTATE, params)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string());
             this.update(cx, |shell, cx| {
-                match result {
-                    Ok(_) => {
-                        shell.add_space = None;
-                        if let Some(chat_id) = shell.pending_move_after_create.take() {
-                            shell.open_move_project_to(chat_id, submit_id.clone(), cx);
-                        } else {
-                            shell.land_in_space(submit_id.clone(), cx);
-                        }
-                    }
-                    Err(err) => {
-                        // Roll the optimistic row back; surface the error inline.
-                        shell.state.update(cx, |s, cx| {
-                            s.spaces.retain(|space| space.id != submit_id);
-                            cx.notify();
-                        });
-                        if let Some(flow) = shell.add_space.as_mut() {
-                            flow.submit_busy = false;
-                            flow.error = Some(format!("{err}").into());
-                        }
-                    }
-                }
-                cx.notify();
+                shell.finish_add_space_submission(flow_id, origin, submit_id.clone(), result, cx);
             })
             .ok();
         });
         if let Some(flow) = self.add_space.as_mut() {
             flow.submit_task = Some(task);
+        }
+        cx.notify();
+    }
+
+    fn finish_add_space_submission(
+        &mut self,
+        flow_id: u64,
+        origin: AddSpaceOrigin,
+        space_id: String,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let is_current = self
+            .add_space
+            .as_ref()
+            .is_some_and(|flow| flow.id == flow_id);
+        match result {
+            Ok(()) if is_current => {
+                self.add_space = None;
+                match origin {
+                    AddSpaceOrigin::Standalone => self.land_in_space(space_id, cx),
+                    AddSpaceOrigin::MoveTask { chat_id } => {
+                        self.open_move_project_to(chat_id, space_id, cx)
+                    }
+                }
+            }
+            Ok(()) => {
+                // A canceled or replaced flow may still finish upstream. The
+                // catalog watch owns that new row; it must not navigate or
+                // consume the origin of a newer flow.
+            }
+            Err(error) => {
+                self.state.update(cx, |state, cx| {
+                    state.spaces.retain(|space| space.id != space_id);
+                    cx.notify();
+                });
+                if is_current && let Some(flow) = self.add_space.as_mut() {
+                    flow.submit_busy = false;
+                    flow.error = Some(error.into());
+                }
+            }
         }
         cx.notify();
     }
@@ -2345,8 +2390,7 @@ impl Shell {
         );
         match key {
             popover::MenuKey::Escape => {
-                self.add_space = None;
-                cx.notify();
+                self.dismiss_add_space(cx);
                 cx.stop_propagation();
             }
             popover::MenuKey::Up | popover::MenuKey::Down => {
@@ -2708,7 +2752,7 @@ impl Shell {
                     .text_color(theme.text_muted)
                     .hover(|s| s.bg(theme.element_hover).text_color(theme.text))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.add_space = None;
+                        this.dismiss_add_space(cx);
                         this.toggle_command_palette(window, cx);
                     }))
                     .child(
@@ -2803,8 +2847,7 @@ impl Shell {
                     this.add_space_key(event, cx)
                 }))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.add_space = None;
-                    cx.notify();
+                    this.dismiss_add_space(cx);
                 }))
                 .child(header)
                 .child(crumbs)
@@ -3102,9 +3145,9 @@ mod tests {
     #[test]
     fn global_pin_order_precedes_recency_and_filtered_subsets_keep_it() {
         let mut alpha = chat("alpha");
-        alpha.pinned_order = Some(2048);
+        alpha.pinned_order = Some("11".into());
         let mut beta = chat("beta");
-        beta.pinned_order = Some(1024);
+        beta.pinned_order = Some("1".into());
         let recent = chat("recent");
         let mut rows = vec![alpha.clone(), recent, beta.clone()];
         rows.sort_by(|left, right| compare_sidebar_chats(SidebarSort::LastUpdated, left, right));
@@ -3199,6 +3242,100 @@ impl Shell {
 #[cfg(test)]
 mod project_flow_tests {
     use super::*;
+
+    fn test_shell(data_dir: PathBuf, cx: &mut gpui::Context<Shell>) -> Shell {
+        let state = cx.new(|_| AppState::new());
+        Shell::new(
+            state,
+            EngineBootConfig {
+                data_dir,
+                ipc_port: 0,
+                edge_url: String::new(),
+                edge_token: None,
+                org_id: None,
+                workos_client_id: None,
+                default_harness: zeron_proto::HarnessId::Mock,
+            },
+            cx,
+        )
+    }
+
+    #[gpui::test]
+    fn canceled_move_origin_cannot_leak_into_reopened_add_project(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let data = tempfile::tempdir().unwrap();
+        let data_dir = data.path().to_path_buf();
+        let shell = cx.new(move |cx| test_shell(data_dir, cx));
+        shell.update(cx, |shell, cx| {
+            shell.open_add_space_for_move("task-a".into(), cx);
+            let old = shell.add_space.as_ref().unwrap();
+            let old_id = old.id;
+            let old_origin = old.origin.clone();
+            shell.dismiss_add_space(cx);
+            shell.open_add_space(cx);
+            let reopened_id = shell.add_space.as_ref().unwrap().id;
+
+            shell.finish_add_space_submission(
+                old_id,
+                old_origin,
+                "late-project".into(),
+                Ok(()),
+                cx,
+            );
+
+            let reopened = shell.add_space.as_ref().expect("reopened flow survives");
+            assert_eq!(reopened.id, reopened_id);
+            assert_eq!(reopened.origin, AddSpaceOrigin::Standalone);
+            assert!(shell.move_project_dialog.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn replaced_add_project_ignores_old_completion_and_returns_current_move_origin(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let data = tempfile::tempdir().unwrap();
+        let data_dir = data.path().to_path_buf();
+        let shell = cx.new(move |cx| test_shell(data_dir, cx));
+        shell.update(cx, |shell, cx| {
+            shell.open_add_space_for_move("task-a".into(), cx);
+            let old = shell.add_space.as_ref().unwrap();
+            let old_id = old.id;
+            let old_origin = old.origin.clone();
+            shell.open_add_space_for_move("task-b".into(), cx);
+            let current = shell.add_space.as_ref().unwrap();
+            let current_id = current.id;
+            let current_origin = current.origin.clone();
+
+            shell.finish_add_space_submission(old_id, old_origin, "old-project".into(), Ok(()), cx);
+            assert_eq!(shell.add_space.as_ref().unwrap().id, current_id);
+            assert!(shell.move_project_dialog.is_none());
+
+            shell.finish_add_space_submission(
+                current_id,
+                current_origin,
+                "new-project".into(),
+                Ok(()),
+                cx,
+            );
+            assert!(shell.add_space.is_none());
+            let preview = shell
+                .move_project_dialog
+                .as_ref()
+                .expect("current move preview reopens");
+            assert_eq!(preview.chat_id, "task-b");
+            assert_eq!(preview.selected_space_id.as_deref(), Some("new-project"));
+        });
+    }
 
     #[gpui::test]
     fn devices_locations_folders_and_back_clear_stale_state(cx: &mut gpui::TestAppContext) {

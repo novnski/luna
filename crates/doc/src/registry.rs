@@ -873,6 +873,7 @@ impl RegistryDoc {
             (
                 "pinnedOrder",
                 chat.pinned_order
+                    .as_deref()
                     .map(|order| json!(order))
                     .unwrap_or(Value::Null),
             ),
@@ -981,7 +982,7 @@ impl RegistryDoc {
     pub fn set_chat_pinned_order(
         &mut self,
         chat_id: &str,
-        order: Option<i64>,
+        order: Option<&str>,
     ) -> Result<bool, DocError> {
         if !self.row_exists(KIND_CHATS, chat_id) {
             return Ok(false);
@@ -1323,6 +1324,7 @@ impl RegistryDoc {
                     (
                         "pinnedOrder",
                         chat.pinned_order
+                            .as_deref()
                             .map(|order| json!(order))
                             .unwrap_or(Value::Null),
                     ),

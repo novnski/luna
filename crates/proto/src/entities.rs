@@ -4,7 +4,8 @@
 //! workspace Loro doc (see ARCHITECTURE.md §2.2) with the same field surface.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::cmp::Ordering;
 
 use crate::{
     HarnessId, PermissionCeilingSource, PermissionDegradationReason, PermissionMode,
@@ -157,10 +158,15 @@ pub struct Chat {
     pub device_id: String,
     pub title: Option<String>,
     pub archived: bool,
-    /// LUNA-owned global pin position. `None` means unpinned; lower keys render
-    /// first. The key is intentionally independent of provider pin support.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pinned_order: Option<i64>,
+    /// LUNA-owned global pin position. `None` means unpinned. Keys are dense
+    /// dyadic fractions encoded as canonical binary strings, so inserting
+    /// between adjacent tasks never rewrites another task's projection.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_pin_order"
+    )]
+    pub pinned_order: Option<String>,
     pub cwd: Option<String>,
     pub branch: Option<String>,
     /// Canonical id of the repo checkout/worktree this chat operates in.
@@ -212,6 +218,106 @@ impl Chat {
     pub fn on_chat2(&self) -> bool {
         self.room_gen.unwrap_or(1) >= 2
     }
+}
+
+/// Compare canonical pin keys as binary fractions in `(0, 1)`. Missing
+/// trailing digits are zero, so `1` (1/2) sorts before `11` (3/4).
+pub fn compare_pin_order(left: &str, right: &str) -> Ordering {
+    let width = left.len().max(right.len());
+    left.bytes()
+        .chain(std::iter::repeat(b'0'))
+        .zip(right.bytes().chain(std::iter::repeat(b'0')))
+        .take(width)
+        .find_map(|(left, right)| (left != right).then(|| left.cmp(&right)))
+        .unwrap_or(Ordering::Equal)
+}
+
+/// Return a stable key strictly between `lower` and `upper`. `None` denotes
+/// the open 0/1 boundary. Only the requested task needs a new key.
+pub fn pin_order_between(lower: Option<&str>, upper: Option<&str>) -> Result<String, &'static str> {
+    for key in [lower, upper].into_iter().flatten() {
+        if key.is_empty()
+            || key.ends_with('0')
+            || !key.bytes().all(|byte| matches!(byte, b'0' | b'1'))
+        {
+            return Err("invalid pin order key");
+        }
+    }
+    if let (Some(lower), Some(upper)) = (lower, upper)
+        && compare_pin_order(lower, upper) != Ordering::Less
+    {
+        return Err("pin order bounds are not increasing");
+    }
+
+    let width = lower
+        .map(str::len)
+        .unwrap_or(0)
+        .max(upper.map(str::len).unwrap_or(0))
+        .max(1);
+    let mut scaled_lower = lower.unwrap_or("").to_string();
+    scaled_lower.extend(std::iter::repeat_n('0', width - scaled_lower.len()));
+    let mut incremented = scaled_lower.as_bytes().to_vec();
+    let mut carry = true;
+    for digit in incremented.iter_mut().rev() {
+        if *digit == b'0' {
+            *digit = b'1';
+            carry = false;
+            break;
+        }
+        *digit = b'0';
+    }
+
+    if !carry {
+        let incremented = String::from_utf8(incremented).expect("binary digits are UTF-8");
+        let below_upper = match upper {
+            Some(upper) => {
+                let mut scaled_upper = upper.to_string();
+                scaled_upper.extend(std::iter::repeat_n('0', width - scaled_upper.len()));
+                incremented < scaled_upper
+            }
+            None => true,
+        };
+        if below_upper {
+            return Ok(incremented.trim_end_matches('0').to_string());
+        }
+    }
+
+    scaled_lower.push('1');
+    Ok(scaled_lower)
+}
+
+/// Read the unreleased integer L12 key format without dropping local
+/// development data. New writes always use dense string keys.
+pub fn deserialize_pin_order<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum WirePinOrder {
+        Dense(String),
+        Legacy(i64),
+    }
+
+    Option::<WirePinOrder>::deserialize(deserializer)?
+        .map(|order| match order {
+            WirePinOrder::Dense(order) => {
+                if order.is_empty()
+                    || !order.bytes().all(|byte| matches!(byte, b'0' | b'1'))
+                    || !order.bytes().any(|byte| byte == b'1')
+                {
+                    return Err(serde::de::Error::custom("invalid pin order key"));
+                }
+                Ok(order.trim_end_matches('0').to_string())
+            }
+            WirePinOrder::Legacy(order) => {
+                let numerator = (i128::from(order) - i128::from(i64::MIN) + 1) as u128;
+                Ok(format!("{numerator:065b}")
+                    .trim_end_matches('0')
+                    .to_string())
+            }
+        })
+        .transpose()
 }
 
 impl Chat {
@@ -1032,6 +1138,40 @@ pub struct ChatConnectivity {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn dense_pin_keys_remain_ordered_without_neighbor_rewrites() {
+        let first = pin_order_between(None, None).unwrap();
+        let before = pin_order_between(None, Some(&first)).unwrap();
+        let after = pin_order_between(Some(&first), None).unwrap();
+        let tight = pin_order_between(Some(&first), Some(&after)).unwrap();
+        assert_eq!(first, "1");
+        assert!(compare_pin_order(&before, &first).is_lt());
+        assert!(compare_pin_order(&first, &tight).is_lt());
+        assert!(compare_pin_order(&tight, &after).is_lt());
+
+        let tighter = pin_order_between(Some(&first), Some(&tight)).unwrap();
+        assert!(compare_pin_order(&first, &tighter).is_lt());
+        assert!(compare_pin_order(&tighter, &tight).is_lt());
+    }
+
+    #[test]
+    fn legacy_integer_pin_keys_deserialize_in_numeric_order() {
+        #[derive(Deserialize)]
+        struct Legacy {
+            #[serde(deserialize_with = "deserialize_pin_order")]
+            order: Option<String>,
+        }
+        let low: Legacy = serde_json::from_value(serde_json::json!({ "order": -1 })).unwrap();
+        let high: Legacy = serde_json::from_value(serde_json::json!({ "order": 1 })).unwrap();
+        assert!(
+            compare_pin_order(
+                low.order.as_deref().unwrap(),
+                high.order.as_deref().unwrap()
+            )
+            .is_lt()
+        );
+    }
 
     #[test]
     fn legacy_chat_config_defaults_to_safe_ask_never_full() {
