@@ -978,6 +978,7 @@ struct HistoryForkDialog {
     prompt: Entity<ComposerInput>,
     snapshot: TaskCommandSnapshot,
     review: serde_json::Value,
+    origin: HistoryEngineOrigin,
     config: ChatConfig,
     /// Immutable authority captured from the host-reviewed source config.
     /// Picker changes update only the requested mode, never this ceiling.
@@ -1025,6 +1026,7 @@ struct EditEarlierMessageDialog {
     input: Entity<ComposerInput>,
     snapshot: TaskCommandSnapshot,
     review: serde_json::Value,
+    origin: HistoryEngineOrigin,
     focus_pending: bool,
     _events: Subscription,
 }
@@ -1035,10 +1037,40 @@ struct HistoryRecoveryDialog {
     selected: usize,
     snapshot: TaskCommandSnapshot,
     review: serde_json::Value,
+    origin: HistoryEngineOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HistoryEngineOrigin {
+    engine_generation: u64,
+}
+
+impl HistoryEngineOrigin {
+    fn capture(state: &AppState) -> Self {
+        Self {
+            engine_generation: state.engine_generation(),
+        }
+    }
+
+    fn is_current(self, state: &AppState) -> bool {
+        self.engine_generation == state.engine_generation()
+    }
+
+    fn run_if_current<T>(self, current_generation: u64, run: impl FnOnce() -> T) -> Option<T> {
+        (self.engine_generation == current_generation).then(run)
+    }
 }
 
 fn history_flow_response_is_live(current_generation: u64, request_generation: u64) -> bool {
     current_generation == request_generation
+}
+
+fn history_engine_generation_changed(observed: &mut u64, current: u64) -> bool {
+    if *observed == current {
+        return false;
+    }
+    *observed = current;
+    true
 }
 
 fn history_review_profile_unchanged(
@@ -1526,6 +1558,9 @@ pub struct Shell {
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
     history_recovery_dialog: Option<HistoryRecoveryDialog>,
     history_flow_generation: u64,
+    /// Last AppState runtime identity observed by this shell. Any change
+    /// invalidates profile-owned history reviews and delayed open responses.
+    history_engine_generation: u64,
     move_project_dialog: Option<MoveProjectDialog>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
@@ -1844,6 +1879,7 @@ impl Shell {
             shell: shell.downgrade(),
             _observation: cx.observe(&shell, |_, _, cx| cx.notify()),
         });
+        let history_engine_generation = state.read(cx).engine_generation();
         Self {
             state,
             sidebar_pane,
@@ -1906,6 +1942,7 @@ impl Shell {
             edit_earlier_message_dialog: None,
             history_recovery_dialog: None,
             history_flow_generation: 0,
+            history_engine_generation,
             move_project_dialog: None,
             delete_confirm: None,
             space_menu: popover::Popup::default(),
@@ -2047,6 +2084,11 @@ impl Shell {
     // ---- splash ----
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        let engine_generation = state.read(cx).engine_generation();
+        if history_engine_generation_changed(&mut self.history_engine_generation, engine_generation)
+        {
+            self.cancel_history_flow(cx);
+        }
         if let Some(notice) = state.update(cx, |state, _| state.take_deep_link_notice()) {
             self.sidebar_notice = Some(notice.into());
         }
@@ -4113,18 +4155,56 @@ impl Shell {
         task_id: String,
         snapshot: TaskCommandSnapshot,
         intent: serde_json::Value,
+        origin: HistoryEngineOrigin,
         cx: &mut Context<Self>,
     ) {
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
+        let (origin_current, engine) = {
+            let state = self.state.read(cx);
+            let current_generation = state.engine_generation();
+            (
+                origin.is_current(&state),
+                origin
+                    .run_if_current(current_generation, || state.engine().cloned())
+                    .flatten(),
+            )
+        };
+        if !origin_current {
+            self.sidebar_notice = Some(
+                "History review belongs to the previous profile; reopen it in this profile.".into(),
+            );
+            self.cancel_history_flow(cx);
+            return;
+        }
+        let Some(engine) = engine else {
             self.sidebar_notice = Some("Engine not connected".into());
             cx.notify();
             return;
         };
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let current = this
+                .update(cx, |shell, cx| {
+                    if origin.is_current(&shell.state.read(cx)) {
+                        true
+                    } else {
+                        shell.sidebar_notice = Some(
+                            "History review belongs to the previous profile; reopen it in this profile."
+                                .into(),
+                        );
+                        shell.cancel_history_flow(cx);
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            if !current {
+                return;
+            }
             if let Err(error) =
                 crate::task_commands::execute_reviewed(&engine, &task_id, snapshot, intent).await
             {
                 this.update(cx, |shell, cx| {
+                    if !origin.is_current(&shell.state.read(cx)) {
+                        return;
+                    }
                     shell.sidebar_notice = Some(error.to_string().into());
                     cx.notify();
                 })
@@ -4139,6 +4219,21 @@ impl Shell {
         self.edit_earlier_message_dialog = None;
         self.history_recovery_dialog = None;
         cx.notify();
+    }
+
+    fn require_history_origin(
+        &mut self,
+        origin: HistoryEngineOrigin,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if origin.is_current(&self.state.read(cx)) {
+            return true;
+        }
+        self.sidebar_notice = Some(
+            "History review belongs to the previous profile; reopen it in this profile.".into(),
+        );
+        self.cancel_history_flow(cx);
+        false
     }
 
     /// Non-task workspace mutations retain their existing owner. L07 does not
@@ -4214,40 +4309,46 @@ impl Shell {
         self.close_chat_menu(cx);
         self.cancel_history_flow(cx);
         let generation = self.history_flow_generation;
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
+        let (engine, origin, chat, message_text) = {
+            let state = self.state.read(cx);
+            let chat = state
+                .chats
+                .iter()
+                .find(|chat| chat.id == source_task_id)
+                .cloned();
+            let message_text = message_id.as_ref().and_then(|id| {
+                state
+                    .transcript
+                    .iter()
+                    .find(|entry| &entry.id == id)
+                    .map(|entry| {
+                        entry
+                            .parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                zeron_doc::MessagePart::Text { text, .. } => Some(text.trim()),
+                                _ => None,
+                            })
+                            .filter(|text| !text.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+            });
+            (
+                state.engine().cloned(),
+                HistoryEngineOrigin::capture(&state),
+                chat,
+                message_text,
+            )
+        };
+        let Some(engine) = engine else {
             self.sidebar_notice = Some("Engine not connected".into());
             return;
         };
-        let Some(chat) = self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .find(|chat| chat.id == source_task_id)
-            .cloned()
-        else {
+        let Some(chat) = chat else {
             self.sidebar_notice = Some("Task no longer exists".into());
             return;
         };
-        let message_text = message_id.as_ref().and_then(|id| {
-            self.state
-                .read(cx)
-                .transcript
-                .iter()
-                .find(|entry| &entry.id == id)
-                .map(|entry| {
-                    entry
-                        .parts
-                        .iter()
-                        .filter_map(|part| match part {
-                            zeron_doc::MessagePart::Text { text, .. } => Some(text.trim()),
-                            _ => None,
-                        })
-                        .filter(|text| !text.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-        });
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
             let read = engine
                 .client()
@@ -4258,6 +4359,9 @@ impl Shell {
                 .await;
             this.update(cx, |shell, cx| {
                 if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                if !origin.is_current(&shell.state.read(cx)) {
                     return;
                 }
                 let current = shell
@@ -4326,6 +4430,7 @@ impl Shell {
                     prompt,
                     snapshot: read.snapshot,
                     review,
+                    origin,
                     config,
                     permission_ceiling,
                     cwd,
@@ -4342,6 +4447,9 @@ impl Shell {
         let Some(dialog) = self.history_fork_dialog.take() else {
             return;
         };
+        if !self.require_history_origin(dialog.origin, cx) {
+            return;
+        }
         let title = dialog.title.read(cx).text().trim().to_string();
         let initial_prompt = dialog.prompt.read(cx).text().trim().to_string();
         let state = self.state.read(cx);
@@ -4368,6 +4476,7 @@ impl Shell {
                 "review": dialog.review,
                 "sourceLink": source_link,
             }),
+            dialog.origin,
             cx,
         );
         cx.notify();
@@ -4382,18 +4491,19 @@ impl Shell {
     ) {
         self.cancel_history_flow(cx);
         let generation = self.history_flow_generation;
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
+        let (engine, origin, chat) = {
+            let state = self.state.read(cx);
+            (
+                state.engine().cloned(),
+                HistoryEngineOrigin::capture(&state),
+                state.chats.iter().find(|chat| chat.id == task_id).cloned(),
+            )
+        };
+        let Some(engine) = engine else {
             self.sidebar_notice = Some("Engine not connected".into());
             return;
         };
-        let Some(chat) = self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .find(|chat| chat.id == task_id)
-            .cloned()
-        else {
+        let Some(chat) = chat else {
             self.sidebar_notice = Some("Task no longer exists".into());
             return;
         };
@@ -4408,6 +4518,9 @@ impl Shell {
                 .await;
             this.update(cx, |shell, cx| {
                 if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                if !origin.is_current(&shell.state.read(cx)) {
                     return;
                 }
                 let current = shell
@@ -4465,6 +4578,7 @@ impl Shell {
                     input,
                     snapshot: read.snapshot,
                     review,
+                    origin,
                     focus_pending: true,
                     _events: events,
                 });
@@ -4478,6 +4592,9 @@ impl Shell {
         let Some(dialog) = self.edit_earlier_message_dialog.take() else {
             return;
         };
+        if !self.require_history_origin(dialog.origin, cx) {
+            return;
+        }
         let text = dialog.input.read(cx).text().trim().to_string();
         if !text.is_empty() {
             self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
@@ -4490,6 +4607,7 @@ impl Shell {
                     "text": text,
                     "review": dialog.review,
                 }),
+                dialog.origin,
                 cx,
             );
         }
@@ -4500,19 +4618,20 @@ impl Shell {
         self.close_chat_menu(cx);
         self.cancel_history_flow(cx);
         let generation = self.history_flow_generation;
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
+        let (engine, origin, chat) = {
+            let state = self.state.read(cx);
+            (
+                state.engine().cloned(),
+                HistoryEngineOrigin::capture(&state),
+                state.chats.iter().find(|chat| chat.id == task_id).cloned(),
+            )
+        };
+        let Some(engine) = engine else {
             self.sidebar_notice = Some("Engine not connected".into());
             cx.notify();
             return;
         };
-        let Some(chat) = self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .find(|chat| chat.id == task_id)
-            .cloned()
-        else {
+        let Some(chat) = chat else {
             self.sidebar_notice = Some("Task no longer exists".into());
             return;
         };
@@ -4534,6 +4653,9 @@ impl Shell {
                 .await;
             this.update(cx, |shell, cx| {
                 if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                if !origin.is_current(&shell.state.read(cx)) {
                     return;
                 }
                 let current = shell
@@ -4578,6 +4700,7 @@ impl Shell {
                             recoveries,
                             snapshot: read.snapshot,
                             review,
+                            origin,
                         });
                     }
                     (Ok(recoveries), Ok(_)) if recoveries.is_empty() => {
@@ -4601,6 +4724,9 @@ impl Shell {
         let Some(dialog) = self.history_recovery_dialog.take() else {
             return;
         };
+        if !self.require_history_origin(dialog.origin, cx) {
+            return;
+        }
         let Some(recovery) = dialog.recoveries.get(dialog.selected) else {
             cx.notify();
             return;
@@ -4616,6 +4742,7 @@ impl Shell {
                 "recoveryId": recovery.recovery_id,
                 "review": review,
             }),
+            dialog.origin,
             cx,
         );
         cx.notify();
@@ -4881,6 +5008,7 @@ impl Shell {
         if self.runtime_change_task.is_some() {
             return;
         }
+        self.cancel_history_flow(cx);
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.runtime_change_error = Some("Engine not connected".into());
             self.sync_flow = SyncFlow::SignedOutRestartRequired;
@@ -5021,6 +5149,7 @@ impl Shell {
         if self.runtime_change_task.is_some() {
             return;
         }
+        self.cancel_history_flow(cx);
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.runtime_change_error = Some("Engine not connected".into());
             self.sync_flow = SyncFlow::RestartPending { notice_open: true };
@@ -11604,6 +11733,69 @@ mod tests {
             &reviewed.config,
             Some(&changed_permissions),
         ));
+    }
+
+    #[test]
+    fn history_origin_rejects_delayed_response_with_identical_chat_metadata() {
+        let reviewed = history_chat("session-a", "/workspace", PermissionMode::Auto);
+        let replacement_profile_chat = reviewed.clone();
+        assert!(history_review_profile_unchanged(
+            &reviewed.harness_session_id,
+            &reviewed.cwd,
+            &reviewed.config,
+            Some(&replacement_profile_chat),
+        ));
+
+        let origin = HistoryEngineOrigin {
+            engine_generation: 23,
+        };
+        assert!(origin.run_if_current(24, || "opened").is_none());
+        assert_eq!(origin.run_if_current(23, || "opened"), Some("opened"));
+
+        let mut observed_generation = 23;
+        assert!(history_engine_generation_changed(
+            &mut observed_generation,
+            24
+        ));
+        assert_eq!(observed_generation, 24);
+        assert!(!history_engine_generation_changed(
+            &mut observed_generation,
+            24
+        ));
+        assert!(history_flow_response_is_live(9, 9));
+        assert!(!history_flow_response_is_live(10, 9));
+    }
+
+    #[test]
+    fn history_origin_blocks_fork_edit_and_restore_submission_after_replacement() {
+        let origin = HistoryEngineOrigin {
+            engine_generation: 31,
+        };
+        let mut old_engine_rpc_calls = 0;
+        let mut replacement_engine_rpc_calls = 0;
+
+        for operation in ["fork", "edit", "restore"] {
+            let dispatched = origin.run_if_current(32, || {
+                old_engine_rpc_calls += 1;
+                replacement_engine_rpc_calls += 1;
+                operation
+            });
+            assert_eq!(dispatched, None, "{operation} must fail closed");
+        }
+        assert_eq!(old_engine_rpc_calls, 0);
+        assert_eq!(replacement_engine_rpc_calls, 0);
+
+        let mut same_origin_rpc_calls = 0;
+        for operation in ["fork", "edit", "restore"] {
+            assert_eq!(
+                origin.run_if_current(31, || {
+                    same_origin_rpc_calls += 1;
+                    operation
+                }),
+                Some(operation)
+            );
+        }
+        assert_eq!(same_origin_rpc_calls, 3);
     }
 
     #[test]
