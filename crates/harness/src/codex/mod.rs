@@ -61,7 +61,7 @@ use zeron_proto::{
 
 use crate::jsonrpc::{Incoming, RpcClient, RpcRequestFailure};
 use crate::process::{Child, Command, Stdio};
-use crate::{Harness, HarnessError, RunControls, SteerAcceptance};
+use crate::{Harness, HarnessError, ProviderForkProgressReporter, RunControls, SteerAcceptance};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
 use normalize::{
     ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_type,
@@ -592,6 +592,14 @@ impl Harness for CodexHarness {
         &self,
         request: ProviderForkRequest,
     ) -> Result<ProviderForkResult, HarnessError> {
+        self.fork_session_staged(request, &|_| Ok(())).await
+    }
+
+    async fn fork_session_staged(
+        &self,
+        request: ProviderForkRequest,
+        progress: &ProviderForkProgressReporter,
+    ) -> Result<ProviderForkResult, HarnessError> {
         let executable = self.resolve_executable()?;
         let home = request
             .provider_home
@@ -603,7 +611,7 @@ impl Harness for CodexHarness {
         let client = native::CodexNativeClient::new(&home)
             .with_executable(executable)
             .for_execution_home(home, request.force_file_auth);
-        client.fork_thread(request).await
+        client.fork_thread_staged(request, progress).await
     }
 
     /// The signed-in account's visible `model/list` is authoritative. A

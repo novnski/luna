@@ -50,6 +50,19 @@ pub enum HarnessError {
     Io(#[from] std::io::Error),
 }
 
+/// Progress boundary for a provider-native history fork. `MutationStarted`
+/// is emitted immediately before the native mutation request; `Acknowledged`
+/// is emitted as soon as that response yields a distinct provider session id,
+/// before any independent readback is awaited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderForkProgress {
+    MutationStarted,
+    Acknowledged { provider_session_id: String },
+}
+
+pub type ProviderForkProgressReporter =
+    dyn Fn(ProviderForkProgress) -> Result<(), HarnessError> + Send + Sync;
+
 /// A steer prompt pushed into a live run; delivered at the harness's steering boundary.
 pub struct SteerMessage {
     pub prompt: String,
@@ -151,6 +164,21 @@ pub trait Harness: Send + Sync {
         Err(HarnessError::Protocol(
             "provider-backed session forks are not supported by this harness".into(),
         ))
+    }
+    /// Staged fork contract used by the engine to durably correlate the
+    /// provider id before independent readback. Adapters with native preflight
+    /// must override this so `MutationStarted` is not reported too early.
+    async fn fork_session_staged(
+        &self,
+        request: ProviderForkRequest,
+        progress: &ProviderForkProgressReporter,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        progress(ProviderForkProgress::MutationStarted)?;
+        let result = self.fork_session(request).await?;
+        progress(ProviderForkProgress::Acknowledged {
+            provider_session_id: result.provider_session_id.clone(),
+        })?;
+        Ok(result)
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
     /// Slash commands the agent advertises (ACP `availableCommands`); empty

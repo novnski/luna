@@ -82,7 +82,7 @@ use crate::change_requests::CheckoutChangeRequests;
 use crate::diff_sync::CheckoutDiffSync;
 use crate::doc_host::DocHost;
 use crate::history_operations::{
-    HistoryPlan, capability_for, load_recovery, plan_history, prepare_recovery, unavailable_reason,
+    capability_for, load_recovery, plan_history, prepare_recovery, unavailable_reason,
 };
 use crate::registry::HarnessRegistry;
 use crate::repos::{Repos, home_dir};
@@ -2208,7 +2208,8 @@ impl EngineRpc {
         command_id: &str,
         chat: &Chat,
         binding: &zeron_proto::ExecutionBinding,
-        plan: &HistoryPlan,
+        boundary: zeron_proto::ProviderForkBoundary,
+        require_current_binding: bool,
     ) -> Result<zeron_proto::ProviderForkResult, TaskProjectionError> {
         let config = chat.config.as_ref().ok_or_else(|| {
             TaskProjectionError::Mutation(crate::EngineError::Other(
@@ -2216,14 +2217,16 @@ impl EngineRpc {
             ))
         })?;
         let cwd = chat.cwd.clone().unwrap_or_else(|| ".".into());
-        self.task_identity
-            .validate_explicit_resume(
-                &chat.id,
-                binding.provider_id,
-                &cwd,
-                &binding.provider_task_id,
-            )
-            .map_err(TaskProjectionError::Mutation)?;
+        if require_current_binding {
+            self.task_identity
+                .validate_explicit_resume(
+                    &chat.id,
+                    binding.provider_id,
+                    &cwd,
+                    &binding.provider_task_id,
+                )
+                .map_err(TaskProjectionError::Mutation)?;
+        }
         let (provider_home, force_file_auth) = if binding.provider_id == HarnessId::Codex {
             let execution = self
                 .agent_accounts
@@ -2247,24 +2250,67 @@ impl EngineRpc {
                 "provider fork capability changed; refresh before retrying".into(),
             )));
         }
-        let result = tokio::time::timeout(
+        let progress_state = std::sync::Arc::new(std::sync::Mutex::new((false, None)));
+        let tracked_progress = progress_state.clone();
+        let doc_host = self.doc_host.clone();
+        let tracked_command_id = command_id.to_string();
+        let progress = move |event| match event {
+            zeron_harness::ProviderForkProgress::MutationStarted => {
+                tracked_progress.lock().unwrap().0 = true;
+                Ok(())
+            }
+            zeron_harness::ProviderForkProgress::Acknowledged {
+                provider_session_id,
+            } => {
+                {
+                    let mut state = tracked_progress.lock().unwrap();
+                    state.0 = true;
+                    state.1 = Some(provider_session_id.clone());
+                }
+                match doc_host
+                    .set_task_command_correlation(&tracked_command_id, &provider_session_id)
+                {
+                    Ok(Some(_)) => Ok(()),
+                    Ok(None) => Err(zeron_harness::HarnessError::Protocol(
+                        "history command receipt vanished before provider acknowledgement".into(),
+                    )),
+                    Err(error) => Err(zeron_harness::HarnessError::Protocol(error.to_string())),
+                }
+            }
+        };
+        let outcome = tokio::time::timeout(
             Duration::from_secs(30),
-            harness.fork_session(ProviderForkRequest {
-                source_session_id: binding.provider_task_id.clone(),
-                boundary: plan.provider_boundary.clone(),
-                cwd,
-                model: config.model.clone(),
-                provider_home,
-                force_file_auth,
-            }),
+            harness.fork_session_staged(
+                ProviderForkRequest {
+                    source_session_id: binding.provider_task_id.clone(),
+                    boundary,
+                    cwd,
+                    model: config.model.clone(),
+                    provider_home,
+                    force_file_auth,
+                },
+                &progress,
+            ),
         )
-        .await
-        .map_err(|_| {
-            TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
-                "provider fork completion is unknown".into(),
-            ))
-        })?
-        .map_err(|error| TaskProjectionError::ProviderUnknown(error.into()))?;
+        .await;
+        let mutation_started = progress_state.lock().unwrap().0;
+        let result = match outcome {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) if mutation_started => {
+                return Err(TaskProjectionError::ProviderUnknown(error.into()));
+            }
+            Ok(Err(error)) => return Err(TaskProjectionError::Mutation(error.into())),
+            Err(_) if mutation_started => {
+                return Err(TaskProjectionError::ProviderUnknown(
+                    crate::EngineError::Other("provider fork completion is unknown".into()),
+                ));
+            }
+            Err(_) => {
+                return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                    "provider fork preflight timed out before mutation".into(),
+                )));
+            }
+        };
         if result.provider_session_id == binding.provider_task_id {
             return Err(TaskProjectionError::ProviderUnknown(
                 crate::EngineError::Other(
@@ -2272,9 +2318,14 @@ impl EngineRpc {
                 ),
             ));
         }
-        self.doc_host
-            .set_task_command_correlation(command_id, &result.provider_session_id)
-            .map_err(|error| TaskProjectionError::ProviderUnknown(error.into()))?;
+        if progress_state.lock().unwrap().1.as_deref() != Some(result.provider_session_id.as_str())
+        {
+            return Err(TaskProjectionError::ProviderUnknown(
+                crate::EngineError::Other(
+                    "provider fork returned without acknowledging its session id".into(),
+                ),
+            ));
+        }
         Ok(result)
     }
 
@@ -3139,12 +3190,10 @@ impl EngineRpc {
                         "a native fork must keep the source provider and provider account".into(),
                     )));
                 }
+                let permission_ceiling = source_config.effective_permission_mode;
                 target_config.permission_mode =
-                    std::cmp::min(target_config.permission_mode, source_config.permission_mode);
-                target_config.effective_permission_mode = std::cmp::min(
-                    target_config.effective_permission_mode,
-                    source_config.effective_permission_mode,
-                );
+                    std::cmp::min(target_config.permission_mode, permission_ceiling);
+                target_config.effective_permission_mode = target_config.permission_mode;
                 target_config.permission_ceiling_source = source_config.permission_ceiling_source;
                 target_config.permission_degradation_reason =
                     source_config.permission_degradation_reason;
@@ -3159,7 +3208,13 @@ impl EngineRpc {
                     })?;
 
                 let provider_result = self
-                    .fork_provider_history(command_id, &source, &binding, &plan)
+                    .fork_provider_history(
+                        command_id,
+                        &source,
+                        &binding,
+                        plan.provider_boundary.clone(),
+                        true,
+                    )
                     .await?;
                 let provider_session_id = provider_result.provider_session_id.clone();
                 let remapped_checkpoints = plan
@@ -3361,7 +3416,13 @@ impl EngineRpc {
                     ))
                 })?;
                 let provider_result = self
-                    .fork_provider_history(command_id, &source, &binding, &plan)
+                    .fork_provider_history(
+                        command_id,
+                        &source,
+                        &binding,
+                        plan.provider_boundary.clone(),
+                        true,
+                    )
                     .await?;
                 let provider_session_id = provider_result.provider_session_id.clone();
                 let remapped_checkpoints = plan
@@ -3545,11 +3606,6 @@ impl EngineRpc {
                         "history recovery has no verified exact native tip checkpoint".into(),
                     )));
                 }
-                let config = source.config.clone().ok_or_else(|| {
-                    TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "task has no provider configuration".into(),
-                    ))
-                })?;
                 let current_handle = self
                     .doc_host
                     .open(task_id)
@@ -3589,50 +3645,17 @@ impl EngineRpc {
                     },
                 )
                 .map_err(TaskProjectionError::Mutation)?;
-                let (provider_home, force_file_auth) = if binding.provider_id == HarnessId::Codex {
-                    let execution = self
-                        .agent_accounts
-                        .resolve_execution(HarnessId::Codex, config.provider_account_id.as_deref())
-                        .map_err(TaskProjectionError::Mutation)?;
-                    (
-                        execution
-                            .codex_home
-                            .map(|path| path.to_string_lossy().into_owned()),
-                        execution.codex_file_auth,
-                    )
-                } else {
-                    (None, false)
-                };
-                let harness = self
-                    .registry
-                    .resolve(binding.provider_id)
-                    .map_err(|error| TaskProjectionError::Mutation(error.into()))?;
-                if harness.fork_capability() != capability_for(binding.provider_id) {
-                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "provider fork capability changed; refresh before retrying".into(),
-                    )));
-                }
-                let provider_result = tokio::time::timeout(
-                    Duration::from_secs(30),
-                    harness.fork_session(ProviderForkRequest {
-                        source_session_id: old_binding.provider_task_id.clone(),
-                        boundary: zeron_proto::ProviderForkBoundary::ThroughCheckpoint {
+                let provider_result = self
+                    .fork_provider_history(
+                        command_id,
+                        &source,
+                        &old_binding,
+                        zeron_proto::ProviderForkBoundary::ThroughCheckpoint {
                             checkpoint_id: recovery_view.source_tip_checkpoint_id.clone(),
                         },
-                        cwd: source.cwd.clone().unwrap_or_else(|| ".".into()),
-                        model: config.model.clone(),
-                        provider_home,
-                        force_file_auth,
-                    }),
-                )
-                .await
-                .map_err(|_| {
-                    TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
-                        "provider recovery fork completion is unknown".into(),
-                    ))
-                })?
-                .map_err(crate::EngineError::from)
-                .map_err(TaskProjectionError::ProviderUnknown)?;
+                        false,
+                    )
+                    .await?;
                 let provider_session_id = provider_result.provider_session_id.clone();
                 if provider_session_id == old_binding.provider_task_id
                     || provider_session_id == binding.provider_task_id
@@ -3643,9 +3666,6 @@ impl EngineRpc {
                         ),
                     ));
                 }
-                self.doc_host
-                    .set_task_command_correlation(command_id, &provider_session_id)
-                    .map_err(|error| TaskProjectionError::ProviderUnknown(error.into()))?;
                 let remapped_checkpoints = plan
                     .remapped_checkpoints(&provider_result)
                     .map_err(TaskProjectionError::ProviderUnknown)?;

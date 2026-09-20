@@ -30,11 +30,34 @@ has "$line" '"method":"initialized"' || exit 1
 # ---- thread start / resume -------------------------------------------------
 read -r line || exit 1
 if has "$line" '"method":"thread/read"'; then
+  thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  case "$thread_id" in
+    fork-source-preflight-fail)
+      emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32603,\"message\":\"injected fork preflight failure\"}}"
+      exit 0
+      ;;
+    fork-source-good|fork-source-mismatch|fork-source-timeout)
+      emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"Fork source\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"idle\"},\"turns\":[{\"id\":\"source-turn-1\",\"status\":{\"type\":\"completed\"},\"items\":[{\"id\":\"source-item-1\",\"type\":\"agentMessage\",\"text\":\"one\",\"payload\":{\"id\":\"semantic-id\",\"time\":17}}]}]}}}"
+      exec sleep 30
+      ;;
+    forked-fork-source-timeout)
+      exec sleep 30
+      ;;
+    forked-fork-source-good|forked-fork-source-mismatch)
+      if has "$line" '"includeTurns":true'; then
+        text=one
+        if [ "$thread_id" = 'forked-fork-source-mismatch' ]; then text=changed; fi
+        emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"Forked\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"idle\"},\"turns\":[{\"id\":\"fork-turn-1\",\"status\":{\"type\":\"completed\"},\"items\":[{\"id\":\"fork-item-1\",\"type\":\"agentMessage\",\"text\":\"$text\",\"payload\":{\"id\":\"semantic-id\",\"time\":17}}]}]}}}"
+      else
+        emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"Forked\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"idle\"},\"updatedAt\":1770000000,\"cliVersion\":\"0.154.0\",\"projectId\":null,\"ephemeral\":false}}}"
+      fi
+      exec sleep 30
+      ;;
+  esac
   if has "$line" '"threadId":"missing-thread"'; then
     emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32602,\"message\":\"thread not found\"}}"
     exit 0
   fi
-  thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
   status=idle
   name='[LUNA QA] Imported fixture'
   if [ "$thread_id" = 'qa-active' ]; then status=active; fi
@@ -49,6 +72,12 @@ if has "$line" '"method":"thread/read"'; then
       ;;
   esac
   emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"$name\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"$status\"},\"updatedAt\":1770000000,\"cliVersion\":\"0.154.0\",\"projectId\":null,\"ephemeral\":false}}}"
+  exec sleep 30
+fi
+if has "$line" '"method":"thread/fork"'; then
+  thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  printf '%s\n' "$thread_id" >> "$CODEX_HOME/fork-mutations"
+  emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"forked-$thread_id\"}}}"
   exec sleep 30
 fi
 if has "$line" '"method":"thread/list"'; then

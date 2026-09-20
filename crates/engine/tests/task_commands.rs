@@ -14,7 +14,10 @@ use zeron_doc::{
     MessageRole, QueueClaimMode, QueueDeliveryGate, QueueHoldReason, QueueMessageStatus,
 };
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::{ContextCompactRequest, Harness, HarnessError, RunControls};
+use zeron_harness::{
+    ContextCompactRequest, Harness, HarnessError, ProviderForkProgress,
+    ProviderForkProgressReporter, RunControls,
+};
 use zeron_proto::{
     AgentEvent, BindingOrigin, COMPOSER_DRAFT_VERSION, ChatConfig, CommandReasonCode,
     CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftRead, ContextControlState,
@@ -50,6 +53,14 @@ struct HistoryHarness {
     provider: HarnessId,
     forks: Arc<Mutex<Vec<ProviderForkRequest>>>,
     fork_sequence: Arc<AtomicUsize>,
+    behavior: HistoryForkBehavior,
+}
+
+#[derive(Clone, Copy)]
+enum HistoryForkBehavior {
+    Success,
+    FailPreflight,
+    FailAfterAcknowledgement,
 }
 
 #[async_trait]
@@ -108,6 +119,29 @@ impl Harness for HistoryHarness {
                 format!("fork-provider-message-{sequence}"),
             )]),
         })
+    }
+
+    async fn fork_session_staged(
+        &self,
+        request: ProviderForkRequest,
+        progress: &ProviderForkProgressReporter,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        if matches!(self.behavior, HistoryForkBehavior::FailPreflight) {
+            return Err(HarnessError::Protocol(
+                "synthetic fork preflight failed before mutation".into(),
+            ));
+        }
+        progress(ProviderForkProgress::MutationStarted)?;
+        let result = self.fork_session(request).await?;
+        progress(ProviderForkProgress::Acknowledged {
+            provider_session_id: result.provider_session_id.clone(),
+        })?;
+        if matches!(self.behavior, HistoryForkBehavior::FailAfterAcknowledgement) {
+            return Err(HarnessError::Protocol(
+                "synthetic fork readback failed after acknowledgement".into(),
+            ));
+        }
+        Ok(result)
     }
 
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
@@ -427,11 +461,21 @@ fn assemble_history(
     forks: Arc<Mutex<Vec<ProviderForkRequest>>>,
     provider: HarnessId,
 ) -> EngineCore {
+    assemble_history_with_behavior(root, forks, provider, HistoryForkBehavior::Success)
+}
+
+fn assemble_history_with_behavior(
+    root: &std::path::Path,
+    forks: Arc<Mutex<Vec<ProviderForkRequest>>>,
+    provider: HarnessId,
+    behavior: HistoryForkBehavior,
+) -> EngineCore {
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(HistoryHarness {
         provider,
         forks,
         fork_sequence: Arc::new(AtomicUsize::new(0)),
+        behavior,
     }));
     EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
         EngineProfile::development(&root.join("data"), "l13-org", "l13-user"),
@@ -548,6 +592,71 @@ fn history_review(
         "messageId": message_id,
         "messageText": message_text,
     })
+}
+
+async fn create_materialized_history_task(
+    core: &EngineCore,
+    client: &RpcClient,
+    task_id: &str,
+    provider: HarnessId,
+) {
+    assert_eq!(
+        execute(
+            client,
+            envelope(
+                &format!("history-create-{task_id}"),
+                task_id,
+                None,
+                serde_json::json!({
+                    "kind": "createChat",
+                    "deviceId": core.device_id,
+                    "cwd": "/tmp",
+                    "config": history_task_config(provider),
+                }),
+            ),
+        )
+        .await
+        .status,
+        CommandReceiptStatus::Applied
+    );
+    execute(
+        client,
+        envelope(
+            &format!("history-materialize-{task_id}"),
+            task_id,
+            Some(&snapshot(client, task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": history_request("source prompt", provider),
+                    "messageId": format!("history-user-{task_id}"),
+                }
+            }),
+        ),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let materialized = core
+                .task_identity
+                .view(task_id)
+                .and_then(|view| view.current_binding)
+                .is_some_and(|binding| !binding.provider_task_id.is_empty());
+            if materialized
+                && snapshot(client, task_id)
+                    .await
+                    .snapshot
+                    .active_turn_id
+                    .is_none()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 fn envelope(
@@ -3908,6 +4017,112 @@ async fn model_change_waits_for_safe_turn_and_keeps_binding_generation() {
 }
 
 #[tokio::test]
+async fn staged_history_fork_persists_acknowledged_id_and_replay_never_mutates_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let forks = Arc::new(Mutex::new(Vec::new()));
+    let source_task_id = uuid::Uuid::new_v4().to_string();
+    let target_task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble_history_with_behavior(
+        dir.path(),
+        forks.clone(),
+        HarnessId::Opencode,
+        HistoryForkBehavior::FailAfterAcknowledgement,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_materialized_history_task(&core, &client, &source_task_id, HarnessId::Opencode).await;
+    let fork_snapshot = snapshot(&client, &source_task_id).await;
+    let command = envelope(
+        "history-staged-ack-failure",
+        &source_task_id,
+        Some(&fork_snapshot),
+        serde_json::json!({
+            "kind": "forkTask",
+            "newTaskId": target_task_id.clone(),
+            "boundary": "tip",
+            "sourceLink": format!("luna://open/chat/{source_task_id}?workspace=fixture"),
+            "review": history_review(&core, &fork_snapshot, &source_task_id, None, None),
+        }),
+    );
+    let first = execute(&client, command.clone()).await;
+    assert_eq!(first.status, CommandReceiptStatus::Pending);
+    assert_eq!(
+        first.reason.as_ref().map(|reason| reason.code),
+        Some(CommandReasonCode::ProviderAcceptanceUnknown)
+    );
+    assert_eq!(
+        first.correlation_id.as_deref(),
+        Some("synthetic-history-fork-1")
+    );
+    assert_eq!(forks.lock().unwrap().len(), 1);
+    assert!(core.task_identity.view(&target_task_id).is_none());
+    assert!(core.workspace.chat(&target_task_id).unwrap().is_none());
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let reopened = assemble_history_with_behavior(
+        dir.path(),
+        forks.clone(),
+        HarnessId::Opencode,
+        HistoryForkBehavior::FailAfterAcknowledgement,
+    );
+    let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
+    let replay = execute(&reopened_client, command).await;
+    assert_eq!(replay.status, CommandReceiptStatus::Pending);
+    assert_eq!(
+        replay.correlation_id.as_deref(),
+        Some("synthetic-history-fork-1")
+    );
+    assert_eq!(forks.lock().unwrap().len(), 1);
+    reopened.shutdown().await;
+
+    let preflight_dir = tempfile::tempdir().unwrap();
+    let preflight_forks = Arc::new(Mutex::new(Vec::new()));
+    let preflight_core = assemble_history_with_behavior(
+        preflight_dir.path(),
+        preflight_forks.clone(),
+        HarnessId::Opencode,
+        HistoryForkBehavior::FailPreflight,
+    );
+    let preflight_client = zeron_rpc::memory_client(preflight_core.rpc_service());
+    let preflight_source = uuid::Uuid::new_v4().to_string();
+    create_materialized_history_task(
+        &preflight_core,
+        &preflight_client,
+        &preflight_source,
+        HarnessId::Opencode,
+    )
+    .await;
+    let preflight_snapshot = snapshot(&preflight_client, &preflight_source).await;
+    let failed = execute(
+        &preflight_client,
+        envelope(
+            "history-staged-preflight-failure",
+            &preflight_source,
+            Some(&preflight_snapshot),
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": uuid::Uuid::new_v4().to_string(),
+                "boundary": "tip",
+                "sourceLink": format!("luna://open/chat/{preflight_source}?workspace=fixture"),
+                "review": history_review(
+                    &preflight_core,
+                    &preflight_snapshot,
+                    &preflight_source,
+                    None,
+                    None,
+                ),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(failed.status, CommandReceiptStatus::Failed);
+    assert!(failed.correlation_id.is_none());
+    assert!(preflight_forks.lock().unwrap().is_empty());
+    preflight_core.shutdown().await;
+}
+
+#[tokio::test]
 async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     let dir = tempfile::tempdir().unwrap();
     let forks = Arc::new(Mutex::new(Vec::new()));
@@ -4053,6 +4268,9 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
 
     let fork_snapshot = snapshot(&client, &source_task_id).await;
     let fork_review = history_review(&core, &fork_snapshot, &source_task_id, None, None);
+    let mut requested_full = history_task_config(HarnessId::Opencode);
+    requested_full.permission_mode = PermissionMode::Full;
+    requested_full.effective_permission_mode = PermissionMode::Full;
     let forked = execute(
         &client,
         envelope(
@@ -4064,6 +4282,7 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
                 "newTaskId": target_task_id,
                 "boundary": "tip",
                 "title": "Independent fork",
+                "config": requested_full,
                 "sourceLink": format!("luna://open/chat/{source_task_id}?workspace=fixture"),
                 "review": fork_review,
             }),
@@ -4094,6 +4313,15 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
         target_binding.provider_task_id
     );
     assert_eq!(target_binding.provider_task_id, "synthetic-history-fork-2");
+    let target_config = core
+        .workspace
+        .chat(&target_task_id)
+        .unwrap()
+        .unwrap()
+        .config
+        .unwrap();
+    assert_eq!(target_config.permission_mode, PermissionMode::Ask);
+    assert_eq!(target_config.effective_permission_mode, PermissionMode::Ask);
     let descendant_task_id = uuid::Uuid::new_v4().to_string();
     let descendant_snapshot = snapshot(&client, &target_task_id).await;
     let descendant_review =

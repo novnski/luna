@@ -26,7 +26,7 @@ use gpui_tokio::Tokio;
 use zeron_engine::InstanceLock;
 use zeron_proto::{
     AuthState, ChatConfig, ConversationForkBoundaryKind, HarnessId, HistoryRecoveryView,
-    PermissionMode, SandboxLevel, TaskCommandSnapshot, WorkspaceScope,
+    PermissionMode, TaskCommandSnapshot, WorkspaceScope,
 };
 use zeron_rpc::methods;
 
@@ -979,9 +979,42 @@ struct HistoryForkDialog {
     snapshot: TaskCommandSnapshot,
     review: serde_json::Value,
     config: ChatConfig,
+    /// Immutable authority captured from the host-reviewed source config.
+    /// Picker changes update only the requested mode, never this ceiling.
+    permission_ceiling: PermissionMode,
     cwd: String,
     focus_pending: bool,
     _events: Subscription,
+}
+
+fn history_fork_initial_permission(config: &ChatConfig) -> PermissionMode {
+    match config.effective_permission_mode {
+        PermissionMode::Full if config.permission_mode == PermissionMode::Full => {
+            PermissionMode::Full
+        }
+        PermissionMode::Full | PermissionMode::Auto => PermissionMode::Auto,
+        PermissionMode::Ask => PermissionMode::Ask,
+    }
+}
+
+const HISTORY_FORK_AUTO_ONLY: &[PermissionMode] = &[PermissionMode::Auto];
+const HISTORY_FORK_AUTO_FULL: &[PermissionMode] = &[PermissionMode::Auto, PermissionMode::Full];
+
+fn history_fork_permission_choices(ceiling: PermissionMode) -> &'static [PermissionMode] {
+    match ceiling {
+        PermissionMode::Full => HISTORY_FORK_AUTO_FULL,
+        PermissionMode::Auto => HISTORY_FORK_AUTO_ONLY,
+        PermissionMode::Ask => &[],
+    }
+}
+
+fn next_history_fork_permission(
+    current: PermissionMode,
+    ceiling: PermissionMode,
+) -> Option<PermissionMode> {
+    let choices = history_fork_permission_choices(ceiling);
+    let current = choices.iter().position(|choice| *choice == current)?;
+    Some(choices[(current + 1) % choices.len()])
 }
 
 /// Staged earlier-message rewrite. The engine creates a native fork and a
@@ -4243,7 +4276,7 @@ impl Shell {
                     shell.sidebar_notice = Some("Could not review the current task state.".into());
                     return;
                 };
-                let Some(config) = chat.config.clone() else {
+                let Some(mut config) = chat.config.clone() else {
                     shell.sidebar_notice = Some("Task has no provider configuration.".into());
                     return;
                 };
@@ -4260,6 +4293,8 @@ impl Shell {
                         Some("Task changed while opening the fork review.".into());
                     return;
                 }
+                let permission_ceiling = config.effective_permission_mode;
+                config.permission_mode = history_fork_initial_permission(&config);
                 let source_title = chat
                     .title
                     .as_deref()
@@ -4292,6 +4327,7 @@ impl Shell {
                     snapshot: read.snapshot,
                     review,
                     config,
+                    permission_ceiling,
                     cwd,
                     focus_pending: true,
                     _events: events,
@@ -8117,12 +8153,14 @@ impl Shell {
             let title = dialog.title.clone();
             let prompt = dialog.prompt.clone();
             let permission = dialog.config.permission_mode;
-            let permission_ceiling = dialog.config.effective_permission_mode;
-            let permission_label = match permission {
-                PermissionMode::Ask => "Ask",
-                PermissionMode::Auto => "Auto",
-                PermissionMode::Full => "Full",
+            let permission_ceiling = dialog.permission_ceiling;
+            let permission_label = match (permission, permission_ceiling) {
+                (PermissionMode::Ask, _) => "Ask (legacy; unchanged)",
+                (PermissionMode::Auto, PermissionMode::Auto) => "Auto (Full unavailable)",
+                (PermissionMode::Auto, _) => "Auto",
+                (PermissionMode::Full, _) => "Full",
             };
+            let permission_selectable = permission_ceiling >= PermissionMode::Auto;
             let cwd = dialog.cwd.clone();
             let card = popover::dialog_card(&theme)
                 .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
@@ -8174,27 +8212,21 @@ impl Shell {
                                 "history-fork-permission",
                             )
                             .id("history-fork-permission")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(dialog) = this.history_fork_dialog.as_mut() {
-                                    let next = match dialog.config.permission_mode {
-                                        PermissionMode::Ask
-                                            if permission_ceiling >= PermissionMode::Auto =>
-                                        {
-                                            PermissionMode::Auto
-                                        }
-                                        PermissionMode::Auto
-                                            if permission_ceiling >= PermissionMode::Full =>
-                                        {
-                                            PermissionMode::Full
-                                        }
-                                        _ => PermissionMode::Ask,
-                                    };
-                                    dialog.config.permission_mode = next;
-                                    dialog.config.effective_permission_mode =
-                                        std::cmp::min(next, permission_ceiling);
-                                }
-                                cx.notify();
-                            })),
+                            .opacity(if permission_selectable { 1.0 } else { 0.58 })
+                            .when(!permission_selectable, |button| button.cursor_default())
+                            .when(permission_selectable, |button| {
+                                button.on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(dialog) = this.history_fork_dialog.as_mut()
+                                        && let Some(next) = next_history_fork_permission(
+                                            dialog.config.permission_mode,
+                                            dialog.permission_ceiling,
+                                        )
+                                    {
+                                        dialog.config.permission_mode = next;
+                                    }
+                                    cx.notify();
+                                }))
+                            }),
                         ),
                 )
                 .child(
@@ -11524,7 +11556,7 @@ mod tests {
                 model: Some("model".into()),
                 reasoning: None,
                 model_options: Default::default(),
-                sandbox: SandboxLevel::WorkspaceWrite,
+                sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
                 permission_mode,
                 effective_permission_mode: permission_mode,
                 permission_ceiling_source: None,
@@ -11572,6 +11604,55 @@ mod tests {
             &reviewed.config,
             Some(&changed_permissions),
         ));
+    }
+
+    #[test]
+    fn history_fork_permission_choice_preserves_immutable_l04_ceiling() {
+        let mut full = history_chat("session", "/workspace", PermissionMode::Full)
+            .config
+            .unwrap();
+        assert_eq!(history_fork_initial_permission(&full), PermissionMode::Full);
+        let auto = next_history_fork_permission(PermissionMode::Full, PermissionMode::Full)
+            .expect("Full ceiling permits Auto");
+        assert_eq!(auto, PermissionMode::Auto);
+        assert_eq!(
+            next_history_fork_permission(auto, PermissionMode::Full),
+            Some(PermissionMode::Full),
+            "lowering the selection must not lower the immutable ceiling"
+        );
+
+        full.effective_permission_mode = PermissionMode::Auto;
+        assert_eq!(history_fork_initial_permission(&full), PermissionMode::Auto);
+        assert_eq!(
+            next_history_fork_permission(PermissionMode::Auto, PermissionMode::Auto),
+            Some(PermissionMode::Auto),
+            "an Auto ceiling must never offer Full"
+        );
+
+        let legacy = history_chat("session", "/workspace", PermissionMode::Ask)
+            .config
+            .unwrap();
+        assert_eq!(
+            history_fork_initial_permission(&legacy),
+            PermissionMode::Ask
+        );
+        assert_eq!(
+            next_history_fork_permission(PermissionMode::Ask, PermissionMode::Ask),
+            None,
+            "legacy Ask is explanatory state, not a selectable choice"
+        );
+        assert!(
+            [
+                PermissionMode::Ask,
+                PermissionMode::Auto,
+                PermissionMode::Full
+            ]
+            .into_iter()
+            .all(|ceiling| history_fork_permission_choices(ceiling)
+                .iter()
+                .all(|choice| *choice != PermissionMode::Ask)),
+            "Ask must never be a selectable history-fork mode"
+        );
     }
 
     #[test]

@@ -24,6 +24,8 @@ use zeron_ui::*;
 
 const TASK_ID: &str = "13131313-1313-4131-8131-131313131313";
 const UNSUPPORTED_TASK_ID: &str = "13131313-1313-4131-8131-131313131314";
+const AUTO_CEILING_TASK_ID: &str = "13131313-1313-4131-8131-131313131315";
+const LEGACY_ASK_TASK_ID: &str = "13131313-1313-4131-8131-131313131316";
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 struct FixtureProviderState {
@@ -208,7 +210,11 @@ fn auth_config(root: &Path) -> AuthConfig {
     config
 }
 
-fn chat_config(harness: HarnessId) -> ChatConfig {
+fn chat_config(
+    harness: HarnessId,
+    permission_mode: PermissionMode,
+    effective_permission_mode: PermissionMode,
+) -> ChatConfig {
     ChatConfig {
         harness,
         provider_account_id: None,
@@ -216,8 +222,8 @@ fn chat_config(harness: HarnessId) -> ChatConfig {
         reasoning: Some(ReasoningLevel::Medium),
         model_options: Default::default(),
         sandbox: SandboxLevel::WorkspaceWrite,
-        permission_mode: PermissionMode::Ask,
-        effective_permission_mode: PermissionMode::Ask,
+        permission_mode,
+        effective_permission_mode,
         permission_ceiling_source: None,
         permission_degradation_reason: None,
         permission_audit: Vec::new(),
@@ -230,7 +236,7 @@ fn fixture_registry(root: &Path) -> anyhow::Result<HarnessRegistry> {
     Ok(registry)
 }
 
-fn run_request(root: &Path, prompt: &str) -> RunRequest {
+fn run_request(root: &Path, prompt: &str, permission_mode: PermissionMode) -> RunRequest {
     RunRequest {
         prompt: prompt.into(),
         harness: Some(HarnessId::Codex),
@@ -240,8 +246,8 @@ fn run_request(root: &Path, prompt: &str) -> RunRequest {
         model_options: Default::default(),
         cwd: root.to_string_lossy().into_owned(),
         sandbox: SandboxLevel::WorkspaceWrite,
-        auto_approve: false,
-        permission_mode: PermissionMode::Ask,
+        auto_approve: permission_mode == PermissionMode::Full,
+        permission_mode,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -305,50 +311,100 @@ async fn wait_applied(client: &RpcClient, command_id: &str) -> anyhow::Result<()
     Ok(())
 }
 
-async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
-    let client = zeron_rpc::memory_client(core.rpc_service());
-    if core.workspace.chat(TASK_ID)?.is_none() {
-        let created = execute(
-            &client,
-            TASK_ID,
-            "l13-create",
+async fn seed_history_task(
+    client: &RpcClient,
+    core: &EngineCore,
+    root: &Path,
+    task_id: &str,
+    command_prefix: &str,
+    title: &str,
+    permission_mode: PermissionMode,
+    effective_permission_mode: PermissionMode,
+    prompts: &[&str],
+) -> anyhow::Result<()> {
+    if core.workspace.chat(task_id)?.is_some() {
+        return Ok(());
+    }
+    let created = execute(
+        client,
+        task_id,
+        &format!("{command_prefix}-create"),
+        serde_json::json!({
+            "kind": "createChat",
+            "deviceId": core.device_id,
+            "cwd": root,
+            "config": chat_config(
+                HarnessId::Codex,
+                permission_mode,
+                effective_permission_mode,
+            ),
+        }),
+    )
+    .await?;
+    anyhow::ensure!(created.status == CommandReceiptStatus::Applied);
+    core.workspace.rename_chat(task_id, title)?;
+    for (index, prompt) in prompts.iter().enumerate() {
+        let command_id = format!("{command_prefix}-turn-{index}");
+        execute(
+            client,
+            task_id,
+            &command_id,
             serde_json::json!({
-                "kind": "createChat",
-                "deviceId": core.device_id,
-                "cwd": root,
-                "config": chat_config(HarnessId::Codex),
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": run_request(root, prompt, effective_permission_mode),
+                    "messageId": format!("{command_prefix}-user-{index}"),
+                }
             }),
         )
         .await?;
-        anyhow::ensure!(created.status == CommandReceiptStatus::Applied);
-        core.workspace
-            .rename_chat(TASK_ID, "L13 native fork and edit QA")?;
+        wait_applied(client, &command_id).await?;
+    }
+    Ok(())
+}
 
-        for (index, prompt) in [
+async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    seed_history_task(
+        &client,
+        core,
+        root,
+        TASK_ID,
+        "l13-full",
+        "L13 Full permission fork and edit QA",
+        PermissionMode::Full,
+        PermissionMode::Full,
+        &[
             "Draft a safe provider-backed fork plan.",
             "Now preserve the original task while exploring an alternative.",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let command_id = format!("l13-seed-turn-{index}");
-            execute(
-                &client,
-                TASK_ID,
-                &command_id,
-                serde_json::json!({
-                    "kind": "session",
-                    "command": {
-                        "kind": "run",
-                        "request": run_request(root, prompt),
-                        "messageId": format!("l13-user-{index}"),
-                    }
-                }),
-            )
-            .await?;
-            wait_applied(&client, &command_id).await?;
-        }
-    }
+        ],
+    )
+    .await?;
+    seed_history_task(
+        &client,
+        core,
+        root,
+        AUTO_CEILING_TASK_ID,
+        "l13-auto-ceiling",
+        "L13 Auto-only permission ceiling QA",
+        PermissionMode::Full,
+        PermissionMode::Auto,
+        &["Exercise a fork whose current permission ceiling is Auto."],
+    )
+    .await?;
+    seed_history_task(
+        &client,
+        core,
+        root,
+        LEGACY_ASK_TASK_ID,
+        "l13-legacy-ask",
+        "L13 legacy Ask read-only permission QA",
+        PermissionMode::Ask,
+        PermissionMode::Ask,
+        &["Exercise a legacy Ask fork without making Ask selectable."],
+    )
+    .await?;
     if core.workspace.chat(UNSUPPORTED_TASK_ID)?.is_none() {
         let unsupported = execute(
             &client,
@@ -358,7 +414,11 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
                 "kind": "createChat",
                 "deviceId": core.device_id,
                 "cwd": root,
-                "config": chat_config(HarnessId::ClaudeCode),
+                "config": chat_config(
+                    HarnessId::ClaudeCode,
+                    PermissionMode::Ask,
+                    PermissionMode::Ask,
+                ),
             }),
         )
         .await?;
@@ -560,6 +620,33 @@ mod tests {
                 .fork_capability(),
             ProviderForkCapability::Checkpoint
         );
+        let full = core
+            .workspace
+            .chat(TASK_ID)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap();
+        assert_eq!(full.permission_mode, PermissionMode::Full);
+        assert_eq!(full.effective_permission_mode, PermissionMode::Full);
+        let auto_ceiling = core
+            .workspace
+            .chat(AUTO_CEILING_TASK_ID)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap();
+        assert_eq!(auto_ceiling.permission_mode, PermissionMode::Full);
+        assert_eq!(auto_ceiling.effective_permission_mode, PermissionMode::Auto);
+        let legacy = core
+            .workspace
+            .chat(LEGACY_ASK_TASK_ID)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap();
+        assert_eq!(legacy.permission_mode, PermissionMode::Ask);
+        assert_eq!(legacy.effective_permission_mode, PermissionMode::Ask);
         core.shutdown().await;
     }
 

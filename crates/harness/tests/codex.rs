@@ -12,12 +12,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use zeron_harness::codex::native::CodexNativeClient;
 use zeron_harness::{
-    CancellationToken, CodexHarness, Harness, HarnessError, RunControls, SteerAcceptance,
-    SteerMessage,
+    CancellationToken, CodexHarness, Harness, HarnessError, ProviderForkProgress, RunControls,
+    SteerAcceptance, SteerMessage,
 };
 use zeron_proto::{
-    AgentEvent, ContextOperationStatus, DoneStatus, HarnessId, ReasoningLevel, RunRequest,
-    SandboxLevel, TodoItem, ToolCall, UserInputAnswer, UserInputQuestion,
+    AgentEvent, ContextOperationStatus, DoneStatus, HarnessId, ProviderForkBoundary,
+    ProviderForkRequest, ReasoningLevel, RunRequest, SandboxLevel, TodoItem, ToolCall,
+    UserInputAnswer, UserInputQuestion,
 };
 
 fn fixture_path() -> PathBuf {
@@ -163,6 +164,77 @@ async fn native_metadata_client_uses_supported_methods_only() {
         .unwrap();
     client.set_archived("qa-import", true).await.unwrap();
     client.set_archived("qa-import", false).await.unwrap();
+}
+
+#[tokio::test]
+async fn native_fork_reports_acknowledged_id_before_mismatch_or_timeout_and_not_on_preflight() {
+    let request = |source_session_id: &str| ProviderForkRequest {
+        source_session_id: source_session_id.into(),
+        boundary: ProviderForkBoundary::Tip,
+        cwd: "/tmp".into(),
+        model: Some("gpt-5.6-sol".into()),
+        provider_home: None,
+        force_file_auth: true,
+    };
+
+    let home = tempfile::tempdir().unwrap();
+    let client = CodexNativeClient::new(home.path()).with_executable(fixture_path());
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let report = move |event| {
+        observed.lock().unwrap().push(event);
+        Ok(())
+    };
+    let error = client
+        .fork_thread_staged(request("fork-source-mismatch"), &report)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("history diverged"));
+    assert_eq!(
+        progress.lock().unwrap().last(),
+        Some(&ProviderForkProgress::Acknowledged {
+            provider_session_id: "forked-fork-source-mismatch".into()
+        })
+    );
+
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let report = move |event| {
+        observed.lock().unwrap().push(event);
+        Ok(())
+    };
+    let timed_out = tokio::time::timeout(
+        Duration::from_millis(100),
+        client.fork_thread_staged(request("fork-source-timeout"), &report),
+    )
+    .await;
+    assert!(timed_out.is_err());
+    assert_eq!(
+        progress.lock().unwrap().last(),
+        Some(&ProviderForkProgress::Acknowledged {
+            provider_session_id: "forked-fork-source-timeout".into()
+        })
+    );
+
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let report = move |event| {
+        observed.lock().unwrap().push(event);
+        Ok(())
+    };
+    let error = client
+        .fork_thread_staged(request("fork-source-preflight-fail"), &report)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("preflight failure"));
+    assert!(progress.lock().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("fork-mutations"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
 }
 
 #[tokio::test]

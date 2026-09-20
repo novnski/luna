@@ -55,7 +55,10 @@ use zeron_proto::{
 };
 
 use crate::process::{Child, Command, Stdio};
-use crate::{ContextCompactRequest, Harness, HarnessError, RunControls, shutdown_child};
+use crate::{
+    ContextCompactRequest, Harness, HarnessError, ProviderForkProgress,
+    ProviderForkProgressReporter, RunControls, shutdown_child,
+};
 
 /// opencode loads plugins and MCP config before the server answers; cold
 /// plugin-heavy starts can take minutes. Shared by chat startup and model
@@ -353,12 +356,21 @@ impl Harness for OpencodeHarness {
         &self,
         request: ProviderForkRequest,
     ) -> Result<ProviderForkResult, HarnessError> {
+        self.fork_session_staged(request, &|_| Ok(())).await
+    }
+
+    async fn fork_session_staged(
+        &self,
+        request: ProviderForkRequest,
+        progress: &ProviderForkProgressReporter,
+    ) -> Result<ProviderForkResult, HarnessError> {
         let mut server = self.server(Some(&request.cwd)).await?;
         let result = server
-            .fork_session(
+            .fork_session_staged(
                 &request.source_session_id,
                 Some(&request.cwd),
                 &request.boundary,
+                progress,
             )
             .await;
         server.shutdown(self.kill_grace).await;
@@ -778,11 +790,12 @@ impl Server {
         })
     }
 
-    async fn fork_session(
+    async fn fork_session_staged(
         &self,
         source_session_id: &str,
         directory: Option<&str>,
         boundary: &ProviderForkBoundary,
+        progress: &ProviderForkProgressReporter,
     ) -> Result<ProviderForkResult, HarnessError> {
         let source_messages = self.session_messages(source_session_id, directory).await?;
         let (expected_source, message_id) = opencode_fork_plan(&source_messages, boundary)?;
@@ -793,6 +806,7 @@ impl Server {
         let body = message_id
             .map(|message_id| json!({ "messageID": message_id }))
             .unwrap_or_else(|| json!({}));
+        progress(ProviderForkProgress::MutationStarted)?;
         let value = unwrap_data(self.post_json(&path, directory, &body).await?);
         let provider_session_id = value
             .get("id")
@@ -805,6 +819,9 @@ impl Server {
                 "opencode fork returned the source session id".into(),
             ));
         }
+        progress(ProviderForkProgress::Acknowledged {
+            provider_session_id: provider_session_id.clone(),
+        })?;
         let mut observed = None;
         for attempt in 0..5 {
             observed = self
@@ -994,32 +1011,118 @@ fn opencode_fork_plan(
     }
 }
 
-fn provider_history_signature(value: &Value) -> Value {
-    const VOLATILE: &[&str] = &[
-        "id",
-        "sessionID",
-        "sessionId",
-        "messageID",
-        "messageId",
-        "parentID",
-        "parentId",
-        "time",
-        "createdAt",
-        "updatedAt",
-    ];
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .filter(|(key, _)| !VOLATILE.contains(&key.as_str()))
-                .map(|(key, value)| (key.clone(), provider_history_signature(value)))
-                .collect(),
-        ),
-        Value::Array(values) => {
-            Value::Array(values.iter().map(provider_history_signature).collect())
+fn take_string(object: &mut serde_json::Map<String, Value>, fields: &[&str]) -> Option<String> {
+    fields.iter().find_map(|field| {
+        object
+            .remove(*field)
+            .and_then(|value| value.as_str().map(str::to_owned))
+    })
+}
+
+fn opencode_history_signatures(
+    source: &Value,
+    fork: &Value,
+    checkpoint_map: &std::collections::BTreeMap<String, String>,
+) -> Result<(Value, Value), HarnessError> {
+    let mut source = source.clone();
+    let mut fork = fork.clone();
+    let source_info = source
+        .get_mut("info")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| HarnessError::Protocol("opencode source message has no info".into()))?;
+    let fork_info = fork
+        .get_mut("info")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| HarnessError::Protocol("opencode fork message has no info".into()))?;
+    let source_id = take_string(source_info, &["id"])
+        .ok_or_else(|| HarnessError::Protocol("opencode source message has no id".into()))?;
+    let fork_id = take_string(fork_info, &["id"])
+        .ok_or_else(|| HarnessError::Protocol("opencode fork message has no id".into()))?;
+    take_string(source_info, &["sessionID", "sessionId"]);
+    take_string(fork_info, &["sessionID", "sessionId"]);
+
+    let source_parent = take_string(source_info, &["parentID", "parentId"]);
+    let fork_parent = take_string(fork_info, &["parentID", "parentId"]);
+    match source_parent {
+        Some(source_parent) => {
+            let expected = checkpoint_map.get(&source_parent).ok_or_else(|| {
+                HarnessError::Protocol(format!(
+                    "opencode source parent {source_parent} was not copied before its child"
+                ))
+            })?;
+            if fork_parent.as_deref() != Some(expected.as_str()) {
+                return Err(HarnessError::Protocol(format!(
+                    "opencode fork parent mismatch for source message {source_id}"
+                )));
+            }
         }
-        other => other.clone(),
+        None if fork_parent.is_some() => {
+            return Err(HarnessError::Protocol(format!(
+                "opencode fork added a parent to source message {source_id}"
+            )));
+        }
+        None => {}
     }
+
+    let source_parts = source
+        .get_mut("parts")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| HarnessError::Protocol("opencode source message has no parts".into()))?;
+    let fork_parts = fork
+        .get_mut("parts")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| HarnessError::Protocol("opencode fork message has no parts".into()))?;
+    if source_parts.len() != fork_parts.len() {
+        return Err(HarnessError::Protocol(format!(
+            "opencode fork part count mismatch for source message {source_id}"
+        )));
+    }
+    for (source_part, fork_part) in source_parts.iter_mut().zip(fork_parts.iter_mut()) {
+        let source_part = source_part.as_object_mut().ok_or_else(|| {
+            HarnessError::Protocol("opencode source history contains a non-object part".into())
+        })?;
+        let fork_part = fork_part.as_object_mut().ok_or_else(|| {
+            HarnessError::Protocol("opencode fork history contains a non-object part".into())
+        })?;
+        take_string(source_part, &["id"]);
+        take_string(fork_part, &["id"]);
+        take_string(source_part, &["sessionID", "sessionId"]);
+        take_string(fork_part, &["sessionID", "sessionId"]);
+        let source_message = take_string(source_part, &["messageID", "messageId"]);
+        let fork_message = take_string(fork_part, &["messageID", "messageId"]);
+        if source_message.as_deref().is_some_and(|id| id != source_id)
+            || fork_message.as_deref().is_some_and(|id| id != fork_id)
+        {
+            return Err(HarnessError::Protocol(format!(
+                "opencode part points at the wrong message for source message {source_id}"
+            )));
+        }
+        if source_part.get("type").and_then(Value::as_str) == Some("compaction") {
+            let source_tail = take_string(source_part, &["tail_start_id", "tailStartId"]);
+            let fork_tail = take_string(fork_part, &["tail_start_id", "tailStartId"]);
+            match source_tail {
+                Some(source_tail) => {
+                    let expected = checkpoint_map.get(&source_tail).ok_or_else(|| {
+                        HarnessError::Protocol(format!(
+                            "opencode compaction tail {source_tail} was not copied before its reference"
+                        ))
+                    })?;
+                    if fork_tail.as_deref() != Some(expected.as_str()) {
+                        return Err(HarnessError::Protocol(format!(
+                            "opencode compaction tail mismatch for source message {source_id}"
+                        )));
+                    }
+                }
+                None if fork_tail.is_some() => {
+                    return Err(HarnessError::Protocol(format!(
+                        "opencode fork added a compaction tail to source message {source_id}"
+                    )));
+                }
+                None => {}
+            }
+        }
+    }
+    Ok((source, fork))
 }
 
 fn map_opencode_fork_history(
@@ -1043,7 +1146,9 @@ fn map_opencode_fork_history(
         let fork_id = opencode_message_id(fork).ok_or_else(|| {
             HarnessError::Protocol("opencode fork history contains a message without an id".into())
         })?;
-        if provider_history_signature(source) != provider_history_signature(fork) {
+        let (source_signature, fork_signature) =
+            opencode_history_signatures(source, fork, &checkpoint_map)?;
+        if source_signature != fork_signature {
             return Err(HarnessError::Protocol(format!(
                 "opencode fork history diverged at source message {source_id}"
             )));

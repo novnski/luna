@@ -13,7 +13,10 @@ use tokio::sync::mpsc;
 use crate::codex::resolve_codex_executable;
 use crate::jsonrpc::{Incoming, RpcClient};
 use crate::process::{Child, Command, Stdio};
-use crate::{HarnessError, compose_child_path, shutdown_child};
+use crate::{
+    HarnessError, ProviderForkProgress, ProviderForkProgressReporter, compose_child_path,
+    shutdown_child,
+};
 use zeron_proto::{ProviderForkBoundary, ProviderForkRequest, ProviderForkResult};
 
 pub const VALIDATED_CODEX_CLI_VERSION: &str = "0.154.0";
@@ -159,9 +162,18 @@ impl CodexNativeClient {
         &self,
         request: ProviderForkRequest,
     ) -> Result<ProviderForkResult, HarnessError> {
+        self.fork_thread_staged(request, &|_| Ok(())).await
+    }
+
+    pub async fn fork_thread_staged(
+        &self,
+        request: ProviderForkRequest,
+        progress: &ProviderForkProgressReporter,
+    ) -> Result<ProviderForkResult, HarnessError> {
         let source_turns = self.thread_turns(&request.source_session_id).await?;
         let expected_source = codex_fork_prefix(&source_turns, &request.boundary)?;
         let params = fork_params(&request);
+        progress(ProviderForkProgress::MutationStarted)?;
         let response = self.call("thread/fork", Value::Object(params)).await?;
         let thread = response.get("thread").unwrap_or(&response);
         let provider_session_id = string(thread, "id")?;
@@ -170,6 +182,9 @@ impl CodexNativeClient {
                 "thread/fork returned the source Codex thread id".into(),
             ));
         }
+        progress(ProviderForkProgress::Acknowledged {
+            provider_session_id: provider_session_id.clone(),
+        })?;
         let mut observed = None;
         for attempt in 0..5 {
             observed = self.observe_thread(&provider_session_id).await?;
@@ -456,26 +471,30 @@ fn codex_fork_prefix(
 }
 
 fn codex_history_signature(value: &Value) -> Value {
-    const VOLATILE: &[&str] = &[
+    let mut signature = value.clone();
+    let Some(turn) = signature.as_object_mut() else {
+        return signature;
+    };
+    for field in [
         "id",
         "threadId",
-        "turnId",
         "createdAt",
         "updatedAt",
         "startedAt",
         "completedAt",
-    ];
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .filter(|(key, _)| !VOLATILE.contains(&key.as_str()))
-                .map(|(key, value)| (key.clone(), codex_history_signature(value)))
-                .collect(),
-        ),
-        Value::Array(values) => Value::Array(values.iter().map(codex_history_signature).collect()),
-        other => other.clone(),
+    ] {
+        turn.remove(field);
     }
+    if let Some(items) = turn.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(item) = item.as_object_mut() {
+                for field in ["id", "threadId", "turnId", "createdAt", "updatedAt"] {
+                    item.remove(field);
+                }
+            }
+        }
+    }
+    signature
 }
 
 fn map_codex_fork_history(
@@ -775,7 +794,7 @@ mod tests {
         assert!(!through.contains_key("beforeTurnId"));
 
         let source = vec![
-            json!({"id":"turn-1","status":{"type":"completed"},"items":[{"id":"item-1","type":"agentMessage","text":"one"}]}),
+            json!({"id":"turn-1","status":{"type":"completed"},"items":[{"id":"item-1","type":"agentMessage","text":"one","payload":{"id":"semantic-id","time":17}}]}),
             json!({"id":"turn-2","status":{"type":"completed"},"items":[{"id":"item-2","type":"agentMessage","text":"two"}]}),
         ];
         let prefix = codex_fork_prefix(
@@ -786,7 +805,7 @@ mod tests {
         )
         .unwrap();
         let fork = vec![
-            json!({"id":"fork-turn-1","status":{"type":"completed"},"items":[{"id":"fork-item-1","type":"agentMessage","text":"one"}]}),
+            json!({"id":"fork-turn-1","status":{"type":"completed"},"items":[{"id":"fork-item-1","type":"agentMessage","text":"one","payload":{"id":"semantic-id","time":17}}]}),
         ];
         assert_eq!(
             map_codex_fork_history(&prefix, &fork)
@@ -796,5 +815,11 @@ mod tests {
             Some("fork-turn-1")
         );
         assert!(map_codex_fork_history(&prefix, &source).is_err());
+        let mut semantic_mismatch = fork.clone();
+        semantic_mismatch[0]["items"][0]["payload"]["id"] = "changed".into();
+        assert!(map_codex_fork_history(&prefix, &semantic_mismatch).is_err());
+        let mut time_mismatch = fork;
+        time_mismatch[0]["items"][0]["payload"]["time"] = 18.into();
+        assert!(map_codex_fork_history(&prefix, &time_mismatch).is_err());
     }
 }

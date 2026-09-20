@@ -1,7 +1,32 @@
 use super::*;
 
+fn ignore_fork_progress(_: ProviderForkProgress) -> Result<(), HarnessError> {
+    Ok(())
+}
+
 async fn fork_wire(
     fork_messages: Value,
+) -> (
+    String,
+    Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    fork_wire_with(
+        json!([
+            {"info":{"id":"user-1","role":"user"},"parts":[{"id":"p1","type":"text","text":"one"}]},
+            {"info":{"id":"assistant-1","role":"assistant"},"parts":[{"id":"p2","type":"text","text":"answer"}]},
+            {"info":{"id":"user-2","role":"user"},"parts":[{"id":"p3","type":"text","text":"later"}]}
+        ]),
+        fork_messages,
+        false,
+    )
+    .await
+}
+
+async fn fork_wire_with(
+    source_messages: Value,
+    fork_messages: Value,
+    delay_fork_readback: bool,
 ) -> (
     String,
     Arc<std::sync::Mutex<Vec<(String, Value)>>>,
@@ -16,6 +41,7 @@ async fn fork_wire(
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             let recorded = recorded.clone();
+            let source_messages = source_messages.clone();
             let fork_messages = fork_messages.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
@@ -57,15 +83,13 @@ async fn fork_wire(
                 let body = serde_json::from_slice(&request[header_end..header_end + length])
                     .unwrap_or(Value::Null);
                 recorded.lock().unwrap().push((path.clone(), body));
-                let source = json!([
-                    {"info":{"id":"user-1","role":"user"},"parts":[{"id":"p1","type":"text","text":"one"}]},
-                    {"info":{"id":"assistant-1","role":"assistant"},"parts":[{"id":"p2","type":"text","text":"answer"}]},
-                    {"info":{"id":"user-2","role":"user"},"parts":[{"id":"p3","type":"text","text":"later"}]}
-                ]);
+                if delay_fork_readback && path == "/session/forked" {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
                 let response = match path.as_str() {
                     "/api/health" => json!({"healthy":true}),
                     "/global/health" => json!({"healthy":true,"version":"1.18.31"}),
-                    "/session/source/message" => source,
+                    "/session/source/message" => source_messages,
                     "/session/source/fork" => json!({"id":"forked"}),
                     "/session/forked" => json!({"id":"forked"}),
                     "/session/forked/message" => fork_messages,
@@ -96,12 +120,13 @@ async fn native_fork_adapter_remaps_regenerated_ids_and_rejects_leakage() {
     ]);
     let (base, requests, server_task) = fork_wire(good).await;
     let result = Server::attached(base)
-        .fork_session(
+        .fork_session_staged(
             "source",
             None,
             &ProviderForkBoundary::ThroughCheckpoint {
                 checkpoint_id: "assistant-1".into(),
             },
+            &ignore_fork_progress,
         )
         .await
         .unwrap();
@@ -122,16 +147,110 @@ async fn native_fork_adapter_remaps_regenerated_ids_and_rejects_leakage() {
     ]);
     let (base, _, server_task) = fork_wire(leaked).await;
     let error = Server::attached(base)
-        .fork_session(
+        .fork_session_staged(
             "source",
             None,
             &ProviderForkBoundary::ThroughCheckpoint {
                 checkpoint_id: "assistant-1".into(),
             },
+            &ignore_fork_progress,
         )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("history length mismatch"));
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn native_fork_progress_distinguishes_preflight_acknowledgement_and_readback_timeout() {
+    let mismatched = json!([
+        {"info":{"id":"fork-user-1","role":"user"},"parts":[{"id":"fp1","type":"text","text":"changed"}]},
+        {"info":{"id":"fork-assistant-1","role":"assistant"},"parts":[{"id":"fp2","type":"text","text":"answer"}]}
+    ]);
+    let (base, _, server_task) = fork_wire(mismatched).await;
+    let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let report = move |event| {
+        observed.lock().unwrap().push(event);
+        Ok(())
+    };
+    let error = Server::attached(base)
+        .fork_session_staged(
+            "source",
+            None,
+            &ProviderForkBoundary::ThroughCheckpoint {
+                checkpoint_id: "assistant-1".into(),
+            },
+            &report,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("history diverged"));
+    assert_eq!(
+        *progress.lock().unwrap(),
+        vec![
+            ProviderForkProgress::MutationStarted,
+            ProviderForkProgress::Acknowledged {
+                provider_session_id: "forked".into()
+            }
+        ]
+    );
+    server_task.abort();
+
+    let (base, _, server_task) = fork_wire_with(
+        json!([
+            {"info":{"id":"user-1","role":"user"},"parts":[{"id":"p1","type":"text","text":"one"}]}
+        ]),
+        json!([]),
+        true,
+    )
+    .await;
+    let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let report = move |event| {
+        observed.lock().unwrap().push(event);
+        Ok(())
+    };
+    let server = Server::attached(base);
+    let timed_out = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        server.fork_session_staged("source", None, &ProviderForkBoundary::Tip, &report),
+    )
+    .await;
+    assert!(timed_out.is_err());
+    assert_eq!(
+        progress.lock().unwrap().last(),
+        Some(&ProviderForkProgress::Acknowledged {
+            provider_session_id: "forked".into()
+        })
+    );
+    server_task.abort();
+
+    let (base, requests, server_task) =
+        fork_wire_with(json!({"error":"preflight failed"}), json!([]), false).await;
+    let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let report = move |event| {
+        observed.lock().unwrap().push(event);
+        Ok(())
+    };
+    let error = Server::attached(base)
+        .fork_session_staged("source", None, &ProviderForkBoundary::Tip, &report)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("messages response was not an array")
+    );
+    assert!(progress.lock().unwrap().is_empty());
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(path, _)| path != "/session/source/fork")
+    );
     server_task.abort();
 }
 
@@ -185,6 +304,48 @@ fn fork_cutoff_includes_checkpoint_by_excluding_the_next_message() {
 
     let malformed = vec![messages[0].clone(), json!({"info":{"role":"assistant"}})];
     assert!(opencode_fork_plan(&malformed, &ProviderForkBoundary::Tip,).is_err());
+}
+
+#[test]
+fn fork_readback_remaps_compaction_references_but_preserves_semantic_nested_fields() {
+    let source = vec![
+        json!({
+            "info":{"id":"u1","sessionID":"source","role":"user","time":{"created":1}},
+            "parts":[{"id":"p1","sessionID":"source","messageID":"u1","type":"text","text":"one"}]
+        }),
+        json!({
+            "info":{"id":"a1","sessionID":"source","parentID":"u1","role":"assistant","time":{"created":2}},
+            "parts":[{"id":"p2","sessionID":"source","messageID":"a1","type":"tool","state":{"input":{"id":"semantic-id","time":17}}}]
+        }),
+        json!({
+            "info":{"id":"c1","sessionID":"source","role":"user","time":{"created":3}},
+            "parts":[{"id":"p3","sessionID":"source","messageID":"c1","type":"compaction","tail_start_id":"u1"}]
+        }),
+    ];
+    let fork = vec![
+        json!({
+            "info":{"id":"fu1","sessionID":"fork","role":"user","time":{"created":1}},
+            "parts":[{"id":"fp1","sessionID":"fork","messageID":"fu1","type":"text","text":"one"}]
+        }),
+        json!({
+            "info":{"id":"fa1","sessionID":"fork","parentID":"fu1","role":"assistant","time":{"created":2}},
+            "parts":[{"id":"fp2","sessionID":"fork","messageID":"fa1","type":"tool","state":{"input":{"id":"semantic-id","time":17}}}]
+        }),
+        json!({
+            "info":{"id":"fc1","sessionID":"fork","role":"user","time":{"created":3}},
+            "parts":[{"id":"fp3","sessionID":"fork","messageID":"fc1","type":"compaction","tail_start_id":"fu1"}]
+        }),
+    ];
+    let map = map_opencode_fork_history(&source, &fork).unwrap();
+    assert_eq!(map.get("c1").map(String::as_str), Some("fc1"));
+
+    let mut semantic_mismatch = fork;
+    semantic_mismatch[1]["parts"][0]["state"]["input"]["id"] = "changed".into();
+    assert!(map_opencode_fork_history(&source, &semantic_mismatch).is_err());
+    let mut time_mismatch = semantic_mismatch;
+    time_mismatch[1]["parts"][0]["state"]["input"]["id"] = "semantic-id".into();
+    time_mismatch[1]["parts"][0]["state"]["input"]["time"] = 18.into();
+    assert!(map_opencode_fork_history(&source, &time_mismatch).is_err());
 }
 
 #[test]
