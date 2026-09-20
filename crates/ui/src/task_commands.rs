@@ -12,6 +12,56 @@ fn client_session_id() -> &'static str {
     ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
 }
 
+fn revision_fenced_kind(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        Some(
+            "rename"
+                | "setArchived"
+                | "delete"
+                | "setBranch"
+                | "setCwd"
+                | "setHost"
+                | "setConfig"
+                | "setModel"
+                | "compactContext"
+                | "clearContext"
+                | "switchProvider"
+                | "setPermission"
+                | "setProviderAccount"
+        )
+    )
+}
+
+fn binding_fenced_kind(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        Some(
+            "session"
+                | "queueMessage"
+                | "editQueuedMessage"
+                | "removeQueuedMessage"
+                | "sendQueuedNow"
+                | "steerQueuedNow"
+                | "retryRecovery"
+                | "cancelRecovery"
+                | "rename"
+                | "setArchived"
+                | "delete"
+                | "setBranch"
+                | "setCwd"
+                | "setHost"
+                | "setConfig"
+                | "setModel"
+                | "compactContext"
+                | "clearContext"
+                | "switchProvider"
+                | "setPermission"
+                | "setProviderAccount"
+        )
+    )
+}
+
 pub async fn execute(
     engine: &EngineHandle,
     task_id: &str,
@@ -74,47 +124,8 @@ pub async fn execute_receipt_on_with_id(
     let turn_fenced = (session_kind == Some("session")
         && matches!(control_kind, Some("steer" | "interrupt")))
         || matches!(session_kind, Some("sendQueuedNow" | "steerQueuedNow"));
-    let revision_fenced = matches!(
-        session_kind,
-        Some(
-            "rename"
-                | "setArchived"
-                | "delete"
-                | "setBranch"
-                | "setCwd"
-                | "setHost"
-                | "setConfig"
-                | "setPermission"
-                | "setProviderAccount"
-        )
-    );
-    let binding_fenced = session_kind == Some("session")
-        || matches!(
-            session_kind,
-            Some(
-                "queueMessage"
-                    | "editQueuedMessage"
-                    | "removeQueuedMessage"
-                    | "sendQueuedNow"
-                    | "steerQueuedNow"
-                    | "retryRecovery"
-                    | "cancelRecovery"
-            )
-        )
-        || matches!(
-            session_kind,
-            Some(
-                "rename"
-                    | "setArchived"
-                    | "delete"
-                    | "setBranch"
-                    | "setCwd"
-                    | "setHost"
-                    | "setConfig"
-                    | "setPermission"
-                    | "setProviderAccount"
-            )
-        );
+    let revision_fenced = revision_fenced_kind(session_kind);
+    let binding_fenced = binding_fenced_kind(session_kind);
     let mut params = serde_json::json!({
         "commandId": command_id,
         "actorId": engine.engine_info().device_id,
@@ -162,6 +173,24 @@ pub async fn execute_receipt_on_with_id(
         }
     };
     Ok(receipt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_intents_carry_revision_and_binding_fences() {
+        for kind in [
+            "setModel",
+            "compactContext",
+            "clearContext",
+            "switchProvider",
+        ] {
+            assert!(revision_fenced_kind(Some(kind)), "revision fence: {kind}");
+            assert!(binding_fenced_kind(Some(kind)), "binding fence: {kind}");
+        }
+    }
 }
 
 async fn receipt(

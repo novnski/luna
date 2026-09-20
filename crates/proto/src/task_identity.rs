@@ -24,6 +24,8 @@ pub enum BindingOrigin {
     LunaCreated,
     ProviderImported,
     ProviderAdopted,
+    ContextReset,
+    ProviderSwitch,
     HandedOff,
     Forked,
     Copied,

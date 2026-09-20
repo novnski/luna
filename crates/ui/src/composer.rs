@@ -9681,6 +9681,7 @@ impl Render for Composer {
                     .update(cx, |pickers, cx| pickers.render_footer(cx))
             });
             let usage = self.state.read(cx).context_usage;
+            let compact_status = self.state.read(cx).context_control.compact.status;
             container.child(
                 div()
                     .w_full()
@@ -9711,15 +9712,14 @@ impl Render for Composer {
                                 .items_center()
                                 .opacity(session_chrome_opacity)
                                 .child(div().flex_1().min_w_0().children(footer.flatten()))
-                                .children(crate::context_usage::has_window(usage).then(|| {
-                                    div().flex_none().pr(px(10.0)).child(
-                                        crate::context_usage::render(
-                                            usage,
-                                            self.state.clone(),
-                                            &theme,
-                                        ),
-                                    )
-                                })),
+                                .child(div().flex_none().pr(px(10.0)).child(
+                                    crate::context_usage::render(
+                                        usage,
+                                        compact_status,
+                                        self.state.clone(),
+                                        &theme,
+                                    ),
+                                )),
                         )
                     }),
             )

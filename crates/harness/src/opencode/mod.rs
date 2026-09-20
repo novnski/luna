@@ -54,7 +54,7 @@ use zeron_proto::{
 };
 
 use crate::process::{Child, Command, Stdio};
-use crate::{Harness, HarnessError, RunControls, shutdown_child};
+use crate::{ContextCompactRequest, Harness, HarnessError, RunControls, shutdown_child};
 
 /// opencode loads plugins and MCP config before the server answers; cold
 /// plugin-heavy starts can take minutes. Shared by chat startup and model
@@ -368,6 +368,19 @@ impl Harness for OpencodeHarness {
             .get_or_try_init(|| self.probe_commands())
             .await
             .cloned()
+    }
+
+    async fn compact_context(&self, request: ContextCompactRequest) -> Result<(), HarnessError> {
+        let mut server = self.server(Some(&request.cwd)).await?;
+        let result = server
+            .compact_session(
+                &request.session_id,
+                Some(&request.cwd),
+                request.model.as_deref(),
+            )
+            .await;
+        server.shutdown(self.kill_grace).await;
+        result
     }
 
     async fn run(
@@ -794,6 +807,19 @@ impl Server {
         self.post_json(&path, directory, &Value::Null).await
     }
 
+    /// Provider-owned compaction. The legacy wire calls its documented
+    /// `summarize` endpoint with the selected provider/model; the current wire
+    /// exposes a dedicated compact operation.
+    async fn compact_session(
+        &self,
+        session_id: &str,
+        directory: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<(), HarnessError> {
+        let (path, body) = compact_http_request(self.protocol().await, session_id, model)?;
+        self.post_json(&path, directory, &body).await.map(|_| ())
+    }
+
     /// 2.x: model and reasoning variant ride the SESSION (set once per run),
     /// not the prompt.
     async fn set_model(
@@ -812,6 +838,30 @@ impl Server {
         self.post_json(&path, directory, &json!({ "model": model_ref }))
             .await
             .map(|_| ())
+    }
+}
+
+fn compact_http_request(
+    protocol: Protocol,
+    session_id: &str,
+    model: Option<&str>,
+) -> Result<(String, Value), HarnessError> {
+    match protocol {
+        Protocol::V1 => {
+            let (provider, model) =
+                model
+                    .and_then(|model| model.split_once('/'))
+                    .ok_or_else(|| {
+                        HarnessError::Protocol(
+                            "OpenCode compaction needs the session's provider/model id".into(),
+                        )
+                    })?;
+            Ok((
+                format!("/session/{session_id}/summarize"),
+                json!({ "providerID": provider, "modelID": model }),
+            ))
+        }
+        Protocol::V2 => Ok((format!("/api/session/{session_id}/compact"), Value::Null)),
     }
 }
 

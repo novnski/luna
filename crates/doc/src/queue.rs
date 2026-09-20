@@ -107,6 +107,7 @@ pub enum QueueHoldReason {
     AwaitingInput,
     StaleTurn,
     ProviderRejected,
+    ContextChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -288,6 +289,74 @@ impl SessionDoc {
         }
         self.doc().commit();
         Ok(true)
+    }
+
+    /// A context boundary must never silently run a row against assumptions
+    /// from the old provider context. Clear holds every queued row; a provider
+    /// switch holds rows whose frozen execution contract names another
+    /// provider. An already claimed row makes the boundary fail closed rather
+    /// than racing provider delivery.
+    pub fn hold_queue_for_context_change(
+        &self,
+        provider: zeron_proto::HarnessId,
+        hold_all: bool,
+        now_ms: i64,
+        text_hash: impl Fn(&str) -> String,
+    ) -> Result<usize, DocError> {
+        let queue = self.doc().get_movable_list("queue");
+        let mut held = 0;
+        for index in 0..queue.len() {
+            let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) =
+                queue.get(index)
+            else {
+                continue;
+            };
+            let Some(item) = queued_from_json(map.get_deep_value().to_json_value()) else {
+                continue;
+            };
+            let needs_review = hold_all
+                || item
+                    .execution
+                    .as_ref()
+                    .is_some_and(|execution| execution.harness != provider);
+            if !needs_review {
+                continue;
+            }
+            if !matches!(item.status, QueueMessageStatus::Held) {
+                return Err(DocError::Schema(format!(
+                    "queued message {} already has an in-flight delivery claim",
+                    item.id
+                )));
+            }
+            if matches!(item.delivery_gate, Some(QueueDeliveryGate::Editing { .. })) {
+                return Err(DocError::Schema(format!(
+                    "queued message {} is being edited on another client",
+                    item.id
+                )));
+            }
+            let gate = QueueDeliveryGate::ReviewRequired {
+                previous_lease_id: String::new(),
+                owner_device_id: "context-boundary".into(),
+                since_ms: now_ms,
+                base_text_hash: text_hash(&item.text),
+            };
+            map.insert(
+                "deliveryGate",
+                crate::schema::loro_value_from_json(&serde_json::to_value(gate)?),
+            )?;
+            map.insert(
+                "holdReason",
+                crate::schema::loro_value_from_json(&serde_json::to_value(
+                    QueueHoldReason::ContextChanged,
+                )?),
+            )?;
+            map.insert("revision", current_revision(&map).saturating_add(1) as i64)?;
+            held += 1;
+        }
+        if held > 0 {
+            self.doc().commit();
+        }
+        Ok(held)
     }
 
     /// Resolve an edit in one document commit. `None` cancels and preserves
@@ -1192,6 +1261,58 @@ mod tests {
             QueueClaimOutcome::RevisionConflict(current) if current.revision == 2
         ));
         assert_eq!(doc.read_queue().unwrap()[0].text, "after");
+    }
+
+    #[test]
+    fn context_boundary_holds_relevant_rows_and_fails_closed_on_claims() {
+        let config: zeron_proto::ChatConfig = serde_json::from_value(serde_json::json!({
+            "harness": "mock",
+            "model": "synthetic",
+            "reasoning": "medium",
+            "modelOptions": {},
+            "sandbox": "workspace-write",
+            "permissionMode": "ask",
+            "effectivePermissionMode": "ask"
+        }))
+        .unwrap();
+
+        let clear_doc = doc();
+        clear_doc
+            .push_queued(&item("clear", "review after clear"))
+            .unwrap();
+        assert_eq!(
+            clear_doc
+                .hold_queue_for_context_change(zeron_proto::HarnessId::Mock, true, 2_000, |_| {
+                    "hash".into()
+                })
+                .unwrap(),
+            1
+        );
+        let row = clear_doc.read_queue().unwrap().pop().unwrap();
+        assert_eq!(row.hold_reason, Some(QueueHoldReason::ContextChanged));
+        assert!(matches!(
+            row.delivery_gate,
+            Some(QueueDeliveryGate::ReviewRequired { .. })
+        ));
+
+        let switch_doc = doc();
+        let mut claimed = item("claimed", "already moving");
+        claimed.execution = Some(config);
+        switch_doc.push_queued(&claimed).unwrap();
+        assert!(matches!(
+            switch_doc
+                .claim_queued("claimed", 1, "claim", QueueClaimMode::NextTurn, 2_000)
+                .unwrap(),
+            QueueClaimOutcome::Claimed(_)
+        ));
+        assert!(
+            switch_doc
+                .hold_queue_for_context_change(zeron_proto::HarnessId::Codex, false, 3_000, |_| {
+                    "hash".into()
+                },)
+                .is_err(),
+            "a provider boundary must not race an in-flight delivery"
+        );
     }
 
     #[test]

@@ -62,10 +62,11 @@ use tokio::sync::watch;
 
 use zeron_doc::{MessagePart, RegistryDoc, SessionCommandPayload};
 use zeron_proto::{
-    Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
-    CommandReceiptStatus, ComposerDraft, ComposerDraftRead, DraftBlobState, EngineInfo,
-    FollowUpBehavior, HarnessId, ImportOwnership, PermissionMode, TaskCommandSnapshot, TaskLineage,
-    ToolCall, WorkspaceScope,
+    BindingOrigin, Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
+    CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead, ContextBoundary,
+    ContextBoundaryKind, ContextControlState, ContextHandoff, ContextOperationStatus,
+    DraftBlobState, EngineInfo, FollowUpBehavior, HarnessId, ImportOwnership, PermissionMode,
+    TaskCommandSnapshot, TaskLineage, ToolCall, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 use zeron_sync::DocsStore;
@@ -247,6 +248,17 @@ enum TaskCommandIntent {
     SetConfig {
         config: ChatConfig,
     },
+    /// Explicit same-provider, next-safe-turn model/config change.
+    SetModel {
+        config: ChatConfig,
+    },
+    CompactContext {},
+    ClearContext {},
+    SwitchProvider {
+        config: ChatConfig,
+        #[serde(default)]
+        handoff: Option<ContextHandoff>,
+    },
     #[serde(rename_all = "camelCase")]
     SetPermission {
         mode: PermissionMode,
@@ -331,6 +343,10 @@ impl TaskCommandIntent {
             Self::SetActivity { .. } => "setActivity",
             Self::SetHost { .. } => "setHost",
             Self::SetConfig { .. } => "setConfig",
+            Self::SetModel { .. } => "setModel",
+            Self::CompactContext {} => "compactContext",
+            Self::ClearContext {} => "clearContext",
+            Self::SwitchProvider { .. } => "switchProvider",
             Self::SetPermission { .. } => "setPermission",
             Self::SetProviderAccount { .. } => "setProviderAccount",
             Self::QueueMessage { .. } => "queueMessage",
@@ -354,6 +370,10 @@ impl TaskCommandIntent {
                 | Self::SetCwd { .. }
                 | Self::SetHost { .. }
                 | Self::SetConfig { .. }
+                | Self::SetModel { .. }
+                | Self::CompactContext {}
+                | Self::ClearContext {}
+                | Self::SwitchProvider { .. }
                 | Self::SetPermission { .. }
                 | Self::SetProviderAccount { .. }
         )
@@ -385,6 +405,10 @@ impl TaskCommandIntent {
                 | Self::SetCwd { .. }
                 | Self::SetHost { .. }
                 | Self::SetConfig { .. }
+                | Self::SetModel { .. }
+                | Self::CompactContext {}
+                | Self::ClearContext {}
+                | Self::SwitchProvider { .. }
         )
     }
 }
@@ -1706,7 +1730,8 @@ impl EngineRpc {
             TaskCommandIntent::Session { .. }
             | TaskCommandIntent::SendQueuedNow { .. }
             | TaskCommandIntent::SteerQueuedNow { .. }
-            | TaskCommandIntent::RetryRecovery { .. } => false,
+            | TaskCommandIntent::RetryRecovery { .. }
+            | TaskCommandIntent::CompactContext {} => false,
             _ => true,
         }
     }
@@ -1793,6 +1818,534 @@ impl EngineRpc {
             deleted_chat_snapshot,
             mutation,
         )
+    }
+
+    fn reject_context_command(
+        &self,
+        command_id: &str,
+        code: CommandReasonCode,
+        message: &str,
+        recovery: &str,
+    ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
+        self.finish_task_command(
+            command_id,
+            CommandReceiptStatus::Rejected,
+            false,
+            code,
+            message,
+            recovery,
+        )
+        .map(Some)
+        .map_err(|error| TaskProjectionError::Commit(crate::EngineError::Other(error.to_string())))
+    }
+
+    async fn apply_compact_context(
+        &self,
+        command_id: &str,
+        task_id: &str,
+    ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
+        let chat = self
+            .workspace
+            .chat(task_id)
+            .map_err(TaskProjectionError::Mutation)?
+            .ok_or_else(|| {
+                TaskProjectionError::Mutation(crate::EngineError::Other(
+                    "context compaction requires an existing task".into(),
+                ))
+            })?;
+        let config = chat.config.ok_or_else(|| {
+            TaskProjectionError::Mutation(crate::EngineError::Other(
+                "context compaction requires a provider configuration".into(),
+            ))
+        })?;
+        let capabilities = crate::context_controls::capabilities_for(config.harness);
+        let Some(mechanism) = capabilities.compact else {
+            return self.reject_context_command(
+                command_id,
+                CommandReasonCode::UnsupportedOperation,
+                capabilities
+                    .compact_unavailable_reason
+                    .as_deref()
+                    .unwrap_or("Context compaction is unsupported."),
+                "Continue normally or switch to a harness with a verified native compact operation.",
+            );
+        };
+        let binding = self
+            .task_identity
+            .view(task_id)
+            .and_then(|view| view.current_binding)
+            .ok_or_else(|| {
+                TaskProjectionError::Mutation(crate::EngineError::Other(
+                    "context compaction requires an accepted provider binding".into(),
+                ))
+            })?;
+        if binding.provider_id != config.harness || binding.provider_task_id.is_empty() {
+            return self.reject_context_command(
+                command_id,
+                CommandReasonCode::StaleBindingGeneration,
+                "The task has no current provider session to compact.",
+                "Send the first prompt on the fresh binding before compacting it.",
+            );
+        }
+        let mut context = self
+            .doc_host
+            .context_control(task_id)
+            .map_err(TaskProjectionError::Mutation)?;
+        if context.compact.blocks_new_turn() {
+            if context.compact.status == ContextOperationStatus::Running {
+                context.compact.status = ContextOperationStatus::Unknown;
+                context.compact.finished_at_ms = Some(crate::now_ms());
+                context.compact.detail = Some(
+                    "A prior compaction did not produce a durable completion readback. It will not be replayed."
+                        .into(),
+                );
+                self.doc_host
+                    .persist_context_control(task_id, command_id, &context)
+                    .map_err(TaskProjectionError::Mutation)?;
+            }
+            return self.reject_context_command(
+                command_id,
+                CommandReasonCode::ProviderAcceptanceUnknown,
+                context
+                    .compact
+                    .detail
+                    .as_deref()
+                    .unwrap_or("A prior compaction is unresolved."),
+                "Do not retry blindly. Clear context to fence the old operation, or wait for provider readback.",
+            );
+        }
+        context.binding_generation = Some(binding.generation);
+        context.compact = CompactOperation {
+            operation_id: Some(command_id.to_string()),
+            status: ContextOperationStatus::Running,
+            mechanism: Some(mechanism),
+            binding_generation: Some(binding.generation),
+            started_at_ms: Some(crate::now_ms()),
+            finished_at_ms: None,
+            detail: Some("Provider-owned context compaction is running.".into()),
+        };
+        context.notice = None;
+        self.doc_host
+            .persist_context_control(task_id, command_id, &context)
+            .map_err(TaskProjectionError::Mutation)?;
+
+        let cwd = chat.cwd.unwrap_or_else(|| ".".into());
+        let result = match config.harness {
+            HarnessId::Codex => self.task_identity.compact_task(task_id).await,
+            harness => tokio::time::timeout(
+                Duration::from_secs(30),
+                self.sessions
+                    .compact_context(harness, binding.provider_task_id, cwd, config.model),
+            )
+            .await
+            .map_err(|_| crate::EngineError::Other("Provider compaction timed out".into()))
+            .and_then(|result| result),
+        };
+        let now = crate::now_ms();
+        match result {
+            Ok(()) => {
+                context.compact.status = ContextOperationStatus::Completed;
+                context.compact.finished_at_ms = Some(now);
+                context.compact.detail =
+                    Some("The provider reported that context compaction completed.".into());
+                let receipt = self
+                    .doc_host
+                    .complete_context_operation(
+                        task_id,
+                        command_id,
+                        CommandReceiptStatus::Applied,
+                        true,
+                        None,
+                        None,
+                        &context,
+                        true,
+                    )
+                    .map_err(TaskProjectionError::Commit)?;
+                Ok(Some(receipt))
+            }
+            Err(error) => {
+                context.compact.status = ContextOperationStatus::Unknown;
+                context.compact.finished_at_ms = Some(now);
+                context.compact.detail = Some(format!(
+                    "Compaction completion is unknown: {error}. LUNA will not replay it."
+                ));
+                let receipt = self
+                    .doc_host
+                    .complete_context_operation(
+                        task_id,
+                        command_id,
+                        CommandReceiptStatus::Failed,
+                        false,
+                        Some(CommandReceiptReason {
+                            code: CommandReasonCode::ProviderAcceptanceUnknown,
+                            message: context.compact.detail.clone().unwrap_or_default(),
+                        }),
+                        Some(
+                            "Clear context to create a fresh binding, or wait for provider readback; do not retry compaction blindly.",
+                        ),
+                        &context,
+                        false,
+                    )
+                    .map_err(TaskProjectionError::Commit)?;
+                Ok(Some(receipt))
+            }
+        }
+    }
+
+    fn visible_handoff(
+        &self,
+        task_id: &str,
+        requested: &ContextHandoff,
+    ) -> Result<ContextHandoff, crate::EngineError> {
+        if requested.message_ids.is_empty()
+            || requested.message_ids.len() > zeron_proto::MAX_CONTEXT_HANDOFF_MESSAGES
+        {
+            return Err(crate::EngineError::Other(format!(
+                "context handoff must contain 1–{} visible messages and at most {} bytes",
+                zeron_proto::MAX_CONTEXT_HANDOFF_MESSAGES,
+                zeron_proto::MAX_CONTEXT_HANDOFF_BYTES
+            )));
+        }
+        let entries = self.doc_host.open(task_id)?.doc().read_entries()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut resolved = Vec::new();
+        for message_id in &requested.message_ids {
+            if !seen.insert(message_id.as_str()) {
+                return Err(crate::EngineError::Other(
+                    "context handoff message ids must be unique".into(),
+                ));
+            }
+            let entry = entries
+                .iter()
+                .find(|entry| entry.id == *message_id)
+                .ok_or_else(|| {
+                    crate::EngineError::Other(format!(
+                        "context handoff message {message_id} is not in this task"
+                    ))
+                })?;
+            let role = match entry.role {
+                zeron_doc::MessageRole::User => "User",
+                zeron_doc::MessageRole::Assistant => "Assistant",
+                zeron_doc::MessageRole::System => {
+                    return Err(crate::EngineError::Other(
+                        "system messages cannot be included in a provider handoff".into(),
+                    ));
+                }
+            };
+            let visible = entry
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    zeron_doc::MessagePart::Text { text, .. } => Some(text.trim()),
+                    _ => None,
+                })
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if visible.is_empty() {
+                return Err(crate::EngineError::Other(format!(
+                    "context handoff message {message_id} has no visible conversation text"
+                )));
+            }
+            resolved.push((message_id.clone(), role, visible));
+        }
+        // Newest messages have priority when the bounded handoff cannot fit
+        // every selected entry; reverse again before serializing so the
+        // provider still receives chronological conversation order.
+        let mut selected = Vec::new();
+        let mut bytes = 0usize;
+        for (message_id, role, visible) in resolved.into_iter().rev() {
+            let separator = usize::from(!selected.is_empty()) * 2;
+            let prefix = format!("{role}: ");
+            let remaining = zeron_proto::MAX_CONTEXT_HANDOFF_BYTES.saturating_sub(bytes);
+            if remaining <= separator + prefix.len() {
+                break;
+            }
+            let mut end = visible
+                .len()
+                .min(remaining.saturating_sub(separator + prefix.len()));
+            while !visible.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == 0 {
+                break;
+            }
+            let block = format!("{prefix}{}", &visible[..end]);
+            bytes += separator + block.len();
+            selected.push((message_id, block));
+        }
+        if selected.is_empty() {
+            return Err(crate::EngineError::Other(
+                "context handoff has no visible conversation text".into(),
+            ));
+        }
+        selected.reverse();
+        Ok(ContextHandoff {
+            kind: requested.kind,
+            text: selected
+                .iter()
+                .map(|(_, block)| block.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            message_ids: selected.into_iter().map(|(id, _)| id).collect(),
+        })
+    }
+
+    fn apply_context_boundary(
+        &self,
+        command_id: &str,
+        task_id: &str,
+        target_config: ChatConfig,
+        kind: ContextBoundaryKind,
+        handoff: Option<ContextHandoff>,
+    ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
+        let handoff = handoff
+            .as_ref()
+            .map(|handoff| self.visible_handoff(task_id, handoff))
+            .transpose()
+            .map_err(TaskProjectionError::Mutation)?;
+        let chat = self
+            .workspace
+            .chat(task_id)
+            .map_err(TaskProjectionError::Mutation)?
+            .ok_or_else(|| {
+                TaskProjectionError::Mutation(crate::EngineError::Other(
+                    "context boundary requires an existing task".into(),
+                ))
+            })?;
+        let current_config = chat.config.ok_or_else(|| {
+            TaskProjectionError::Mutation(crate::EngineError::Other(
+                "context boundary requires a provider configuration".into(),
+            ))
+        })?;
+        if kind == ContextBoundaryKind::Cleared && target_config.harness != current_config.harness {
+            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                "clear context cannot change providers".into(),
+            )));
+        }
+        if kind == ContextBoundaryKind::ProviderSwitched
+            && target_config.harness == current_config.harness
+        {
+            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                "provider switch requires a different harness".into(),
+            )));
+        }
+        let cwd = chat.cwd.unwrap_or_else(|| ".".into());
+        let recovery = self
+            .sessions
+            .prepare_supersede_recovery(
+                task_id,
+                match kind {
+                    ContextBoundaryKind::Cleared => {
+                        "Recovery cancelled because context was explicitly cleared."
+                    }
+                    ContextBoundaryKind::ProviderSwitched => {
+                        "Recovery cancelled because the provider binding changed."
+                    }
+                },
+            )
+            .map_err(TaskProjectionError::Mutation)?;
+        let boundary_id = format!("context-boundary:{command_id}");
+        let origin = match kind {
+            ContextBoundaryKind::Cleared => BindingOrigin::ContextReset,
+            ContextBoundaryKind::ProviderSwitched => BindingOrigin::ProviderSwitch,
+        };
+        let provenance = match kind {
+            ContextBoundaryKind::Cleared => "user explicitly cleared provider context",
+            ContextBoundaryKind::ProviderSwitched => {
+                "user explicitly switched providers with a fresh execution binding"
+            }
+        };
+        let transition = recovery
+            .as_ref()
+            .map(|change| change.storage_transition())
+            .transpose()
+            .map_err(TaskProjectionError::Mutation)?;
+        let target_provider = target_config.harness;
+        let handoff_for_state = handoff.clone();
+        let target_for_registry = target_config.clone();
+        let cwd_for_registry = cwd.clone();
+        let committed = self.task_identity.begin_fresh_binding_with_command(
+            task_id,
+            target_provider,
+            origin,
+            provenance,
+            |binding, identity_snapshot| {
+                let boundary = ContextBoundary {
+                    boundary_id: boundary_id.clone(),
+                    kind,
+                    generation: binding.generation,
+                    from_provider: current_config.harness,
+                    to_provider: target_provider,
+                    created_at_ms: crate::now_ms(),
+                    handoff_kind: handoff_for_state.as_ref().map(|handoff| handoff.kind),
+                };
+                let state = ContextControlState {
+                    binding_generation: Some(binding.generation),
+                    compact: CompactOperation::default(),
+                    last_boundary: Some(boundary),
+                    pending_handoff: handoff_for_state.clone(),
+                    last_handoff: handoff_for_state.clone(),
+                    provider_summary: None,
+                    notice: Some(match kind {
+                        ContextBoundaryKind::Cleared => {
+                            "Old provider context was cleared. The next prompt starts a fresh provider session; LUNA history and files remain."
+                                .into()
+                        }
+                        ContextBoundaryKind::ProviderSwitched if handoff_for_state.is_some() => {
+                            "A fresh provider binding will receive only the selected visible-history handoff."
+                                .into()
+                        }
+                        ContextBoundaryKind::ProviderSwitched => {
+                            "A fresh provider binding will start without prior model context.".into()
+                        }
+                    }),
+                    ..Default::default()
+                };
+                let boundary_text = state.notice.clone().unwrap_or_default();
+                self.doc_host.commit_context_boundary(
+                    task_id,
+                    command_id,
+                    Some(&binding.binding_id),
+                    Some(binding.generation),
+                    identity_snapshot,
+                    transition.as_ref(),
+                    move |doc| {
+                        doc.clear_context_usage()?;
+                        doc.set_context_control(&state)?;
+                        if !doc
+                            .read_entries()?
+                            .iter()
+                            .any(|entry| entry.id == boundary_id)
+                        {
+                            doc.push_message(&zeron_doc::SessionMessageEntry {
+                                id: boundary_id,
+                                role: zeron_doc::MessageRole::System,
+                                parts: vec![zeron_doc::MessagePart::Text {
+                                    id: "boundary".into(),
+                                    text: boundary_text,
+                                }],
+                                created_at: crate::now_ms(),
+                                device_id: self.doc_host.device_id().to_string(),
+                                status: Some(zeron_doc::MessageStatus::Complete),
+                                continuation_of: None,
+                            })?;
+                        }
+                        let held = doc.hold_queue_for_context_change(
+                            target_provider,
+                            kind == ContextBoundaryKind::Cleared,
+                            crate::now_ms(),
+                            |text| format!("{:x}", Sha256::digest(text.as_bytes())),
+                        )?;
+                        Ok(held)
+                    },
+                    move |registry| {
+                        if !registry.set_chat_config(task_id, &target_for_registry)? {
+                            return Err(crate::EngineError::Other(
+                                "task vanished during context boundary".into(),
+                            ));
+                        }
+                        registry.set_chat_harness_session(task_id, "", &cwd_for_registry)?;
+                        Ok(())
+                    },
+                )
+            },
+        )?;
+        if let Some(change) = recovery.as_ref() {
+            self.sessions.publish_committed_recovery(&change.next);
+        }
+        self.sessions.retire_context_binding(task_id, &cwd);
+        Ok(Some(committed.1))
+    }
+
+    fn apply_model_change(
+        &self,
+        command_id: &str,
+        task_id: &str,
+        requested: ChatConfig,
+    ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
+        let chat = self
+            .workspace
+            .chat(task_id)
+            .map_err(TaskProjectionError::Mutation)?
+            .ok_or_else(|| {
+                TaskProjectionError::Mutation(crate::EngineError::Other(
+                    "model change requires an existing task".into(),
+                ))
+            })?;
+        let current = chat.config.ok_or_else(|| {
+            TaskProjectionError::Mutation(crate::EngineError::Other(
+                "model change requires a provider configuration".into(),
+            ))
+        })?;
+        if current.harness != requested.harness {
+            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                "use the explicit provider-switch action to change harnesses".into(),
+            )));
+        }
+        let mut config = current.clone();
+        config.model = requested.model;
+        config.reasoning = requested.reasoning;
+        config.model_options = requested.model_options;
+        let binding = self
+            .task_identity
+            .view(task_id)
+            .and_then(|view| view.current_binding);
+        if binding
+            .as_ref()
+            .is_some_and(|binding| binding.provider_id != current.harness)
+        {
+            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                "model change does not match the current provider binding".into(),
+            )));
+        }
+        let recovery = self
+            .sessions
+            .prepare_supersede_recovery(
+                task_id,
+                "Recovery cancelled because the next-turn model changed.",
+            )
+            .map_err(TaskProjectionError::Mutation)?;
+        let transition = recovery
+            .as_ref()
+            .map(|change| change.storage_transition())
+            .transpose()
+            .map_err(TaskProjectionError::Mutation)?;
+        let mut state = self
+            .doc_host
+            .context_control(task_id)
+            .map_err(TaskProjectionError::Mutation)?;
+        state.binding_generation = binding.as_ref().map(|binding| binding.generation);
+        state.notice =
+            Some(crate::context_controls::capabilities_for(config.harness).model_change_note);
+        let state_for_doc = state;
+        let config_for_registry = config;
+        let binding_id = binding.as_ref().map(|binding| binding.binding_id.as_str());
+        let binding_generation = binding.as_ref().map(|binding| binding.generation);
+        let (_, receipt) = self.doc_host.commit_context_boundary(
+            task_id,
+            command_id,
+            binding_id,
+            binding_generation,
+            None,
+            transition.as_ref(),
+            move |doc| {
+                doc.set_context_control(&state_for_doc)?;
+                Ok(())
+            },
+            move |registry| {
+                if !registry.set_chat_config(task_id, &config_for_registry)? {
+                    return Err(crate::EngineError::Other(
+                        "task vanished during model change".into(),
+                    ));
+                }
+                Ok(())
+            },
+        )?;
+        if let Some(change) = recovery.as_ref() {
+            self.sessions.publish_committed_recovery(&change.next);
+        }
+        Ok(Some(receipt))
     }
 
     async fn apply_task_command_intent(
@@ -2043,7 +2596,50 @@ impl EngineRpc {
                 )?;
                 Ok(Some(receipt))
             }
+            TaskCommandIntent::CompactContext {} => {
+                self.apply_compact_context(command_id, task_id).await
+            }
+            TaskCommandIntent::ClearContext {} => {
+                let config = self
+                    .workspace
+                    .chat(task_id)
+                    .map_err(TaskProjectionError::Mutation)?
+                    .and_then(|chat| chat.config)
+                    .ok_or_else(|| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "clear context requires a provider configuration".into(),
+                        ))
+                    })?;
+                self.apply_context_boundary(
+                    command_id,
+                    task_id,
+                    config,
+                    ContextBoundaryKind::Cleared,
+                    None,
+                )
+            }
+            TaskCommandIntent::SwitchProvider { config, handoff } => self.apply_context_boundary(
+                command_id,
+                task_id,
+                config,
+                ContextBoundaryKind::ProviderSwitched,
+                handoff,
+            ),
+            TaskCommandIntent::SetModel { config } => {
+                self.apply_model_change(command_id, task_id, config)
+            }
             TaskCommandIntent::SetConfig { config } => {
+                if self
+                    .workspace
+                    .chat(task_id)
+                    .map_err(TaskProjectionError::Mutation)?
+                    .and_then(|chat| chat.config)
+                    .is_some_and(|current| current.harness != config.harness)
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "use the explicit provider-switch action to change harnesses".into(),
+                    )));
+                }
                 let owned_task_id = task_id.to_string();
                 let (_, receipt) = self.commit_task_projection_superseding_recovery(
                     command_id,
@@ -2872,9 +3468,17 @@ fn doc_messages_stream(
             None::<crate::doc_host::TranscriptSnapshot>,
             doc,
             None,
+            zeron_proto::ContextControlState::default(),
             zeron_doc::TranscriptBaseline::default(),
         ),
-        |(mut rx, mut prev, doc, mut previous_usage, mut opening_baseline)| async move {
+        |(
+            mut rx,
+            mut prev,
+            doc,
+            mut previous_usage,
+            mut previous_context,
+            mut opening_baseline,
+        )| async move {
             loop {
                 if prev.is_some() {
                     rx.changed().await.ok()?;
@@ -2918,17 +3522,34 @@ fn doc_messages_stream(
                 // No-op commits (a second watcher attaching, command-only
                 // changes) produce empty deltas — skip the frame entirely.
                 let usage = doc.context_usage();
-                if frame.is_empty_delta() && usage == previous_usage && replay_baseline.is_none() {
+                let context_control = doc.context_control();
+                if frame.is_empty_delta()
+                    && usage == previous_usage
+                    && context_control == previous_context
+                    && replay_baseline.is_none()
+                {
                     continue;
                 }
                 previous_usage = usage;
+                previous_context = context_control.clone();
                 let value = serde_json::to_value(zeron_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
+                    context_control,
                     replay_baseline,
                 })
                 .ok()?;
-                return Some((value, (rx, prev, doc, previous_usage, opening_baseline)));
+                return Some((
+                    value,
+                    (
+                        rx,
+                        prev,
+                        doc,
+                        previous_usage,
+                        previous_context,
+                        opening_baseline,
+                    ),
+                ));
             }
         },
     )

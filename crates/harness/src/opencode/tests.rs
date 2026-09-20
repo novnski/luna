@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn compact_routes_stay_provider_native_on_both_supported_protocols() {
+    assert_eq!(
+        compact_http_request(Protocol::V1, "session-1", Some("openai/gpt-5")).unwrap(),
+        (
+            "/session/session-1/summarize".into(),
+            json!({ "providerID": "openai", "modelID": "gpt-5" })
+        )
+    );
+    assert_eq!(
+        compact_http_request(Protocol::V2, "session-2", None).unwrap(),
+        ("/api/session/session-2/compact".into(), Value::Null)
+    );
+    assert!(compact_http_request(Protocol::V1, "session-3", None).is_err());
+}
+
+#[test]
 fn permission_modes_compile_to_session_scoped_rules() {
     let ask = opencode_permission_rules(zeron_proto::PermissionMode::Ask);
     assert!(

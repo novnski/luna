@@ -4,6 +4,7 @@
 //! Context occupancy is replicated per chat; billing `Usage` remains a harness passthrough.
 
 pub mod agent;
+pub mod context_control;
 pub mod draft;
 pub mod entities;
 pub mod motion;
@@ -15,6 +16,7 @@ pub mod view;
 pub mod workspace;
 
 pub use agent::*;
+pub use context_control::*;
 pub use draft::*;
 pub use entities::*;
 pub use preview::*;

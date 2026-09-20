@@ -834,6 +834,107 @@ impl WorkspaceHost {
         Ok((result, receipt))
     }
 
+    /// L11 boundary form: include prepared chat snapshots/publication batches
+    /// and an optional recovery transition with the identity/registry/receipt
+    /// transaction. The in-memory registry remains hidden behind its lock
+    /// until the durable transaction succeeds.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_context_boundary<R>(
+        &self,
+        command_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        identity_snapshot: Option<(&str, &[u8])>,
+        chat_snapshots: &[(&str, &[u8])],
+        chat_updates: &[(&str, &str, &[u8])],
+        recovery: Option<&TaskRecoveryTransition>,
+        mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
+    ) -> Result<(R, CommandReceipt), TaskProjectionError> {
+        let mut reg = lock(&self.inner.reg);
+        let before = reg.to_bytes().map_err(|error| {
+            TaskProjectionError::Commit(EngineError::Other(format!(
+                "registry snapshot export failed: {error}"
+            )))
+        })?;
+        let result = match mutation(&mut reg) {
+            Ok(result) => result,
+            Err(error) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed after {error}: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Mutation(error));
+            }
+        };
+        let after = match reg.to_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed after snapshot export error {error}: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Commit(EngineError::Other(format!(
+                    "registry snapshot export failed: {error}"
+                ))));
+            }
+        };
+        let mut snapshots = Vec::with_capacity(2 + chat_snapshots.len());
+        snapshots.push((REGISTRY_DOC_ID, after.as_slice()));
+        if let Some(snapshot) = identity_snapshot {
+            snapshots.push(snapshot);
+        }
+        snapshots.extend_from_slice(chat_snapshots);
+        let receipt = match self
+            .inner
+            .store
+            .complete_task_command_with_snapshot_changes_updates_and_recovery(
+                command_id,
+                CommandReceiptStatus::Applied,
+                true,
+                binding_id,
+                binding_generation,
+                None,
+                None,
+                None,
+                &snapshots,
+                &[],
+                chat_updates,
+                recovery,
+            ) {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Commit(EngineError::Other(
+                    "task command receipt vanished before context boundary commit".into(),
+                )));
+            }
+            Err(error) => {
+                *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id).map_err(
+                    |restore| {
+                        TaskProjectionError::Commit(EngineError::Other(format!(
+                            "registry rollback failed after storage error {error}: {restore}"
+                        )))
+                    },
+                )?;
+                return Err(TaskProjectionError::Commit(error.into()));
+            }
+        };
+        drop(reg);
+        Ok((result, receipt))
+    }
+
     /// Publish a task projection only after every durable lifecycle projection
     /// and required local cleanup has completed.
     pub(crate) fn publish_task_command_projection(&self) {

@@ -31,13 +31,14 @@ use tokio_util::task::TaskTracker;
 use zeron_doc::{
     COMMAND_DEFAULT_TTL_MS, CommandBasedOn, CommandDisposition, DocError, EvaluationContext,
     MessagePart, MessageRole, MessageStatus, QueueClaimMode, QueueClaimOutcome, QueueDeliveryGate,
-    QueueHoldReason, QueueMessageStatus, QueuedMessage, SessionCommandEntry, SessionCommandPayload,
-    SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
+    QueueHoldReason, QueueMessageStatus, QueuedMessage, RegistryDoc, SessionCommandEntry,
+    SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry, evaluate_command,
     join_continuation_entries,
 };
 use zeron_proto::{
     CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus,
-    ConversationSourceContext, HarnessId, TaskCommandRead, UserInputAnswer, UserInputQuestion,
+    ContextControlState, ConversationSourceContext, HarnessId, TaskCommandRead, UserInputAnswer,
+    UserInputQuestion,
 };
 use zeron_sync::{DocsStore, TaskCommandBegin, TaskRecoveryTransition};
 
@@ -236,6 +237,10 @@ struct DocHostInner {
     handles: Mutex<HashMap<String, Arc<ChatDocHandle>>>,
     /// Serialize cold opens without blocking access to already-live handles.
     opening: Mutex<()>,
+    /// First open in this engine process reconciles a durable `Running`
+    /// compaction left by an interrupted predecessor to `Unknown`. Subsequent
+    /// LRU reopens must not disturb an operation started by this process.
+    context_reconciled: Mutex<HashSet<String>>,
     /// chat2 seeds in flight (one per chat — reopen storms must not race
     /// duplicate rebuild+checkpoint POSTs; benign server-side, wasteful).
     seeding: Mutex<HashSet<String>>,
@@ -887,6 +892,7 @@ impl DocHost {
                 tasks: TaskTracker::new(),
                 handles: Mutex::new(HashMap::new()),
                 opening: Mutex::new(()),
+                context_reconciled: Mutex::new(HashSet::new()),
                 seeding: Mutex::new(HashSet::new()),
                 seed_waiting: Mutex::new(HashSet::new()),
                 drain_waiting: Mutex::new(HashSet::new()),
@@ -973,6 +979,130 @@ impl DocHost {
         command_id: &str,
     ) -> Result<Option<CommandReceipt>, EngineError> {
         Ok(self.inner.store.task_command_receipt(command_id)?)
+    }
+
+    pub fn context_control(&self, chat_id: &str) -> Result<ContextControlState, EngineError> {
+        Ok(self.open(chat_id)?.doc().context_control())
+    }
+
+    /// Persist a non-terminal context operation marker before contacting the
+    /// provider. A crash after this point is conservatively delivery-unknown;
+    /// the operation is never replayed from the pending receipt.
+    pub fn persist_context_control(
+        &self,
+        chat_id: &str,
+        operation_id: &str,
+        state: &ContextControlState,
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        let state = state.clone();
+        self.persist_queue_projection(&handle, operation_id, move |doc| {
+            doc.set_context_control(&state)?;
+            Ok(())
+        })?;
+        handle.publish_messages();
+        Ok(())
+    }
+
+    /// Finish a compact command with its durable context snapshot and receipt
+    /// in one transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_context_operation(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        state: &ContextControlState,
+        clear_usage: bool,
+    ) -> Result<CommandReceipt, EngineError> {
+        let handle = self.open(chat_id)?;
+        let _projection = lock(&handle.queue_projection_lock);
+        let state = state.clone();
+        let prepared = self.prepare_queue_projection(&handle, command_id, move |doc| {
+            doc.set_context_control(&state)?;
+            if clear_usage {
+                doc.clear_context_usage()?;
+            }
+            Ok(())
+        })?;
+        let pending = self
+            .inner
+            .store
+            .task_command_receipt(command_id)?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(&handle, &prepared);
+        let receipt = self
+            .inner
+            .store
+            .complete_task_command_with_snapshot_changes_and_updates(
+                command_id,
+                status,
+                applied,
+                pending.snapshot.binding_id.as_deref(),
+                pending.snapshot.binding_generation,
+                pending.snapshot.active_turn_id.as_deref(),
+                reason,
+                recovery_action,
+                &snapshots,
+                &[],
+                &updates,
+            )?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        self.install_queue_projection(&handle, prepared)?;
+        handle.publish_messages();
+        Ok(receipt)
+    }
+
+    /// Commit a clear/provider-switch boundary across task identity, registry,
+    /// transcript/context state, recovery, and receipt.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_context_boundary<R>(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        identity_snapshot: Option<(&str, &[u8])>,
+        recovery: Option<&TaskRecoveryTransition>,
+        doc_mutation: impl FnOnce(&SessionDoc) -> Result<R, EngineError>,
+        registry_mutation: impl FnOnce(&mut RegistryDoc) -> Result<(), EngineError>,
+    ) -> Result<(R, CommandReceipt), crate::workspace_host::TaskProjectionError> {
+        let handle = self
+            .open(chat_id)
+            .map_err(crate::workspace_host::TaskProjectionError::Mutation)?;
+        let _projection = lock(&handle.queue_projection_lock);
+        let prepared = self
+            .prepare_queue_projection(&handle, command_id, doc_mutation)
+            .map_err(crate::workspace_host::TaskProjectionError::Mutation)?;
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(&handle, &prepared);
+        let (_, receipt) = self
+            .workspace()
+            .ok_or_else(|| {
+                crate::workspace_host::TaskProjectionError::Mutation(EngineError::Other(
+                    "workspace host is unavailable".into(),
+                ))
+            })?
+            .commit_context_boundary(
+                command_id,
+                binding_id,
+                binding_generation,
+                identity_snapshot,
+                &snapshots,
+                &updates,
+                recovery,
+                registry_mutation,
+            )?;
+        let outcome = self
+            .install_queue_projection(&handle, prepared)
+            .map_err(crate::workspace_host::TaskProjectionError::Commit)?;
+        handle.publish_messages();
+        handle.publish_queue();
+        Ok((outcome, receipt))
     }
 
     pub(crate) fn task_command_receipt_for_correlation(
@@ -1860,6 +1990,21 @@ impl DocHost {
                     // after the rebuild instant in a retired fat lineage.
                     self.spawn_chat2_seed_when_quiet(edge.clone(), chat_id, &handle);
                 }
+            }
+        }
+        let locally_hosted = chat_row
+            .as_ref()
+            .is_some_and(|chat| chat.device_id == self.inner.config.device_id);
+        if locally_hosted && lock(&self.inner.context_reconciled).insert(chat_id.to_string()) {
+            let mut context = doc.context_control();
+            if context.compact.status == zeron_proto::ContextOperationStatus::Running {
+                context.compact.status = zeron_proto::ContextOperationStatus::Unknown;
+                context.compact.finished_at_ms = Some(now_ms());
+                context.compact.detail = Some(
+                    "The previous engine stopped before provider compaction completion was durably observed. LUNA will not replay it."
+                        .into(),
+                );
+                doc.set_context_control(&context)?;
             }
         }
         // Publish only after the durable subscription and bootstrap are installed.

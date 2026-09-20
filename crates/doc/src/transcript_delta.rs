@@ -24,6 +24,9 @@ pub struct TranscriptUpdate {
     pub frame: TranscriptFrame,
     #[serde(default)]
     pub context_usage: Option<zeron_proto::ContextUsage>,
+    /// Durable harness-owned compaction and explicit context-boundary state.
+    #[serde(default)]
+    pub context_control: zeron_proto::ContextControlState,
     /// Historical content included in this update, independent of reset/delta
     /// encoding. Omitted on ordinary live updates and by older engines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -508,6 +511,10 @@ mod context_update_tests {
         let old = serde_json::json!({"reset": []});
         let update: TranscriptUpdate = serde_json::from_value(old).unwrap();
         assert_eq!(update.context_usage, None);
+        assert_eq!(
+            update.context_control,
+            zeron_proto::ContextControlState::default()
+        );
         assert!(update.replay_baseline.is_none());
         let value = serde_json::to_value(TranscriptUpdate {
             frame: TranscriptFrame::reset(&[]),
@@ -516,6 +523,7 @@ mod context_update_tests {
                 tokens: Some(0),
                 window: Some(200000),
             }),
+            context_control: zeron_proto::ContextControlState::default(),
         })
         .unwrap();
         assert_eq!(value["contextUsage"]["tokens"], 0);

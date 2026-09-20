@@ -173,6 +173,7 @@ fn queue_hold_reason_label(reason: QueueHoldReason) -> &'static str {
         QueueHoldReason::AwaitingInput => "Waiting for an answer",
         QueueHoldReason::StaleTurn => "The active turn changed",
         QueueHoldReason::ProviderRejected => "Provider rejected steer",
+        QueueHoldReason::ContextChanged => "Review after context change",
     }
 }
 

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt;
+use tokio::sync::mpsc;
 
 use crate::codex::resolve_codex_executable;
 use crate::jsonrpc::{Incoming, RpcClient};
@@ -24,6 +25,7 @@ pub const NATIVE_CAPABILITIES: &[&str] = &[
     "thread/archive",
     "thread/unarchive",
     "thread/fork",
+    "thread/compact/start",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -135,6 +137,38 @@ impl CodexNativeClient {
         Ok(())
     }
 
+    /// Start asynchronous native compaction and wait for the provider's
+    /// context-compaction completion item. The request response alone is only
+    /// an acknowledgement and must not be presented as completion.
+    pub async fn compact_thread(&self, thread_id: &str) -> Result<(), HarnessError> {
+        let mut connection = self.connect().await?;
+        let started = connection
+            .client
+            .request("thread/compact/start", json!({"threadId": thread_id}))
+            .await;
+        if let Err(error) = started {
+            connection.close().await;
+            return Err(error);
+        }
+        while let Some((method, params)) = connection.notifications.recv().await {
+            match compact_notification(thread_id, &method, &params) {
+                Some(CompactNotification::Completed) => {
+                    connection.close().await;
+                    return Ok(());
+                }
+                Some(CompactNotification::Failed(detail)) => {
+                    connection.close().await;
+                    return Err(HarnessError::Protocol(detail));
+                }
+                None => {}
+            }
+        }
+        connection.close().await;
+        Err(HarnessError::Protocol(
+            "Codex compaction completion became unknown".into(),
+        ))
+    }
+
     async fn listed_with_archived(
         &self,
         thread_id: &str,
@@ -200,6 +234,7 @@ impl CodexNativeClient {
         }
         let (client, mut incoming) = RpcClient::new(stdin, stdout);
         let responder = client.clone();
+        let (notification_tx, notification_rx) = mpsc::channel(64);
         let drain = tokio::spawn(async move {
             while let Some(message) = incoming.recv().await {
                 match message {
@@ -210,6 +245,7 @@ impl CodexNativeClient {
                     ),
                     Incoming::Notification { method, params } => {
                         tracing::trace!(target: "zeron_harness::codex_native", %method, ?params, "notification");
+                        let _ = notification_tx.send((method, params)).await;
                     }
                     Incoming::Eof => break,
                 }
@@ -239,14 +275,51 @@ impl CodexNativeClient {
             child,
             client,
             drain,
+            notifications: notification_rx,
         })
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CompactNotification {
+    Completed,
+    Failed(String),
+}
+
+fn compact_notification(
+    thread_id: &str,
+    method: &str,
+    params: &Value,
+) -> Option<CompactNotification> {
+    let event_thread = params
+        .get("threadId")
+        .or_else(|| params.pointer("/thread/id"))
+        .and_then(Value::as_str);
+    if event_thread != Some(thread_id) {
+        return None;
+    }
+    if method == "item/completed"
+        && params.pointer("/item/type").and_then(Value::as_str) == Some("contextCompaction")
+    {
+        return Some(CompactNotification::Completed);
+    }
+    if matches!(method, "turn/failed" | "turn/aborted") {
+        return Some(CompactNotification::Failed(
+            params
+                .pointer("/turn/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("Codex compaction did not complete")
+                .to_string(),
+        ));
+    }
+    None
 }
 
 struct NativeConnection {
     child: Child,
     client: RpcClient,
     drain: tokio::task::JoinHandle<()>,
+    notifications: mpsc::Receiver<(String, Value)>,
 }
 
 impl NativeConnection {
@@ -277,4 +350,65 @@ fn missing_thread(error: &HarnessError) -> bool {
     ]
     .iter()
     .any(|needle| message.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_completion_requires_matching_native_context_item() {
+        assert_eq!(
+            compact_notification(
+                "thread-1",
+                "item/completed",
+                &json!({
+                    "threadId": "thread-1",
+                    "item": { "type": "contextCompaction" }
+                }),
+            ),
+            Some(CompactNotification::Completed)
+        );
+        assert_eq!(
+            compact_notification(
+                "thread-1",
+                "item/completed",
+                &json!({
+                    "threadId": "thread-2",
+                    "item": { "type": "contextCompaction" }
+                }),
+            ),
+            None
+        );
+        assert_eq!(
+            compact_notification(
+                "thread-1",
+                "item/completed",
+                &json!({ "item": { "type": "contextCompaction" } }),
+            ),
+            None
+        );
+        assert_eq!(
+            compact_notification(
+                "thread-1",
+                "item/completed",
+                &json!({
+                    "threadId": "thread-1",
+                    "item": { "type": "agentMessage" }
+                }),
+            ),
+            None
+        );
+        assert_eq!(
+            compact_notification(
+                "thread-1",
+                "turn/failed",
+                &json!({
+                    "threadId": "thread-1",
+                    "turn": { "error": { "message": "provider failed" } }
+                }),
+            ),
+            Some(CompactNotification::Failed("provider failed".into()))
+        );
+    }
 }

@@ -347,6 +347,28 @@ impl SessionDoc {
         Ok(())
     }
 
+    /// Context-operation/boundary state is one JSON value so a replicated
+    /// reader never observes a half-updated operation.
+    pub fn context_control(&self) -> zeron_proto::ContextControlState {
+        let Some(loro::ValueOrContainer::Value(LoroValue::String(value))) =
+            self.doc.get_map("meta").get("contextControl")
+        else {
+            return Default::default();
+        };
+        serde_json::from_str(&value).unwrap_or_default()
+    }
+
+    pub fn set_context_control(
+        &self,
+        state: &zeron_proto::ContextControlState,
+    ) -> Result<(), DocError> {
+        self.doc
+            .get_map("meta")
+            .insert("contextControl", serde_json::to_string(state)?)?;
+        self.doc.commit();
+        Ok(())
+    }
+
     pub fn chat_id(&self) -> Option<String> {
         match self.doc.get_map("meta").get("chatId") {
             Some(loro::ValueOrContainer::Value(LoroValue::String(s))) => Some(s.to_string()),

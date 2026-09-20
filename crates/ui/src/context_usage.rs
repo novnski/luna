@@ -4,19 +4,22 @@ use gpui::{
     Context, IntoElement, PathBuilder, Render, SharedString, Window, canvas, div, point,
     prelude::*, px,
 };
-use zeron_proto::ContextUsage;
+use zeron_proto::{ContextOperationStatus, ContextUsage};
 
 pub fn render(
     usage: Option<ContextUsage>,
+    compact_status: ContextOperationStatus,
     state: gpui::Entity<crate::state::AppState>,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
     let fraction = usage.and_then(ContextUsage::fraction);
-    let color = match fraction {
-        Some(f) if f >= 0.9 => theme.danger,
-        Some(f) if f >= 0.75 => theme.warning,
-        Some(_) => theme.text_muted,
-        None => theme.text_faint,
+    let color = match (compact_status, fraction) {
+        (ContextOperationStatus::Unknown, _) => theme.warning,
+        (ContextOperationStatus::Running, _) => theme.accent,
+        (_, Some(f)) if f >= 0.9 => theme.danger,
+        (_, Some(f)) if f >= 0.75 => theme.warning,
+        (_, Some(_)) => theme.text_muted,
+        (_, None) => theme.text_faint,
     };
     let track = theme.text_faint.opacity(0.25);
     let ring = canvas(
@@ -51,9 +54,13 @@ pub fn render(
         },
     )
     .size(px(16.0));
-    let label = fraction
-        .map(|f| format!("{:.0}%", f * 100.0))
-        .unwrap_or_else(|| "—".into());
+    let label = match compact_status {
+        ContextOperationStatus::Running => "Compacting…".into(),
+        ContextOperationStatus::Unknown => "Context?".into(),
+        _ => fraction
+            .map(|f| format!("{:.0}%", f * 100.0))
+            .unwrap_or_else(|| "—".into()),
+    };
     div()
         .id("context-usage")
         .flex_none()
@@ -92,15 +99,6 @@ fn with_separators(count: u64) -> String {
         grouped.push(digit);
     }
     grouped
-}
-
-/// whether the indicator has anything to measure against: harnesses that
-/// never report a window (antigravity) get no indicator at all, rather than a
-/// permanently empty ring.
-pub fn has_window(usage: Option<ContextUsage>) -> bool {
-    usage
-        .and_then(|usage| usage.window)
-        .is_some_and(|window| window > 0)
 }
 
 fn details(usage: Option<ContextUsage>) -> String {
@@ -160,7 +158,24 @@ impl Render for UsageCard {
                     .child(SharedString::from(details(
                         self.state.read(cx).context_usage,
                     ))),
-            );
+            )
+            .child({
+                let context = &self.state.read(cx).context_control;
+                let mut detail = context
+                    .compact
+                    .detail
+                    .clone()
+                    .or_else(|| context.notice.clone())
+                    .unwrap_or_else(|| "No provider context operation is pending.".into());
+                detail.push_str(
+                    "\nContext pressure is separate from account quota, rate limits, and cost.",
+                );
+                div()
+                    .text_size(px(11.0))
+                    .line_height(px(17.0))
+                    .text_color(theme.text_faint)
+                    .child(SharedString::from(detail))
+            });
         crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
     }
 }
@@ -168,23 +183,6 @@ impl Render for UsageCard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn indicator_needs_a_reported_window() {
-        assert!(!has_window(None));
-        assert!(!has_window(Some(ContextUsage {
-            tokens: Some(1_200),
-            window: None,
-        })));
-        assert!(!has_window(Some(ContextUsage {
-            tokens: Some(1_200),
-            window: Some(0),
-        })));
-        assert!(has_window(Some(ContextUsage {
-            tokens: None,
-            window: Some(200_000),
-        })));
-    }
-
     #[test]
     fn missing_usage_is_distinct_from_zero_and_overflow() {
         assert!(details(None).contains("not reported"));

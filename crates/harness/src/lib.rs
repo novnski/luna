@@ -92,6 +92,15 @@ pub struct RunControls {
     pub interrupt: CancellationToken,
 }
 
+/// Provider-native compaction input. The operation targets an already-bound
+/// provider session; no transcript text is replayed through this contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextCompactRequest {
+    pub session_id: String,
+    pub cwd: String,
+    pub model: Option<String>,
+}
+
 #[async_trait]
 pub trait Harness: Send + Sync {
     fn id(&self) -> HarnessId;
@@ -131,6 +140,13 @@ pub trait Harness: Send + Sync {
     /// for harnesses without them. May spawn a short-lived discovery process.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
+    }
+    /// Run the harness's own native/session compaction operation. Adapters
+    /// must opt in; the default is honest unsupported behavior.
+    async fn compact_context(&self, _request: ContextCompactRequest) -> Result<(), HarnessError> {
+        Err(HarnessError::Protocol(
+            "context compaction is not supported by this harness".into(),
+        ))
     }
     /// Run an isolated title request. Drivers must opt in with title-specific
     /// instructions and restrictions; never fall back to an ordinary coding run.

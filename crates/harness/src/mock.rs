@@ -9,7 +9,7 @@ use zeron_proto::{
     UserInputQuestion,
 };
 
-use crate::{Harness, HarnessError, RunControls};
+use crate::{ContextCompactRequest, Harness, HarnessError, RunControls};
 
 pub struct MockHarness {
     pub script: Vec<AgentEvent>,
@@ -90,6 +90,9 @@ impl Harness for MockHarness {
                 options: vec![],
             },
         ])
+    }
+    async fn compact_context(&self, _request: ContextCompactRequest) -> Result<(), HarnessError> {
+        Ok(())
     }
     async fn run_title(
         &self,

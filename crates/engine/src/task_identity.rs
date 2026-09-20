@@ -75,6 +75,11 @@ enum TaskIdentityEvent {
         binding_id: String,
         reconciliation: ReconciliationRecord,
     },
+    BindingMaterialized {
+        binding_id: String,
+        provider_task_id: String,
+        reconciliation: ReconciliationRecord,
+    },
     BindingReplaced {
         binding_id: String,
         replacement_id: String,
@@ -159,11 +164,13 @@ impl Projection {
                     }
                     return Ok(());
                 }
-                let tuple = provider_tuple(binding);
-                if let Some(existing_id) = self.live_provider_bindings.get(&tuple) {
-                    return Err(EngineError::Other(format!(
-                        "provider task tuple is already bound by {existing_id}"
-                    )));
+                if !binding.provider_task_id.is_empty() {
+                    let tuple = provider_tuple(binding);
+                    if let Some(existing_id) = self.live_provider_bindings.get(&tuple) {
+                        return Err(EngineError::Other(format!(
+                            "provider task tuple is already bound by {existing_id}"
+                        )));
+                    }
                 }
                 let expected_generation = self
                     .bindings_by_task
@@ -175,8 +182,10 @@ impl Projection {
                         binding.binding_id, binding.generation
                     )));
                 }
-                self.live_provider_bindings
-                    .insert(tuple, binding.binding_id.clone());
+                if !binding.provider_task_id.is_empty() {
+                    self.live_provider_bindings
+                        .insert(provider_tuple(binding), binding.binding_id.clone());
+                }
                 self.bindings_by_task
                     .entry(binding.task_id.clone())
                     .or_default()
@@ -196,6 +205,46 @@ impl Projection {
                 })?;
                 binding.last_observed_at_ms = reconciliation.observed_at_ms;
                 binding.reconciliation = reconciliation.clone();
+            }
+            TaskIdentityEvent::BindingMaterialized {
+                binding_id,
+                provider_task_id,
+                reconciliation,
+            } => {
+                if provider_task_id.is_empty() {
+                    return Err(EngineError::Other(
+                        "binding materialization has an empty provider task id".into(),
+                    ));
+                }
+                let binding = self.bindings.get(binding_id).ok_or_else(|| {
+                    EngineError::Other(format!(
+                        "materialization references unknown binding {binding_id}"
+                    ))
+                })?;
+                if !binding.provider_task_id.is_empty() {
+                    if binding.provider_task_id == *provider_task_id {
+                        return Ok(());
+                    }
+                    return Err(EngineError::Other(format!(
+                        "binding {binding_id} is already materialized"
+                    )));
+                }
+                let tuple = provider_tuple_parts(
+                    binding.provider_id,
+                    &binding.provider_instance_id,
+                    provider_task_id,
+                );
+                if let Some(existing_id) = self.live_provider_bindings.get(&tuple) {
+                    return Err(EngineError::Other(format!(
+                        "provider task tuple is already bound by {existing_id}"
+                    )));
+                }
+                let binding = self.bindings.get_mut(binding_id).expect("checked above");
+                binding.provider_task_id = provider_task_id.clone();
+                binding.last_observed_at_ms = reconciliation.observed_at_ms;
+                binding.reconciliation = reconciliation.clone();
+                self.live_provider_bindings
+                    .insert(tuple, binding_id.clone());
             }
             TaskIdentityEvent::BindingReplaced {
                 binding_id,
@@ -423,6 +472,12 @@ impl TaskIdentityService {
         lock(&self.inner.state).projection.view(task_id)
     }
 
+    pub fn current_binding_pending(&self, task_id: &str) -> bool {
+        self.view(task_id)
+            .and_then(|view| view.current_binding)
+            .is_some_and(|binding| binding.provider_task_id.is_empty())
+    }
+
     pub fn has_native_codex_binding(&self, task_id: &str) -> bool {
         self.view(task_id)
             .and_then(|view| view.current_binding)
@@ -589,6 +644,44 @@ impl TaskIdentityService {
             });
         }
         if let Some(current) = view.current_binding {
+            if current.provider_task_id.is_empty() {
+                if current.provider_id != provider_id
+                    || current.provider_instance_id != identity.instance_id
+                {
+                    return Err(EngineError::Other(format!(
+                        "pending provider binding for task {task_id} does not match the accepted session"
+                    )));
+                }
+                let observation = ProviderTaskObservation {
+                    provider_task_id: provider_task_id.to_string(),
+                    name: None,
+                    cwd: cwd.to_string(),
+                    status: "active".into(),
+                    archived: None,
+                    updated_at: None,
+                    cli_version: None,
+                    project_id: None,
+                    ephemeral: false,
+                };
+                let state = if provider_id == HarnessId::Codex {
+                    ReconciliationState::Current
+                } else {
+                    ReconciliationState::Unsupported
+                };
+                prefix_events.push(TaskIdentityEvent::BindingMaterialized {
+                    binding_id: current.binding_id,
+                    provider_task_id: provider_task_id.to_string(),
+                    reconciliation: ReconciliationRecord {
+                        state,
+                        reason: "explicit binding generation materialized from provider acceptance"
+                            .into(),
+                        observed_at_ms: now_ms(),
+                        provider: Some(observation),
+                    },
+                });
+                self.commit(prefix_events)?;
+                return Ok(self.view(task_id).and_then(|view| view.current_binding));
+            }
             if current.provider_id != provider_id
                 || current.provider_instance_id != identity.instance_id
                 || current.provider_task_id != provider_task_id
@@ -759,6 +852,9 @@ impl TaskIdentityService {
         let Some(binding) = view.current_binding else {
             return Ok(None);
         };
+        if binding.provider_task_id.is_empty() {
+            return Ok(None);
+        }
         if binding.provider_id != provider_id {
             return Err(EngineError::Other(format!(
                 "task is bound to {:?}, not {provider_id:?}",
@@ -839,6 +935,11 @@ impl TaskIdentityService {
             .current_binding
             .clone()
             .ok_or_else(|| EngineError::Other(format!("task {task_id} has no provider binding")))?;
+        if binding.provider_task_id.is_empty() {
+            // Explicit clear/provider-switch generations intentionally have
+            // no native id until their first accepted turn materializes them.
+            return Ok(view);
+        }
         if self.has_pending_materialization(task_id) {
             self.record_reconciliation(
                 &binding.binding_id,
@@ -1601,6 +1702,84 @@ impl TaskIdentityService {
         Ok(replacement)
     }
 
+    /// Stage an explicit fresh provider binding and let the caller commit the
+    /// identity snapshot with registry/chat/receipt state. The provider task
+    /// id is deliberately empty until the next SessionStarted event proves
+    /// which native session accepted the first prompt.
+    pub(crate) fn begin_fresh_binding_with_command<R>(
+        &self,
+        task_id: &str,
+        provider_id: HarnessId,
+        origin: BindingOrigin,
+        provenance: &str,
+        commit: impl FnOnce(&ExecutionBinding, Option<(&str, &[u8])>) -> Result<R, TaskProjectionError>,
+    ) -> Result<R, TaskProjectionError> {
+        let view = self.view(task_id).ok_or_else(|| {
+            TaskProjectionError::Mutation(EngineError::Other(format!("unknown task {task_id}")))
+        })?;
+        if view.task.tombstoned {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(format!(
+                "task {task_id} is tombstoned"
+            ))));
+        }
+        let identity = self.provider_identity(provider_id);
+        let at = now_ms();
+        let generation = view
+            .current_binding
+            .as_ref()
+            .map_or(1, |binding| binding.generation + 1);
+        let replacement = ExecutionBinding {
+            schema_version: TASK_IDENTITY_SCHEMA_VERSION,
+            binding_id: new_id(),
+            task_id: task_id.to_string(),
+            generation,
+            provider_id,
+            provider_instance_id: identity.instance_id,
+            provider_profile_id: identity.profile_id,
+            provider_home_identity: identity.home_identity,
+            provider_task_id: String::new(),
+            resume_cursor: None,
+            environment_id: view.workspace.environment_id,
+            workspace_id: view.workspace.workspace_id,
+            worktree_id: view.workspace.worktree_id,
+            origin,
+            provenance: provenance.to_string(),
+            capabilities: identity.capabilities,
+            reconciliation: ReconciliationRecord {
+                state: ReconciliationState::Stale,
+                reason: "fresh binding awaits the next provider SessionStarted acceptance".into(),
+                observed_at_ms: at,
+                provider: None,
+            },
+            replaced_by_binding_id: None,
+            created_at_ms: at,
+            last_observed_at_ms: at,
+        };
+        let mut events = Vec::new();
+        if let Some(current) = view.current_binding {
+            events.push(TaskIdentityEvent::BindingReplaced {
+                binding_id: current.binding_id,
+                replacement_id: replacement.binding_id.clone(),
+                at_ms: at,
+            });
+        }
+        events.push(TaskIdentityEvent::BindingCreated {
+            binding: replacement.clone(),
+        });
+        self.commit_events_with_task_command(events, |snapshot| commit(&replacement, snapshot))
+    }
+
+    pub async fn compact_task(&self, task_id: &str) -> Result<(), EngineError> {
+        let binding = self.mutable_codex_binding(task_id)?;
+        tokio::time::timeout(
+            PROVIDER_TIMEOUT,
+            self.inner.codex.compact_thread(&binding.provider_task_id),
+        )
+        .await
+        .map_err(|_| EngineError::Other("Codex compaction completion timed out".into()))?
+        .map_err(|error| EngineError::Other(error.to_string()))
+    }
+
     fn mutable_codex_binding(&self, task_id: &str) -> Result<ExecutionBinding, EngineError> {
         if self.has_pending_materialization(task_id) {
             return Err(EngineError::Other(
@@ -1619,6 +1798,11 @@ impl TaskIdentityService {
         if binding.origin == BindingOrigin::ProviderImported {
             return Err(EngineError::Other(
                 "provider-owned import is read-only until explicitly adopted".into(),
+            ));
+        }
+        if binding.provider_task_id.is_empty() {
+            return Err(EngineError::Other(
+                "provider binding is waiting for its first accepted turn".into(),
             ));
         }
         let current = self.provider_identity(HarnessId::Codex);

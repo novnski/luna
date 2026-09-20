@@ -22,8 +22,8 @@ use gpui::{
 
 use zeron_engine::registry::HarnessDescriptor;
 use zeron_proto::{
-    AgentAccountsSnapshot, ChatConfig, FolderListing, HarnessId, Model, PermissionMode,
-    ReasoningLevel, RepoRef, SandboxLevel, Space,
+    AgentAccountsSnapshot, ChatConfig, ContextHandoff, ContextHandoffKind, FolderListing,
+    HarnessId, Model, PermissionMode, ReasoningLevel, RepoRef, SandboxLevel, Space,
 };
 use zeron_rpc::methods;
 
@@ -87,6 +87,54 @@ fn slow_catalog_delay() -> Option<std::time::Duration> {
         .ok()
         .and_then(|ms| ms.parse::<u64>().ok())
         .map(std::time::Duration::from_millis)
+}
+
+fn recent_visible_handoff(entries: &[zeron_doc::SessionMessageEntry]) -> Option<ContextHandoff> {
+    let mut selected = Vec::new();
+    let mut bytes = 0usize;
+    for entry in entries.iter().rev() {
+        if selected.len() >= zeron_proto::MAX_CONTEXT_HANDOFF_MESSAGES {
+            break;
+        }
+        let role = match entry.role {
+            zeron_doc::MessageRole::User => "User",
+            zeron_doc::MessageRole::Assistant => "Assistant",
+            zeron_doc::MessageRole::System => continue,
+        };
+        let text = entry
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                zeron_doc::MessagePart::Text { text, .. } => Some(text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.is_empty() {
+            continue;
+        }
+        let remaining = zeron_proto::MAX_CONTEXT_HANDOFF_BYTES.saturating_sub(bytes);
+        if remaining <= role.len() + 4 {
+            break;
+        }
+        let mut end = text.len().min(remaining - role.len() - 4);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        selected.push((entry.id.clone(), format!("{role}: {}", &text[..end])));
+        bytes += selected.last().map_or(0, |(_, text)| text.len() + 2);
+    }
+    selected.reverse();
+    (!selected.is_empty()).then(|| ContextHandoff {
+        kind: ContextHandoffKind::RecentVisibleHistory,
+        text: selected
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        message_ids: selected.into_iter().map(|(id, _)| id).collect(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -696,6 +744,10 @@ pub struct Pickers {
     /// Last mid-session switch failure (shown in the ref popover).
     switch_error: Option<String>,
     account_error: Option<String>,
+    context_error: Option<String>,
+    clear_context_confirmation: bool,
+    provider_switch_target: Option<HarnessId>,
+    provider_switch_handoff: bool,
     full_confirmation: Option<String>,
     mutate_task: Option<Task<()>>,
     _search_events: Subscription,
@@ -789,6 +841,10 @@ impl Pickers {
                 this.config.permission_mode = None;
                 this.config.model_options.clear();
                 this.switch_error = None;
+                this.context_error = None;
+                this.clear_context_confirmation = false;
+                this.provider_switch_target = None;
+                this.provider_switch_handoff = false;
             }
             // A space switch invalidates the branch draft + cache — the folder
             // (and possibly the device) changed under them.
@@ -895,6 +951,10 @@ impl Pickers {
             switch_task: None,
             switch_error: None,
             account_error: None,
+            context_error: None,
+            clear_context_confirmation: false,
+            provider_switch_target: None,
+            provider_switch_handoff: false,
             full_confirmation: None,
             mutate_task: None,
             _search_events: search_events,
@@ -1876,6 +1936,14 @@ impl Pickers {
 
     fn pick_harness(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
         if self.harness_locked(cx) {
+            if self.effective_harness(cx) != Some(harness) {
+                self.provider_switch_target = Some(harness);
+                self.provider_switch_handoff = false;
+                self.clear_context_confirmation = false;
+                self.context_error = None;
+                self.ensure_models(harness, false, cx);
+                cx.notify();
+            }
             return;
         }
         if self.config.harness != Some(harness) {
@@ -1957,7 +2025,9 @@ impl Pickers {
         if self.state.read(cx).selected_chat.is_some() {
             // Existing chat: persist to the chat row (Mutate setChatConfig) —
             // survives restarts and syncs; next runs in this chat use it.
-            self.update_chat_config(cx, move |config| config.model = Some(model_id));
+            self.update_chat_config_kind(cx, "setModel", move |config| {
+                config.model = Some(model_id)
+            });
         } else {
             // New chat: draft pick + sticky last-used memory for this harness.
             self.config.model = Some(model_id.clone());
@@ -1974,6 +2044,125 @@ impl Pickers {
                 self.save_defaults();
             }
         }
+        cx.notify();
+    }
+
+    fn run_context_action(&mut self, kind: &'static str, cx: &mut Context<Self>) {
+        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        let Some(engine) = self.engine(cx) else {
+            self.context_error = Some("Engine not connected".into());
+            cx.notify();
+            return;
+        };
+        self.context_error = None;
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::task_commands::execute(
+                &engine,
+                &chat_id,
+                serde_json::json!({ "kind": kind }),
+            )
+            .await;
+            this.update(cx, |pickers, cx| {
+                if let Err(error) = result {
+                    pickers.context_error = Some(error.to_string());
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn confirm_provider_switch(&mut self, target: HarnessId, cx: &mut Context<Self>) {
+        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        let Some(mut config) = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| chat.config.clone())
+        else {
+            self.context_error = Some("This task has no provider configuration.".into());
+            cx.notify();
+            return;
+        };
+        let Some(engine) = self.engine(cx) else {
+            self.context_error = Some("Engine not connected".into());
+            cx.notify();
+            return;
+        };
+        let selected_model = self
+            .defaults
+            .model_for(target)
+            .and_then(|remembered| {
+                self.models
+                    .get(&target)
+                    .and_then(|models| models.ready())
+                    .and_then(|models| {
+                        models
+                            .iter()
+                            .find(|model| model.id == remembered.id)
+                            .cloned()
+                    })
+            })
+            .or_else(|| {
+                self.models
+                    .get(&target)
+                    .and_then(|models| models.ready())
+                    .and_then(|models| models.first().cloned())
+            });
+        config.harness = target;
+        config.provider_account_id = None;
+        config.model = selected_model.as_ref().map(|model| model.id.clone());
+        config.reasoning = selected_model
+            .as_ref()
+            .and_then(|model| model.reasoning_levels.first().copied());
+        config.model_options.clear();
+        let handoff = self
+            .provider_switch_handoff
+            .then(|| recent_visible_handoff(&self.state.read(cx).transcript))
+            .flatten();
+        let previous = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| chat.config.clone());
+        self.context_error = None;
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::task_commands::execute(
+                &engine,
+                &chat_id,
+                serde_json::json!({
+                    "kind": "switchProvider",
+                    "config": config,
+                    "handoff": handoff,
+                }),
+            )
+            .await;
+            this.update(cx, |pickers, cx| {
+                match result {
+                    Ok(_) => {
+                        pickers.provider_switch_target = None;
+                        pickers.provider_switch_handoff = false;
+                        pickers.config = DraftConfig::default();
+                    }
+                    Err(error) => {
+                        pickers.context_error = Some(error.to_string());
+                        if let Some(previous) = previous.clone() {
+                            pickers.state.update(cx, |state, cx| {
+                                state.apply_chat_config(&chat_id, previous);
+                                cx.notify();
+                            });
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
         cx.notify();
     }
 
@@ -2129,9 +2318,23 @@ impl Pickers {
     /// row always carries the CONCRETE resolved model/reasoning, with the
     /// reasoning re-clamped to the (possibly just-changed) model's ladder.
     fn update_chat_config(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ChatConfig)) {
+        self.update_chat_config_kind(cx, "setConfig", change)
+    }
+
+    fn update_chat_config_kind(
+        &mut self,
+        cx: &mut Context<Self>,
+        intent_kind: &'static str,
+        change: impl FnOnce(&mut ChatConfig),
+    ) {
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
             return;
         };
+        let previous = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| chat.config.clone());
         let resolved = self.resolved(cx);
         let Some(mut config) = resolved.chat_config() else {
             return; // harness unknown (catalog + chat row both missing) — nothing safe to write
@@ -2186,11 +2389,27 @@ impl Pickers {
         let Some(engine) = self.engine(cx) else {
             return;
         };
-        self.mutate_task = Some(cx.spawn(async move |_, _| {
-            let intent = serde_json::json!({ "kind": "setConfig", "config": config });
-            if let Err(err) = crate::task_commands::execute(&engine, &chat_id, intent).await {
-                tracing::warn!(error = %err, "setChatConfig mutate failed");
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let intent = serde_json::json!({ "kind": intent_kind, "config": config });
+            let result = crate::task_commands::execute(&engine, &chat_id, intent).await;
+            if let Err(err) = &result {
+                tracing::warn!(error = %err, %intent_kind, "setChatConfig mutate failed");
             }
+            this.update(cx, |pickers, cx| {
+                if let Err(error) = result
+                    && intent_kind == "setModel"
+                {
+                    pickers.context_error = Some(error.to_string());
+                    if let Some(previous) = previous.clone() {
+                        pickers.state.update(cx, |state, cx| {
+                            state.apply_chat_config(&chat_id, previous);
+                            cx.notify();
+                        });
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
         }));
     }
 
@@ -4177,7 +4396,6 @@ impl Pickers {
         for (ix, descriptor) in descriptors.iter().enumerate() {
             let harness = descriptor.id;
             let is_viewed = !favorites_view && effective == Some(harness);
-            let is_disabled = locked && effective != Some(harness);
             let (icon_path, tint) = harness_brand_icon(harness);
             tabs =
                 tabs.child(
@@ -4190,11 +4408,9 @@ impl Pickers {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .when(is_disabled, |el| el.opacity(0.35))
-                        .when(!is_disabled, |el| el.cursor_pointer())
-                        .when(!is_disabled && !is_viewed, |el| {
-                            el.hover(|s| s.bg(crate::theme::ink(0.06)))
-                        })
+                        .cursor_pointer()
+                        .when(locked && effective != Some(harness), |el| el.opacity(0.7))
+                        .when(!is_viewed, |el| el.hover(|s| s.bg(crate::theme::ink(0.06))))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.setting_menu = None;
                             this.model_rail = ModelRail::Harness;
@@ -4210,6 +4426,110 @@ impl Pickers {
                         ))
                         .when(is_viewed, |el| el.child(tab_indicator(theme.accent))),
                 );
+        }
+
+        if let Some(target) = self.provider_switch_target {
+            let target_name = descriptors
+                .iter()
+                .find(|descriptor| descriptor.id == target)
+                .map(|descriptor| descriptor.name.clone())
+                .unwrap_or_else(|| format!("{target:?}"));
+            let handoff = self.provider_switch_handoff;
+            let panel = div()
+                .p(px(14.0))
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(SharedString::from(format!("Switch to {target_name}?"))),
+                )
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .line_height(px(17.0))
+                        .text_color(theme.text_muted)
+                        .child("This creates a fresh provider binding. LUNA keeps the task history, files, draft, and queue."),
+                )
+                .child(
+                    div()
+                        .id("provider-switch-handoff")
+                        .h(px(30.0))
+                        .px(px(8.0))
+                        .rounded(px(6.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(crate::theme::ink(0.05)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.provider_switch_handoff = !this.provider_switch_handoff;
+                            cx.notify();
+                        }))
+                        .child(
+                            crate::icons::icon(crate::icons::CHECK)
+                            .size(px(13.0))
+                            .text_color(if handoff { theme.accent } else { theme.text_faint }),
+                        )
+                        .child("Include up to 8 recent visible messages"),
+                )
+                .when_some(self.context_error.clone(), |panel, error| {
+                    panel.child(
+                        div()
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .line_height(px(16.0))
+                            .text_color(theme.danger_muted)
+                            .child(SharedString::from(error)),
+                    )
+                })
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .id("provider-switch-cancel")
+                                .px(px(10.0))
+                                .h(px(28.0))
+                                .rounded(px(6.0))
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(crate::theme::ink(0.06)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.provider_switch_target = None;
+                                    this.provider_switch_handoff = false;
+                                    cx.notify();
+                                }))
+                                .child("Cancel"),
+                        )
+                        .child(
+                            div()
+                                .id("provider-switch-confirm")
+                                .px(px(10.0))
+                                .h(px(28.0))
+                                .rounded(px(6.0))
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .bg(theme.accent.opacity(0.16))
+                                .hover(|style| style.bg(theme.accent.opacity(0.24)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.confirm_provider_switch(target, cx);
+                                }))
+                                .child("Switch provider"),
+                        ),
+                );
+            return div()
+                .flex()
+                .flex_col()
+                .child(tabs)
+                .child(panel)
+                .into_any_element();
         }
 
         // ── search row: icon + borderless input over a full-bleed hairline.
@@ -4354,6 +4674,12 @@ impl Pickers {
         });
 
         let account_strip = self.render_codex_account_strip(cx);
+        let context_tray = self
+            .state
+            .read(cx)
+            .selected_chat
+            .is_some()
+            .then(|| self.render_context_controls(cx));
         div()
             .flex()
             .flex_col()
@@ -4362,6 +4688,122 @@ impl Pickers {
             .child(search_row)
             .child(list_host)
             .children(tray)
+            .children(context_tray)
+            .into_any_element()
+    }
+
+    fn render_context_controls(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let harness = self.effective_harness(cx);
+        let capabilities = harness.map(zeron_engine::context_controls::capabilities_for);
+        let context = self.state.read(cx).context_control.clone();
+        let compact_enabled = capabilities
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.compact.is_some())
+            && !context.compact.blocks_new_turn();
+        let compact_label = match context.compact.status {
+            zeron_proto::ContextOperationStatus::Running => "Compacting…",
+            zeron_proto::ContextOperationStatus::Unknown => "Compact unresolved",
+            _ => "Compact",
+        };
+        let compact_reason = capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.compact_unavailable_reason.clone());
+        let compact = div()
+            .id("context-compact")
+            .h(px(30.0))
+            .px(px(8.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .when(compact_enabled, |row| {
+                row.cursor_pointer()
+                    .hover(|style| style.bg(crate::theme::ink(0.05)))
+            })
+            .when(!compact_enabled, |row| row.opacity(0.5))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if compact_enabled {
+                    this.run_context_action("compactContext", cx);
+                }
+            }))
+            .child(
+                crate::icons::icon(crate::icons::COLLAPSE_ARROWS)
+                    .size(px(13.0))
+                    .text_color(theme.text_muted),
+            )
+            .child(compact_label);
+        let clear_label = if self.clear_context_confirmation {
+            "Confirm clear context"
+        } else {
+            "Clear context…"
+        };
+        let clear = div()
+            .id("context-clear")
+            .h(px(30.0))
+            .px(px(8.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .cursor_pointer()
+            .hover(|style| style.bg(crate::theme::ink(0.05)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.clear_context_confirmation {
+                    this.clear_context_confirmation = false;
+                    this.run_context_action("clearContext", cx);
+                } else {
+                    this.clear_context_confirmation = true;
+                    this.context_error = None;
+                    cx.notify();
+                }
+            }))
+            .child(
+                crate::icons::icon(crate::icons::REFRESH)
+                    .size(px(13.0))
+                    .text_color(theme.text_muted),
+            )
+            .child(clear_label);
+        div()
+            .id("context-controls-tray")
+            .flex_none()
+            .border_t_1()
+            .border_color(crate::theme::hairline(0.08))
+            .px(px(popover::CARD_INSET))
+            .py(px(6.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .child(
+                div()
+                    .px(px(8.0))
+                    .pb(px(3.0))
+                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_color(theme.text_faint)
+                    .child("CONTEXT · PROVIDER-OWNED"),
+            )
+            .child(compact)
+            .when_some(compact_reason, |panel, reason| {
+                panel.child(
+                    div()
+                        .px(px(8.0))
+                        .pb(px(3.0))
+                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_color(theme.text_faint)
+                        .child(SharedString::from(reason)),
+                )
+            })
+            .child(clear)
+            .when_some(self.context_error.clone(), |panel, error| {
+                panel.child(
+                    div()
+                        .px(px(8.0))
+                        .pt(px(3.0))
+                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_color(theme.danger_muted)
+                        .child(SharedString::from(error)),
+                )
+            })
             .into_any_element()
     }
 
@@ -5648,6 +6090,65 @@ impl Render for Pickers {
 mod tests {
     use super::*;
     use zeron_proto::{FolderEntry, Model, ModelOption, ModelOptionChoice};
+
+    #[test]
+    fn provider_handoff_contains_only_bounded_visible_conversation_text() {
+        let mut entries = vec![zeron_doc::SessionMessageEntry {
+            id: "system-secret".into(),
+            role: zeron_doc::MessageRole::System,
+            parts: vec![zeron_doc::MessagePart::Text {
+                id: "system-part".into(),
+                text: "hidden system instructions".into(),
+            }],
+            created_at: 0,
+            device_id: "device".into(),
+            status: None,
+            continuation_of: None,
+        }];
+        for index in 0..10 {
+            entries.push(zeron_doc::SessionMessageEntry {
+                id: format!("visible-{index}"),
+                role: if index % 2 == 0 {
+                    zeron_doc::MessageRole::User
+                } else {
+                    zeron_doc::MessageRole::Assistant
+                },
+                parts: vec![
+                    zeron_doc::MessagePart::Reasoning {
+                        id: format!("reasoning-{index}"),
+                        text: format!("hidden reasoning {index}"),
+                    },
+                    zeron_doc::MessagePart::Text {
+                        id: format!("text-{index}"),
+                        text: format!("visible message {index}"),
+                    },
+                ],
+                created_at: index,
+                device_id: "device".into(),
+                status: None,
+                continuation_of: None,
+            });
+        }
+
+        let handoff = recent_visible_handoff(&entries).unwrap();
+        assert_eq!(handoff.kind, ContextHandoffKind::RecentVisibleHistory);
+        assert_eq!(
+            handoff.message_ids.len(),
+            zeron_proto::MAX_CONTEXT_HANDOFF_MESSAGES
+        );
+        assert_eq!(
+            handoff.message_ids.first().map(String::as_str),
+            Some("visible-2")
+        );
+        assert_eq!(
+            handoff.message_ids.last().map(String::as_str),
+            Some("visible-9")
+        );
+        assert!(!handoff.text.contains("hidden system"));
+        assert!(!handoff.text.contains("hidden reasoning"));
+        assert!(handoff.text.contains("visible message 9"));
+        assert!(handoff.text.len() <= zeron_proto::MAX_CONTEXT_HANDOFF_BYTES);
+    }
 
     #[test]
     fn permission_defaults_and_degradation_follow_provider_capabilities() {

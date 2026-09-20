@@ -8,18 +8,24 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use zeron_doc::{MessageRole, QueueClaimMode, QueueMessageStatus};
+use zeron_doc::{
+    MessageRole, QueueClaimMode, QueueDeliveryGate, QueueHoldReason, QueueMessageStatus,
+};
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
+use zeron_harness::{ContextCompactRequest, Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, COMPOSER_DRAFT_VERSION, CommandReasonCode, CommandReceipt, CommandReceiptStatus,
-    ComposerDraft, ComposerDraftRead, DoneStatus, DraftContext, DraftSubmissionState, HarnessId,
-    Model, PermissionMode, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode, TaskCommandRead,
+    AgentEvent, BindingOrigin, COMPOSER_DRAFT_VERSION, ChatConfig, CommandReasonCode,
+    CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftRead, ContextControlState,
+    ContextHandoff, ContextHandoffKind, ContextOperationStatus, DoneStatus, DraftContext,
+    DraftSubmissionState, HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest,
+    SandboxLevel, SteeringMode, TaskCommandRead,
 };
 use zeron_rpc::{RpcClient, methods};
 
 struct CountingHarness {
     runs: Arc<AtomicUsize>,
+    compactions: Arc<AtomicUsize>,
+    compact_error: bool,
     hold: bool,
     steering: SteeringMode,
 }
@@ -48,6 +54,17 @@ impl Harness for CountingHarness {
 
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         Ok(Vec::new())
+    }
+
+    async fn compact_context(&self, _request: ContextCompactRequest) -> Result<(), HarnessError> {
+        self.compactions.fetch_add(1, Ordering::SeqCst);
+        if self.compact_error {
+            Err(HarnessError::Protocol(
+                "synthetic compact completion lost".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     async fn run(
@@ -129,6 +146,8 @@ fn assemble_with_steering(
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(CountingHarness {
         runs,
+        compactions: Arc::new(AtomicUsize::new(0)),
+        compact_error: false,
         hold,
         steering,
     }));
@@ -140,6 +159,47 @@ fn assemble_with_steering(
         account_config(root),
     )
     .unwrap()
+}
+
+fn assemble_context(
+    root: &std::path::Path,
+    runs: Arc<AtomicUsize>,
+    compactions: Arc<AtomicUsize>,
+    hold: bool,
+    compact_error: bool,
+) -> EngineCore {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(CountingHarness {
+        runs,
+        compactions,
+        compact_error,
+        hold,
+        steering: SteeringMode::StepBoundary,
+    }));
+    EngineCore::assemble_with_profile_and_agent_accounts_config(
+        EngineProfile::development(&root.join("data"), "l07-org", "l07-user"),
+        Arc::new(registry),
+        HarnessId::Mock,
+        None,
+        account_config(root),
+    )
+    .unwrap()
+}
+
+fn task_config(model: &str) -> ChatConfig {
+    ChatConfig {
+        harness: HarnessId::Mock,
+        provider_account_id: None,
+        model: Some(model.into()),
+        reasoning: Some(ReasoningLevel::Medium),
+        model_options: Default::default(),
+        sandbox: SandboxLevel::WorkspaceWrite,
+        permission_mode: PermissionMode::Ask,
+        effective_permission_mode: PermissionMode::Ask,
+        permission_ceiling_source: None,
+        permission_degradation_reason: None,
+        permission_audit: Vec::new(),
+    }
 }
 
 fn request(prompt: &str) -> RunRequest {
@@ -256,6 +316,60 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
     )
     .await;
     assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+}
+
+async fn create_configured_task(client: &RpcClient, task_id: &str, device_id: &str) {
+    let receipt = execute(
+        client,
+        envelope(
+            "create-context-task",
+            task_id,
+            None,
+            serde_json::json!({
+                "kind": "createChat",
+                "deviceId": device_id,
+                "cwd": "/tmp",
+                "config": task_config("synthetic")
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+}
+
+async fn run_once(client: &RpcClient, task_id: &str, command_id: &str, prompt: &str) {
+    let receipt = execute(
+        client,
+        envelope(
+            command_id,
+            task_id,
+            Some(&snapshot(client, task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": request(prompt),
+                    "messageId": format!("{command_id}-message")
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        receipt.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+    wait_for_receipt(client, command_id, CommandReceiptStatus::Applied).await;
+}
+
+async fn wait_for_no_live_run(core: &EngineCore, task_id: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while core.sessions.has_live_run(task_id) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 async fn steer_queue_case(
@@ -1892,5 +2006,558 @@ async fn revision_binding_turn_and_lifecycle_fences_are_visible() {
         .unwrap();
     assert!(gap.reload_required);
     assert!(gap.events.is_empty());
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clear_context_atomically_advances_binding_and_retains_local_state() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let compactions = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble_context(root.path(), runs.clone(), compactions, false, false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_configured_task(&client, &task_id, &core.device_id).await;
+    core.doc_host.open(&task_id).unwrap();
+    run_once(&client, &task_id, "clear-context-run", "remember this").await;
+    wait_for_no_live_run(&core, &task_id).await;
+    core.doc_host.pause_all_queues();
+
+    let before_binding = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    let before_entries = core
+        .doc_host
+        .open(&task_id)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    assert!(!before_entries.is_empty());
+    core.doc_host
+        .open(&task_id)
+        .unwrap()
+        .doc()
+        .update_context_usage(Some(321), Some(1_000))
+        .unwrap();
+
+    let draft = composer_draft(&task_id, "draft stays local");
+    client
+        .call(
+            methods::SAVE_COMPOSER_DRAFT,
+            serde_json::json!({ "draft": draft }),
+        )
+        .await
+        .unwrap();
+    let queue = execute(
+        &client,
+        envelope(
+            "clear-context-queue",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "queueMessage",
+                "messageId": "clear-context-row",
+                "text": "queued content stays",
+                "attachments": ["/tmp/synthetic-attachment.txt"],
+                "holdForTurnEnd": true,
+                "execution": task_config("synthetic")
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(queue.status, CommandReceiptStatus::Applied);
+
+    let clear = envelope(
+        "clear-context",
+        &task_id,
+        Some(&snapshot(&client, &task_id).await),
+        serde_json::json!({ "kind": "clearContext" }),
+    );
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_context_boundary BEFORE INSERT ON task_command_events
+             WHEN NEW.command_id='clear-context'
+             BEGIN SELECT RAISE(ABORT, 'forced context boundary failure'); END;",
+        )
+        .unwrap();
+    }
+    assert!(
+        client
+            .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, clear.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        core.task_identity
+            .view(&task_id)
+            .unwrap()
+            .current_binding
+            .unwrap()
+            .binding_id,
+        before_binding.binding_id
+    );
+    assert!(
+        core.doc_host
+            .context_control(&task_id)
+            .unwrap()
+            .last_boundary
+            .is_none()
+    );
+    assert_eq!(
+        core.doc_host
+            .open(&task_id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .len(),
+        before_entries.len()
+    );
+    assert_eq!(
+        core.workspace
+            .chat(&task_id)
+            .unwrap()
+            .unwrap()
+            .harness_session_id
+            .as_deref(),
+        Some("synthetic-provider-session")
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_context_boundary")
+            .unwrap();
+    }
+    let applied = execute(&client, clear.clone()).await;
+    assert_eq!(applied.status, CommandReceiptStatus::Applied);
+    assert_eq!(execute(&client, clear).await, applied);
+
+    let after_binding = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(after_binding.generation, before_binding.generation + 1);
+    assert_eq!(after_binding.origin, BindingOrigin::ContextReset);
+    assert!(after_binding.provider_task_id.is_empty());
+    let chat = core.workspace.chat(&task_id).unwrap().unwrap();
+    assert_eq!(chat.config.unwrap().harness, HarnessId::Mock);
+    assert_eq!(chat.harness_session_id.as_deref(), Some(""));
+    let handle = core.doc_host.open(&task_id).unwrap();
+    assert!(handle.doc().context_usage().is_none());
+    let state = handle.doc().context_control();
+    assert_eq!(state.binding_generation, Some(after_binding.generation));
+    assert_eq!(
+        state.last_boundary.as_ref().map(|boundary| boundary.kind),
+        Some(zeron_proto::ContextBoundaryKind::Cleared)
+    );
+    let entries = handle.doc().read_entries().unwrap();
+    assert!(entries.len() > before_entries.len());
+    assert!(entries.iter().any(|entry| {
+        entry.role == MessageRole::System && entry.id == "context-boundary:clear-context"
+    }));
+    let row = core
+        .doc_host
+        .queued_message(&task_id, "clear-context-row")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.text, "queued content stays");
+    assert_eq!(row.attachments, vec!["/tmp/synthetic-attachment.txt"]);
+    assert_eq!(row.hold_reason, Some(QueueHoldReason::ContextChanged));
+    assert!(matches!(
+        row.delivery_gate,
+        Some(QueueDeliveryGate::ReviewRequired { .. })
+    ));
+    let draft_read: ComposerDraftRead = client
+        .call_as(
+            methods::GET_COMPOSER_DRAFT,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        draft_read.draft.as_ref().map(|draft| draft.text.as_str()),
+        Some("draft stays local")
+    );
+
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+    let reopened = assemble_context(
+        root.path(),
+        runs,
+        Arc::new(AtomicUsize::new(0)),
+        false,
+        false,
+    );
+    let reopened_binding = reopened
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(reopened_binding.binding_id, after_binding.binding_id);
+    assert!(reopened_binding.provider_task_id.is_empty());
+    assert_eq!(
+        reopened
+            .doc_host
+            .open(&task_id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .len(),
+        entries.len()
+    );
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provider_switch_creates_fresh_binding_and_holds_incompatible_queue() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble_context(
+        root.path(),
+        runs,
+        Arc::new(AtomicUsize::new(0)),
+        false,
+        false,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_configured_task(&client, &task_id, &core.device_id).await;
+    core.doc_host.open(&task_id).unwrap();
+    run_once(
+        &client,
+        &task_id,
+        "switch-provider-run",
+        "old provider history",
+    )
+    .await;
+    wait_for_no_live_run(&core, &task_id).await;
+    core.doc_host.pause_all_queues();
+    let before = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+
+    let queued = execute(
+        &client,
+        envelope(
+            "switch-provider-queue",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "queueMessage",
+                "messageId": "switch-provider-row",
+                "text": "review me before delivery",
+                "attachments": ["/tmp/retained.png"],
+                "holdForTurnEnd": true,
+                "execution": task_config("synthetic")
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(queued.status, CommandReceiptStatus::Applied);
+
+    let mut target = task_config("gpt-5.1-codex");
+    target.harness = HarnessId::Codex;
+    let requested_handoff = ContextHandoff {
+        kind: ContextHandoffKind::RecentVisibleHistory,
+        text: "invented hidden context must not cross the boundary".into(),
+        message_ids: vec!["switch-provider-run-message".into()],
+    };
+    let expected_handoff = ContextHandoff {
+        kind: ContextHandoffKind::RecentVisibleHistory,
+        text: "User: old provider history".into(),
+        message_ids: vec!["switch-provider-run-message".into()],
+    };
+    let switched = execute(
+        &client,
+        envelope(
+            "switch-provider",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "switchProvider",
+                "config": target,
+                "handoff": requested_handoff
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(switched.status, CommandReceiptStatus::Applied);
+
+    let after = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(after.generation, before.generation + 1);
+    assert_eq!(after.origin, BindingOrigin::ProviderSwitch);
+    assert_eq!(after.provider_id, HarnessId::Codex);
+    assert!(after.provider_task_id.is_empty());
+    let chat = core.workspace.chat(&task_id).unwrap().unwrap();
+    assert_eq!(chat.config.unwrap().harness, HarnessId::Codex);
+    assert_eq!(chat.harness_session_id.as_deref(), Some(""));
+    let state = core.doc_host.context_control(&task_id).unwrap();
+    assert_eq!(state.pending_handoff.as_ref(), Some(&expected_handoff));
+    assert_eq!(state.last_handoff.as_ref(), Some(&expected_handoff));
+    assert_eq!(
+        state.last_boundary.as_ref().map(|boundary| boundary.kind),
+        Some(zeron_proto::ContextBoundaryKind::ProviderSwitched)
+    );
+    let row = core
+        .doc_host
+        .queued_message(&task_id, "switch-provider-row")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.attachments, vec!["/tmp/retained.png"]);
+    assert_eq!(row.hold_reason, Some(QueueHoldReason::ContextChanged));
+    assert!(matches!(
+        row.delivery_gate,
+        Some(QueueDeliveryGate::ReviewRequired { .. })
+    ));
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compact_is_idempotent_and_restart_unknown_is_never_replayed() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let compactions = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble_context(root.path(), runs.clone(), compactions.clone(), false, false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_configured_task(&client, &task_id, &core.device_id).await;
+    run_once(&client, &task_id, "compact-run", "fill provider context").await;
+
+    let compact = envelope(
+        "compact-once",
+        &task_id,
+        Some(&snapshot(&client, &task_id).await),
+        serde_json::json!({ "kind": "compactContext" }),
+    );
+    let applied = execute(&client, compact.clone()).await;
+    assert_eq!(applied.status, CommandReceiptStatus::Applied);
+    assert_eq!(execute(&client, compact).await, applied);
+    assert_eq!(compactions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        core.doc_host
+            .context_control(&task_id)
+            .unwrap()
+            .compact
+            .status,
+        ContextOperationStatus::Completed
+    );
+
+    let binding_generation = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap()
+        .generation;
+    let mut interrupted = ContextControlState::default();
+    interrupted.binding_generation = Some(binding_generation);
+    interrupted.compact.operation_id = Some("interrupted-compact".into());
+    interrupted.compact.status = ContextOperationStatus::Running;
+    interrupted.compact.binding_generation = Some(binding_generation);
+    interrupted.compact.started_at_ms = Some(1);
+    core.doc_host
+        .persist_context_control(&task_id, "interrupted-compact", &interrupted)
+        .unwrap();
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let reopened = assemble_context(root.path(), runs, compactions.clone(), false, false);
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let restarted_state = reopened.doc_host.context_control(&task_id).unwrap();
+    assert_eq!(
+        restarted_state.compact.status,
+        ContextOperationStatus::Unknown
+    );
+    assert!(
+        restarted_state
+            .compact
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("will not replay")
+    );
+    let retry = envelope(
+        "compact-after-restart",
+        &task_id,
+        Some(&snapshot(&client, &task_id).await),
+        serde_json::json!({ "kind": "compactContext" }),
+    );
+    let rejected = execute(&client, retry.clone()).await;
+    assert_eq!(rejected.status, CommandReceiptStatus::Rejected);
+    assert_eq!(
+        rejected.reason.as_ref().map(|reason| reason.code),
+        Some(CommandReasonCode::ProviderAcceptanceUnknown)
+    );
+    assert_eq!(execute(&client, retry).await, rejected);
+    assert_eq!(compactions.load(Ordering::SeqCst), 1);
+    let state = reopened.doc_host.context_control(&task_id).unwrap();
+    assert_eq!(state.compact.status, ContextOperationStatus::Unknown);
+    assert!(state.compact.detail.unwrap().contains("will not replay"));
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn model_change_waits_for_safe_turn_and_keeps_binding_generation() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble_context(
+        root.path(),
+        runs,
+        Arc::new(AtomicUsize::new(0)),
+        true,
+        false,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_configured_task(&client, &task_id, &core.device_id).await;
+    let before_first_turn = execute(
+        &client,
+        envelope(
+            "model-change-before-first-turn",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "setModel",
+                "config": task_config("synthetic-prestart")
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(before_first_turn.status, CommandReceiptStatus::Applied);
+    assert!(
+        core.task_identity
+            .view(&task_id)
+            .unwrap()
+            .current_binding
+            .is_none()
+    );
+    assert_eq!(
+        core.workspace
+            .chat(&task_id)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap()
+            .model
+            .as_deref(),
+        Some("synthetic-prestart")
+    );
+    let run = execute(
+        &client,
+        envelope(
+            "model-change-run",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": request("hold the active turn"),
+                    "messageId": "model-change-run-message"
+                }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(run.status, CommandReceiptStatus::Pending);
+    let active = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = snapshot(&client, &task_id).await;
+            if current.snapshot.active_turn_id.is_some()
+                && current.snapshot.binding_generation.is_some()
+            {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let generation = active.snapshot.binding_generation.unwrap();
+    let conflict = execute(
+        &client,
+        envelope(
+            "model-change-active",
+            &task_id,
+            Some(&active),
+            serde_json::json!({
+                "kind": "setModel",
+                "config": task_config("synthetic-next")
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(conflict.status, CommandReceiptStatus::Conflict);
+    assert_eq!(
+        conflict.reason.unwrap().code,
+        CommandReasonCode::ActiveTurnConflict
+    );
+
+    let before_stop = snapshot(&client, &task_id).await;
+    let mut stop = envelope(
+        "model-change-stop",
+        &task_id,
+        Some(&before_stop),
+        serde_json::json!({ "kind": "session", "command": { "kind": "interrupt" } }),
+    );
+    stop["expectedTurnId"] = before_stop.snapshot.active_turn_id.unwrap().into();
+    execute(&client, stop).await;
+    wait_for_receipt(&client, "model-change-stop", CommandReceiptStatus::Applied).await;
+
+    let mut requested_model = task_config("synthetic-next");
+    requested_model.permission_mode = PermissionMode::Full;
+    requested_model.provider_account_id = Some("must-not-change-through-set-model".into());
+    let changed = execute(
+        &client,
+        envelope(
+            "model-change-safe",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "setModel",
+                "config": requested_model
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(changed.status, CommandReceiptStatus::Applied);
+    let after = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(after.generation, generation);
+    let config = core
+        .workspace
+        .chat(&task_id)
+        .unwrap()
+        .unwrap()
+        .config
+        .unwrap();
+    assert_eq!(config.model.as_deref(), Some("synthetic-next"));
+    assert_eq!(config.permission_mode, PermissionMode::Ask);
+    assert!(config.provider_account_id.is_none());
     core.shutdown().await;
 }

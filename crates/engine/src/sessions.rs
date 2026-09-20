@@ -788,12 +788,39 @@ impl SessionsEngine {
         mut message_id: Option<String>,
         recovery: Option<RecoveryAttemptContext>,
     ) -> Result<String, EngineError> {
-        let frozen_request = request.clone();
         // Provider selection and runtime routing/startup are one boundary: an
         // account mutation cannot race a warm steer or a fresh process spawn.
         let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
+        let context_control = self.doc_handle(chat_id)?.doc().context_control();
+        if context_control.compact.blocks_new_turn() {
+            return Err(EngineError::Other(
+                context_control
+                    .compact
+                    .detail
+                    .unwrap_or_else(|| {
+                        "Context compaction is unresolved. Clear context to create a fresh binding, or wait for provider readback."
+                            .into()
+                    }),
+            ));
+        }
+        if let Some(handoff) = context_control.pending_handoff.as_ref()
+            && !request
+                .prompt
+                .starts_with("[LUNA user-selected context handoff]\n")
+            && self
+                .inner
+                .task_identity
+                .get()
+                .is_some_and(|identity| identity.current_binding_pending(chat_id))
+        {
+            request.prompt = format!(
+                "[LUNA user-selected context handoff]\n{}\n[End handoff]\n\n{}",
+                handoff.text, request.prompt
+            );
+        }
+        let frozen_request = request.clone();
         if let Some(recovery) = recovery.as_ref() {
             let Some(claimed) = self.inner.recovery.latest(chat_id)? else {
                 return Err(EngineError::Other(
@@ -1133,6 +1160,40 @@ impl SessionsEngine {
             },
         ));
         Ok(run_id)
+    }
+
+    /// Run a verified harness-native compaction operation for non-Codex
+    /// adapters. Codex uses TaskIdentityService so its provider-home binding
+    /// is validated before the short-lived native client starts.
+    pub async fn compact_context(
+        &self,
+        harness_id: HarnessId,
+        session_id: String,
+        cwd: String,
+        model: Option<String>,
+    ) -> Result<(), EngineError> {
+        let harness = self.inner.registry.resolve(harness_id)?;
+        harness
+            .compact_context(zeron_harness::ContextCompactRequest {
+                session_id,
+                cwd,
+                model,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Install the explicit no-resume tombstone in the in-memory route after
+    /// an atomic clear/provider-switch boundary commits.
+    pub fn retire_context_binding(&self, chat_id: &str, cwd: &str) {
+        lock(&self.inner.harness_sessions).insert(
+            chat_id.to_string(),
+            HarnessSessionRef {
+                session_id: String::new(),
+                cwd: cwd.to_string(),
+            },
+        );
+        lock(&self.inner.last_requests).remove(chat_id);
     }
 
     /// Push a steer prompt into the live run's mailbox. `NotSteerable` when no live
@@ -3927,6 +3988,24 @@ async fn drive_run(
                         .get()
                         .and_then(|identity| identity.view(&chat_id))
                         .and_then(|view| view.current_binding);
+                    if let Ok(mut context) = host.context_control(&chat_id)
+                        && context.pending_handoff.is_some()
+                    {
+                        context.pending_handoff = None;
+                        context.binding_generation =
+                            binding.as_ref().map(|binding| binding.generation);
+                        context.notice = Some(
+                            "The user-selected handoff was accepted by the fresh provider binding."
+                                .into(),
+                        );
+                        if let Err(error) = host.persist_context_control(
+                            &chat_id,
+                            &format!("handoff-accepted:{session_id}"),
+                            &context,
+                        ) {
+                            tracing::warn!(chat = %chat_id, %error, "handoff acceptance persistence failed");
+                        }
+                    }
                     if let Err(error) = host.confirm_task_command_correlation(
                         &chat_id,
                         &resume_state.user_message_id,

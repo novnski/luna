@@ -658,6 +658,7 @@ pub struct AppState {
     /// chat's doc holds them (every device sees the same queue).
     pub queue: Vec<zeron_doc::QueuedMessage>,
     pub context_usage: Option<zeron_proto::ContextUsage>,
+    pub context_control: zeron_proto::ContextControlState,
     /// The selected chat's opening `WatchDocMessages` reset has landed. An
     /// empty transcript is otherwise indistinguishable from the pre-replay
     /// gap after selection, where optimistic echoes may already be visible.
@@ -755,6 +756,7 @@ impl AppState {
             transcript: Vec::new(),
             queue: Vec::new(),
             context_usage: None,
+            context_control: Default::default(),
             transcript_replayed: false,
             transcript_baselines: HashMap::new(),
             transcript_revision: 0,
@@ -897,6 +899,7 @@ impl AppState {
             self.selected_chat = None;
             self.transcript.clear();
             self.context_usage = None;
+            self.context_control = Default::default();
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
             self.transcript_task = None;
@@ -1210,6 +1213,10 @@ impl AppState {
         }
         if self.context_usage != update.context_usage {
             self.context_usage = update.context_usage;
+            cx.notify();
+        }
+        if self.context_control != update.context_control {
+            self.context_control = update.context_control;
             cx.notify();
         }
         Ok(())
@@ -1686,6 +1693,7 @@ impl AppState {
         self.transcript.clear();
         self.transcript_baselines.clear();
         self.context_usage = None;
+        self.context_control = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         self.echoes.clear();
@@ -1919,6 +1927,7 @@ impl AppState {
         self.auto_selected = true;
         self.transcript.clear();
         self.context_usage = None;
+        self.context_control = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         self.transcript_task = None;
