@@ -795,15 +795,46 @@ impl SessionsEngine {
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
         if let Some(recovery) = recovery.as_ref() {
-            let claimed = self.inner.recovery.latest(chat_id)?.is_some_and(|record| {
-                record.view.chain_id == recovery.chain_id
-                    && record.view.attempt_count == recovery.attempt_count
-                    && record.view.status == RecoveryStatus::Running
-            });
-            if !claimed {
+            let Some(claimed) = self.inner.recovery.latest(chat_id)? else {
                 return Err(EngineError::Other(
                     "recovery chain was cancelled or superseded before dispatch".into(),
                 ));
+            };
+            if claimed.view.chain_id != recovery.chain_id
+                || claimed.view.attempt_count != recovery.attempt_count
+                || claimed.view.status != RecoveryStatus::Running
+            {
+                return Err(EngineError::Other(
+                    "recovery chain was cancelled or superseded before dispatch".into(),
+                ));
+            }
+            if recovery.automatic {
+                let (status, detail) = if !self.automatic_retries_enabled() {
+                    (
+                        RecoveryStatus::Held,
+                        "Automatic retries were disabled before provider dispatch. Review and use Send now if recovery is still needed.",
+                    )
+                } else if now_ms() > claimed.view.automatic_deadline_ms {
+                    (
+                        RecoveryStatus::RecoveryNeeded,
+                        "The initial six-hour automatic recovery window expired before provider dispatch. Partial output and completed effects remain preserved.",
+                    )
+                } else {
+                    (RecoveryStatus::Running, "")
+                };
+                if status != RecoveryStatus::Running {
+                    let mut next = claimed.clone();
+                    next.view.status = status;
+                    next.view.automatic = false;
+                    next.view.retry_at_ms = None;
+                    next.view.detail = detail.into();
+                    next.view.updated_at_ms = now_ms();
+                    let change = self.inner.recovery.prepare_change(claimed, next);
+                    if self.inner.recovery.apply_change(&change)? {
+                        self.publish_committed_recovery(&change.next);
+                    }
+                    return Err(EngineError::Other(detail.into()));
+                }
             }
         } else {
             self.supersede_recovery(chat_id, "Superseded by newer user activity.")?;
@@ -1325,21 +1356,22 @@ impl SessionsEngine {
         detail: String,
         provider_session_id: Option<String>,
         attempt: Option<&RecoveryAttemptContext>,
-    ) -> Result<TaskRecovery, EngineError> {
+    ) -> Result<Option<TaskRecovery>, EngineError> {
         let now = now_ms();
-        let existing = attempt.and_then(|attempt| {
-            self.inner
-                .recovery
-                .latest(chat_id)
-                .ok()
-                .flatten()
-                .filter(|record| record.view.chain_id == attempt.chain_id)
-        });
-        if let Some(existing) = existing.as_ref()
-            && !existing.view.status.active()
-        {
-            return Ok(existing.view.clone());
-        }
+        let existing = if let Some(attempt) = attempt {
+            let Some(record) = self.inner.recovery.latest(chat_id)? else {
+                return Ok(None);
+            };
+            if record.view.chain_id != attempt.chain_id
+                || record.view.attempt_count != attempt.attempt_count
+                || record.view.status != RecoveryStatus::Running
+            {
+                return Ok(Some(record.view));
+            }
+            Some(record)
+        } else {
+            None
+        };
         let original_acceptance = existing
             .as_ref()
             .map(|record| record.original_acceptance)
@@ -1381,16 +1413,15 @@ impl SessionsEngine {
             .map(|record| record.view.attempt_count)
             .or_else(|| attempt.map(|attempt| attempt.attempt_count))
             .unwrap_or(0);
-        let receipt = existing
-            .is_none()
-            .then(|| {
-                self.inner.doc_host().and_then(|host| {
-                    host.task_command_receipt_for_correlation(chat_id, &message_id)
-                        .ok()
-                        .flatten()
-                })
-            })
-            .flatten();
+        let receipt = if existing.is_none() {
+            self.inner
+                .doc_host()
+                .map(|host| host.task_command_receipt_for_correlation(chat_id, &message_id))
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
         let binding = existing
             .as_ref()
             .map(|record| {
@@ -1444,7 +1475,7 @@ impl SessionsEngine {
             original_command_id: existing
                 .as_ref()
                 .and_then(|record| record.view.original_command_id.clone())
-                .or_else(|| receipt.map(|receipt| receipt.command_id)),
+                .or_else(|| receipt.as_ref().map(|receipt| receipt.command_id.clone())),
             original_acceptance,
             acceptance: effective_acceptance,
             failure,
@@ -1484,6 +1515,9 @@ impl SessionsEngine {
             attempt_started_at_ms: existing
                 .as_ref()
                 .and_then(|record| record.attempt_started_at_ms),
+            attempt_automatic: existing
+                .as_ref()
+                .is_some_and(|record| record.attempt_automatic),
             provider_session_id,
         };
         let record = if let Some(existing) = existing {
@@ -1495,8 +1529,7 @@ impl SessionsEngine {
                     .inner
                     .recovery
                     .latest(chat_id)?
-                    .map(|record| record.view)
-                    .unwrap_or(view));
+                    .map(|record| record.view));
             }
         } else {
             self.inner.recovery.put(record)?
@@ -1506,7 +1539,7 @@ impl SessionsEngine {
         if record.view.status == RecoveryStatus::Scheduled {
             self.arm_recovery(record);
         }
-        Ok(view)
+        Ok(Some(view))
     }
 
     fn arm_recovery(&self, record: RecoveryRecord) {
@@ -1519,46 +1552,91 @@ impl SessionsEngine {
         let engine = self.clone();
         let task_id = record.view.task_id.clone();
         let chain_id = record.view.chain_id.clone();
+        let attempt_count = record.view.attempt_count;
         let task_key = task_id.clone();
         let handle = tokio::spawn(async move {
             let wait_ms = retry_at_ms.saturating_sub(now_ms()).max(0) as u64;
             tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
             lock(&engine.inner.recovery_tasks).remove(&task_key);
-            if !engine.automatic_retries_enabled() {
-                if let Err(error) = engine.hold_recovery(
-                    &task_id,
-                    "Automatic retries were disabled in Settings. Review and use Send now if recovery is still needed.",
-                ) {
-                    tracing::warn!(task = %task_id, chain = %chain_id, %error, "automatic recovery disable failed");
-                }
-                return;
-            }
-            if let Err(error) = engine.execute_recovery(&task_id, &chain_id).await {
+            if let Err(error) = engine
+                .execute_automatic_recovery(&task_id, &chain_id, attempt_count, retry_at_ms)
+                .await
+            {
                 tracing::warn!(task = %task_id, chain = %chain_id, %error, "automatic recovery failed");
             }
         });
         lock(&self.inner.recovery_tasks).insert(record.view.task_id, handle);
     }
 
-    async fn execute_recovery(&self, task_id: &str, chain_id: &str) -> Result<(), EngineError> {
+    async fn execute_automatic_recovery(
+        &self,
+        task_id: &str,
+        chain_id: &str,
+        expected_attempt_count: u8,
+        expected_retry_at_ms: i64,
+    ) -> Result<(), EngineError> {
         let Some(host) = self.inner.doc_host() else {
             return Ok(());
         };
         let _lane = host.task_command_gate(task_id).await;
-        if !self.automatic_retries_enabled() {
-            return self.hold_recovery(
-                task_id,
-                "Automatic retries were disabled in Settings. Review and use Send now if recovery is still needed.",
-            );
-        }
-        let Some(change) = self.prepare_recovery_attempt(task_id, chain_id)? else {
+        let Some(current) = self.inner.recovery.latest(task_id)? else {
             return Ok(());
         };
+        if current.view.chain_id != chain_id
+            || current.view.attempt_count != expected_attempt_count
+            || current.view.status != RecoveryStatus::Scheduled
+            || !current.view.automatic
+            || current.view.retry_at_ms != Some(expected_retry_at_ms)
+        {
+            return Ok(());
+        }
+        let now = now_ms();
+        if now < expected_retry_at_ms {
+            self.arm_recovery(current);
+            return Ok(());
+        }
+        let mut next = current.clone();
+        let dispatch = if !self.automatic_retries_enabled() {
+            next.view.status = RecoveryStatus::Held;
+            next.view.automatic = false;
+            next.view.retry_at_ms = None;
+            next.view.detail = "Automatic retries were disabled in Settings. Review and use Send now if recovery is still needed.".into();
+            false
+        } else if now > current.view.automatic_deadline_ms {
+            next.view.status = RecoveryStatus::RecoveryNeeded;
+            next.view.automatic = false;
+            next.view.retry_at_ms = None;
+            next.view.detail = "The initial six-hour automatic recovery window expired before dispatch. Partial output and completed effects remain preserved.".into();
+            false
+        } else if current.view.attempt_count >= current.view.max_attempts
+            || current.view.attempt_count >= MAX_AUTO_RETRIES
+        {
+            next.view.status = RecoveryStatus::Exhausted;
+            next.view.automatic = false;
+            next.view.retry_at_ms = None;
+            next.view.detail =
+                "The four-attempt automatic retry limit was reached before dispatch.".into();
+            false
+        } else {
+            next.view.status = RecoveryStatus::Running;
+            next.view.automatic = false;
+            next.view.retry_at_ms = None;
+            next.view.attempt_count = next.view.attempt_count.saturating_add(1);
+            next.attempt_acceptance = None;
+            next.attempt_started_at_ms = Some(now);
+            next.attempt_automatic = true;
+            true
+        };
+        next.view.updated_at_ms = now;
+        let change = self.inner.recovery.prepare_change(current, next);
         if !self.inner.recovery.apply_change(&change)? {
             return Ok(());
         }
         self.publish_committed_recovery(&change.next);
-        self.execute_claimed_recovery(change.next).await
+        if dispatch {
+            self.execute_claimed_recovery(change.next).await?;
+        }
+        Ok(())
     }
 
     pub(crate) fn prepare_recovery_attempt(
@@ -1595,6 +1673,7 @@ impl SessionsEngine {
         next.view.updated_at_ms = now_ms();
         next.attempt_acceptance = None;
         next.attempt_started_at_ms = Some(next.view.updated_at_ms);
+        next.attempt_automatic = false;
         Ok(Some(self.inner.recovery.prepare_change(current, next)))
     }
 
@@ -1688,6 +1767,7 @@ impl SessionsEngine {
         let context = RecoveryAttemptContext {
             chain_id: record.view.chain_id.clone(),
             attempt_count: record.view.attempt_count,
+            automatic: record.attempt_automatic,
         };
         if let Err(error) = self
             .dispatch_with_context(
@@ -1700,7 +1780,9 @@ impl SessionsEngine {
             .await
         {
             let still_current = self.inner.recovery.latest(task_id)?.is_some_and(|latest| {
-                latest.view.chain_id == context.chain_id && latest.view.status.active()
+                latest.view.chain_id == context.chain_id
+                    && latest.view.attempt_count == context.attempt_count
+                    && latest.view.status == RecoveryStatus::Running
             });
             if !still_current {
                 return Ok(());
@@ -1821,19 +1903,23 @@ impl SessionsEngine {
         let Some(attempt) = attempt else {
             return Ok(());
         };
-        if let Some(record) = self
-            .inner
-            .recovery
-            .update(task_id, &attempt.chain_id, |record| {
-                if record.view.status.active() {
-                    record.view.acceptance = RecoveryAcceptance::Accepted;
-                    record.attempt_acceptance = Some(RecoveryAcceptance::Accepted);
-                    record.provider_session_id = Some(session_id.into());
-                    record.view.updated_at_ms = now_ms();
-                }
-            })?
+        let Some(current) = self.inner.recovery.latest(task_id)? else {
+            return Ok(());
+        };
+        if current.view.chain_id != attempt.chain_id
+            || current.view.attempt_count != attempt.attempt_count
+            || current.view.status != RecoveryStatus::Running
         {
-            self.inner.publish_recovery(task_id, Some(record.view));
+            return Ok(());
+        }
+        let mut next = current.clone();
+        next.view.acceptance = RecoveryAcceptance::Accepted;
+        next.attempt_acceptance = Some(RecoveryAcceptance::Accepted);
+        next.provider_session_id = Some(session_id.into());
+        next.view.updated_at_ms = now_ms();
+        let change = self.inner.recovery.prepare_change(current, next.clone());
+        if self.inner.recovery.apply_change(&change)? {
+            self.inner.publish_recovery(task_id, Some(next.view));
         }
         Ok(())
     }
@@ -1846,16 +1932,24 @@ impl SessionsEngine {
         let Some(attempt) = attempt else {
             return Ok(());
         };
-        if let Some(record) = self.inner.recovery.update(task_id, &attempt.chain_id, |record| {
-            if record.view.status == RecoveryStatus::Running {
-                record.view.status = RecoveryStatus::Completed;
-                record.view.automatic = false;
-                record.view.retry_at_ms = None;
-                record.view.detail = "Recovery completed on the preserved request/session without replaying completed effects.".into();
-                record.view.updated_at_ms = now_ms();
-            }
-        })? {
-            self.inner.publish_recovery(task_id, Some(record.view));
+        let Some(current) = self.inner.recovery.latest(task_id)? else {
+            return Ok(());
+        };
+        if current.view.chain_id != attempt.chain_id
+            || current.view.attempt_count != attempt.attempt_count
+            || current.view.status != RecoveryStatus::Running
+        {
+            return Ok(());
+        }
+        let mut next = current.clone();
+        next.view.status = RecoveryStatus::Completed;
+        next.view.automatic = false;
+        next.view.retry_at_ms = None;
+        next.view.detail = "Recovery completed on the preserved request/session without replaying completed effects.".into();
+        next.view.updated_at_ms = now_ms();
+        let change = self.inner.recovery.prepare_change(current, next.clone());
+        if self.inner.recovery.apply_change(&change)? {
+            self.inner.publish_recovery(task_id, Some(next.view));
         }
         Ok(())
     }
@@ -1893,18 +1987,7 @@ impl SessionsEngine {
                 self.inner
                     .remember_harness_session(&chat_id, session_id, &cwd);
             }
-            let message = handle.doc().read_entries().ok().and_then(|entries| {
-                entries
-                    .iter()
-                    .rev()
-                    .find(|e| e.role == MessageRole::User)
-                    .and_then(|e| {
-                        e.parts.iter().find_map(|p| match p {
-                            MessagePart::Text { text, .. } => Some((e.id.clone(), text.clone())),
-                            _ => None,
-                        })
-                    })
-            });
+            let message_id = latest_user_message_id(&handle)?;
             let note = "Run interrupted by engine restart — reconciling delivery";
             let done = AgentEvent::Done {
                 status: DoneStatus::Interrupted,
@@ -1918,11 +2001,14 @@ impl SessionsEngine {
             tracing::info!(chat = %chat_id, stamped, "reconciled stale session journal");
             recovered += 1;
 
-            if let Some(record) = self.inner.recovery.latest(&chat_id)? {
+            if let Some(record) = self.inner.recovery.latest(&chat_id)?
+                && message_id.as_deref() == Some(record.view.original_message_id.as_str())
+            {
                 if record.view.status == RecoveryStatus::Running {
                     let attempt = RecoveryAttemptContext {
                         chain_id: record.view.chain_id.clone(),
                         attempt_count: record.view.attempt_count,
+                        automatic: record.attempt_automatic,
                     };
                     let acceptance = if accepted_session.is_some() {
                         RecoveryAcceptance::Accepted
@@ -1945,29 +2031,20 @@ impl SessionsEngine {
                     )?;
                     reconciled_running.insert(chat_id.clone());
                 }
-                // Any other durable chain already owns recovery for this task.
+                // This exact original already has durable recovery ownership.
                 continue;
             }
 
-            let Some((message_id, _)) = message else {
+            let Some(message_id) = message_id else {
                 continue;
             };
-            let commands = handle.doc().read_commands().unwrap_or_default();
-            let frozen = commands
-                .iter()
-                .rev()
-                .find_map(|command| match &command.payload {
-                    SessionCommandPayload::Run {
-                        request,
-                        message_id: candidate,
-                    } if candidate == &message_id => Some((command.id.clone(), request.clone())),
-                    _ => None,
-                });
-            let receipt = self.inner.doc_host().and_then(|host| {
-                host.task_command_receipt_for_correlation(&chat_id, &message_id)
-                    .ok()
-                    .flatten()
-            });
+            let frozen = frozen_run_for_message(&handle, &message_id)?;
+            let receipt = self
+                .inner
+                .doc_host()
+                .map(|host| host.task_command_receipt_for_correlation(&chat_id, &message_id))
+                .transpose()?
+                .flatten();
             let acceptance = if accepted_session.is_some() {
                 RecoveryAcceptance::Accepted
             } else if receipt
@@ -1978,7 +2055,7 @@ impl SessionsEngine {
             } else {
                 RecoveryAcceptance::Unknown
             };
-            let Some((_, request)) = frozen else {
+            let Some(request) = frozen else {
                 tracing::warn!(chat = %chat_id, "recovery has no exact frozen Run command; refusing reconstruction");
                 continue;
             };
@@ -2009,6 +2086,106 @@ impl SessionsEngine {
                 None,
             )?;
         }
+        // A provider can durably append terminal Done and the process can die
+        // before the recovery row is written. Such a journal is not "stale",
+        // so inspect the latest local terminal segment and create recovery only
+        // when no row owns that exact original message. An older terminal row
+        // for the same task must never mask a newer failed Run command.
+        if let Some(workspace) = self.inner.workspace() {
+            for chat in workspace.read_chats()? {
+                if chat.device_id != self.inner.device_id
+                    || lock(&self.inner.runs).contains_key(&chat.id)
+                {
+                    continue;
+                }
+                let replay = self.inner.journal.replay(&chat.id, 0)?;
+                let Some(done_index) = replay
+                    .iter()
+                    .rposition(|(_, event)| matches!(event, AgentEvent::Done { .. }))
+                else {
+                    continue;
+                };
+                let AgentEvent::Done { status, error, .. } = &replay[done_index].1 else {
+                    continue;
+                };
+                if *status == DoneStatus::Completed {
+                    continue;
+                }
+                let handle = self.doc_handle(&chat.id)?;
+                let Some(message_id) = latest_user_message_id(&handle)? else {
+                    continue;
+                };
+                if self
+                    .inner
+                    .recovery
+                    .latest(&chat.id)?
+                    .is_some_and(|record| record.view.original_message_id == message_id)
+                {
+                    continue;
+                }
+                let Some(request) = frozen_run_for_message(&handle, &message_id)? else {
+                    tracing::warn!(chat = %chat.id, message = %message_id,
+                        "terminal recovery has no exact frozen Run command; refusing reconstruction");
+                    continue;
+                };
+                let previous_done = replay[..done_index]
+                    .iter()
+                    .rposition(|(_, event)| matches!(event, AgentEvent::Done { .. }));
+                let accepted_session = replay
+                    .iter()
+                    .take(done_index)
+                    .skip(previous_done.map_or(0, |index| index + 1))
+                    .filter_map(|(_, event)| match event {
+                        AgentEvent::SessionStarted {
+                            harness,
+                            session_id,
+                            ..
+                        } => Some((*harness, session_id.clone())),
+                        _ => None,
+                    })
+                    .next_back();
+                let Some(host) = self.inner.doc_host() else {
+                    continue;
+                };
+                let receipt = host.task_command_receipt_for_correlation(&chat.id, &message_id)?;
+                let acceptance = match receipt.as_ref().map(|receipt| receipt.status) {
+                    Some(CommandReceiptStatus::Applied) => RecoveryAcceptance::Accepted,
+                    Some(CommandReceiptStatus::Rejected) => {
+                        RecoveryAcceptance::RejectedBeforeAcceptance
+                    }
+                    _ => RecoveryAcceptance::Unknown,
+                };
+                let failure_detail = error
+                    .clone()
+                    .unwrap_or_else(|| "provider turn ended before recovery persisted".into());
+                let failure = if *status == DoneStatus::Interrupted {
+                    RecoveryFailure::Interrupted
+                } else {
+                    classify_failure(&failure_detail)
+                };
+                let harness = if acceptance == RecoveryAcceptance::Accepted {
+                    accepted_session
+                        .as_ref()
+                        .map(|(harness, _)| *harness)
+                        .unwrap_or_else(|| host.harness_for_request(&chat.id, &request))
+                } else {
+                    host.harness_for_request(&chat.id, &request)
+                };
+                self.record_recovery_failure(
+                    &chat.id,
+                    harness,
+                    request,
+                    message_id,
+                    acceptance,
+                    failure,
+                    failure_detail,
+                    (acceptance == RecoveryAcceptance::Accepted)
+                        .then(|| accepted_session.map(|(_, session_id)| session_id))
+                        .flatten(),
+                    None,
+                )?;
+            }
+        }
         // A recovery claim is durable before provider dispatch. If the process
         // dies in that earliest window, the journal is already terminal from
         // the prior attempt and therefore is not returned by stale_sessions.
@@ -2035,6 +2212,7 @@ impl SessionsEngine {
             let attempt = RecoveryAttemptContext {
                 chain_id: record.view.chain_id.clone(),
                 attempt_count: record.view.attempt_count,
+                automatic: record.attempt_automatic,
             };
             self.record_recovery_failure(
                 &record.view.task_id,
@@ -2788,6 +2966,35 @@ struct RunResumeState {
 struct RecoveryAttemptContext {
     chain_id: String,
     attempt_count: u8,
+    automatic: bool,
+}
+
+fn latest_user_message_id(handle: &ChatDocHandle) -> Result<Option<String>, EngineError> {
+    Ok(handle
+        .doc()
+        .read_entries()?
+        .into_iter()
+        .rev()
+        .find(|entry| entry.role == MessageRole::User)
+        .map(|entry| entry.id))
+}
+
+fn frozen_run_for_message(
+    handle: &ChatDocHandle,
+    message_id: &str,
+) -> Result<Option<RunRequest>, EngineError> {
+    Ok(handle
+        .doc()
+        .read_commands()?
+        .into_iter()
+        .rev()
+        .find_map(|command| match command.payload {
+            SessionCommandPayload::Run {
+                request,
+                message_id: candidate,
+            } if candidate == message_id => Some(request),
+            _ => None,
+        }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4008,7 +4215,10 @@ mod tests {
     };
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
-    use zeron_proto::{HarnessId, RunRequest, SandboxLevel, Session, SessionStatus};
+    use zeron_proto::{
+        HarnessId, RecoveryAcceptance, RecoveryAction, RecoveryFailure, RecoveryStatus, RunRequest,
+        SandboxLevel, Session, SessionStatus, TaskRecovery,
+    };
     use zeron_sync::DocsStore;
 
     #[test]
@@ -4183,6 +4393,98 @@ mod tests {
             attachments: Vec::new(),
             worktree: None,
         }
+    }
+
+    #[test]
+    fn stale_attempt_results_cannot_mutate_a_newer_chain_or_attempt() {
+        use super::{RecoveryAttemptContext, RecoveryRecord};
+
+        let root = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "device-test".into(),
+            Arc::new(crate::run_journal::RunJournal::open(root.path()).unwrap()),
+            Arc::new(crate::registry::HarnessRegistry::new()),
+            Arc::new(DocsStore::open(root.path().join("store")).unwrap()),
+        );
+        let mut frozen = request();
+        frozen.prompt = "newer frozen request".into();
+        frozen.attachments = vec!["/tmp/newer.png".into()];
+        let current = RecoveryRecord {
+            view: TaskRecovery {
+                chain_id: "new-chain".into(),
+                task_id: "chat".into(),
+                original_message_id: "new-message".into(),
+                original_command_id: Some("new-command".into()),
+                original_acceptance: RecoveryAcceptance::RejectedBeforeAcceptance,
+                acceptance: RecoveryAcceptance::RejectedBeforeAcceptance,
+                failure: RecoveryFailure::Overloaded,
+                action: RecoveryAction::ResendOriginal,
+                status: RecoveryStatus::Running,
+                attempt_count: 2,
+                max_attempts: 4,
+                automatic: false,
+                retry_at_ms: None,
+                automatic_deadline_ms: i64::MAX,
+                environment_id: "device-test".into(),
+                binding_id: None,
+                binding_generation: None,
+                detail: "current".into(),
+                created_at_ms: 1,
+                updated_at_ms: 2,
+            },
+            harness: HarnessId::Mock,
+            request: frozen.clone(),
+            original_acceptance: RecoveryAcceptance::RejectedBeforeAcceptance,
+            attempt_acceptance: None,
+            attempt_started_at_ms: Some(2),
+            attempt_automatic: false,
+            provider_session_id: None,
+        };
+        sessions.inner.recovery.put(current).unwrap();
+
+        for stale in [
+            RecoveryAttemptContext {
+                chain_id: "old-chain".into(),
+                attempt_count: 1,
+                automatic: false,
+            },
+            RecoveryAttemptContext {
+                chain_id: "new-chain".into(),
+                attempt_count: 1,
+                automatic: false,
+            },
+        ] {
+            sessions
+                .record_recovery_failure(
+                    "chat",
+                    HarnessId::Mock,
+                    request(),
+                    "old-message".into(),
+                    RecoveryAcceptance::Accepted,
+                    RecoveryFailure::Interrupted,
+                    "stale result".into(),
+                    Some("stale-session".into()),
+                    Some(&stale),
+                )
+                .unwrap();
+            sessions
+                .mark_recovery_accepted("chat", Some(&stale), "stale-session")
+                .unwrap();
+            sessions.complete_recovery("chat", Some(&stale)).unwrap();
+        }
+
+        let stored = sessions.inner.recovery.latest("chat").unwrap().unwrap();
+        assert_eq!(stored.view.chain_id, "new-chain");
+        assert_eq!(stored.view.attempt_count, 2);
+        assert_eq!(stored.view.status, RecoveryStatus::Running);
+        assert_eq!(
+            stored.view.acceptance,
+            RecoveryAcceptance::RejectedBeforeAcceptance
+        );
+        assert_eq!(stored.request.prompt, "newer frozen request");
+        assert_eq!(stored.request.attachments, vec!["/tmp/newer.png"]);
+        assert!(stored.attempt_acceptance.is_none());
+        assert!(stored.provider_session_id.is_none());
     }
 
     #[test]

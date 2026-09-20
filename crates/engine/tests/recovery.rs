@@ -8,7 +8,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use zeron_doc::{MessagePart, MessageRole};
+use zeron_doc::{
+    MessagePart, MessageRole, SessionCommandEntry, SessionCommandPayload, SessionCommandStatus,
+};
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, RunJournal};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
@@ -408,6 +410,104 @@ fn changed_config() -> ChatConfig {
     }
 }
 
+fn mutate_recovery_record(
+    root: &std::path::Path,
+    mutate: impl FnOnce(&mut serde_json::Value, &mut zeron_sync::StoredTaskRecovery),
+) {
+    let store = DocsStore::open(store_root(root)).unwrap();
+    let current = store.task_recovery(TASK).unwrap().unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&current.record_json).unwrap();
+    let mut next = current.clone();
+    mutate(&mut value, &mut next);
+    next.record_json = serde_json::to_vec(&value).unwrap();
+    assert!(
+        store
+            .transition_task_recovery(&TaskRecoveryTransition {
+                expected: Some(TaskRecoveryExpectation {
+                    chain_id: current.chain_id,
+                    attempt_count: current.attempt_count,
+                    status: current.status,
+                }),
+                next,
+            })
+            .unwrap()
+    );
+}
+
+fn persist_synthetic_run(
+    core: &EngineCore,
+    command_id: &str,
+    message_id: &str,
+    request: RunRequest,
+) {
+    let handle = core.doc_host.open(TASK).unwrap();
+    handle
+        .write_user_message(message_id, &request.prompt, now_ms())
+        .unwrap();
+    handle
+        .doc()
+        .queue_command(&SessionCommandEntry {
+            id: command_id.into(),
+            payload: SessionCommandPayload::Run {
+                request,
+                message_id: message_id.into(),
+            },
+            issued_by: core.device_id.clone(),
+            issued_at: now_ms(),
+            based_on: None,
+            expires_at: None,
+            status: SessionCommandStatus::Applied,
+            resolution: None,
+        })
+        .unwrap();
+    core.doc_host.flush_all();
+}
+
+fn persist_pending_receipt(core: &EngineCore, command_id: &str, message_id: &str) {
+    let now = now_ms();
+    let snapshot = core.doc_host.task_command_snapshot(TASK).unwrap().snapshot;
+    core.doc_host
+        .begin_task_command(
+            CommandReceipt {
+                command_id: command_id.into(),
+                task_id: TASK.into(),
+                intent: "run".into(),
+                payload_hash: format!("synthetic-{command_id}"),
+                status: CommandReceiptStatus::Pending,
+                snapshot,
+                event_sequence: None,
+                actor_id: "l10-test".into(),
+                client_id: "l10-test".into(),
+                client_session_id: "isolated".into(),
+                execution_environment: Some(core.device_id.clone()),
+                correlation_id: None,
+                reason: None,
+                recovery_action: None,
+                accepted_at_ms: now,
+                committed_at_ms: None,
+                observed_at_ms: now,
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    core.doc_host
+        .set_task_command_correlation(command_id, message_id)
+        .unwrap();
+}
+
+fn persist_accepted_receipt(core: &EngineCore, command_id: &str, message_id: &str) {
+    persist_pending_receipt(core, command_id, message_id);
+    assert_eq!(
+        core.doc_host
+            .confirm_task_command_correlation(TASK, message_id, "terminal-window-turn", None, None,)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 #[tokio::test]
 async fn confirmed_rejection_resends_the_frozen_request_once() {
     let root = tempfile::tempdir().unwrap();
@@ -686,6 +786,227 @@ async fn cancellation_and_chain_identity_survive_restart_without_replay() {
         1,
         "restart must not replay a cancelled chain"
     );
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn terminal_old_chain_does_not_mask_a_newer_interrupted_original_on_restart() {
+    for accepted in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let old_attachment = root.path().join("old.png");
+        let new_attachment = root.path().join("new.png");
+        std::fs::write(&old_attachment, b"old").unwrap();
+        std::fs::write(&new_attachment, b"new").unwrap();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let core = assemble(
+            root.path(),
+            FirstOutcome::RejectedOverload,
+            runs.clone(),
+            requests.clone(),
+        );
+        let client = zeron_rpc::memory_client(core.rpc_service());
+        send_original(&client, request(old_attachment.to_str().unwrap())).await;
+        let old = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+        command(
+            &client,
+            "l10-cancel-old-original",
+            serde_json::json!({"kind":"cancelRecovery","chainId":old.chain_id.clone()}),
+        )
+        .await;
+        let old = wait_for_recovery(&core, RecoveryStatus::Cancelled).await;
+
+        let mut newer = request(new_attachment.to_str().unwrap());
+        newer.prompt = if accepted {
+            "newer accepted interrupted original".into()
+        } else {
+            "newer unknown interrupted original".into()
+        };
+        newer
+            .model_options
+            .insert("fixtureChoice".into(), "newer".into());
+        let message_id = if accepted {
+            "l10-newer-accepted-message"
+        } else {
+            "l10-newer-unknown-message"
+        };
+        let command_id = if accepted {
+            "l10-newer-accepted-command"
+        } else {
+            "l10-newer-unknown-command"
+        };
+        persist_synthetic_run(&core, command_id, message_id, newer.clone());
+        if accepted {
+            persist_accepted_receipt(&core, command_id, message_id);
+        } else {
+            persist_pending_receipt(&core, command_id, message_id);
+        }
+        let journal = RunJournal::open(store_root(root.path()).join("journals")).unwrap();
+        if accepted {
+            journal
+                .append(
+                    TASK,
+                    &AgentEvent::SessionStarted {
+                        harness: HarnessId::Mock,
+                        model: "mock-1".into(),
+                        tools: Vec::new(),
+                        cwd: "/tmp".into(),
+                        session_id: "newer-provider-session".into(),
+                        assistant_message_id: "newer-assistant".into(),
+                    },
+                )
+                .unwrap();
+        } else {
+            journal
+                .append(
+                    TASK,
+                    &AgentEvent::TextDelta {
+                        text: "delivery boundary unknown".into(),
+                    },
+                )
+                .unwrap();
+        }
+        std::fs::write(
+            root.path().join("data/ui-settings.json"),
+            br#"{"automaticRetriesEnabled":false}"#,
+        )
+        .unwrap();
+        core.shutdown().await;
+        drop(client);
+        drop(core);
+
+        let reopened = assemble(
+            root.path(),
+            FirstOutcome::RejectedOverload,
+            runs.clone(),
+            requests,
+        );
+        let recovered = wait_for_recovery(
+            &reopened,
+            if accepted {
+                RecoveryStatus::RecoveryNeeded
+            } else {
+                RecoveryStatus::CheckingDelivery
+            },
+        )
+        .await;
+        assert_ne!(recovered.chain_id, old.chain_id);
+        assert_eq!(recovered.original_message_id, message_id);
+        assert_eq!(recovered.original_command_id.as_deref(), Some(command_id));
+        assert_eq!(
+            recovered.original_acceptance,
+            if accepted {
+                RecoveryAcceptance::Accepted
+            } else {
+                RecoveryAcceptance::Unknown
+            }
+        );
+        assert_eq!(recovered.attempt_count, 0);
+        let stored = DocsStore::open(store_root(root.path()))
+            .unwrap()
+            .task_recovery(TASK)
+            .unwrap()
+            .unwrap();
+        let private: serde_json::Value = serde_json::from_slice(&stored.record_json).unwrap();
+        assert_eq!(private["request"]["prompt"], newer.prompt);
+        assert_eq!(
+            private["request"]["attachments"][0],
+            new_attachment.to_str().unwrap()
+        );
+        assert_eq!(private["request"]["modelOptions"]["fixtureChoice"], "newer");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "restart must not replay either original"
+        );
+        reopened.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn terminal_journal_failure_without_a_recovery_row_is_visible_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("terminal-window.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let mut frozen = request(attachment.to_str().unwrap());
+    frozen.prompt = "terminal journal before recovery row".into();
+    frozen
+        .model_options
+        .insert("terminalWindow".into(), true.into());
+    persist_synthetic_run(
+        &core,
+        "l10-terminal-window-command",
+        "l10-terminal-window-message",
+        frozen.clone(),
+    );
+    persist_accepted_receipt(
+        &core,
+        "l10-terminal-window-command",
+        "l10-terminal-window-message",
+    );
+    let journal = RunJournal::open(store_root(root.path()).join("journals")).unwrap();
+    journal
+        .append(
+            TASK,
+            &AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: Vec::new(),
+                cwd: "/tmp".into(),
+                session_id: "terminal-window-session".into(),
+                assistant_message_id: "terminal-window-assistant".into(),
+            },
+        )
+        .unwrap();
+    journal
+        .append(
+            TASK,
+            &AgentEvent::Done {
+                status: DoneStatus::Errored,
+                result: None,
+                error: Some("synthetic provider overloaded".into()),
+                session_id: Some("terminal-window-session".into()),
+            },
+        )
+        .unwrap();
+    std::fs::write(
+        root.path().join("data/ui-settings.json"),
+        br#"{"automaticRetriesEnabled":false}"#,
+    )
+    .unwrap();
+    core.shutdown().await;
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests,
+    );
+    let recovered = wait_for_recovery(&reopened, RecoveryStatus::RecoveryNeeded).await;
+    assert_eq!(recovered.original_message_id, "l10-terminal-window-message");
+    assert_eq!(recovered.original_acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(recovered.action, RecoveryAction::ContinueSession);
+    let stored = DocsStore::open(store_root(root.path()))
+        .unwrap()
+        .task_recovery(TASK)
+        .unwrap()
+        .unwrap();
+    let private: serde_json::Value = serde_json::from_slice(&stored.record_json).unwrap();
+    assert_eq!(private["request"]["prompt"], frozen.prompt);
+    assert_eq!(
+        private["request"]["attachments"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
     reopened.shutdown().await;
 }
 
@@ -1127,6 +1448,93 @@ async fn permission_grant_supersedes_a_pending_timer_before_dispatch() {
     assert_eq!(config.permission_mode, PermissionMode::Full);
     assert_eq!(config.effective_permission_mode, PermissionMode::Full);
     reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn overdue_in_process_timer_expires_without_dispatching() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("overdue.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    assert_eq!(scheduled.attempt_count, 0);
+    mutate_recovery_record(root.path(), |value, next| {
+        let updated = now_ms();
+        value["view"]["automaticDeadlineMs"] = (updated - 1).into();
+        value["view"]["updatedAtMs"] = updated.into();
+        next.updated_at = updated;
+    });
+
+    let wait_ms = scheduled
+        .retry_at_ms
+        .unwrap()
+        .saturating_sub(now_ms())
+        .max(0) as u64
+        + 500;
+    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+    let expired = core
+        .sessions
+        .session_status(TASK)
+        .and_then(|session| session.recovery)
+        .unwrap();
+    assert_eq!(expired.status, RecoveryStatus::RecoveryNeeded);
+    assert_eq!(expired.chain_id, scheduled.chain_id);
+    assert_eq!(expired.attempt_count, 0);
+    assert!(!expired.automatic);
+    assert!(expired.retry_at_ms.is_none());
+    assert!(expired.detail.contains("expired before dispatch"));
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn stale_timer_snapshot_cannot_claim_a_rescheduled_attempt() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("stale-timer.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let old_retry_at = scheduled.retry_at_ms.unwrap();
+    mutate_recovery_record(root.path(), |value, next| {
+        let updated = now_ms();
+        let replacement_retry = updated + 60_000;
+        value["view"]["attemptCount"] = 1.into();
+        value["view"]["retryAtMs"] = replacement_retry.into();
+        value["view"]["updatedAtMs"] = updated.into();
+        next.attempt_count = 1;
+        next.updated_at = updated;
+    });
+
+    let wait_ms = old_retry_at.saturating_sub(now_ms()).max(0) as u64 + 250;
+    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+    let stored = DocsStore::open(store_root(root.path()))
+        .unwrap()
+        .task_recovery(TASK)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.chain_id, scheduled.chain_id);
+    assert_eq!(stored.attempt_count, 1);
+    assert_eq!(stored.status, "scheduled");
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    core.shutdown().await;
 }
 
 #[tokio::test]

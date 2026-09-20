@@ -30,6 +30,8 @@ pub(crate) struct RecoveryRecord {
     pub attempt_acceptance: Option<RecoveryAcceptance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_started_at_ms: Option<i64>,
+    #[serde(default)]
+    pub attempt_automatic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
 }
@@ -231,7 +233,11 @@ fn schedule_at(
         };
     }
     let deadline = created_at_ms.saturating_add(MAX_AUTO_WAIT_MS);
-    if retry_at_ms > deadline || retry_at_ms.saturating_sub(now_ms) > MAX_AUTO_WAIT_MS {
+    let retry_at_ms = retry_at_ms.max(now_ms);
+    if now_ms > deadline
+        || retry_at_ms > deadline
+        || retry_at_ms.saturating_sub(now_ms) > MAX_AUTO_WAIT_MS
+    {
         return RecoveryDecision {
             action,
             status: RecoveryStatus::RecoveryNeeded,
@@ -246,7 +252,7 @@ fn schedule_at(
         action,
         status: RecoveryStatus::Scheduled,
         automatic: true,
-        retry_at_ms: Some(retry_at_ms.max(now_ms)),
+        retry_at_ms: Some(retry_at_ms),
         detail: format!("{label}. A bounded retry is scheduled and can be sent now or cancelled."),
     }
 }
@@ -521,6 +527,23 @@ mod tests {
             0,
         );
         assert_eq!(too_late.status, RecoveryStatus::RecoveryNeeded);
+        let past_reset_after_expired_window = recovery_decision(
+            RecoveryAcceptance::RejectedBeforeAcceptance,
+            &RecoveryFailure::SubscriptionWindow {
+                reset_at_ms: Some(now - 60_000),
+            },
+            now,
+            now - MAX_AUTO_WAIT_MS - 1,
+            0,
+            true,
+            true,
+            0,
+        );
+        assert_eq!(
+            past_reset_after_expired_window.status,
+            RecoveryStatus::RecoveryNeeded,
+            "clamping a past reset to now must not reopen an expired initial window"
+        );
 
         let disabled = recovery_decision(
             RecoveryAcceptance::RejectedBeforeAcceptance,
