@@ -4010,6 +4010,14 @@ fn slash_error_message(err: &RpcError) -> SharedString {
     }
 }
 
+struct PendingDraftOwnerStage {
+    origin_key: String,
+    target_key: String,
+    engine_generation: u64,
+    previous_text: Option<String>,
+    target_seen: bool,
+}
+
 pub struct Composer {
     pub(crate) state: Entity<AppState>,
     pub(crate) input: Entity<ComposerInput>,
@@ -4049,6 +4057,7 @@ pub struct Composer {
     draft_comment_fingerprints: HashMap<String, u64>,
     recoverable_submissions: HashMap<String, Vec<DraftSubmission>>,
     draft_merge_on_load: HashSet<String>,
+    pending_draft_owner_stage: Option<PendingDraftOwnerStage>,
     draft_engine_generation: Option<u64>,
     appshot_entrances: HashMap<String, Instant>,
     /// The staged attachment being viewed full-size (click a thumbnail).
@@ -4369,6 +4378,7 @@ impl Composer {
             draft_comment_fingerprints: HashMap::new(),
             recoverable_submissions: HashMap::new(),
             draft_merge_on_load: HashSet::new(),
+            pending_draft_owner_stage: None,
             draft_engine_generation: None,
             appshot_entrances: HashMap::new(),
             preview: None,
@@ -4508,6 +4518,119 @@ impl Composer {
     ) {
         self.suppress_next_draft_edit = true;
         self.input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+
+    /// Stage an explicit context handoff for the blank-canvas draft without
+    /// writing through the still-current source composer. The target owner is
+    /// allowed to display and persist the text only after navigation makes it
+    /// current and its durable draft has been loaded/merged.
+    pub(crate) fn stage_new_task_context_handoff(
+        &mut self,
+        origin_key: &str,
+        handoff: String,
+        engine_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let state = self.state.read(cx);
+        if self.pending_draft_owner_stage.is_some()
+            || self.current_key != origin_key
+            || state.selected_chat.as_deref() != Some(origin_key)
+            || state.engine_generation() != engine_generation
+        {
+            return false;
+        }
+        let target_key = String::new();
+        let previous_text = self.drafts.get(&target_key).cloned();
+        let existing = previous_text.clone().unwrap_or_default();
+        let marker = handoff.trim_end();
+        let staged = if existing.contains(marker) {
+            existing
+        } else if existing.trim().is_empty() {
+            handoff
+        } else {
+            format!("{handoff}{existing}")
+        };
+        self.drafts.insert(target_key.clone(), staged);
+        self.draft_merge_on_load.insert(target_key.clone());
+        self.pending_draft_owner_stage = Some(PendingDraftOwnerStage {
+            origin_key: origin_key.to_string(),
+            target_key,
+            engine_generation,
+            previous_text,
+            target_seen: false,
+        });
+        true
+    }
+
+    fn cancel_pending_draft_owner_stage(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_draft_owner_stage.take() else {
+            return;
+        };
+        self.draft_merge_on_load.remove(&pending.target_key);
+        match pending.previous_text {
+            Some(previous) => {
+                self.drafts
+                    .insert(pending.target_key.clone(), previous.clone());
+                if self.current_key == pending.target_key {
+                    self.set_input_text_without_draft_edit(previous, cx);
+                }
+            }
+            None => {
+                self.drafts.remove(&pending.target_key);
+                if self.current_key == pending.target_key {
+                    self.set_input_text_without_draft_edit(String::new(), cx);
+                }
+            }
+        }
+    }
+
+    fn observe_pending_draft_owner(&mut self, next_key: &str, cx: &mut Context<Self>) {
+        let current_generation = self.state.read(cx).engine_generation();
+        let cancel = self
+            .pending_draft_owner_stage
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.engine_generation != current_generation
+                    || (next_key != pending.origin_key && next_key != pending.target_key)
+                    || (pending.target_seen && next_key != pending.target_key)
+            });
+        if cancel {
+            self.cancel_pending_draft_owner_stage(cx);
+            return;
+        }
+        if let Some(pending) = self.pending_draft_owner_stage.as_mut()
+            && next_key == pending.target_key
+        {
+            pending.target_seen = true;
+        }
+    }
+
+    fn finish_pending_draft_owner_stage(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_draft_owner_stage.as_ref() else {
+            return;
+        };
+        if self.state.read(cx).engine_generation() != pending.engine_generation {
+            self.cancel_pending_draft_owner_stage(cx);
+            return;
+        }
+        if self.current_key != pending.target_key
+            || !pending.target_seen
+            || !self.draft_loaded.contains(&pending.target_key)
+        {
+            return;
+        }
+        let pending = self.pending_draft_owner_stage.take().unwrap();
+        // A durable target draft went through `merge_loaded_draft`, which
+        // already removed this marker and scheduled the higher revision. A
+        // brand-new canvas has no durable row, so persist the staged text now.
+        if self.draft_merge_on_load.remove(&pending.target_key) {
+            let revision = self
+                .draft_revisions
+                .entry(pending.target_key.clone())
+                .or_insert(0);
+            *revision = revision.saturating_add(1);
+            self.schedule_draft_save(pending.target_key, Duration::ZERO, cx);
+        }
     }
 
     fn build_draft_record(&self, key: &str, text: String, cx: &App) -> ComposerDraft {
@@ -5301,6 +5424,7 @@ impl Composer {
         self.draft_comment_fingerprints.clear();
         self.recoverable_submissions.clear();
         self.draft_merge_on_load.clear();
+        self.pending_draft_owner_stage = None;
         self.draft_close_flushing = false;
         self.draft_close_failed = false;
         self.queue_edit_draft = None;
@@ -5453,6 +5577,7 @@ impl Composer {
                                     composer.draft_loaded.insert(load_key.clone());
                                     composer.draft_load_tasks.remove(&load_key);
                                     composer.draft_submitting.remove(&load_key);
+                                    composer.finish_pending_draft_owner_stage(cx);
                                 })
                                 .ok();
                                 return;
@@ -5621,6 +5746,7 @@ impl Composer {
                     || composer.draft_merge_on_load.contains(&load_key)
                 {
                     composer.merge_loaded_draft(&load_key, restored, cx);
+                    composer.finish_pending_draft_owner_stage(cx);
                     return;
                 }
                 composer.draft_loaded.insert(load_key.clone());
@@ -5710,6 +5836,7 @@ impl Composer {
                     );
                     composer.failure_key = Some(load_key.clone());
                 }
+                composer.finish_pending_draft_owner_stage(cx);
                 cx.notify();
             })
             .ok();
@@ -7203,6 +7330,7 @@ impl Composer {
                     .is_none_or(|id| s.queue.iter().any(|item| item.id == *id)),
             )
         };
+        self.observe_pending_draft_owner(&key, cx);
 
         // A queue edit belongs to exactly one visible row. Navigation or a
         // remote drain/removal cancels it instead of leaving a focused but
@@ -7290,6 +7418,7 @@ impl Composer {
         }
 
         self.load_draft(self.current_key.clone(), cx);
+        self.finish_pending_draft_owner_stage(cx);
 
         // A pending agent question must not take over an active queue edit.
         if self.editing_queued.is_some() {

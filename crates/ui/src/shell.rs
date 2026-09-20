@@ -4761,14 +4761,22 @@ impl Shell {
             cx.notify();
             return;
         };
-        self.open_new_session(cx);
+        let engine_generation = state.engine_generation();
         let draft = format!(
             "[LUNA user-selected context handoff]\n{}\n[End handoff]\n\n",
             handoff.text
         );
-        self.composer.update(cx, |composer, cx| {
-            composer.set_input_text_without_draft_edit(draft, cx)
+        let staged = self.composer.update(cx, |composer, cx| {
+            composer.stage_new_task_context_handoff(task_id, draft, engine_generation, cx)
         });
+        if !staged {
+            self.sidebar_notice = Some(
+                "The draft owner changed while preparing the context handoff; try again.".into(),
+            );
+            cx.notify();
+            return;
+        }
+        self.open_new_session(cx);
         self.sidebar_notice = Some(
             "Started a new task draft with the selected visible context. Review it before sending."
                 .into(),
@@ -12863,7 +12871,452 @@ mod tests {
 #[cfg(test)]
 mod exit_regressions {
     use super::*;
+    use async_trait::async_trait;
     use gpui::{AppContext, TestAppContext};
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+    use zeron_proto::{ComposerDraft, ComposerDraftRead, ComposerDraftSaveOutcome, DraftContext};
+    use zeron_rpc::{RpcError, RpcReply, RpcService};
+
+    const HANDOFF_SOURCE: &str = "handoff-source";
+    const HANDOFF_MARKER: &str = "[LUNA user-selected context handoff]";
+
+    struct ShellDraftRpc {
+        drafts: Mutex<HashMap<String, ComposerDraft>>,
+    }
+
+    impl ShellDraftRpc {
+        fn new(drafts: Vec<ComposerDraft>) -> Self {
+            Self {
+                drafts: Mutex::new(
+                    drafts
+                        .into_iter()
+                        .map(|draft| (draft.draft_id.clone(), draft))
+                        .collect(),
+                ),
+            }
+        }
+
+        fn text_for_task(&self, task_id: Option<&str>) -> Option<String> {
+            self.drafts
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|draft| draft.task_id.as_deref() == task_id)
+                .max_by_key(|draft| draft.revision)
+                .map(|draft| draft.text.clone())
+        }
+    }
+
+    #[async_trait]
+    impl RpcService for ShellDraftRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            match method {
+                methods::GET_COMPOSER_DRAFT => {
+                    let task_id = params.get("taskId").and_then(|value| value.as_str());
+                    let draft_id = params.get("draftId").and_then(|value| value.as_str());
+                    let draft = self
+                        .drafts
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .filter(|draft| {
+                            draft_id.is_some_and(|id| draft.draft_id == id)
+                                || (draft_id.is_none() && draft.task_id.as_deref() == task_id)
+                        })
+                        .max_by_key(|draft| draft.revision)
+                        .cloned();
+                    RpcReply::value(&ComposerDraftRead {
+                        draft,
+                        submissions: Vec::new(),
+                    })
+                }
+                methods::SAVE_COMPOSER_DRAFT => {
+                    let draft: ComposerDraft = serde_json::from_value(
+                        params
+                            .get("draft")
+                            .cloned()
+                            .ok_or_else(|| RpcError::BadParams("missing draft".into()))?,
+                    )
+                    .map_err(|error| RpcError::BadParams(error.to_string()))?;
+                    let outcome = {
+                        let mut drafts = self.drafts.lock().unwrap();
+                        match drafts.get(&draft.draft_id) {
+                            Some(current) if current.revision > draft.revision => {
+                                ComposerDraftSaveOutcome::Stale {
+                                    current_revision: current.revision,
+                                }
+                            }
+                            Some(current) if current == &draft => {
+                                ComposerDraftSaveOutcome::Unchanged
+                            }
+                            _ => {
+                                drafts.insert(draft.draft_id.clone(), draft);
+                                ComposerDraftSaveOutcome::Saved
+                            }
+                        }
+                    };
+                    RpcReply::value(&outcome)
+                }
+                methods::GET_TASK_COMMAND_RECEIPT => {
+                    RpcReply::value(&Option::<zeron_proto::CommandReceipt>::None)
+                }
+                other => Err(RpcError::UnknownMethod(other.into())),
+            }
+        }
+    }
+
+    fn shell_draft(
+        draft_id: &str,
+        task_id: Option<&str>,
+        revision: u64,
+        text: &str,
+    ) -> ComposerDraft {
+        ComposerDraft {
+            version: zeron_proto::COMPOSER_DRAFT_VERSION,
+            draft_id: draft_id.into(),
+            task_id: task_id.map(str::to_string),
+            revision,
+            text: text.into(),
+            attachments: Vec::new(),
+            appshots: Vec::new(),
+            context: DraftContext::default(),
+            execution: serde_json::Value::Null,
+            updated_at_ms: revision as i64,
+        }
+    }
+
+    fn handoff_chat(id: &str) -> zeron_proto::Chat {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "deviceId": "local",
+            "title": "Unsupported synthetic task",
+            "archived": false,
+            "cwd": "/tmp",
+            "config": {
+                "harness": "claude-code",
+                "model": "synthetic-l13",
+                "sandbox": "workspace-write",
+                "permissionMode": "ask",
+                "effectivePermissionMode": "ask"
+            },
+            "createdAt": Utc::now(),
+        }))
+        .unwrap()
+    }
+
+    fn handoff_transcript() -> Vec<zeron_doc::SessionMessageEntry> {
+        [
+            (
+                "handoff-user",
+                zeron_doc::MessageRole::User,
+                "Visible user context",
+            ),
+            (
+                "handoff-assistant",
+                zeron_doc::MessageRole::Assistant,
+                "Visible assistant context",
+            ),
+        ]
+        .into_iter()
+        .map(|(id, role, text)| zeron_doc::SessionMessageEntry {
+            id: id.into(),
+            role,
+            parts: vec![zeron_doc::MessagePart::Text {
+                id: "text".into(),
+                text: text.into(),
+            }],
+            created_at: 1,
+            device_id: "local".into(),
+            status: Some(zeron_doc::MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .collect()
+    }
+
+    fn init_handoff_shell_test(cx: &mut TestAppContext, data_dir: &Path) {
+        cx.update(|cx| {
+            settings::init(settings::UiSettings::default(), data_dir, cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+    }
+
+    fn handoff_shell(
+        cx: &mut TestAppContext,
+        data_dir: &Path,
+        selected: Option<&str>,
+        service: Arc<ShellDraftRpc>,
+    ) -> gpui::WindowHandle<Shell> {
+        cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                    zeron_rpc::memory_client(service),
+                ));
+                state.chats = vec![handoff_chat(HANDOFF_SOURCE), handoff_chat("other")];
+                state.selected_chat = selected.map(str::to_string);
+                state.transcript = selected
+                    .is_some_and(|id| id == HANDOFF_SOURCE)
+                    .then(handoff_transcript)
+                    .unwrap_or_default();
+                state
+            });
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: data_dir.into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        })
+    }
+
+    fn pump_shell_until(
+        cx: &mut TestAppContext,
+        runtime: &tokio::runtime::Runtime,
+        mut done: impl FnMut(&mut TestAppContext) -> bool,
+    ) {
+        for _ in 0..100 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            if done(cx) {
+                return;
+            }
+        }
+        assert!(done(cx), "shell draft fixture did not settle");
+    }
+
+    fn shell_composer_snapshot(
+        cx: &mut TestAppContext,
+        window: &gpui::WindowHandle<Shell>,
+    ) -> (String, String) {
+        cx.update(|cx| {
+            let shell = window.read(cx).unwrap();
+            let composer = shell.composer.read(cx);
+            (
+                composer.current_key.clone(),
+                composer.input.read(cx).text().to_string(),
+            )
+        })
+    }
+
+    #[gpui::test]
+    fn context_handoff_follows_new_task_draft_owner_through_navigation_and_restart(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        init_handoff_shell_test(cx, dir.path());
+        let service = Arc::new(ShellDraftRpc::new(vec![
+            shell_draft("source-draft", Some(HANDOFF_SOURCE), 7, "source sentinel"),
+            shell_draft("canvas-draft", None, 4, "existing new-task draft"),
+        ]));
+        let window = handoff_shell(cx, dir.path(), Some(HANDOFF_SOURCE), service.clone());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |_, cx| cx.notify());
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).1 == "source sentinel"
+        });
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.start_new_task_with_context(HANDOFF_SOURCE, cx)
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            let (key, text) = shell_composer_snapshot(cx, &window);
+            key.is_empty()
+                && text.contains("existing new-task draft")
+                && text.matches(HANDOFF_MARKER).count() == 1
+                && service
+                    .text_for_task(None)
+                    .is_some_and(|saved| saved.matches(HANDOFF_MARKER).count() == 1)
+        });
+        let target_text = shell_composer_snapshot(cx, &window).1;
+        assert_eq!(target_text.matches(HANDOFF_MARKER).count(), 1);
+        assert!(target_text.contains("Visible user context"));
+        assert!(target_text.contains("Visible assistant context"));
+        assert!(target_text.contains("existing new-task draft"));
+        assert_eq!(
+            service.text_for_task(Some(HANDOFF_SOURCE)).as_deref(),
+            Some("source sentinel")
+        );
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_chat(HANDOFF_SOURCE.into(), cx)
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).1 == "source sentinel"
+        });
+        window
+            .update(cx, |shell, _, cx| shell.open_new_session(cx))
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).1 == target_text
+        });
+
+        let restarted = handoff_shell(cx, dir.path(), None, service.clone());
+        restarted
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |_, cx| cx.notify());
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &restarted).1 == target_text
+        });
+        assert_eq!(
+            service.text_for_task(Some(HANDOFF_SOURCE)).as_deref(),
+            Some("source sentinel")
+        );
+
+        let blank_service = Arc::new(ShellDraftRpc::new(vec![shell_draft(
+            "blank-source-draft",
+            Some(HANDOFF_SOURCE),
+            3,
+            "blank source sentinel",
+        )]));
+        let blank = handoff_shell(cx, dir.path(), Some(HANDOFF_SOURCE), blank_service.clone());
+        blank
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |_, cx| cx.notify());
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &blank).1 == "blank source sentinel"
+        });
+        blank
+            .update(cx, |shell, _, cx| {
+                shell.start_new_task_with_context(HANDOFF_SOURCE, cx)
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            let (key, text) = shell_composer_snapshot(cx, &blank);
+            key.is_empty()
+                && text.matches(HANDOFF_MARKER).count() == 1
+                && blank_service
+                    .text_for_task(None)
+                    .is_some_and(|saved| saved.matches(HANDOFF_MARKER).count() == 1)
+        });
+        assert_eq!(
+            blank_service.text_for_task(Some(HANDOFF_SOURCE)).as_deref(),
+            Some("blank source sentinel")
+        );
+    }
+
+    #[gpui::test]
+    fn cancelled_or_profile_replaced_handoff_never_lands_on_an_unowned_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        init_handoff_shell_test(cx, dir.path());
+        let service = Arc::new(ShellDraftRpc::new(vec![
+            shell_draft("source-draft", Some(HANDOFF_SOURCE), 7, "source sentinel"),
+            shell_draft("canvas-draft", None, 4, "existing new-task draft"),
+        ]));
+        let window = handoff_shell(cx, dir.path(), Some(HANDOFF_SOURCE), service.clone());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |_, cx| cx.notify());
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).1 == "source sentinel"
+        });
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.start_new_task_with_context(HANDOFF_SOURCE, cx);
+                shell.open_chat("other".into(), cx);
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).0 == "other"
+        });
+        assert_eq!(
+            service.text_for_task(None).as_deref(),
+            Some("existing new-task draft")
+        );
+        assert_eq!(
+            service.text_for_task(Some(HANDOFF_SOURCE)).as_deref(),
+            Some("source sentinel")
+        );
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, cx| {
+                    state.selected_chat = Some(HANDOFF_SOURCE.into());
+                    state.transcript = handoff_transcript();
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).1 == "source sentinel"
+        });
+        let replacement = Arc::new(ShellDraftRpc::new(vec![shell_draft(
+            "replacement-canvas",
+            None,
+            2,
+            "replacement profile canvas",
+        )]));
+        window
+            .update(cx, |shell, _, cx| {
+                shell.start_new_task_with_context(HANDOFF_SOURCE, cx);
+                shell.state.update(cx, |state, cx| {
+                    state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                        zeron_rpc::memory_client(replacement.clone()),
+                    ));
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        pump_shell_until(cx, &runtime, |cx| {
+            shell_composer_snapshot(cx, &window).1 == "replacement profile canvas"
+        });
+        assert!(
+            !shell_composer_snapshot(cx, &window)
+                .1
+                .contains(HANDOFF_MARKER)
+        );
+        assert_eq!(
+            service.text_for_task(None).as_deref(),
+            Some("existing new-task draft")
+        );
+    }
 
     #[gpui::test]
     fn appshot_destinations_retain_last_session_and_use_new_canvas_defaults(
