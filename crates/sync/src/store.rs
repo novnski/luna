@@ -27,6 +27,8 @@ pub enum StoreError {
     DraftSubmissionConflict(String),
     #[error("composer draft {0} reused a revision with different content")]
     DraftRevisionConflict(String),
+    #[error("task recovery state changed before the requested transition")]
+    RecoveryConflict,
 }
 
 /// Ordered, append-only migrations. Each entry runs once inside a transaction;
@@ -134,6 +136,18 @@ const MIGRATIONS: &[&str] = &[
      ) STRICT;
      CREATE INDEX attachment_owners_owner
        ON attachment_owners(device_id, owner_kind, owner_id);",
+    // v6 — L10 device-local recovery authority. `record_json` may contain the
+    // frozen prompt, attachment paths, and provider session identity, so this
+    // table is intentionally local SQLite state and is never projected into a
+    // synced document. The scalar columns are the compare-and-set fence.
+    "CREATE TABLE task_recovery_state (
+        task_id TEXT PRIMARY KEY,
+        chain_id TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        record_json BLOB NOT NULL,
+        updated_at INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +161,29 @@ pub enum TaskCommandBeginKind {
 pub struct TaskCommandBegin {
     pub kind: TaskCommandBeginKind,
     pub receipt: CommandReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredTaskRecovery {
+    pub task_id: String,
+    pub chain_id: String,
+    pub attempt_count: u8,
+    pub status: String,
+    pub record_json: Vec<u8>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskRecoveryExpectation {
+    pub chain_id: String,
+    pub attempt_count: u8,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskRecoveryTransition {
+    pub expected: Option<TaskRecoveryExpectation>,
+    pub next: StoredTaskRecovery,
 }
 
 /// SQLite-backed store under a data directory (`{data_dir}/docs.sqlite3`).
@@ -938,6 +975,37 @@ impl DocsStore {
             reason,
             recovery_action,
             None,
+            None,
+        )
+    }
+
+    /// L10 command boundary: terminal receipt and exact recovery-state CAS
+    /// become durable together. A stale timer/client cannot receive Applied
+    /// while mutating a replacement chain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_task_command_with_recovery(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        recovery: &TaskRecoveryTransition,
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.complete_task_command_inner(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            None,
+            Some(recovery),
         )
     }
 
@@ -1001,10 +1069,43 @@ impl DocsStore {
             reason,
             recovery_action,
             Some((snapshots, deleted_snapshots, updates)),
+            None,
+        )
+    }
+
+    /// Registry/session projection, terminal receipt, and L10 recovery fence
+    /// in one transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_task_command_with_snapshot_changes_and_recovery(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        snapshots: &[(&str, &[u8])],
+        deleted_snapshots: &[&str],
+        recovery: &TaskRecoveryTransition,
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.complete_task_command_inner(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            Some((snapshots, deleted_snapshots, &[])),
+            Some(recovery),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::type_complexity)]
     fn complete_task_command_inner(
         &self,
         command_id: &str,
@@ -1016,6 +1117,7 @@ impl DocsStore {
         reason: Option<CommandReceiptReason>,
         recovery_action: Option<&str>,
         snapshot_changes: Option<(&[(&str, &[u8])], &[&str], &[(&str, &str, &[u8])])>,
+        recovery: Option<&TaskRecoveryTransition>,
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -1046,6 +1148,9 @@ impl DocsStore {
         let receipt = commit_task_command_tx(&tx, receipt, applied)?;
         if let Some((snapshots, deleted_snapshots, updates)) = snapshot_changes {
             self.persist_snapshot_changes_tx(&tx, snapshots, deleted_snapshots, updates)?;
+        }
+        if let Some(recovery) = recovery {
+            apply_task_recovery_transition_tx(&tx, recovery)?;
         }
         tx.commit()?;
         Ok(Some(receipt))
@@ -1140,12 +1245,7 @@ impl DocsStore {
         command_id: &str,
         correlation_id: &str,
     ) -> Result<Option<CommandReceipt>, StoreError> {
-        self.set_task_command_correlation_with_snapshot_changes(
-            command_id,
-            correlation_id,
-            &[],
-            &[],
-        )
+        self.set_task_command_correlation_inner(command_id, correlation_id, &[], &[], None)
     }
 
     pub fn set_task_command_correlation_with_snapshot_changes(
@@ -1154,6 +1254,38 @@ impl DocsStore {
         correlation_id: &str,
         snapshots: &[(&str, &[u8])],
         updates: &[(&str, &str, &[u8])],
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.set_task_command_correlation_inner(
+            command_id,
+            correlation_id,
+            snapshots,
+            updates,
+            None,
+        )
+    }
+
+    pub fn set_task_command_correlation_with_recovery(
+        &self,
+        command_id: &str,
+        correlation_id: &str,
+        recovery: &TaskRecoveryTransition,
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.set_task_command_correlation_inner(
+            command_id,
+            correlation_id,
+            &[],
+            &[],
+            Some(recovery),
+        )
+    }
+
+    fn set_task_command_correlation_inner(
+        &self,
+        command_id: &str,
+        correlation_id: &str,
+        snapshots: &[(&str, &[u8])],
+        updates: &[(&str, &str, &[u8])],
+        recovery: Option<&TaskRecoveryTransition>,
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -1186,6 +1318,9 @@ impl DocsStore {
             )?;
         }
         self.persist_snapshot_changes_tx(&tx, snapshots, &[], updates)?;
+        if let Some(recovery) = recovery {
+            apply_task_recovery_transition_tx(&tx, recovery)?;
+        }
         tx.commit()?;
         Ok(Some(receipt))
     }
@@ -1272,6 +1407,56 @@ impl DocsStore {
         bytes
             .map(|bytes| serde_json::from_slice(&bytes).map_err(StoreError::from))
             .transpose()
+    }
+
+    pub fn task_recovery(&self, task_id: &str) -> Result<Option<StoredTaskRecovery>, StoreError> {
+        self.conn()
+            .query_row(
+                "SELECT task_id,chain_id,attempt_count,status,record_json,updated_at
+                 FROM task_recovery_state WHERE task_id=?1",
+                params![task_id],
+                stored_task_recovery_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn task_recoveries(&self) -> Result<Vec<StoredTaskRecovery>, StoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT task_id,chain_id,attempt_count,status,record_json,updated_at
+             FROM task_recovery_state ORDER BY task_id",
+        )?;
+        Ok(stmt
+            .query_map([], stored_task_recovery_from_row)?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn put_task_recovery(&self, recovery: &StoredTaskRecovery) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        upsert_task_recovery_tx(&tx, recovery)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn transition_task_recovery(
+        &self,
+        transition: &TaskRecoveryTransition,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        match apply_task_recovery_transition_tx(&tx, transition) {
+            Ok(()) => {
+                tx.commit()?;
+                Ok(true)
+            }
+            Err(StoreError::RecoveryConflict) => {
+                tx.rollback()?;
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Latest durable command whose provider correlation is this message id.
@@ -1409,6 +1594,83 @@ impl DocsStore {
         // connection itself is still usable.
         self.conn.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+fn stored_task_recovery_from_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<StoredTaskRecovery, rusqlite::Error> {
+    let attempt_count = row.get::<_, i64>(2)?;
+    Ok(StoredTaskRecovery {
+        task_id: row.get(0)?,
+        chain_id: row.get(1)?,
+        attempt_count: u8::try_from(attempt_count).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Integer,
+                Box::new(error),
+            )
+        })?,
+        status: row.get(3)?,
+        record_json: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+
+fn upsert_task_recovery_tx(
+    tx: &rusqlite::Transaction<'_>,
+    recovery: &StoredTaskRecovery,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO task_recovery_state
+         (task_id,chain_id,attempt_count,status,record_json,updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(task_id) DO UPDATE SET
+           chain_id=excluded.chain_id,
+           attempt_count=excluded.attempt_count,
+           status=excluded.status,
+           record_json=excluded.record_json,
+           updated_at=excluded.updated_at",
+        params![
+            recovery.task_id,
+            recovery.chain_id,
+            i64::from(recovery.attempt_count),
+            recovery.status,
+            recovery.record_json,
+            recovery.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn apply_task_recovery_transition_tx(
+    tx: &rusqlite::Transaction<'_>,
+    transition: &TaskRecoveryTransition,
+) -> Result<(), StoreError> {
+    if let Some(expected) = transition.expected.as_ref() {
+        let current = tx
+            .query_row(
+                "SELECT chain_id,attempt_count,status FROM task_recovery_state WHERE task_id=?1",
+                params![transition.next.task_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if current.as_ref()
+            != Some(&(
+                expected.chain_id.clone(),
+                i64::from(expected.attempt_count),
+                expected.status.clone(),
+            ))
+        {
+            return Err(StoreError::RecoveryConflict);
+        }
+    }
+    upsert_task_recovery_tx(tx, &transition.next)
 }
 
 fn replace_attachment_owners_tx<'a>(

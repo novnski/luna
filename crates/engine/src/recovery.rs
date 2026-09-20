@@ -1,44 +1,52 @@
 //! Durable, acceptance-aware retry policy for failed turns.
 //!
-//! This is deliberately not a general scheduler. One small ledger per task
-//! records the latest failed original request plus bounded history. Timers are
-//! process-local; restart reloads the ledger and reconciles before arming them.
+//! This is deliberately not a general scheduler. One local SQLite row per
+//! task records the frozen original request and exact CAS fence. Timers are
+//! process-local; restart reloads the row and reconciles before arming them.
 
-use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
-
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use zeron_proto::{
     HarnessId, RecoveryAcceptance, RecoveryAction, RecoveryFailure, RecoveryStatus, RunRequest,
     TaskRecovery,
 };
+use zeron_sync::{DocsStore, StoredTaskRecovery, TaskRecoveryExpectation, TaskRecoveryTransition};
 
-use crate::{EngineError, new_id};
+use crate::EngineError;
 
 pub const MAX_AUTO_RETRIES: u8 = 4;
 pub const MAX_AUTO_WAIT_MS: i64 = 6 * 60 * 60 * 1_000;
-const HISTORY_LIMIT: usize = 16;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryRecord {
     pub view: TaskRecovery,
     pub harness: HarnessId,
+    /// Immutable original request. Continuation prompts and cleared
+    /// attachments never replace this value.
     pub request: RunRequest,
+    pub original_acceptance: RecoveryAcceptance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_acceptance: Option<RecoveryAcceptance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_started_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RecoveryLedger {
-    #[serde(default)]
-    records: Vec<RecoveryRecord>,
+#[derive(Debug, Clone)]
+pub(crate) struct RecoveryChange {
+    pub expected: RecoveryRecord,
+    pub next: RecoveryRecord,
+}
+
+impl RecoveryChange {
+    pub fn storage_transition(&self) -> Result<TaskRecoveryTransition, EngineError> {
+        Ok(TaskRecoveryTransition {
+            expected: Some(RecoveryStore::expectation(&self.expected)?),
+            next: RecoveryStore::stored(&self.next)?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,114 +311,80 @@ fn explicit_reset_at_ms(message: &str) -> Option<i64> {
 }
 
 pub(crate) struct RecoveryStore {
-    dir: PathBuf,
-    gate: Mutex<()>,
+    store: Arc<DocsStore>,
 }
 
 impl RecoveryStore {
-    pub fn new(dir: impl AsRef<Path>) -> Self {
-        Self {
-            dir: dir.as_ref().to_path_buf(),
-            gate: Mutex::new(()),
+    pub fn new(store: Arc<DocsStore>) -> Self {
+        Self { store }
+    }
+
+    fn status(status: RecoveryStatus) -> Result<String, EngineError> {
+        Ok(serde_json::to_value(status)?
+            .as_str()
+            .ok_or_else(|| EngineError::Other("recovery status did not serialize as text".into()))?
+            .to_string())
+    }
+
+    fn stored(record: &RecoveryRecord) -> Result<StoredTaskRecovery, EngineError> {
+        Ok(StoredTaskRecovery {
+            task_id: record.view.task_id.clone(),
+            chain_id: record.view.chain_id.clone(),
+            attempt_count: record.view.attempt_count,
+            status: Self::status(record.view.status)?,
+            record_json: serde_json::to_vec(record)?,
+            updated_at: record.view.updated_at_ms,
+        })
+    }
+
+    fn expectation(record: &RecoveryRecord) -> Result<TaskRecoveryExpectation, EngineError> {
+        Ok(TaskRecoveryExpectation {
+            chain_id: record.view.chain_id.clone(),
+            attempt_count: record.view.attempt_count,
+            status: Self::status(record.view.status)?,
+        })
+    }
+
+    fn decode(stored: StoredTaskRecovery) -> Result<RecoveryRecord, EngineError> {
+        let record: RecoveryRecord = serde_json::from_slice(&stored.record_json)?;
+        if record.view.task_id != stored.task_id
+            || record.view.chain_id != stored.chain_id
+            || record.view.attempt_count != stored.attempt_count
+            || Self::status(record.view.status)? != stored.status
+        {
+            return Err(EngineError::Other(
+                "recovery scalar fence does not match its private record".into(),
+            ));
         }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, ()> {
-        self.gate.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn path(&self, task_id: &str) -> PathBuf {
-        let safe: String = task_id
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        self.dir.join(format!("{safe}.json"))
-    }
-
-    fn read_locked(&self, task_id: &str) -> Result<RecoveryLedger, EngineError> {
-        match std::fs::read(self.path(task_id)) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(RecoveryLedger::default())
-            }
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    fn write_locked(&self, task_id: &str, ledger: &RecoveryLedger) -> Result<(), EngineError> {
-        std::fs::create_dir_all(&self.dir)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
-        let path = self.path(task_id);
-        let temp = path.with_extension(format!("{}.tmp", new_id()));
-        let bytes = serde_json::to_vec(ledger)?;
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options.open(&temp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&temp, &path)?;
-        if let Some(parent) = path.parent() {
-            File::open(parent)?.sync_all()?;
-        }
-        Ok(())
+        Ok(record)
     }
 
     pub fn current(&self, task_id: &str) -> Result<Option<RecoveryRecord>, EngineError> {
-        let _guard = self.lock();
         Ok(self
-            .read_locked(task_id)?
-            .records
-            .into_iter()
-            .rev()
-            .find(|record| record.view.status.active()))
+            .latest(task_id)?
+            .filter(|record| record.view.status.active()))
     }
 
     pub fn latest(&self, task_id: &str) -> Result<Option<RecoveryRecord>, EngineError> {
-        let _guard = self.lock();
-        Ok(self.read_locked(task_id)?.records.into_iter().next_back())
+        self.store
+            .task_recovery(task_id)?
+            .map(Self::decode)
+            .transpose()
     }
 
     pub fn put(&self, record: RecoveryRecord) -> Result<RecoveryRecord, EngineError> {
-        let _guard = self.lock();
-        let mut ledger = self.read_locked(&record.view.task_id)?;
-        for previous in ledger
-            .records
-            .iter_mut()
-            .filter(|previous| previous.view.status.active())
-        {
-            if previous.view.chain_id != record.view.chain_id {
-                previous.view.status = RecoveryStatus::Superseded;
-                previous.view.retry_at_ms = None;
-                previous.view.automatic = false;
-                previous.view.detail =
-                    "Superseded by newer user activity or a newer failed original request.".into();
-                previous.view.updated_at_ms = record.view.updated_at_ms;
-            }
-        }
-        if let Some(existing) = ledger
-            .records
-            .iter_mut()
-            .find(|existing| existing.view.chain_id == record.view.chain_id)
-        {
-            *existing = record.clone();
-        } else {
-            ledger.records.push(record.clone());
-        }
-        if ledger.records.len() > HISTORY_LIMIT {
-            let remove = ledger.records.len() - HISTORY_LIMIT;
-            ledger.records.drain(0..remove);
-        }
-        self.write_locked(&record.view.task_id, &ledger)?;
+        self.store.put_task_recovery(&Self::stored(&record)?)?;
         Ok(record)
+    }
+
+    pub fn prepare_change(&self, expected: RecoveryRecord, next: RecoveryRecord) -> RecoveryChange {
+        RecoveryChange { expected, next }
+    }
+
+    pub fn apply_change(&self, change: &RecoveryChange) -> Result<bool, EngineError> {
+        Ok(self
+            .store
+            .transition_task_recovery(&change.storage_transition()?)?)
     }
 
     pub fn update<F>(
@@ -422,72 +396,27 @@ impl RecoveryStore {
     where
         F: FnOnce(&mut RecoveryRecord),
     {
-        let _guard = self.lock();
-        let mut ledger = self.read_locked(task_id)?;
-        let Some(record) = ledger
-            .records
-            .iter_mut()
-            .find(|record| record.view.chain_id == chain_id)
-        else {
+        let Some(current) = self.latest(task_id)? else {
             return Ok(None);
         };
-        update(record);
-        let result = record.clone();
-        self.write_locked(task_id, &ledger)?;
-        Ok(Some(result))
-    }
-
-    /// Atomically claim one active chain for a provider attempt. A newer user
-    /// turn can supersede the chain before this claim; in that case no stale
-    /// in-memory snapshot may resurrect it.
-    pub fn start_attempt(
-        &self,
-        task_id: &str,
-        chain_id: &str,
-        attempt_count: u8,
-        updated_at_ms: i64,
-    ) -> Result<Option<RecoveryRecord>, EngineError> {
-        let _guard = self.lock();
-        let mut ledger = self.read_locked(task_id)?;
-        let Some(record) = ledger
-            .records
-            .iter_mut()
-            .find(|record| record.view.chain_id == chain_id && record.view.status.active())
-        else {
+        if current.view.chain_id != chain_id {
             return Ok(None);
-        };
-        record.view.status = RecoveryStatus::Running;
-        record.view.automatic = false;
-        record.view.retry_at_ms = None;
-        record.view.attempt_count = attempt_count;
-        record.view.updated_at_ms = updated_at_ms;
-        let result = record.clone();
-        self.write_locked(task_id, &ledger)?;
-        Ok(Some(result))
+        }
+        let mut next = current.clone();
+        update(&mut next);
+        let change = self.prepare_change(current, next.clone());
+        Ok(self.apply_change(&change)?.then_some(next))
     }
 
     /// Latest durable chain per task, including terminal cancellation,
     /// supersession, exhaustion, and completion. Reloading must not erase the
     /// last known outcome even though only active scheduled chains get timers.
     pub fn latest_records(&self) -> Result<Vec<RecoveryRecord>, EngineError> {
-        let _guard = self.lock();
-        std::fs::create_dir_all(&self.dir)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
-        let mut records = Vec::new();
-        for entry in std::fs::read_dir(&self.dir)? {
-            let entry = entry?;
-            if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
-                continue;
-            }
-            let bytes = std::fs::read(entry.path())?;
-            let ledger: RecoveryLedger = serde_json::from_slice(&bytes)?;
-            if let Some(record) = ledger.records.into_iter().next_back() {
-                records.push(record);
-            }
-        }
-        records.sort_by(|a, b| a.view.task_id.cmp(&b.view.task_id));
-        Ok(records)
+        self.store
+            .task_recoveries()?
+            .into_iter()
+            .map(Self::decode)
+            .collect()
     }
 }
 

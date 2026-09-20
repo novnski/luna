@@ -3201,10 +3201,10 @@ async fn generated_image_is_materialized_before_publication_and_survives_reopen(
     ];
     let registry = registry_with(Arc::new(MockHarness { script }));
     let journal = Arc::new(RunJournal::open(dir.path().join("journals")).unwrap());
-    let sessions = SessionsEngine::new("host".into(), journal.clone(), registry);
+    let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+    let sessions = SessionsEngine::new("host".into(), journal.clone(), registry, store.clone());
     let uploads = Uploads::from_root(&dir.path().join("profile/uploads"));
     sessions.set_generated_images(uploads.clone(), source_root);
-    let store = Arc::new(DocsStore::open(dir.path()).unwrap());
     let host = DocHost::new(
         store,
         DocHostConfig {

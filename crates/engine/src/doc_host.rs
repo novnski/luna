@@ -39,7 +39,7 @@ use zeron_proto::{
     CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus,
     ConversationSourceContext, HarnessId, TaskCommandRead, UserInputAnswer, UserInputQuestion,
 };
-use zeron_sync::{DocsStore, TaskCommandBegin};
+use zeron_sync::{DocsStore, TaskCommandBegin, TaskRecoveryTransition};
 
 use crate::http_error::describe_http_error;
 use crate::sessions::{SessionsEngine, SteerOutcome};
@@ -1038,6 +1038,36 @@ impl DocHost {
         Ok(receipt)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_task_command_with_recovery(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        recovery: &TaskRecoveryTransition,
+    ) -> Result<Option<CommandReceipt>, EngineError> {
+        let receipt = self.inner.store.complete_task_command_with_recovery(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            recovery,
+        )?;
+        if let Some(receipt) = receipt.clone() {
+            self.publish_task_receipt(receipt);
+        }
+        Ok(receipt)
+    }
+
     pub fn mark_task_command_unknown(
         &self,
         command_id: &str,
@@ -1062,6 +1092,22 @@ impl DocHost {
             .inner
             .store
             .set_task_command_correlation(command_id, correlation_id)?;
+        if let Some(receipt) = receipt.clone() {
+            self.publish_task_receipt(receipt);
+        }
+        Ok(receipt)
+    }
+
+    pub fn set_task_command_correlation_with_recovery(
+        &self,
+        command_id: &str,
+        correlation_id: &str,
+        recovery: &TaskRecoveryTransition,
+    ) -> Result<Option<CommandReceipt>, EngineError> {
+        let receipt = self
+            .inner
+            .store
+            .set_task_command_correlation_with_recovery(command_id, correlation_id, recovery)?;
         if let Some(receipt) = receipt.clone() {
             self.publish_task_receipt(receipt);
         }
@@ -4575,14 +4621,8 @@ impl DocHost {
             return Ok(false);
         }
         handle.queue_paused.store(true, Ordering::Release);
-        match sessions.interrupt(&handle.chat_id).await {
-            Ok(true) => {
-                sessions.hold_recovery(
-                    &handle.chat_id,
-                    "Recovery held by Stop. Queued work and partial output were preserved.",
-                )?;
-                Ok(true)
-            }
+        match sessions.interrupt_for_stop(&handle.chat_id).await {
+            Ok(true) => Ok(true),
             Ok(false) => {
                 handle.queue_paused.store(false, Ordering::Release);
                 Ok(false)
@@ -5682,18 +5722,60 @@ impl DocHost {
             .is_some()
             .then_some("Reload task state; never replay this control against a replacement binding or turn.")
             .or(resolution);
-        if let Err(error) = self.complete_task_command(
-            command_id,
-            receipt_status,
-            receipt_status == CommandReceiptStatus::Applied,
-            prior.snapshot.binding_id.as_deref(),
-            prior.snapshot.binding_generation,
-            active_turn.as_deref(),
-            reason,
-            recovery,
-        ) {
+        let stop_recovery = (receipt_status == CommandReceiptStatus::Applied)
+            .then(|| {
+                handle
+                    .doc
+                    .read_commands()
+                    .ok()?
+                    .into_iter()
+                    .find(|command| command.id == command_id)
+                    .filter(|command| {
+                        matches!(command.payload, SessionCommandPayload::Interrupt {})
+                    })?;
+                self.sessions()?
+                    .prepare_hold_recovery(
+                        &handle.chat_id,
+                        "Recovery held by Stop. Queued work and partial output were preserved.",
+                    )
+                    .ok()
+                    .flatten()
+            })
+            .flatten();
+        let result = if let Some(change) = stop_recovery.as_ref() {
+            match change.storage_transition() {
+                Ok(transition) => self.complete_task_command_with_recovery(
+                    command_id,
+                    receipt_status,
+                    true,
+                    prior.snapshot.binding_id.as_deref(),
+                    prior.snapshot.binding_generation,
+                    active_turn.as_deref(),
+                    reason,
+                    recovery,
+                    &transition,
+                ),
+                Err(error) => Err(error),
+            }
+        } else {
+            self.complete_task_command(
+                command_id,
+                receipt_status,
+                receipt_status == CommandReceiptStatus::Applied,
+                prior.snapshot.binding_id.as_deref(),
+                prior.snapshot.binding_generation,
+                active_turn.as_deref(),
+                reason,
+                recovery,
+            )
+        };
+        if let Err(error) = result {
             tracing::error!(chat = %handle.chat_id, command = %command_id, %error,
                 "task command receipt finalization failed");
+        } else if let Some(change) = stop_recovery
+            && let Some(sessions) = self.sessions()
+        {
+            sessions.publish_committed_recovery(&change.next);
         }
     }
 

@@ -83,6 +83,12 @@ pub struct TaskRecovery {
     pub original_message_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_command_id: Option<String>,
+    /// Immutable acceptance of the original user request. Recovery-attempt
+    /// transport outcomes never downgrade this fact.
+    pub original_acceptance: RecoveryAcceptance,
+    /// Current safe delivery classification after considering the latest
+    /// recovery attempt. This may become Unknown/Accepted while the original
+    /// acceptance remains unchanged.
     pub acceptance: RecoveryAcceptance,
     pub failure: RecoveryFailure,
     pub action: RecoveryAction,

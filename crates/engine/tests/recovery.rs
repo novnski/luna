@@ -5,21 +5,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use zeron_doc::{MessagePart, MessageRole};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, RunJournal};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, CommandReceipt, CommandReceiptStatus, DoneStatus, HarnessId, Model, PermissionMode,
-    ReasoningLevel, RecoveryAcceptance, RecoveryStatus, RunRequest, SandboxLevel, SteeringMode,
-    TaskCommandRead,
+    AgentEvent, ChatConfig, CommandReceipt, CommandReceiptStatus, DoneStatus, HarnessId, Model,
+    PermissionMode, ReasoningLevel, RecoveryAcceptance, RecoveryAction, RecoveryStatus, RunRequest,
+    SandboxLevel, SteeringMode, TaskCommandRead,
 };
 use zeron_rpc::{RpcClient, methods};
+use zeron_sync::{DocsStore, TaskRecoveryExpectation, TaskRecoveryTransition};
 
 const TASK: &str = "l10-recovery-task";
 const MESSAGE: &str = "l10-original-message";
@@ -28,6 +26,9 @@ const MESSAGE: &str = "l10-original-message";
 enum FirstOutcome {
     RejectedOverload,
     AcceptedOverload,
+    AcceptedOverloadThenPending,
+    AcceptedThenContinuationRejected,
+    AcceptedThenContinuationUnknown,
     UnknownTransport,
 }
 
@@ -85,11 +86,36 @@ impl Harness for RecoveryHarness {
             ))])
             .boxed());
         }
+        if run == 1 && matches!(self.outcome, FirstOutcome::AcceptedThenContinuationRejected) {
+            return Err(HarnessError::RejectedBeforeAcceptance(
+                "synthetic continuation rejected before acceptance: provider overloaded".into(),
+            ));
+        }
+        if run == 1 && matches!(self.outcome, FirstOutcome::AcceptedThenContinuationUnknown) {
+            return Ok(futures::stream::iter(vec![Err(HarnessError::Protocol(
+                "synthetic continuation transport timeout".into(),
+            ))])
+            .boxed());
+        }
 
         let session_id = request
             .resume
             .clone()
             .unwrap_or_else(|| "l10-provider-session".into());
+        if run == 1 && matches!(self.outcome, FirstOutcome::AcceptedOverloadThenPending) {
+            return Ok(futures::stream::once(async move {
+                Ok(AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: request.model.unwrap_or_else(|| "mock-1".into()),
+                    tools: Vec::new(),
+                    cwd: request.cwd,
+                    session_id,
+                    assistant_message_id: "assistant-pending".into(),
+                })
+            })
+            .chain(futures::stream::pending())
+            .boxed());
+        }
         let mut events = vec![
             Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
@@ -107,7 +133,15 @@ impl Harness for RecoveryHarness {
                 },
             }),
         ];
-        if run == 0 && matches!(self.outcome, FirstOutcome::AcceptedOverload) {
+        if run == 0
+            && matches!(
+                self.outcome,
+                FirstOutcome::AcceptedOverload
+                    | FirstOutcome::AcceptedOverloadThenPending
+                    | FirstOutcome::AcceptedThenContinuationRejected
+                    | FirstOutcome::AcceptedThenContinuationUnknown
+            )
+        {
             events.extend([
                 Ok(AgentEvent::ToolCall {
                     id: "completed-effect".into(),
@@ -148,6 +182,10 @@ fn account_config(root: &std::path::Path) -> AgentAccountsConfig {
         codex_home: root.join("synthetic-codex"),
         cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
     }
+}
+
+fn store_root(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("data/orgs/l10-org/l10-user")
 }
 
 fn assemble(
@@ -219,6 +257,20 @@ async fn snapshot(client: &RpcClient) -> TaskCommandRead {
 
 async fn command(client: &RpcClient, id: &str, intent: serde_json::Value) -> CommandReceipt {
     let snapshot = snapshot(client).await;
+    let requires_revision = matches!(
+        intent.get("kind").and_then(serde_json::Value::as_str),
+        Some(
+            "rename"
+                | "setArchived"
+                | "delete"
+                | "setBranch"
+                | "setCwd"
+                | "setHost"
+                | "setConfig"
+                | "setPermission"
+                | "setProviderAccount"
+        )
+    );
     let mut value = serde_json::json!({
         "commandId":id,
         "actorId":"l10-test",
@@ -229,6 +281,9 @@ async fn command(client: &RpcClient, id: &str, intent: serde_json::Value) -> Com
     });
     if let Some(generation) = snapshot.snapshot.binding_generation {
         value["expectedBindingGeneration"] = generation.into();
+    }
+    if requires_revision {
+        value["expectedTaskRevision"] = snapshot.snapshot.task_revision.into();
     }
     client
         .call_as(methods::EXECUTE_TASK_COMMAND, value)
@@ -268,6 +323,91 @@ async fn wait_for_recovery(core: &EngineCore, status: RecoveryStatus) -> zeron_p
     }
 }
 
+fn claim_recovery_without_dispatch(root: &std::path::Path) {
+    let store = DocsStore::open(store_root(root)).unwrap();
+    let current = store.task_recovery(TASK).unwrap().unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&current.record_json).unwrap();
+    value["view"]["status"] = "running".into();
+    value["view"]["automatic"] = false.into();
+    value["view"]["retryAtMs"] = serde_json::Value::Null;
+    value["view"]["attemptCount"] = 1.into();
+    value["view"]["updatedAtMs"] = 1_789_860_000_000_i64.into();
+    value["attemptAcceptance"] = serde_json::Value::Null;
+    value["attemptStartedAtMs"] = 1_789_860_000_000_i64.into();
+    let next = zeron_sync::StoredTaskRecovery {
+        task_id: current.task_id.clone(),
+        chain_id: current.chain_id.clone(),
+        attempt_count: 1,
+        status: "running".into(),
+        record_json: serde_json::to_vec(&value).unwrap(),
+        updated_at: 1_789_860_000_000,
+    };
+    assert!(
+        store
+            .transition_task_recovery(&TaskRecoveryTransition {
+                expected: Some(TaskRecoveryExpectation {
+                    chain_id: current.chain_id,
+                    attempt_count: current.attempt_count,
+                    status: current.status,
+                }),
+                next,
+            })
+            .unwrap()
+    );
+}
+
+fn set_recovery_retry_at(root: &std::path::Path, retry_at_ms: i64) {
+    let store = DocsStore::open(store_root(root)).unwrap();
+    let current = store.task_recovery(TASK).unwrap().unwrap();
+    assert_eq!(current.status, "scheduled");
+    let mut value: serde_json::Value = serde_json::from_slice(&current.record_json).unwrap();
+    value["view"]["retryAtMs"] = retry_at_ms.into();
+    value["view"]["updatedAtMs"] = retry_at_ms.into();
+    let next = zeron_sync::StoredTaskRecovery {
+        task_id: current.task_id.clone(),
+        chain_id: current.chain_id.clone(),
+        attempt_count: current.attempt_count,
+        status: current.status.clone(),
+        record_json: serde_json::to_vec(&value).unwrap(),
+        updated_at: retry_at_ms,
+    };
+    assert!(
+        store
+            .transition_task_recovery(&TaskRecoveryTransition {
+                expected: Some(TaskRecoveryExpectation {
+                    chain_id: current.chain_id,
+                    attempt_count: current.attempt_count,
+                    status: current.status,
+                }),
+                next,
+            })
+            .unwrap()
+    );
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+fn changed_config() -> ChatConfig {
+    ChatConfig {
+        harness: HarnessId::Mock,
+        provider_account_id: None,
+        model: Some("mock-2".into()),
+        reasoning: Some(ReasoningLevel::Medium),
+        model_options: serde_json::Map::new(),
+        sandbox: SandboxLevel::WorkspaceWrite,
+        permission_mode: PermissionMode::Ask,
+        effective_permission_mode: PermissionMode::Ask,
+        permission_ceiling_source: None,
+        permission_degradation_reason: None,
+        permission_audit: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn confirmed_rejection_resends_the_frozen_request_once() {
     let root = tempfile::tempdir().unwrap();
@@ -287,19 +427,6 @@ async fn confirmed_rejection_resends_the_frozen_request_once() {
     assert_eq!(
         recovery.acceptance,
         RecoveryAcceptance::RejectedBeforeAcceptance
-    );
-    #[cfg(unix)]
-    assert_eq!(
-        std::fs::metadata(
-            root.path()
-                .join("data/orgs/l10-org/l10-user/recovery/l10-recovery-task.json")
-        )
-        .unwrap()
-        .permissions()
-        .mode()
-            & 0o777,
-        0o600,
-        "the frozen recovery request ledger must be private to the local user"
     );
     core.sessions
         .hold_recovery(
@@ -399,6 +526,88 @@ async fn accepted_failure_continues_same_session_without_repeating_effects() {
 }
 
 #[tokio::test]
+async fn accepted_original_is_never_downgraded_when_continuation_is_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedThenContinuationRejected,
+        runs,
+        requests,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let first = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    command(
+        &client,
+        "l10-rejected-continuation",
+        serde_json::json!({"kind":"retryRecovery","chainId":first.chain_id}),
+    )
+    .await;
+    let retry = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    assert_eq!(retry.attempt_count, 1);
+    assert_eq!(retry.original_acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(retry.acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(retry.action, RecoveryAction::ContinueSession);
+
+    let stored = DocsStore::open(store_root(root.path()))
+        .unwrap()
+        .task_recovery(TASK)
+        .unwrap()
+        .unwrap();
+    let private: serde_json::Value = serde_json::from_slice(&stored.record_json).unwrap();
+    assert_eq!(
+        private["request"]["prompt"], "perform the original synthetic request",
+        "a failed continuation must not replace the frozen original request"
+    );
+    assert_eq!(
+        private["request"]["attachments"].as_array().unwrap().len(),
+        1
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn ambiguous_continuation_start_checks_delivery_and_cannot_resend_original() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedThenContinuationUnknown,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let first = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    command(
+        &client,
+        "l10-unknown-continuation",
+        serde_json::json!({"kind":"retryRecovery","chainId":first.chain_id}),
+    )
+    .await;
+    let recovery = wait_for_recovery(&core, RecoveryStatus::CheckingDelivery).await;
+    assert_eq!(recovery.original_acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(recovery.acceptance, RecoveryAcceptance::Unknown);
+    assert_eq!(recovery.action, RecoveryAction::ObserveOnly);
+    let unsafe_retry = command(
+        &client,
+        "l10-replay-after-ambiguous-continuation",
+        serde_json::json!({"kind":"retryRecovery","chainId":recovery.chain_id}),
+    )
+    .await;
+    assert_eq!(unsafe_retry.status, CommandReceiptStatus::Rejected);
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    core.shutdown().await;
+}
+
+#[tokio::test]
 async fn unknown_delivery_is_visible_and_never_replayed() {
     let root = tempfile::tempdir().unwrap();
     let attachment = root.path().join("frozen.png");
@@ -481,6 +690,126 @@ async fn cancellation_and_chain_identity_survive_restart_without_replay() {
 }
 
 #[tokio::test]
+async fn restart_after_earliest_attempt_claim_preserves_chain_budget_and_does_not_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let original = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let chain_id = original.chain_id.clone();
+    let deadline = original.automatic_deadline_ms;
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    // This is the exact durable state after the receipt/attempt claim commits
+    // but before the provider dispatch emits its first journal event.
+    claim_recovery_without_dispatch(root.path());
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let reconciled = wait_for_recovery(&reopened, RecoveryStatus::CheckingDelivery).await;
+    assert_eq!(reconciled.chain_id, chain_id);
+    assert_eq!(reconciled.attempt_count, 1);
+    assert_eq!(reconciled.automatic_deadline_ms, deadline);
+    assert_eq!(reconciled.original_acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(reconciled.acceptance, RecoveryAcceptance::Unknown);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "restart must not dispatch the claim"
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    let entries = reopened
+        .doc_host
+        .open(TASK)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.role == MessageRole::User)
+            .count(),
+        1,
+        "restart reconciliation must not duplicate the original input"
+    );
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn restart_during_accepted_attempt_continues_same_chain_without_replaying_input() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let original = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let chain_id = original.chain_id.clone();
+    let deadline = original.automatic_deadline_ms;
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+    claim_recovery_without_dispatch(root.path());
+    let journal = RunJournal::open(store_root(root.path()).join("journals")).unwrap();
+    journal
+        .append(
+            TASK,
+            &AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: Vec::new(),
+                cwd: "/tmp".into(),
+                session_id: "accepted-recovery-session".into(),
+                assistant_message_id: "accepted-recovery-assistant".into(),
+            },
+        )
+        .unwrap();
+    std::fs::write(
+        root.path().join("data/ui-settings.json"),
+        br#"{"automaticRetriesEnabled":false}"#,
+    )
+    .unwrap();
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let reconciled = wait_for_recovery(&reopened, RecoveryStatus::RecoveryNeeded).await;
+    assert_eq!(reconciled.chain_id, chain_id);
+    assert_eq!(reconciled.attempt_count, 1);
+    assert_eq!(reconciled.automatic_deadline_ms, deadline);
+    assert_eq!(reconciled.original_acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(reconciled.acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(reconciled.action, RecoveryAction::ContinueSession);
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
 async fn newer_user_activity_supersedes_the_scheduled_chain() {
     let root = tempfile::tempdir().unwrap();
     let attachment = root.path().join("frozen.png");
@@ -533,4 +862,456 @@ async fn newer_user_activity_supersedes_the_scheduled_chain() {
         "newer explicit user request"
     );
     core.shutdown().await;
+}
+
+#[tokio::test]
+async fn two_clients_cannot_claim_the_same_recovery_attempt() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests,
+    );
+    let first = zeron_rpc::memory_client(core.rpc_service());
+    let second = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&first, request(attachment.to_str().unwrap())).await;
+    let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let (a, b) = tokio::join!(
+        command(
+            &first,
+            "l10-racing-retry-a",
+            serde_json::json!({"kind":"retryRecovery","chainId":recovery.chain_id})
+        ),
+        command(
+            &second,
+            "l10-racing-retry-b",
+            serde_json::json!({"kind":"retryRecovery","chainId":recovery.chain_id})
+        )
+    );
+    let statuses = [a.status, b.status];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == CommandReceiptStatus::Applied)
+            .count(),
+        1
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == CommandReceiptStatus::Rejected)
+            .count(),
+        1
+    );
+    wait_for_recovery(&core, RecoveryStatus::Completed).await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        2,
+        "only one recovery provider call"
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn duplicate_retry_after_lost_response_returns_the_receipt_without_another_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let chain_id = recovery.chain_id.clone();
+    let first = command(
+        &client,
+        "l10-lost-retry-response",
+        serde_json::json!({"kind":"retryRecovery","chainId":chain_id}),
+    )
+    .await;
+    assert_eq!(first.status, CommandReceiptStatus::Applied);
+    wait_for_recovery(&core, RecoveryStatus::Completed).await;
+
+    // Simulate a client that lost the first response and retries the exact
+    // command id and payload after observing no reply.
+    let duplicate = command(
+        &client,
+        "l10-lost-retry-response",
+        serde_json::json!({"kind":"retryRecovery","chainId":recovery.chain_id}),
+    )
+    .await;
+    assert_eq!(duplicate.status, CommandReceiptStatus::Applied);
+    assert_eq!(duplicate.command_id, first.command_id);
+    assert_eq!(duplicate.committed_at_ms, first.committed_at_ms);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        2,
+        "duplicate receipt must not dispatch"
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn timer_claim_fences_a_late_cancellation_without_a_second_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverloadThenPending,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let chain_id = scheduled.chain_id.clone();
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    set_recovery_retry_at(root.path(), now_ms());
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverloadThenPending,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let running = wait_for_recovery(&reopened, RecoveryStatus::Running).await;
+    assert_eq!(running.chain_id, chain_id);
+    assert_eq!(running.attempt_count, 1);
+    let cancelled = command(
+        &client,
+        "l10-cancel-after-timer-claim",
+        serde_json::json!({"kind":"cancelRecovery","chainId":chain_id}),
+    )
+    .await;
+    assert_eq!(cancelled.status, CommandReceiptStatus::Rejected);
+    let final_state = wait_for_recovery(&reopened, RecoveryStatus::Running).await;
+    assert_eq!(final_state.attempt_count, 1);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        2,
+        "one claimed retry may run, never two"
+    );
+    reopened.shutdown().await;
+    let held = wait_for_recovery(&reopened, RecoveryStatus::Held).await;
+    assert_eq!(held.attempt_count, 1);
+}
+
+#[tokio::test]
+async fn configuration_commit_supersedes_a_pending_timer_before_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let chain_id = scheduled.chain_id.clone();
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    set_recovery_retry_at(root.path(), now_ms() + 250);
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let changed = changed_config();
+    let receipt = command(
+        &client,
+        "l10-config-before-timer",
+        serde_json::json!({"kind":"setConfig","config":changed}),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+    let superseded = wait_for_recovery(&reopened, RecoveryStatus::Superseded).await;
+    assert_eq!(superseded.chain_id, chain_id);
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "superseded timer must not dispatch"
+    );
+    assert_eq!(
+        reopened
+            .workspace
+            .chat(TASK)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap()
+            .model
+            .as_deref(),
+        Some("mock-2")
+    );
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn permission_grant_supersedes_a_pending_timer_before_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let chain_id = scheduled.chain_id.clone();
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    set_recovery_retry_at(root.path(), now_ms() + 250);
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests,
+    );
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let receipt = command(
+        &client,
+        "l10-permission-before-timer",
+        serde_json::json!({"kind":"setPermission","mode":"full","actor":"l10-test"}),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+    let superseded = wait_for_recovery(&reopened, RecoveryStatus::Superseded).await;
+    assert_eq!(superseded.chain_id, chain_id);
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "a permission grant committed first must fence the pending timer"
+    );
+    let config = reopened
+        .workspace
+        .chat(TASK)
+        .unwrap()
+        .unwrap()
+        .config
+        .unwrap();
+    assert_eq!(config.permission_mode, PermissionMode::Full);
+    assert_eq!(config.effective_permission_mode, PermissionMode::Full);
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn recovery_transition_storage_failure_rolls_back_receipt_and_reopens_safely() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let db_path = store_root(root.path()).join("docs.sqlite3");
+    let injection = rusqlite::Connection::open(&db_path).unwrap();
+    injection
+        .execute_batch(
+            "CREATE TRIGGER fail_recovery_transition
+             BEFORE UPDATE ON task_recovery_state
+             BEGIN SELECT RAISE(ABORT, 'forced recovery transition failure'); END;",
+        )
+        .unwrap();
+    let value = serde_json::json!({
+        "commandId":"l10-cancel-storage-failure",
+        "actorId":"l10-test",
+        "clientId":"l10-test",
+        "clientSessionId":"isolated",
+        "taskId":TASK,
+        "intent":{"kind":"cancelRecovery","chainId":recovery.chain_id},
+    });
+    let failed = client
+        .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, value)
+        .await;
+    assert!(failed.is_err(), "injected SQLite failure must surface");
+    assert_eq!(
+        wait_for_recovery(&core, RecoveryStatus::Scheduled)
+            .await
+            .chain_id,
+        recovery.chain_id
+    );
+    assert_eq!(
+        core.doc_host
+            .task_command_receipt("l10-cancel-storage-failure")
+            .unwrap()
+            .unwrap()
+            .status,
+        CommandReceiptStatus::Pending,
+        "terminal receipt must roll back with recovery state"
+    );
+    injection
+        .execute_batch("DROP TRIGGER fail_recovery_transition")
+        .unwrap();
+    let applied = command(
+        &client,
+        "l10-cancel-storage-failure",
+        serde_json::json!({"kind":"cancelRecovery","chainId":recovery.chain_id}),
+    )
+    .await;
+    assert_eq!(applied.status, CommandReceiptStatus::Applied);
+    wait_for_recovery(&core, RecoveryStatus::Cancelled).await;
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests,
+    );
+    wait_for_recovery(&reopened, RecoveryStatus::Cancelled).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn recovery_storage_failure_rolls_back_registry_projection_and_receipt_together() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    let before_config = core.workspace.chat(TASK).unwrap().unwrap().config;
+
+    let db_path = store_root(root.path()).join("docs.sqlite3");
+    let injection = rusqlite::Connection::open(&db_path).unwrap();
+    injection
+        .execute_batch(
+            "CREATE TRIGGER fail_recovery_projection
+             BEFORE UPDATE ON task_recovery_state
+             BEGIN SELECT RAISE(ABORT, 'forced recovery projection failure'); END;",
+        )
+        .unwrap();
+    let value = serde_json::json!({
+        "commandId":"l10-config-storage-failure",
+        "actorId":"l10-test",
+        "clientId":"l10-test",
+        "clientSessionId":"isolated",
+        "taskId":TASK,
+        "expectedTaskRevision":snapshot(&client).await.snapshot.task_revision,
+        "intent":{"kind":"setConfig","config":changed_config()},
+    });
+    let failed = client
+        .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, value)
+        .await;
+    assert!(failed.is_err(), "injected SQLite failure must surface");
+    assert_eq!(
+        core.workspace.chat(TASK).unwrap().unwrap().config,
+        before_config,
+        "the in-memory registry candidate must roll back"
+    );
+    assert_eq!(
+        wait_for_recovery(&core, RecoveryStatus::Scheduled)
+            .await
+            .chain_id,
+        recovery.chain_id
+    );
+    assert_eq!(
+        core.doc_host
+            .task_command_receipt("l10-config-storage-failure")
+            .unwrap()
+            .unwrap()
+            .status,
+        CommandReceiptStatus::Pending
+    );
+
+    injection
+        .execute_batch("DROP TRIGGER fail_recovery_projection")
+        .unwrap();
+    let applied = command(
+        &client,
+        "l10-config-storage-failure",
+        serde_json::json!({"kind":"setConfig","config":changed_config()}),
+    )
+    .await;
+    assert_eq!(applied.status, CommandReceiptStatus::Applied);
+    wait_for_recovery(&core, RecoveryStatus::Superseded).await;
+    assert_eq!(
+        core.workspace
+            .chat(TASK)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap()
+            .model
+            .as_deref(),
+        Some("mock-2")
+    );
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::RejectedOverload,
+        runs.clone(),
+        requests,
+    );
+    wait_for_recovery(&reopened, RecoveryStatus::Superseded).await;
+    assert_eq!(
+        reopened
+            .workspace
+            .chat(TASK)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap()
+            .model
+            .as_deref(),
+        Some("mock-2")
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    reopened.shutdown().await;
 }
