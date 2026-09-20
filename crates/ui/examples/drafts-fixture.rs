@@ -25,6 +25,7 @@ use zeron_proto::{
     HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
     TaskLineage, ToolCall,
 };
+use zeron_rpc::RpcService as _;
 use zeron_rpc::methods;
 use zeron_ui::*;
 
@@ -32,6 +33,9 @@ const TASK_A: &str = "l08-native-a";
 const TASK_B: &str = "l08-native-b";
 const L11_TASK_A: &str = "11111111-1111-4111-8111-111111111111";
 const L11_TASK_B: &str = "22222222-2222-4222-8222-222222222222";
+const L11_BOOTSTRAP_MARKER: &str = "l11-bootstrap-v2.complete";
+const MEDIUM_REASONING: &[ReasoningLevel] = &[ReasoningLevel::Medium];
+const L11_REASONING: &[ReasoningLevel] = &[ReasoningLevel::Medium, ReasoningLevel::High];
 const PNG_B64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -40,6 +44,8 @@ struct L09FixtureHarness {
     harness_id: HarnessId,
     display_name: &'static str,
     model_id: &'static str,
+    alternate_model_id: Option<&'static str>,
+    reasoning_levels: &'static [ReasoningLevel],
     safety_deadline: Duration,
     steer_outcome: FixtureSteerOutcome,
     control_path: PathBuf,
@@ -290,7 +296,7 @@ impl Harness for L09FixtureHarness {
     }
 
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
-        &[ReasoningLevel::Medium]
+        self.reasoning_levels
     }
 
     fn deterministic_turn_end(&self) -> bool {
@@ -302,13 +308,23 @@ impl Harness for L09FixtureHarness {
     }
 
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
-        Ok(vec![Model {
+        let mut models = vec![Model {
             id: self.model_id.into(),
-            label: format!("{} · synthetic", self.display_name),
+            label: format!("{} · primary synthetic", self.display_name),
             description: Some("bounded fixture-only synthetic harness".into()),
-            reasoning_levels: vec![ReasoningLevel::Medium],
+            reasoning_levels: self.reasoning_levels.to_vec(),
             options: Vec::new(),
-        }])
+        }];
+        if let Some(alternate) = self.alternate_model_id {
+            models.push(Model {
+                id: alternate.into(),
+                label: format!("{} · alternate synthetic", self.display_name),
+                description: Some("second synthetic model for same-provider QA".into()),
+                reasoning_levels: self.reasoning_levels.to_vec(),
+                options: Vec::new(),
+            });
+        }
+        Ok(models)
     }
 
     async fn compact_context(&self, request: ContextCompactRequest) -> Result<(), HarnessError> {
@@ -330,6 +346,10 @@ impl Harness for L09FixtureHarness {
         let generation = self.generation;
         let harness_id = self.harness_id;
         let model_id = self.model_id;
+        let requested_model = request
+            .model
+            .clone()
+            .unwrap_or_else(|| model_id.to_string());
         let control_path = self.control_path.clone();
         let trace_path = self.trace_path.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -367,7 +387,7 @@ impl Harness for L09FixtureHarness {
             );
             let _ = tx.send(Ok(AgentEvent::SessionStarted {
                 harness: harness_id,
-                model: model_id.into(),
+                model: requested_model,
                 tools: Vec::new(),
                 cwd: request.cwd,
                 session_id: session_id.clone(),
@@ -904,19 +924,104 @@ fn l11_run_request(project: &Path) -> RunRequest {
     }
 }
 
-async fn seed_l11_context_controls(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
-    let client = zeron_rpc::memory_client(core.rpc_service());
-    let (_replay, mut events) = core.sessions.subscribe(L11_TASK_A, 0)?;
-    let receipt: zeron_proto::CommandReceipt = client
-        .call_as(
-            methods::EXECUTE_TASK_COMMAND,
-            serde_json::json!({
-                "commandId":"l11-native-history-command",
-                "actorId":"l11-native-fixture",
-                "clientId":"l11-native-fixture",
-                "clientSessionId":"isolated",
-                "taskId":L11_TASK_A,
-                "intent": {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum L11SeedCheckpoint {
+    Complete,
+    AfterHistory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum L11SeedOutcome {
+    Ready,
+    AlreadyReady,
+    PausedAfterHistory,
+}
+
+fn l11_command_receipt(
+    core: &EngineCore,
+    command_id: &str,
+) -> anyhow::Result<Option<zeron_proto::CommandReceipt>> {
+    Ok(core.doc_host.task_command_receipt(command_id)?)
+}
+
+async fn wait_for_l11_applied_receipt(
+    core: &EngineCore,
+    command_id: &str,
+) -> anyhow::Result<zeron_proto::CommandReceipt> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(receipt) = l11_command_receipt(core, command_id)? {
+                match receipt.status {
+                    zeron_proto::CommandReceiptStatus::Pending => {}
+                    zeron_proto::CommandReceiptStatus::Applied => return Ok(receipt),
+                    status => {
+                        anyhow::bail!(
+                            "L11 fixture command {command_id} ended {status:?}: {:?}",
+                            receipt.reason
+                        );
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("L11 fixture command {command_id} did not settle"))?
+}
+
+async fn l11_rpc_call<T: serde::de::DeserializeOwned>(
+    core: &EngineCore,
+    method: &str,
+    params: serde_json::Value,
+) -> anyhow::Result<T> {
+    match core.rpc_service().handle(method, params).await? {
+        zeron_rpc::RpcReply::Value(value) => Ok(serde_json::from_value(value)?),
+        zeron_rpc::RpcReply::Stream(_) => anyhow::bail!("unexpected stream reply from {method}"),
+    }
+}
+
+async fn execute_l11_fenced_command(
+    core: &EngineCore,
+    command_id: &str,
+    intent: serde_json::Value,
+) -> anyhow::Result<zeron_proto::CommandReceipt> {
+    let read: zeron_proto::TaskCommandRead = l11_rpc_call(
+        core,
+        methods::GET_TASK_COMMAND_SNAPSHOT,
+        serde_json::json!({ "taskId": L11_TASK_A }),
+    )
+    .await?;
+    let mut envelope = serde_json::json!({
+        "commandId":command_id,
+        "actorId":"l11-native-fixture",
+        "clientId":"l11-native-fixture",
+        "clientSessionId":"isolated",
+        "taskId":L11_TASK_A,
+        "intent":intent,
+    });
+    if let Some(generation) = read.snapshot.binding_generation {
+        envelope["expectedBindingGeneration"] = generation.into();
+    }
+    l11_rpc_call(core, methods::EXECUTE_TASK_COMMAND, envelope).await
+}
+
+async fn ensure_l11_history(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+    const COMMAND: &str = "l11-native-history-command";
+    match l11_command_receipt(core, COMMAND)? {
+        Some(receipt) if receipt.status == zeron_proto::CommandReceiptStatus::Applied => {}
+        Some(receipt) if receipt.status == zeron_proto::CommandReceiptStatus::Pending => {
+            wait_for_l11_applied_receipt(core, COMMAND).await?;
+        }
+        Some(receipt) => anyhow::bail!(
+            "L11 fixture history receipt is terminal {:?}: {:?}",
+            receipt.status,
+            receipt.reason
+        ),
+        None => {
+            let receipt = execute_l11_fenced_command(
+                core,
+                COMMAND,
+                serde_json::json!({
                     "kind":"session",
                     "command": {
                         "kind":"run",
@@ -924,84 +1029,163 @@ async fn seed_l11_context_controls(core: &EngineCore, root: &Path) -> anyhow::Re
                         "request":l11_run_request(&l11_fixture_project(root))
                     },
                     "transfers":[]
+                }),
+            )
+            .await?;
+            match receipt.status {
+                zeron_proto::CommandReceiptStatus::Applied => {}
+                zeron_proto::CommandReceiptStatus::Pending => {
+                    wait_for_l11_applied_receipt(core, COMMAND).await?;
                 }
-            }),
-        )
-        .await?;
-    anyhow::ensure!(
-        matches!(
-            receipt.status,
-            zeron_proto::CommandReceiptStatus::Pending | zeron_proto::CommandReceiptStatus::Applied
-        ),
-        "L11 fixture history request was not accepted"
-    );
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if matches!(events.recv().await?.event, AgentEvent::Done { .. }) {
-                return Ok::<_, tokio::sync::broadcast::error::RecvError>(());
+                status => anyhow::bail!(
+                    "L11 fixture history request ended {status:?}: {:?}",
+                    receipt.reason
+                ),
             }
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while core.sessions.active_turn_id(L11_TASK_A).is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .map_err(|_| anyhow::anyhow!("L11 fixture history seed did not finish"))??;
+    .map_err(|_| anyhow::anyhow!("L11 fixture history turn did not finish"))?;
+    Ok(())
+}
+
+async fn seed_l11_context_controls_at(
+    core: &EngineCore,
+    root: &Path,
+    checkpoint: L11SeedCheckpoint,
+) -> anyhow::Result<L11SeedOutcome> {
+    let marker = root.join(L11_BOOTSTRAP_MARKER);
+    if marker.is_file() {
+        return Ok(L11SeedOutcome::AlreadyReady);
+    }
+    ensure_l11_history(core, root).await?;
+    if checkpoint == L11SeedCheckpoint::AfterHistory {
+        return Ok(L11SeedOutcome::PausedAfterHistory);
+    }
 
     core.doc_host.open(L11_TASK_A)?;
     core.doc_host.pause_all_queues();
-    client
-        .call(
-            methods::UPLOAD_CHUNK,
+    let existing_queue = core
+        .doc_host
+        .queued_message(L11_TASK_A, "l11-native-queue-message")?;
+    let draft_read = core
+        .store
+        .read_composer_draft(&core.device_id, Some(L11_TASK_A), None)?;
+    let mut attachment = existing_queue
+        .as_ref()
+        .and_then(|row| row.attachments.first().cloned())
+        .or_else(|| {
+            draft_read
+                .draft
+                .as_ref()
+                .and_then(|draft| draft.saved_blob_paths().next().map(str::to_string))
+        });
+    if attachment.is_none() {
+        core.uploads
+            .append("l11-native-attachment", PNG_B64, Some(0))?;
+        attachment = Some(
+            core.uploads
+                .commit("l11-native-attachment", "l11-queue.png")?,
+        );
+    }
+    let attachment = attachment.expect("fixture attachment was resolved");
+
+    if existing_queue.is_none() {
+        const COMMAND: &str = "l11-native-queue-command-v2";
+        anyhow::ensure!(
+            l11_command_receipt(core, COMMAND)?.is_none(),
+            "L11 fixture queue receipt exists without its queue row"
+        );
+        let queued = execute_l11_fenced_command(
+            core,
+            COMMAND,
             serde_json::json!({
-                "uploadId":"l11-native-attachment",
-                "data":PNG_B64,
-                "seq":0
-            }),
-        )
-        .await?;
-    let committed = client
-        .call(
-            methods::UPLOAD_COMMIT,
-            serde_json::json!({
-                "uploadId":"l11-native-attachment",
-                "fileName":"l11-queue.png"
-            }),
-        )
-        .await?;
-    let attachment = committed["path"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("L11 fixture upload returned no path"))?;
-    let queued: zeron_proto::CommandReceipt = client
-        .call_as(
-            methods::EXECUTE_TASK_COMMAND,
-            serde_json::json!({
-                "commandId":"l11-native-queue-command",
-                "actorId":"l11-native-fixture",
-                "clientId":"l11-native-fixture",
-                "clientSessionId":"isolated",
-                "taskId":L11_TASK_A,
-                "intent": {
-                    "kind":"queueMessage",
-                    "messageId":"l11-native-queue-message",
-                    "text":"L11 queued message survives clear and provider handoff",
-                    "attachments":[attachment],
-                    "holdForTurnEnd":true,
-                    "execution": {
-                        "harness":"mock",
-                        "providerAccountId":null,
-                        "model":"l11-mock-a",
-                        "reasoning":"high",
-                        "modelOptions":{},
-                        "sandbox":"workspace-write",
-                        "permissionMode":"ask",
-                        "effectivePermissionMode":"ask"
-                    }
+                "kind":"queueMessage",
+                "messageId":"l11-native-queue-message",
+                "text":"L11 queued message survives clear and provider handoff",
+                "attachments":[attachment.clone()],
+                "holdForTurnEnd":true,
+                "execution": {
+                    "harness":"mock",
+                    "providerAccountId":null,
+                    "model":"l11-mock-a",
+                    "reasoning":"high",
+                    "modelOptions":{},
+                    "sandbox":"workspace-write",
+                    "permissionMode":"ask",
+                    "effectivePermissionMode":"ask"
                 }
             }),
         )
         .await?;
+        anyhow::ensure!(
+            queued.status == zeron_proto::CommandReceiptStatus::Applied,
+            "L11 fixture queue request ended {:?}: {:?}",
+            queued.status,
+            queued.reason
+        );
+    }
+
+    if draft_read.draft.is_none() {
+        let png = base64::engine::general_purpose::STANDARD.decode(PNG_B64)?;
+        let mut rich_draft = draft(
+            L11_TASK_A,
+            1,
+            "L11 rich draft survives clear, restart, and provider handoff",
+        );
+        rich_draft.attachments.push(DraftBlob {
+            attachment_id: "l11-native-draft-attachment".into(),
+            name: "l11-queue.png".into(),
+            path: Some(attachment),
+            sha256: Some(format!("{:x}", Sha256::digest(&png))),
+            size: Some(png.len() as u64),
+            state: DraftBlobState::Saved,
+            error: None,
+        });
+        rich_draft.execution =
+            serde_json::to_value(l11_fixture_chat_config(HarnessId::Mock, "l11-mock-a"))?;
+        let outcome = core
+            .store
+            .save_composer_draft(&core.device_id, &rich_draft)?;
+        anyhow::ensure!(
+            matches!(
+                outcome,
+                zeron_proto::ComposerDraftSaveOutcome::Saved
+                    | zeron_proto::ComposerDraftSaveOutcome::Unchanged
+            ),
+            "L11 fixture draft was not saved: {outcome:?}"
+        );
+    }
+
+    let ready_queue = core
+        .doc_host
+        .queued_message(L11_TASK_A, "l11-native-queue-message")?
+        .ok_or_else(|| anyhow::anyhow!("L11 fixture queue row is missing after seed"))?;
+    core.store.replace_queue_attachment_owners(
+        &core.device_id,
+        [(ready_queue.id, ready_queue.attachments)],
+    )?;
     anyhow::ensure!(
-        queued.status == zeron_proto::CommandReceiptStatus::Applied,
-        "L11 fixture queue seed was not applied"
+        core.store
+            .read_composer_draft(&core.device_id, Some(L11_TASK_A), None)?
+            .draft
+            .is_some(),
+        "L11 fixture draft is missing after seed"
     );
+
+    let temp = root.join(format!(".{L11_BOOTSTRAP_MARKER}.{}", uuid::Uuid::new_v4()));
+    std::fs::write(&temp, b"ready\n")?;
+    std::fs::rename(temp, marker)?;
+    Ok(L11SeedOutcome::Ready)
+}
+
+async fn seed_l11_context_controls(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+    seed_l11_context_controls_at(core, root, L11SeedCheckpoint::Complete).await?;
     Ok(())
 }
 
@@ -1136,8 +1320,8 @@ fn initialize_fixture_workspace(
         return Ok(FixtureStartup {
             task_id: L11_TASK_A,
             seed_turn_recovery: false,
-            seed_l11_context: !task_a_exists,
-            stage_draft_evidence: !task_a_exists,
+            seed_l11_context: true,
+            stage_draft_evidence: false,
         });
     }
     let task_a_exists = existing.iter().any(|chat| chat.id == TASK_A);
@@ -1197,6 +1381,42 @@ fn trace_turn_recovery_workspace(core: &EngineCore, root: &Path, first_run: bool
     );
 }
 
+fn register_l11_harnesses(registry: &HarnessRegistry, root: &Path) {
+    let compact_control = L11CompactControl {
+        command_path: root.join("l11-compact-control.json"),
+        trace_path: root.join("l11-context-control-trace.jsonl"),
+        safety_deadline: fixture_safety_deadline(),
+    };
+    for (harness_id, display_name, model_id, alternate_model_id) in [
+        (
+            HarnessId::Mock,
+            "L11 QA Mock A",
+            "l11-mock-a",
+            "l11-mock-a-alt",
+        ),
+        (
+            HarnessId::Opencode,
+            "L11 QA Mock B · no executable",
+            "l11-mock-b",
+            "l11-mock-b-alt",
+        ),
+    ] {
+        registry.register(Arc::new(L09FixtureHarness {
+            generation: "L11",
+            harness_id,
+            display_name,
+            model_id,
+            alternate_model_id: Some(alternate_model_id),
+            reasoning_levels: L11_REASONING,
+            safety_deadline: fixture_safety_deadline(),
+            steer_outcome: FixtureSteerOutcome::Incorporated,
+            control_path: root.join("l11-fixture-control.json"),
+            trace_path: root.join("l11-context-control-trace.jsonl"),
+            compact_control: Some(compact_control.clone()),
+        }));
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated fixture data root"));
@@ -1223,37 +1443,15 @@ fn main() -> anyhow::Result<()> {
     let l10 = mode == "turn-recovery";
     let l11 = mode == "context-controls";
     if l11 {
-        let compact_control = L11CompactControl {
-            command_path: root.join("l11-compact-control.json"),
-            trace_path: root.join("l11-context-control-trace.jsonl"),
-            safety_deadline: fixture_safety_deadline(),
-        };
-        for (harness_id, display_name, model_id) in [
-            (HarnessId::Mock, "L11 QA Mock A", "l11-mock-a"),
-            (
-                HarnessId::Opencode,
-                "L11 QA Mock B · no executable",
-                "l11-mock-b",
-            ),
-        ] {
-            registry.register(Arc::new(L09FixtureHarness {
-                generation: "L11",
-                harness_id,
-                display_name,
-                model_id,
-                safety_deadline: fixture_safety_deadline(),
-                steer_outcome: FixtureSteerOutcome::Incorporated,
-                control_path: root.join("l11-fixture-control.json"),
-                trace_path: root.join("l11-context-control-trace.jsonl"),
-                compact_control: Some(compact_control.clone()),
-            }));
-        }
+        register_l11_harnesses(&registry, &root);
     } else {
         registry.register(Arc::new(L09FixtureHarness {
             generation: if l10 { "L10" } else { "L09" },
             harness_id: HarnessId::Mock,
             display_name: if l10 { "L10 QA Mock" } else { "L09 QA Mock" },
             model_id: "mock-1",
+            alternate_model_id: None,
+            reasoning_levels: MEDIUM_REASONING,
             safety_deadline: fixture_safety_deadline(),
             steer_outcome: fixture_steer_outcome(),
             control_path: root.join(if l10 {
@@ -1313,7 +1511,7 @@ fn main() -> anyhow::Result<()> {
         if startup.seed_turn_recovery {
             runtime.block_on(seed_turn_recovery(&core, &root))?;
         }
-    } else if startup.seed_l11_context {
+    } else if l11 && startup.seed_l11_context {
         runtime.block_on(seed_l11_context_controls(&core, &root))?;
     }
 
@@ -1443,6 +1641,47 @@ mod tests {
         .unwrap()
     }
 
+    fn assemble_l11_fixture_test_core(root: &Path) -> EngineCore {
+        let accounts = account_config(root);
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let registry = HarnessRegistry::new();
+        register_l11_harnesses(&registry, root);
+        let core = EngineCore::assemble_with_profile_and_agent_accounts_config(
+            EngineProfile::development(&root.join("engine"), "l11-native-org", "l11-native-user"),
+            Arc::new(registry),
+            HarnessId::Mock,
+            None,
+            accounts,
+        )
+        .unwrap();
+        let mut auth_config = AuthConfig::new("http://127.0.0.1:1", root.join("auth"));
+        auth_config.dev_user_id = "l11-fixture-user".into();
+        auth_config.use_in_memory_credentials_for_tests();
+        core.set_auth(Auth::new(auth_config));
+        core
+    }
+
+    fn l11_draft(core: &EngineCore) -> zeron_proto::ComposerDraftRead {
+        core.store
+            .read_composer_draft(&core.device_id, Some(L11_TASK_A), None)
+            .unwrap()
+    }
+
+    fn l11_history_seed_count(core: &EngineCore) -> usize {
+        core.doc_host
+            .open(L11_TASK_A)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .iter()
+            .filter(|entry| {
+                entry.role == zeron_doc::MessageRole::User
+                    && entry.id == "l11-native-history-message"
+            })
+            .count()
+    }
+
     fn write_control(path: &Path, sequence: u64, action: &str) {
         std::fs::write(
             path,
@@ -1488,7 +1727,7 @@ mod tests {
         let first = initialize_fixture_workspace(&core, root.path(), "context-controls").unwrap();
         assert_eq!(first.task_id, L11_TASK_A);
         assert!(first.seed_l11_context);
-        assert!(first.stage_draft_evidence);
+        assert!(!first.stage_draft_evidence);
         assert!(core.task_identity.view(L11_TASK_A).is_some());
         assert!(core.task_identity.view(L11_TASK_B).is_some());
         let chat = core.workspace.chat(L11_TASK_A).unwrap().unwrap();
@@ -1503,9 +1742,214 @@ mod tests {
         );
 
         let restart = initialize_fixture_workspace(&core, root.path(), "context-controls").unwrap();
-        assert!(!restart.seed_l11_context);
+        assert!(restart.seed_l11_context);
         assert!(!restart.stage_draft_evidence);
         core.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn l11_async_seed_fresh_and_reopen_preserves_ready_state() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble_l11_fixture_test_core(root.path());
+        initialize_fixture_workspace(&core, root.path(), "context-controls").unwrap();
+        assert_eq!(
+            seed_l11_context_controls_at(&core, root.path(), L11SeedCheckpoint::Complete)
+                .await
+                .unwrap(),
+            L11SeedOutcome::Ready
+        );
+        assert!(root.path().join(L11_BOOTSTRAP_MARKER).is_file());
+        assert_eq!(l11_history_seed_count(&core), 1);
+        assert_eq!(
+            core.doc_host
+                .task_command_receipt("l11-native-history-command")
+                .unwrap()
+                .unwrap()
+                .status,
+            zeron_proto::CommandReceiptStatus::Applied
+        );
+        assert_eq!(
+            core.doc_host
+                .task_command_receipt("l11-native-queue-command-v2")
+                .unwrap()
+                .unwrap()
+                .status,
+            zeron_proto::CommandReceiptStatus::Applied
+        );
+        let queue = core
+            .doc_host
+            .queued_message(L11_TASK_A, "l11-native-queue-message")
+            .unwrap()
+            .unwrap();
+        assert_eq!(queue.attachments.len(), 1);
+        assert!(std::path::Path::new(&queue.attachments[0]).is_file());
+        let read = l11_draft(&core);
+        let mut user_draft = read.draft.unwrap();
+        assert!(user_draft.text.contains("L11 rich draft"));
+        assert_eq!(user_draft.attachments.len(), 1);
+        assert_eq!(
+            core.task_identity
+                .view(L11_TASK_A)
+                .unwrap()
+                .current_binding
+                .unwrap()
+                .generation,
+            1
+        );
+        let models = core
+            .registry
+            .resolve(HarnessId::Mock)
+            .unwrap()
+            .models()
+            .await
+            .unwrap();
+        assert_eq!(models.len(), 2);
+        assert!(
+            models
+                .iter()
+                .all(|model| model.reasoning_levels.contains(&ReasoningLevel::High))
+        );
+
+        user_draft.revision += 1;
+        user_draft.text = "user-edited L11 draft".into();
+        let saved = core
+            .store
+            .save_composer_draft(&core.device_id, &user_draft)
+            .unwrap();
+        assert_eq!(saved, zeron_proto::ComposerDraftSaveOutcome::Saved);
+        let mut user_config = core
+            .workspace
+            .chat(L11_TASK_A)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap();
+        user_config.model = Some("l11-mock-a-alt".into());
+        user_config.reasoning = Some(ReasoningLevel::Medium);
+        core.workspace
+            .set_chat_config(L11_TASK_A, &user_config)
+            .unwrap();
+        core.shutdown().await;
+        drop(core);
+
+        let db = root
+            .path()
+            .join("engine/orgs/l11-native-org/l11-native-user/docs.sqlite3");
+        let output = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(db)
+            .arg(format!(
+                "SELECT COUNT(*) FROM attachment_owners WHERE owner_id IN ('l11-native-queue-message','{L11_TASK_A}')"
+            ))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let owner_count: i64 = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(owner_count, 2);
+
+        let reopened = assemble_l11_fixture_test_core(root.path());
+        initialize_fixture_workspace(&reopened, root.path(), "context-controls").unwrap();
+        assert_eq!(
+            seed_l11_context_controls_at(&reopened, root.path(), L11SeedCheckpoint::Complete)
+                .await
+                .unwrap(),
+            L11SeedOutcome::AlreadyReady
+        );
+        assert_eq!(l11_history_seed_count(&reopened), 1);
+        assert_eq!(
+            l11_draft(&reopened).draft.unwrap().text,
+            "user-edited L11 draft"
+        );
+        let reopened_config = reopened
+            .workspace
+            .chat(L11_TASK_A)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap();
+        assert_eq!(reopened_config.model.as_deref(), Some("l11-mock-a-alt"));
+        assert_eq!(reopened_config.reasoning, Some(ReasoningLevel::Medium));
+        assert!(
+            reopened
+                .doc_host
+                .queued_message(L11_TASK_A, "l11-native-queue-message")
+                .unwrap()
+                .is_some()
+        );
+        reopened.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn l11_async_seed_recovers_after_history_without_duplicate_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble_l11_fixture_test_core(root.path());
+        initialize_fixture_workspace(&core, root.path(), "context-controls").unwrap();
+        assert_eq!(
+            seed_l11_context_controls_at(&core, root.path(), L11SeedCheckpoint::AfterHistory)
+                .await
+                .unwrap(),
+            L11SeedOutcome::PausedAfterHistory
+        );
+        assert_eq!(l11_history_seed_count(&core), 1);
+        assert!(!root.path().join(L11_BOOTSTRAP_MARKER).exists());
+        let legacy_conflict: zeron_proto::CommandReceipt = l11_rpc_call(
+            &core,
+            methods::EXECUTE_TASK_COMMAND,
+            serde_json::json!({
+                "commandId":"l11-native-queue-command",
+                "actorId":"l11-native-fixture",
+                "clientId":"l11-native-fixture",
+                "clientSessionId":"isolated",
+                "taskId":L11_TASK_A,
+                "intent": {
+                    "kind":"queueMessage",
+                    "messageId":"l11-native-queue-message",
+                    "text":"legacy unfenced fixture row",
+                    "attachments":[],
+                    "holdForTurnEnd":true
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            legacy_conflict.status,
+            zeron_proto::CommandReceiptStatus::Conflict
+        );
+        assert!(
+            core.doc_host
+                .queued_message(L11_TASK_A, "l11-native-queue-message")
+                .unwrap()
+                .is_none()
+        );
+        assert!(l11_draft(&core).draft.is_none());
+        core.shutdown().await;
+        drop(core);
+
+        let reopened = assemble_l11_fixture_test_core(root.path());
+        initialize_fixture_workspace(&reopened, root.path(), "context-controls").unwrap();
+        assert_eq!(
+            seed_l11_context_controls_at(&reopened, root.path(), L11SeedCheckpoint::Complete)
+                .await
+                .unwrap(),
+            L11SeedOutcome::Ready
+        );
+        assert_eq!(l11_history_seed_count(&reopened), 1);
+        assert!(
+            reopened
+                .doc_host
+                .queued_message(L11_TASK_A, "l11-native-queue-message")
+                .unwrap()
+                .is_some()
+        );
+        assert!(l11_draft(&reopened).draft.is_some());
+        let trace =
+            std::fs::read_to_string(root.path().join("l11-context-control-trace.jsonl")).unwrap();
+        assert_eq!(trace.matches("\"event\":\"runStarted\"").count(), 1);
+        reopened.shutdown().await;
     }
 
     #[tokio::test]
@@ -1642,6 +2086,8 @@ mod tests {
             harness_id: HarnessId::Mock,
             display_name: "L09 QA Mock",
             model_id: "mock-1",
+            alternate_model_id: None,
+            reasoning_levels: MEDIUM_REASONING,
             safety_deadline: Duration::from_secs(5),
             steer_outcome: FixtureSteerOutcome::Incorporated,
             control_path: command.clone(),
