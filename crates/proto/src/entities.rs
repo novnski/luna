@@ -157,6 +157,10 @@ pub struct Chat {
     pub device_id: String,
     pub title: Option<String>,
     pub archived: bool,
+    /// LUNA-owned global pin position. `None` means unpinned; lower keys render
+    /// first. The key is intentionally independent of provider pin support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_order: Option<i64>,
     pub cwd: Option<String>,
     pub branch: Option<String>,
     /// Canonical id of the repo checkout/worktree this chat operates in.
@@ -191,6 +195,10 @@ pub struct Chat {
     /// device clears the badge everywhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<DateTime<Utc>>,
+    /// Explicit user override for "Mark unread". New activity still uses the
+    /// timestamp comparison; opening/marking read clears this flag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manually_unread: bool,
     /// Which sync room generation serves this chat (docs/chat2-sync.md M2):
     /// `None`/1 = legacy s2 loro room, 2 = chat2 dumb relay. The HOST flips
     /// this in the same breath as seeding the chat2 checkpoint; every device
@@ -209,6 +217,9 @@ impl Chat {
 impl Chat {
     /// True when the chat has activity the user hasn't seen on any device.
     pub fn unseen(&self) -> bool {
+        if self.manually_unread {
+            return true;
+        }
         match (self.last_message_at, self.last_seen_at) {
             (Some(msg), Some(seen)) => msg > seen,
             (Some(_), None) => true,

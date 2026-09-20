@@ -346,6 +346,7 @@ mod tests {
             device_id: "d".into(),
             title: None,
             archived,
+            pinned_order: None,
             cwd: None,
             branch: None,
             checkout_id: None,
@@ -358,6 +359,7 @@ mod tests {
             harness_session_cwd: None,
             space_id: None,
             last_seen_at: None,
+            manually_unread: false,
             room_gen: None,
         }
     }

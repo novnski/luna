@@ -1606,6 +1606,7 @@ impl AppState {
         self.overview_chats(now)
             .into_iter()
             .filter(|(_, chat)| match space_filter {
+                Some(crate::settings::PERSONAL_SPACE_FILTER) => chat.space_id.is_none(),
                 Some(space_id) => chat.space_id.as_deref() == Some(space_id),
                 None => true,
             })
@@ -2033,6 +2034,7 @@ impl AppState {
             return;
         }
         chat.last_seen_at = Some(Utc::now());
+        chat.manually_unread = false;
         cx.notify();
         let Some(handle) = self.engine.clone() else {
             return;
@@ -3056,6 +3058,7 @@ mod tests {
             device_id: "dev".into(),
             title: None,
             archived: false,
+            pinned_order: None,
             cwd: None,
             branch: None,
             checkout_id: None,
@@ -3068,6 +3071,7 @@ mod tests {
             harness_session_cwd: None,
             space_id: None,
             last_seen_at: None,
+            manually_unread: false,
             room_gen: None,
         }
     }
@@ -3752,6 +3756,28 @@ mod tests {
             .map(|(_, c)| c.id.as_str())
             .collect();
         assert_eq!(overview, ["old", "new", "dangling"]);
+    }
+
+    #[test]
+    fn sidebar_personal_scope_is_explicit_and_all_projects_stays_flat() {
+        let mut state = AppState::new();
+        state.apply_spaces(vec![space("s1", "dev", "/a", 1)]);
+        let mut project = chat("project", 2, None);
+        project.space_id = Some("s1".into());
+        let personal = chat("personal", 1, None);
+        state.apply_chats(vec![project, personal]);
+        let all: Vec<_> = state
+            .sidebar_chats(Utc::now(), None)
+            .into_iter()
+            .map(|(_, chat)| chat.id.as_str())
+            .collect();
+        assert_eq!(all, ["project", "personal"]);
+        let personal: Vec<_> = state
+            .sidebar_chats(Utc::now(), Some(crate::settings::PERSONAL_SPACE_FILTER))
+            .into_iter()
+            .map(|(_, chat)| chat.id.as_str())
+            .collect();
+        assert_eq!(personal, ["personal"]);
     }
 
     #[test]

@@ -870,6 +870,12 @@ impl RegistryDoc {
             ("deviceId", json!(chat.device_id)),
             ("title", opt_str(chat.title.as_deref())),
             ("archived", json!(chat.archived)),
+            (
+                "pinnedOrder",
+                chat.pinned_order
+                    .map(|order| json!(order))
+                    .unwrap_or(Value::Null),
+            ),
             ("cwd", opt_str(chat.cwd.as_deref())),
             ("branch", opt_str(chat.branch.as_deref())),
             ("checkoutId", opt_str(chat.checkout_id.as_deref())),
@@ -898,6 +904,7 @@ impl RegistryDoc {
             ),
             ("spaceId", opt_str(chat.space_id.as_deref())),
             ("lastSeenAt", opt_ms(chat.last_seen_at)),
+            ("manuallyUnread", json!(chat.manually_unread)),
             (
                 "roomGen",
                 chat.room_gen.map(|g| json!(g)).unwrap_or(Value::Null),
@@ -949,6 +956,45 @@ impl RegistryDoc {
             OpKind::Update,
             fields([("lastSeenAt", json!(at.timestamp_millis()))]),
         );
+        self.write(
+            KIND_CHATS,
+            chat_id,
+            OpKind::Update,
+            fields([("manuallyUnread", json!(false))]),
+        );
+        Ok(true)
+    }
+
+    pub fn set_chat_unread(&mut self, chat_id: &str, unread: bool) -> Result<bool, DocError> {
+        if !self.row_exists(KIND_CHATS, chat_id) {
+            return Ok(false);
+        }
+        self.write(
+            KIND_CHATS,
+            chat_id,
+            OpKind::Update,
+            fields([("manuallyUnread", json!(unread))]),
+        );
+        Ok(true)
+    }
+
+    pub fn set_chat_pinned_order(
+        &mut self,
+        chat_id: &str,
+        order: Option<i64>,
+    ) -> Result<bool, DocError> {
+        if !self.row_exists(KIND_CHATS, chat_id) {
+            return Ok(false);
+        }
+        self.write(
+            KIND_CHATS,
+            chat_id,
+            OpKind::Update,
+            fields([(
+                "pinnedOrder",
+                order.map(|value| json!(value)).unwrap_or(Value::Null),
+            )]),
+        );
         Ok(true)
     }
 
@@ -986,11 +1032,23 @@ impl RegistryDoc {
         if !self.row_exists(KIND_CHATS, chat_id) {
             return Ok(false);
         }
+        let mut set = fields([("archived", json!(archived))]);
+        if archived {
+            set.insert("pinnedOrder".into(), Value::Null);
+        }
+        self.write(KIND_CHATS, chat_id, OpKind::Update, set);
+        Ok(true)
+    }
+
+    pub fn set_chat_space(&mut self, chat_id: &str, space_id: &str) -> Result<bool, DocError> {
+        if !self.row_exists(KIND_CHATS, chat_id) || !self.row_exists(KIND_SPACES, space_id) {
+            return Ok(false);
+        }
         self.write(
             KIND_CHATS,
             chat_id,
             OpKind::Update,
-            fields([("archived", json!(archived))]),
+            fields([("spaceId", json!(space_id))]),
         );
         Ok(true)
     }
@@ -1262,6 +1320,12 @@ impl RegistryDoc {
                     ("deviceId", json!(chat.device_id)),
                     ("title", opt_str(chat.title.as_deref())),
                     ("archived", json!(chat.archived)),
+                    (
+                        "pinnedOrder",
+                        chat.pinned_order
+                            .map(|order| json!(order))
+                            .unwrap_or(Value::Null),
+                    ),
                     ("cwd", opt_str(chat.cwd.as_deref())),
                     ("branch", opt_str(chat.branch.as_deref())),
                     ("checkoutId", opt_str(chat.checkout_id.as_deref())),
@@ -1282,6 +1346,7 @@ impl RegistryDoc {
                     ),
                     ("spaceId", opt_str(chat.space_id.as_deref())),
                     ("lastSeenAt", opt_ms(chat.last_seen_at)),
+                    ("manuallyUnread", json!(chat.manually_unread)),
                 ]),
             );
         }

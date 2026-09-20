@@ -5922,6 +5922,7 @@ rename to new_name.rs
             device_id: device.into(),
             title: None,
             archived: false,
+            pinned_order: None,
             cwd: cwd.map(Into::into),
             branch: None,
             checkout_id: checkout.map(Into::into),
@@ -5934,6 +5935,7 @@ rename to new_name.rs
             harness_session_cwd: None,
             space_id: None,
             last_seen_at: None,
+            manually_unread: false,
             room_gen: None,
         }
     }

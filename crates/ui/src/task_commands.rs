@@ -17,6 +17,10 @@ fn revision_fenced_kind(kind: Option<&str>) -> bool {
         kind,
         Some(
             "rename"
+                | "setPinned"
+                | "setRead"
+                | "markSeen"
+                | "moveProject"
                 | "setArchived"
                 | "delete"
                 | "setBranch"
@@ -46,6 +50,10 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
                 | "retryRecovery"
                 | "cancelRecovery"
                 | "rename"
+                | "setPinned"
+                | "setRead"
+                | "markSeen"
+                | "moveProject"
                 | "setArchived"
                 | "delete"
                 | "setBranch"
@@ -186,6 +194,21 @@ mod tests {
             "compactContext",
             "clearContext",
             "switchProvider",
+        ] {
+            assert!(revision_fenced_kind(Some(kind)), "revision fence: {kind}");
+            assert!(binding_fenced_kind(Some(kind)), "binding fence: {kind}");
+        }
+    }
+
+    #[test]
+    fn organization_intents_carry_revision_and_binding_fences() {
+        for kind in [
+            "rename",
+            "setPinned",
+            "setRead",
+            "markSeen",
+            "setArchived",
+            "moveProject",
         ] {
             assert!(revision_fenced_kind(Some(kind)), "revision fence: {kind}");
             assert!(binding_fenced_kind(Some(kind)), "binding fence: {kind}");

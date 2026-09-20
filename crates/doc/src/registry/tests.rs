@@ -255,6 +255,7 @@ fn chat(id: &str, device_id: &str) -> Chat {
         device_id: device_id.into(),
         title: Some("First chat".into()),
         archived: false,
+        pinned_order: None,
         cwd: Some("/tmp/repo".into()),
         branch: Some("main".into()),
         checkout_id: None,
@@ -279,6 +280,7 @@ fn chat(id: &str, device_id: &str) -> Chat {
         harness_session_cwd: None,
         space_id: None,
         last_seen_at: None,
+        manually_unread: false,
         room_gen: None,
     }
 }

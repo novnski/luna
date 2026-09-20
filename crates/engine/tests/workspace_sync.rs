@@ -711,6 +711,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
                 device_id: "dev-a".into(),
                 title: Some("Migrated chat".into()),
                 archived: false,
+                pinned_order: None,
                 cwd: Some("/tmp/legacy".into()),
                 branch: Some("main".into()),
                 checkout_id: None,
@@ -724,6 +725,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
                 harness_session_cwd: Some("/tmp/legacy".into()),
                 space_id: Some("space-legacy".into()),
                 last_seen_at: Some(now),
+                manually_unread: false,
             })
             .unwrap();
         legacy

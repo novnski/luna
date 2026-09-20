@@ -245,6 +245,10 @@ impl WorkspaceDoc {
         row.insert("deviceId", chat.device_id.as_str())?;
         set_opt_str(&row, "title", chat.title.as_deref())?;
         row.insert("archived", chat.archived)?;
+        match chat.pinned_order {
+            Some(order) => row.insert("pinnedOrder", order)?,
+            None => row.delete("pinnedOrder")?,
+        }
         set_opt_str(&row, "cwd", chat.cwd.as_deref())?;
         set_opt_str(&row, "branch", chat.branch.as_deref())?;
         set_opt_str(&row, "checkoutId", chat.checkout_id.as_deref())?;
@@ -276,6 +280,7 @@ impl WorkspaceDoc {
         )?;
         set_opt_str(&row, "spaceId", chat.space_id.as_deref())?;
         set_opt_ms(&row, "lastSeenAt", chat.last_seen_at)?;
+        row.insert("manuallyUnread", chat.manually_unread)?;
         self.doc.commit();
         Ok(())
     }
@@ -295,6 +300,35 @@ impl WorkspaceDoc {
             return Ok(true);
         }
         row.insert("lastSeenAt", at.timestamp_millis())?;
+        row.insert("manuallyUnread", false)?;
+        self.doc.commit();
+        Ok(true)
+    }
+
+    /// Durable explicit read/unread organization state.
+    pub fn set_chat_unread(&self, chat_id: &str, unread: bool) -> Result<bool, DocError> {
+        let Some(row) = self.existing_row("chats", chat_id) else {
+            return Ok(false);
+        };
+        row.insert("manuallyUnread", unread)?;
+        self.doc.commit();
+        Ok(true)
+    }
+
+    /// LUNA-owned stable global pin key. Provider metadata is deliberately not
+    /// consulted here.
+    pub fn set_chat_pinned_order(
+        &self,
+        chat_id: &str,
+        order: Option<i64>,
+    ) -> Result<bool, DocError> {
+        let Some(row) = self.existing_row("chats", chat_id) else {
+            return Ok(false);
+        };
+        match order {
+            Some(order) => row.insert("pinnedOrder", order)?,
+            None => row.delete("pinnedOrder")?,
+        }
         self.doc.commit();
         Ok(true)
     }
@@ -341,6 +375,21 @@ impl WorkspaceDoc {
             return Ok(false);
         };
         row.insert("archived", archived)?;
+        if archived {
+            row.delete("pinnedOrder")?;
+        }
+        self.doc.commit();
+        Ok(true)
+    }
+
+    pub fn set_chat_space(&self, chat_id: &str, space_id: &str) -> Result<bool, DocError> {
+        if self.existing_row("spaces", space_id).is_none() {
+            return Ok(false);
+        }
+        let Some(row) = self.existing_row("chats", chat_id) else {
+            return Ok(false);
+        };
+        row.insert("spaceId", space_id)?;
         self.doc.commit();
         Ok(true)
     }
@@ -666,6 +715,8 @@ pub(crate) struct RawChat {
     #[serde(default)]
     archived: bool,
     #[serde(default)]
+    pinned_order: Option<i64>,
+    #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
     branch: Option<String>,
@@ -696,6 +747,8 @@ pub(crate) struct RawChat {
     #[serde(default)]
     last_seen_at: Option<i64>,
     #[serde(default)]
+    manually_unread: bool,
+    #[serde(default)]
     room_gen: Option<u32>,
 }
 
@@ -724,6 +777,7 @@ impl From<RawChat> for Chat {
             device_id: raw.device_id,
             title: raw.title,
             archived: raw.archived,
+            pinned_order: raw.pinned_order,
             cwd: raw.cwd,
             branch: raw.branch,
             checkout_id: raw.checkout_id,
@@ -736,6 +790,7 @@ impl From<RawChat> for Chat {
             harness_session_cwd: raw.harness_session_cwd,
             space_id: raw.space_id,
             last_seen_at: raw.last_seen_at.map(dt),
+            manually_unread: raw.manually_unread,
             room_gen: raw.room_gen,
         }
     }
@@ -798,6 +853,7 @@ mod tests {
             device_id: device_id.into(),
             title: Some("First chat".into()),
             archived: false,
+            pinned_order: None,
             cwd: Some("/tmp/repo".into()),
             branch: Some("main".into()),
             checkout_id: None,
@@ -822,6 +878,7 @@ mod tests {
             harness_session_cwd: None,
             space_id: None,
             last_seen_at: None,
+            manually_unread: false,
             room_gen: None,
         }
     }

@@ -27,6 +27,16 @@ pub(super) fn compare_sidebar_chats(
     left: &zeron_proto::Chat,
     right: &zeron_proto::Chat,
 ) -> std::cmp::Ordering {
+    match (left.pinned_order, right.pinned_order) {
+        (Some(left_order), Some(right_order)) => {
+            return left_order
+                .cmp(&right_order)
+                .then_with(|| left.id.cmp(&right.id));
+        }
+        (Some(_), None) => return std::cmp::Ordering::Less,
+        (None, Some(_)) => return std::cmp::Ordering::Greater,
+        (None, None) => {}
+    }
     let primary = match sort {
         SidebarSort::Created => right.created_at.cmp(&left.created_at),
         SidebarSort::LastUpdated => right
@@ -179,6 +189,7 @@ fn sidebar_disclosure_header(theme: &Theme, label: SharedString, chevron: AnyEle
 #[derive(Clone, PartialEq)]
 pub(super) enum SpacesMenuRow {
     All,
+    Personal,
     Space(String),
     AddSpace,
 }
@@ -380,11 +391,17 @@ impl Shell {
     /// default is "the space you're looking at".
     pub(super) fn set_space_filter(&mut self, filter: Option<String>, cx: &mut Context<Self>) {
         self.settings.space_filter = filter.clone();
-        if let Some(space_id) = filter
-            && self.state.read(cx).selected_chat.is_none()
-        {
-            self.state
-                .update(cx, |s, cx| s.select_space(Some(space_id), cx));
+        if self.state.read(cx).selected_chat.is_none() {
+            match filter.as_deref() {
+                Some(crate::settings::PERSONAL_SPACE_FILTER) => {
+                    self.state.update(cx, |s, cx| s.select_space(None, cx));
+                }
+                Some(space_id) => {
+                    self.state
+                        .update(cx, |s, cx| s.select_space(Some(space_id.into()), cx));
+                }
+                None => {}
+            }
         }
         self.close_spaces_menu(cx);
         self.schedule_save(cx);
@@ -452,6 +469,7 @@ impl Shell {
         let mut rows: Vec<SpacesMenuRow> = Vec::new();
         if query.trim().is_empty() {
             rows.push(SpacesMenuRow::All);
+            rows.push(SpacesMenuRow::Personal);
         }
         rows.extend(
             popover::filter_indices(&query, &names)
@@ -491,6 +509,10 @@ impl Shell {
         let rows = self.spaces_menu_rows(cx);
         let start = match &current {
             None => 0,
+            Some(id) if id == crate::settings::PERSONAL_SPACE_FILTER => rows
+                .iter()
+                .position(|row| matches!(row, SpacesMenuRow::Personal))
+                .unwrap_or(0),
             Some(id) => rows
                 .iter()
                 .position(|row| matches!(row, SpacesMenuRow::Space(s) if s == id))
@@ -507,9 +529,13 @@ impl Shell {
     fn activate_spaces_menu_row(&mut self, row: SpacesMenuRow, cx: &mut Context<Self>) {
         match row {
             SpacesMenuRow::All => self.set_space_filter(None, cx),
+            SpacesMenuRow::Personal => {
+                self.set_space_filter(Some(crate::settings::PERSONAL_SPACE_FILTER.into()), cx)
+            }
             SpacesMenuRow::Space(id) => self.set_space_filter(Some(id), cx),
             SpacesMenuRow::AddSpace => {
                 self.close_spaces_menu(cx);
+                self.pending_move_after_create = None;
                 self.open_add_space(cx);
             }
         }
@@ -771,6 +797,9 @@ impl Shell {
                         Some((tag.into(), offline)),
                     )
                 }
+                None if filter.as_deref() == Some(crate::settings::PERSONAL_SPACE_FILTER) => {
+                    (SharedString::from("Personal / no project"), None)
+                }
                 None => (SharedString::from("All projects"), None),
             }
         };
@@ -1003,6 +1032,13 @@ impl Shell {
                         false,
                         filter.is_none(),
                     ),
+                    SpacesMenuRow::Personal => (
+                        SpacesMenuRow::Personal,
+                        SharedString::from("Personal / no project"),
+                        None,
+                        false,
+                        filter.as_deref() == Some(crate::settings::PERSONAL_SPACE_FILTER),
+                    ),
                     SpacesMenuRow::Space(id) => {
                         let selected = filter.as_deref() == Some(id.as_str());
                         match state.space_row(&id) {
@@ -1179,8 +1215,14 @@ impl Shell {
         if self.settings.sidebar_organization != SidebarOrganization::ByDevice {
             return chats.into_iter().map(|chat| chat.id).collect();
         }
+        let pinned_len = chats
+            .iter()
+            .take_while(|chat| chat.pinned_order.is_some())
+            .count();
+        let unpinned = chats.split_off(pinned_len);
+        let mut ordered: Vec<String> = chats.into_iter().map(|chat| chat.id).collect();
         let mut groups: Vec<(Option<(String, String)>, Vec<zeron_proto::Chat>)> = Vec::new();
-        for chat in chats {
+        for chat in unpinned {
             let key = Some((chat.device_id.clone(), String::new()));
             if let Some((_, existing)) = groups.iter_mut().find(|(group, _)| group == &key) {
                 existing.push(chat);
@@ -1189,11 +1231,13 @@ impl Shell {
             }
         }
         promote_local_device_group(&mut groups, state.local_device_id.as_deref());
-        groups
-            .into_iter()
-            .flat_map(|(_, rows)| rows)
-            .map(|chat| chat.id)
-            .collect()
+        ordered.extend(
+            groups
+                .into_iter()
+                .flat_map(|(_, rows)| rows)
+                .map(|chat| chat.id),
+        );
+        ordered
     }
 
     /// The sidebar's Sessions list: every session (idle included) of the
@@ -1243,9 +1287,13 @@ impl Shell {
                         .filter(|b| !b.is_empty())
                         .map(str::to_string);
                     let change_request = state.change_request_for_chat(&chat).cloned();
-                    let group = match self.settings.sidebar_organization {
-                        SidebarOrganization::ByDevice => Some((chat.device_id.clone(), device)),
-                        SidebarOrganization::ByProject | SidebarOrganization::InOneList => None,
+                    let group = if chat.pinned_order.is_some() {
+                        Some(("__luna_pinned__".into(), "Pinned".into()))
+                    } else {
+                        match self.settings.sidebar_organization {
+                            SidebarOrganization::ByDevice => Some((chat.device_id.clone(), device)),
+                            SidebarOrganization::ByProject | SidebarOrganization::InOneList => None,
+                        }
                     };
                     ActiveChatRow {
                         status,
@@ -1279,7 +1327,17 @@ impl Shell {
         }
         if self.settings.sidebar_organization == SidebarOrganization::ByDevice {
             let local_device_id = self.state.read(cx).local_device_id.clone();
-            promote_local_device_group(&mut groups, local_device_id.as_deref());
+            if groups.first().is_some_and(|(group, _)| {
+                group
+                    .as_ref()
+                    .is_some_and(|(id, _)| id == "__luna_pinned__")
+            }) {
+                let pinned = groups.remove(0);
+                promote_local_device_group(&mut groups, local_device_id.as_deref());
+                groups.insert(0, pinned);
+            } else {
+                promote_local_device_group(&mut groups, local_device_id.as_deref());
+            }
         }
 
         let selected = self.state.read(cx).selected_chat.clone();
@@ -1347,9 +1405,13 @@ impl Shell {
                 rendered.extend(rendered_rows);
                 continue;
             };
-            let organization = match self.settings.sidebar_organization {
-                SidebarOrganization::ByDevice => "device",
-                SidebarOrganization::ByProject | SidebarOrganization::InOneList => "list",
+            let organization = if key == "__luna_pinned__" {
+                "pinned"
+            } else {
+                match self.settings.sidebar_organization {
+                    SidebarOrganization::ByDevice => "device",
+                    SidebarOrganization::ByProject | SidebarOrganization::InOneList => "list",
+                }
             };
             let collapse_key = format!("{organization}:{key}");
             let motion_key = format!("group:{collapse_key}");
@@ -1436,6 +1498,9 @@ impl Shell {
                 .iter()
                 .filter(|c| c.archived)
                 .filter(|chat| match &filter {
+                    Some(space_id) if space_id == crate::settings::PERSONAL_SPACE_FILTER => {
+                        chat.space_id.is_none()
+                    }
                     Some(space_id) => chat.space_id.as_deref() == Some(space_id.as_str()),
                     None => true,
                 })
@@ -2147,7 +2212,11 @@ impl Shell {
             .map(|s| s.id.clone())
         {
             self.add_space = None;
-            self.land_in_space(existing, cx);
+            if let Some(chat_id) = self.pending_move_after_create.take() {
+                self.open_move_project_to(chat_id, existing, cx);
+            } else {
+                self.land_in_space(existing, cx);
+            }
             return;
         }
         let Some(flow) = self.add_space.as_mut() else {
@@ -2188,7 +2257,11 @@ impl Shell {
                 match result {
                     Ok(_) => {
                         shell.add_space = None;
-                        shell.land_in_space(submit_id.clone(), cx);
+                        if let Some(chat_id) = shell.pending_move_after_create.take() {
+                            shell.open_move_project_to(chat_id, submit_id.clone(), cx);
+                        } else {
+                            shell.land_in_space(submit_id.clone(), cx);
+                        }
                     }
                     Err(err) => {
                         // Roll the optimistic row back; surface the error inline.
@@ -3000,6 +3073,7 @@ mod tests {
             device_id: "device".into(),
             title: None,
             archived: false,
+            pinned_order: None,
             cwd: None,
             branch: None,
             checkout_id: None,
@@ -3012,6 +3086,7 @@ mod tests {
             harness_session_cwd: None,
             space_id: None,
             last_seen_at: None,
+            manually_unread: false,
             room_gen: None,
         }
     }
@@ -3022,6 +3097,24 @@ mod tests {
         let beta = chat("beta");
         assert!(compare_sidebar_chats(SidebarSort::Created, &alpha, &beta).is_lt());
         assert!(compare_sidebar_chats(SidebarSort::LastUpdated, &alpha, &beta).is_lt());
+    }
+
+    #[test]
+    fn global_pin_order_precedes_recency_and_filtered_subsets_keep_it() {
+        let mut alpha = chat("alpha");
+        alpha.pinned_order = Some(2048);
+        let mut beta = chat("beta");
+        beta.pinned_order = Some(1024);
+        let recent = chat("recent");
+        let mut rows = vec![alpha.clone(), recent, beta.clone()];
+        rows.sort_by(|left, right| compare_sidebar_chats(SidebarSort::LastUpdated, left, right));
+        assert_eq!(
+            rows.iter().map(|chat| chat.id.as_str()).collect::<Vec<_>>(),
+            ["beta", "alpha", "recent"]
+        );
+        // A project-filtered subset uses the same keys rather than maintaining
+        // a second project-local order.
+        assert!(compare_sidebar_chats(SidebarSort::Created, &beta, &alpha).is_lt());
     }
 
     #[test]

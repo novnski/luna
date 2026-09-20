@@ -222,8 +222,23 @@ enum TaskCommandIntent {
     Rename {
         title: String,
     },
+    #[serde(rename_all = "camelCase")]
+    SetPinned {
+        pinned: bool,
+        #[serde(default)]
+        after_task_id: Option<String>,
+        #[serde(default)]
+        before_task_id: Option<String>,
+    },
+    SetRead {
+        read: bool,
+    },
     SetArchived {
         archived: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    MoveProject {
+        destination_space_id: String,
     },
     Delete {},
     #[serde(rename_all = "camelCase")]
@@ -336,7 +351,10 @@ impl TaskCommandIntent {
                 SessionCommandPayload::RespondApproval { .. } => "respondApproval",
             },
             Self::Rename { .. } => "rename",
+            Self::SetPinned { .. } => "setPinned",
+            Self::SetRead { .. } => "setRead",
             Self::SetArchived { .. } => "setArchived",
+            Self::MoveProject { .. } => "moveProject",
             Self::Delete {} => "delete",
             Self::SetBranch { .. } => "setBranch",
             Self::SetCwd { .. } => "setCwd",
@@ -364,7 +382,10 @@ impl TaskCommandIntent {
         matches!(
             self,
             Self::Rename { .. }
+                | Self::SetPinned { .. }
+                | Self::SetRead { .. }
                 | Self::SetArchived { .. }
+                | Self::MoveProject { .. }
                 | Self::Delete {}
                 | Self::SetBranch { .. }
                 | Self::SetCwd { .. }
@@ -376,6 +397,7 @@ impl TaskCommandIntent {
                 | Self::SwitchProvider { .. }
                 | Self::SetPermission { .. }
                 | Self::SetProviderAccount { .. }
+                | Self::MarkSeen { .. }
         )
     }
 
@@ -390,16 +412,14 @@ impl TaskCommandIntent {
     }
 
     fn requires_binding_fence(&self) -> bool {
-        !matches!(
-            self,
-            Self::CreateChat { .. } | Self::SetActivity { .. } | Self::MarkSeen { .. }
-        )
+        !matches!(self, Self::CreateChat { .. } | Self::SetActivity { .. })
     }
 
     fn conflicts_with_active_turn(&self) -> bool {
         matches!(
             self,
             Self::SetArchived { .. }
+                | Self::MoveProject { .. }
                 | Self::Delete {}
                 | Self::SetBranch { .. }
                 | Self::SetCwd { .. }
@@ -1443,6 +1463,22 @@ impl EngineRpc {
                 "Stop the expected active turn, wait for settlement, then retry with a new command id.",
             );
         }
+        if let TaskCommandIntent::MoveProject {
+            destination_space_id,
+        } = &command.intent
+            && let Err((code, message, recovery)) = self
+                .validate_project_move(&command.task_id, destination_space_id)
+                .await
+        {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Rejected,
+                false,
+                code,
+                &message,
+                &recovery,
+            );
+        }
         let revalidated = self.current_task_command_snapshot(&command.task_id)?;
         if command.expected_binding_generation.is_some()
             && command.expected_binding_generation != revalidated.binding_generation
@@ -1734,6 +1770,138 @@ impl EngineRpc {
             | TaskCommandIntent::CompactContext {} => false,
             _ => true,
         }
+    }
+
+    async fn validate_project_move(
+        &self,
+        task_id: &str,
+        destination_space_id: &str,
+    ) -> Result<(), (CommandReasonCode, String, String)> {
+        let task = self
+            .workspace
+            .chat(task_id)
+            .map_err(|error| {
+                (
+                    CommandReasonCode::OperationFailed,
+                    error.to_string(),
+                    "Reload the task and retry after the workspace is readable.".into(),
+                )
+            })?
+            .ok_or_else(|| {
+                (
+                    CommandReasonCode::InvalidDestination,
+                    "the task no longer exists".into(),
+                    "Reload the task list; no project metadata was changed.".into(),
+                )
+            })?;
+        let destination = self
+            .workspace
+            .read_spaces()
+            .map_err(|error| {
+                (
+                    CommandReasonCode::OperationFailed,
+                    error.to_string(),
+                    "Reload the project catalog and retry.".into(),
+                )
+            })?
+            .into_iter()
+            .find(|space| space.id == destination_space_id)
+            .ok_or_else(|| {
+                (
+                    CommandReasonCode::InvalidDestination,
+                    "the destination project is unavailable".into(),
+                    "Refresh the authoritative project catalog; the original task is unchanged."
+                        .into(),
+                )
+            })?;
+
+        if task.space_id.as_deref() == Some(destination_space_id) {
+            return Ok(());
+        }
+        if destination.device_id != task.device_id
+            || destination.device_id != self.engine_info.device_id
+        {
+            return Err((
+                CommandReasonCode::IncompatibleEnvironment,
+                "moving to another machine or execution environment requires X03 handoff".into(),
+                "Choose a project on the task's owning machine, or wait for X03.".into(),
+            ));
+        }
+        let cwd = task.cwd.as_deref().unwrap_or("~");
+        let cwd = if cwd == "~" {
+            home_dir()
+        } else {
+            std::path::PathBuf::from(cwd)
+        };
+        let destination_path = std::path::PathBuf::from(&destination.path);
+        let canonical_cwd = std::fs::canonicalize(&cwd).map_err(|error| {
+            (
+                CommandReasonCode::InvalidDestination,
+                format!("the task workspace cannot be validated: {error}"),
+                "Restore access to the current workspace; the original task is unchanged.".into(),
+            )
+        })?;
+        let canonical_destination = std::fs::canonicalize(&destination_path).map_err(|error| {
+            (
+                CommandReasonCode::InvalidDestination,
+                format!("the destination folder cannot be validated: {error}"),
+                "Choose an existing accessible folder; the original task is unchanged.".into(),
+            )
+        })?;
+        if !canonical_cwd.starts_with(&canonical_destination) {
+            return Err((
+                CommandReasonCode::IncompatibleWorkspace,
+                "the destination project does not contain the task's current working directory; cross-workspace moves require X03"
+                    .into(),
+                "Choose a project that owns the same canonical workspace, or wait for X03."
+                    .into(),
+            ));
+        }
+        let current_checkout =
+            self.repos
+                .checkout_identity(&canonical_cwd)
+                .await
+                .map_err(|_| {
+                    (
+                        CommandReasonCode::IncompatibleWorkspace,
+                        "the current task is not in a compatible Git workspace".into(),
+                        "L12 can only preserve the provider session inside one canonical checkout."
+                            .into(),
+                    )
+                })?;
+        let destination_checkout = self
+            .repos
+            .checkout_identity(&canonical_destination)
+            .await
+            .map_err(|_| {
+                (
+                    CommandReasonCode::IncompatibleWorkspace,
+                    "the destination project is not in a compatible Git workspace".into(),
+                    "L12 can only preserve the provider session inside one canonical checkout."
+                        .into(),
+                )
+            })?;
+        if current_checkout.id != destination_checkout.id {
+            return Err((
+                CommandReasonCode::IncompatibleWorkspace,
+                "the destination resolves to a different checkout or worktree; cross-workspace moves require X03"
+                    .into(),
+                "Choose a project in the same canonical checkout; the original task is unchanged."
+                    .into(),
+            ));
+        }
+        if destination
+            .checkout_id
+            .as_deref()
+            .is_some_and(|id| id != destination_checkout.id)
+        {
+            return Err((
+                CommandReasonCode::InvalidDestination,
+                "the destination project catalog is stale for its current checkout".into(),
+                "Wait for the owning machine to refresh the project catalog and retry.".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn commit_task_projection<R>(
@@ -2436,6 +2604,7 @@ impl EngineRpc {
                                     device_id: host_device,
                                     title: None,
                                     archived: false,
+                                    pinned_order: None,
                                     cwd: Some(cwd.unwrap_or_else(|| {
                                         space
                                             .as_ref()
@@ -2454,6 +2623,7 @@ impl EngineRpc {
                                     harness_session_cwd: None,
                                     space_id: space.as_ref().map(|space| space.id.clone()),
                                     last_seen_at: None,
+                                    manually_unread: false,
                                 })?;
                                 if let Some(branch) =
                                     branch.as_deref().filter(|branch| !branch.is_empty())
@@ -2495,6 +2665,133 @@ impl EngineRpc {
                 }
                 Ok(Some(receipt))
             }
+            TaskCommandIntent::SetPinned {
+                pinned,
+                after_task_id,
+                before_task_id,
+            } => {
+                let owned_task_id = task_id.to_string();
+                let (_, receipt) =
+                    self.commit_task_projection(command_id, task_id, move |doc| {
+                        if !pinned {
+                            doc.set_chat_pinned_order(&owned_task_id, None)?;
+                            return Ok(());
+                        }
+                        let mut pinned: Vec<_> = doc
+                            .read_chats()?
+                            .into_iter()
+                            .filter(|chat| {
+                                !chat.archived
+                                    && chat.id != owned_task_id
+                                    && chat.pinned_order.is_some()
+                            })
+                            .collect();
+                        pinned.sort_by_key(|chat| {
+                            (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone())
+                        });
+
+                        let insertion = match (after_task_id.as_deref(), before_task_id.as_deref())
+                        {
+                            (Some(after), Some(before)) => {
+                                let after_ix = pinned
+                                    .iter()
+                                    .position(|chat| chat.id == after)
+                                    .ok_or_else(|| {
+                                        crate::EngineError::Other(
+                                            "the previous pinned task changed".into(),
+                                        )
+                                    })?;
+                                let before_ix = pinned
+                                    .iter()
+                                    .position(|chat| chat.id == before)
+                                    .ok_or_else(|| {
+                                        crate::EngineError::Other(
+                                            "the next pinned task changed".into(),
+                                        )
+                                    })?;
+                                if before_ix != after_ix + 1 {
+                                    return Err(crate::EngineError::Other(
+                                        "the pinned order changed".into(),
+                                    ));
+                                }
+                                before_ix
+                            }
+                            (Some(after), None) => pinned
+                                .iter()
+                                .position(|chat| chat.id == after)
+                                .map(|ix| ix + 1)
+                                .ok_or_else(|| {
+                                    crate::EngineError::Other(
+                                        "the previous pinned task changed".into(),
+                                    )
+                                })?,
+                            (None, Some(before)) => pinned
+                                .iter()
+                                .position(|chat| chat.id == before)
+                                .ok_or_else(|| {
+                                    crate::EngineError::Other("the next pinned task changed".into())
+                                })?,
+                            (None, None) => pinned.len(),
+                        };
+                        let left = insertion
+                            .checked_sub(1)
+                            .and_then(|ix| pinned[ix].pinned_order);
+                        let right = pinned.get(insertion).and_then(|chat| chat.pinned_order);
+                        let mut order = match (left, right) {
+                            (Some(left), Some(right)) if right - left > 1 => {
+                                left + (right - left) / 2
+                            }
+                            (Some(left), None) => left.saturating_add(1024),
+                            (None, Some(right)) => right.saturating_sub(1024),
+                            (None, None) => 0,
+                            _ => {
+                                // Fractional integer space was exhausted. Rebalance only on
+                                // this rare collision, never on ordinary reorders.
+                                for (ix, chat) in pinned.iter_mut().enumerate() {
+                                    let key = (ix as i64) * 1024;
+                                    if chat.pinned_order != Some(key) {
+                                        doc.set_chat_pinned_order(&chat.id, Some(key))?;
+                                        chat.pinned_order = Some(key);
+                                    }
+                                }
+                                let left = insertion
+                                    .checked_sub(1)
+                                    .and_then(|ix| pinned[ix].pinned_order);
+                                let right =
+                                    pinned.get(insertion).and_then(|chat| chat.pinned_order);
+                                match (left, right) {
+                                    (Some(left), Some(right)) => left + (right - left) / 2,
+                                    (Some(left), None) => left + 1024,
+                                    (None, Some(right)) => right - 1024,
+                                    (None, None) => 0,
+                                }
+                            }
+                        };
+                        if pinned.iter().any(|chat| chat.pinned_order == Some(order)) {
+                            order = pinned
+                                .last()
+                                .and_then(|chat| chat.pinned_order)
+                                .unwrap_or(0)
+                                + 1024;
+                        }
+                        doc.set_chat_pinned_order(&owned_task_id, Some(order))?;
+                        Ok(())
+                    })?;
+                Ok(Some(receipt))
+            }
+            TaskCommandIntent::SetRead { read } => {
+                let owned_task_id = task_id.to_string();
+                let (_, receipt) =
+                    self.commit_task_projection(command_id, task_id, move |doc| {
+                        if read {
+                            doc.set_chat_seen(&owned_task_id, chrono::Utc::now())?;
+                        } else {
+                            doc.set_chat_unread(&owned_task_id, true)?;
+                        }
+                        Ok(())
+                    })?;
+                Ok(Some(receipt))
+            }
             TaskCommandIntent::SetArchived { archived } => {
                 let native = self.task_identity.has_native_codex_binding(task_id);
                 if native {
@@ -2521,6 +2818,21 @@ impl EngineRpc {
                 {
                     tracing::warn!(task = %task_id, %error, "post-archive task reconciliation failed");
                 }
+                Ok(Some(receipt))
+            }
+            TaskCommandIntent::MoveProject {
+                destination_space_id,
+            } => {
+                let owned_task_id = task_id.to_string();
+                let (_, receipt) =
+                    self.commit_task_projection(command_id, task_id, move |doc| {
+                        if !doc.set_chat_space(&owned_task_id, &destination_space_id)? {
+                            return Err(crate::EngineError::Other(
+                                "the task or destination project changed before commit".into(),
+                            ));
+                        }
+                        Ok(())
+                    })?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::Delete {} => {

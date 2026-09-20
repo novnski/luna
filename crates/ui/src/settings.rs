@@ -526,6 +526,10 @@ pub enum SidebarSort {
     Created,
 }
 
+/// Persisted sentinel for the explicit projectless/personal sidebar scope.
+/// `None` remains All projects, so personal cannot be represented by absence.
+pub const PERSONAL_SPACE_FILTER: &str = "__luna_personal__";
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowGeometry {
@@ -2019,6 +2023,18 @@ mod tests {
         assert!(json.contains(r#""terminalFontSize": 15.0"#));
         assert!(json.contains(r#""codeFontFamily": "geist""#));
         assert!(json.contains(r#""codeFontSize": 11.0"#));
+    }
+
+    #[test]
+    fn personal_project_filter_round_trips_without_becoming_all_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = UiSettings {
+            space_filter: Some(PERSONAL_SPACE_FILTER.into()),
+            ..UiSettings::default()
+        };
+        settings.save(dir.path()).unwrap();
+        let loaded = UiSettings::load(dir.path());
+        assert_eq!(loaded.space_filter.as_deref(), Some(PERSONAL_SPACE_FILTER));
     }
 
     #[test]

@@ -966,6 +966,17 @@ struct RenameChatDialog {
     _events: Subscription,
 }
 
+/// Searchable same-workspace project reassignment dialog. The UI previews
+/// known topology; the authoritative engine repeats canonical validation in
+/// the fenced command before committing any metadata.
+struct MoveProjectDialog {
+    chat_id: String,
+    search: Entity<ComposerInput>,
+    selected_space_id: Option<String>,
+    focus_pending: bool,
+    _events: Subscription,
+}
+
 /// In-app update lifecycle (macOS bundle installs; see `render_update_strip`).
 enum UpdateFlow {
     Idle,
@@ -1423,6 +1434,10 @@ pub struct Shell {
     /// Session-row context menu, including the Copy submenu.
     chat_menu: popover::Popup<ChatMenuState>,
     rename_dialog: Option<RenameChatDialog>,
+    move_project_dialog: Option<MoveProjectDialog>,
+    /// When New project is entered from Move to project, return to the move
+    /// preview instead of changing the new-task canvas.
+    pending_move_after_create: Option<String>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
     /// Space-row context menu (dropdown rows): (space id, window position).
@@ -1795,6 +1810,8 @@ impl Shell {
             appearance_settings_sub: None,
             chat_menu: popover::Popup::default(),
             rename_dialog: None,
+            move_project_dialog: None,
+            pending_move_after_create: None,
             delete_confirm: None,
             space_menu: popover::Popup::default(),
             rename_space_dialog: None,
@@ -2133,6 +2150,7 @@ impl Shell {
         // retaining a project filter would hide the session on its first send.
         if state.read(cx).no_project
             && state.read(cx).selected_chat.is_none()
+            && self.settings.space_filter.as_deref() != Some(crate::settings::PERSONAL_SPACE_FILTER)
             && self.settings.space_filter.take().is_some()
         {
             self.schedule_save(cx);
@@ -2141,16 +2159,28 @@ impl Shell {
         // lands (a still-existing row wins over the auto-selected first one;
         // the boot-auto-selected chat's own space wins over both — selecting a
         // chat implies its space, which `select_chat` already applied).
-        if !self.space_boot_applied && !state.read(cx).spaces.is_empty() {
+        if !self.space_boot_applied
+            && state.read(cx).spaces_synced
+            && (!state.read(cx).spaces.is_empty()
+                || self.settings.space_filter.as_deref()
+                    == Some(crate::settings::PERSONAL_SPACE_FILTER))
+        {
             self.space_boot_applied = true;
             if state.read(cx).selected_chat.is_none() {
                 // A set sidebar filter is an explicit standing choice — the
                 // canvas defaults (project AND its device) follow it, even
                 // over a remembered "no project" opt-out. Otherwise the last
                 // selected project stands, unless opted out.
-                let exists = |id: &String| state.read(cx).space_row(id).is_some();
+                let exists = |id: &String| {
+                    id == crate::settings::PERSONAL_SPACE_FILTER
+                        || state.read(cx).space_row(id).is_some()
+                };
                 let filter = self.settings.space_filter.clone().filter(&exists);
                 let target = match filter {
+                    Some(filter) if filter == crate::settings::PERSONAL_SPACE_FILTER => {
+                        state.update(cx, |s, cx| s.select_space(None, cx));
+                        None
+                    }
                     Some(filter) => Some(filter),
                     None if !state.read(cx).no_project => {
                         self.settings.last_space_id.clone().filter(&exists)
@@ -2177,6 +2207,7 @@ impl Shell {
         // fall back to "All" rather than filtering everything out.
         if state.read(cx).spaces_synced
             && let Some(filter) = self.settings.space_filter.clone()
+            && filter != crate::settings::PERSONAL_SPACE_FILTER
             && state.read(cx).space_row(&filter).is_none()
         {
             self.settings.space_filter = None;
@@ -3605,7 +3636,7 @@ impl Shell {
         };
         if let Some(link) = link {
             cx.write_to_clipboard(ClipboardItem::new_string(link));
-            self.sidebar_notice = Some("LUNA conversation link copied".into());
+            self.sidebar_notice = Some("LUNA task link copied".into());
         } else {
             self.sidebar_notice = Some("Conversation link is not ready yet".into());
         }
@@ -3639,7 +3670,7 @@ impl Shell {
             .and_then(|chat| chat.harness_session_id.clone());
         if let Some(id) = id.filter(|id| !id.trim().is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(id));
-            self.sidebar_notice = Some("Harness session ID copied".into());
+            self.sidebar_notice = Some("Provider session ID copied".into());
         }
         self.close_chat_menu(cx);
         cx.notify();
@@ -4031,6 +4062,107 @@ impl Shell {
 
     fn archive_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
         self.set_chat_archived(chat_id, true, cx);
+    }
+
+    fn set_chat_pinned(&mut self, chat_id: String, pinned: bool, cx: &mut Context<Self>) {
+        self.close_chat_menu(cx);
+        self.mutate_task(
+            chat_id,
+            serde_json::json!({ "kind": "setPinned", "pinned": pinned }),
+            cx,
+        );
+    }
+
+    fn reorder_pinned_chat(&mut self, chat_id: String, delta: isize, cx: &mut Context<Self>) {
+        let mut pinned: Vec<_> = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .filter(|chat| !chat.archived && chat.pinned_order.is_some())
+            .cloned()
+            .collect();
+        pinned.sort_by_key(|chat| (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone()));
+        let Some(index) = pinned.iter().position(|chat| chat.id == chat_id) else {
+            return;
+        };
+        let target = index
+            .saturating_add_signed(delta)
+            .min(pinned.len().saturating_sub(1));
+        if target == index {
+            return;
+        }
+        let moved = pinned.remove(index);
+        pinned.insert(target, moved);
+        let after = target
+            .checked_sub(1)
+            .and_then(|ix| pinned.get(ix))
+            .map(|chat| chat.id.clone());
+        let before = pinned.get(target + 1).map(|chat| chat.id.clone());
+        self.close_chat_menu(cx);
+        self.mutate_task(
+            chat_id,
+            serde_json::json!({
+                "kind": "setPinned",
+                "pinned": true,
+                "afterTaskId": after,
+                "beforeTaskId": before,
+            }),
+            cx,
+        );
+    }
+
+    fn set_chat_read(&mut self, chat_id: String, read: bool, cx: &mut Context<Self>) {
+        self.close_chat_menu(cx);
+        self.mutate_task(
+            chat_id,
+            serde_json::json!({ "kind": "setRead", "read": read }),
+            cx,
+        );
+    }
+
+    fn open_move_project(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.close_chat_menu(cx);
+        let search =
+            cx.new(|cx| ComposerInput::with_context("Search projects…", "PaletteSearch", cx));
+        let events = cx.subscribe(&search, |_: &mut Shell, _, event, cx| {
+            if matches!(event, ComposerInputEvent::Edited) {
+                cx.notify();
+            }
+        });
+        self.move_project_dialog = Some(MoveProjectDialog {
+            chat_id,
+            search,
+            selected_space_id: None,
+            focus_pending: true,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn open_move_project_to(&mut self, chat_id: String, space_id: String, cx: &mut Context<Self>) {
+        self.open_move_project(chat_id, cx);
+        if let Some(dialog) = self.move_project_dialog.as_mut() {
+            dialog.selected_space_id = Some(space_id);
+        }
+    }
+
+    fn submit_move_project(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.move_project_dialog.take() else {
+            return;
+        };
+        let Some(destination) = dialog.selected_space_id else {
+            return;
+        };
+        self.mutate_task(
+            dialog.chat_id,
+            serde_json::json!({
+                "kind": "moveProject",
+                "destinationSpaceId": destination,
+            }),
+            cx,
+        );
+        cx.notify();
     }
 
     /// The Archive session shortcut. With no chat open, or with an already
@@ -7039,6 +7171,29 @@ impl Shell {
             let rename_id = chat_id.clone();
             let archive_id = chat_id.clone();
             let delete_id = chat_id.clone();
+            let (archived, pinned, unread, can_move_up, can_move_down) = {
+                let state = self.state.read(cx);
+                let chat = state.chats.iter().find(|chat| chat.id == chat_id);
+                let mut pins: Vec<_> = state
+                    .chats
+                    .iter()
+                    .filter(|chat| !chat.archived && chat.pinned_order.is_some())
+                    .collect();
+                pins.sort_by_key(|chat| (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone()));
+                let pin_index = pins.iter().position(|chat| chat.id == chat_id);
+                (
+                    chat.is_some_and(|chat| chat.archived),
+                    chat.and_then(|chat| chat.pinned_order).is_some(),
+                    chat.is_some_and(zeron_proto::Chat::unseen),
+                    pin_index.is_some_and(|index| index > 0),
+                    pin_index.is_some_and(|index| index + 1 < pins.len()),
+                )
+            };
+            let pin_id = chat_id.clone();
+            let move_up_id = chat_id.clone();
+            let move_down_id = chat_id.clone();
+            let read_id = chat_id.clone();
+            let move_project_id = chat_id.clone();
             let menu = popover::popover_card(&theme)
                 .w(px(216.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -7048,6 +7203,51 @@ impl Shell {
                 .flex_col();
             let menu = match menu_state.page {
                 ChatMenuPage::Root => menu
+                    .when(!archived, |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-pin-{chat_id}"))
+                                .id("chat-menu-pin")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_chat_pinned(pin_id.clone(), !pinned, cx)
+                                }))
+                                .child(icon(icons::TAG).size(px(16.0)).text_color(theme.text_muted))
+                                .child(SharedString::from(if pinned { "Unpin" } else { "Pin" })),
+                        )
+                    })
+                    .when(can_move_up, |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-pin-up-{chat_id}"))
+                                .id("chat-menu-pin-up")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.reorder_pinned_chat(move_up_id.clone(), -1, cx)
+                                }))
+                                .child(
+                                    icon(icons::ARROW_UP)
+                                        .size(px(16.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(SharedString::from("Move pinned up")),
+                        )
+                    })
+                    .when(can_move_down, |menu| {
+                        menu.child(
+                            popover::menu_row(
+                                &theme,
+                                false,
+                                format!("chat-menu-pin-down-{chat_id}"),
+                            )
+                            .id("chat-menu-pin-down")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.reorder_pinned_chat(move_down_id.clone(), 1, cx)
+                            }))
+                            .child(
+                                icon(icons::ARROW_DOWN)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from("Move pinned down")),
+                        )
+                    })
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-rename-{chat_id}"))
                             .id("chat-menu-rename")
@@ -7058,17 +7258,55 @@ impl Shell {
                             .child(SharedString::from("Rename…")),
                     )
                     .child(
+                        popover::menu_row(&theme, false, format!("chat-menu-read-{chat_id}"))
+                            .id("chat-menu-read")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.set_chat_read(read_id.clone(), unread, cx)
+                            }))
+                            .child(
+                                icon(if unread {
+                                    icons::EYE
+                                } else {
+                                    icons::EYE_CLOSED
+                                })
+                                .size(px(16.0))
+                                .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from(if unread {
+                                "Mark read"
+                            } else {
+                                "Mark unread"
+                            })),
+                    )
+                    .child(
+                        popover::menu_row(&theme, false, format!("chat-menu-move-{chat_id}"))
+                            .id("chat-menu-move")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_move_project(move_project_id.clone(), cx)
+                            }))
+                            .child(
+                                icon(icons::FOLDER)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from("Move to project…")),
+                    )
+                    .child(
                         popover::menu_row(&theme, false, format!("chat-menu-archive-{chat_id}"))
                             .id("chat-menu-archive")
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.archive_chat(archive_id.clone(), cx)
+                                this.set_chat_archived(archive_id.clone(), !archived, cx)
                             }))
                             .child(
                                 icon(icons::ARCHIVE_MINIMALISTIC)
                                     .size(px(16.0))
                                     .text_color(theme.text_muted),
                             )
-                            .child(SharedString::from("Archive")),
+                            .child(SharedString::from(if archived {
+                                "Unarchive"
+                            } else {
+                                "Archive"
+                            })),
                     )
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-copy-{chat_id}"))
@@ -7149,7 +7387,7 @@ impl Shell {
                                     .size(px(16.0))
                                     .text_color(theme.text_muted),
                             )
-                            .child(SharedString::from("LUNA conversation link")),
+                            .child(SharedString::from("LUNA task link")),
                     )
                     .when_some(harness_link, |menu, link| {
                         menu.child(
@@ -7186,7 +7424,7 @@ impl Shell {
                                     .size(px(16.0))
                                     .text_color(theme.text_muted),
                             )
-                            .child(SharedString::from("Harness session ID")),
+                            .child(SharedString::from("Provider session ID")),
                         )
                     })
                 }
@@ -7244,6 +7482,190 @@ impl Shell {
                 )
                 .into_any_element();
             overlays.push(popover::modal("rename-chat-dialog", viewport, card));
+        }
+
+        if self.move_project_dialog.is_some() {
+            let (chat_id, search, selected_space_id) = {
+                let dialog = self.move_project_dialog.as_mut().expect("checked above");
+                if std::mem::take(&mut dialog.focus_pending) {
+                    window.focus(&dialog.search.focus_handle(cx), cx);
+                }
+                (
+                    dialog.chat_id.clone(),
+                    dialog.search.clone(),
+                    dialog.selected_space_id.clone(),
+                )
+            };
+            let query = search.read(cx).text().to_string();
+            let (chat, spaces, source_name) = {
+                let state = self.state.read(cx);
+                let chat = state.chats.iter().find(|chat| chat.id == chat_id).cloned();
+                let spaces = state
+                    .spaces_sorted()
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let source_name = chat
+                    .as_ref()
+                    .and_then(|chat| state.space_for_chat(chat))
+                    .map(|space| space.display_name().to_string())
+                    .unwrap_or_else(|| "Personal / no project".into());
+                (chat, spaces, source_name)
+            };
+            let names: Vec<_> = spaces
+                .iter()
+                .map(|space| format!("{} @ {}", space.display_name(), space.device_id))
+                .collect();
+            let rows = popover::filter_indices(&query, &names)
+                .into_iter()
+                .map(|index| {
+                    let space = spaces[index].clone();
+                    let label = names[index].clone();
+                    let selected = selected_space_id.as_deref() == Some(space.id.as_str());
+                    popover::menu_row(&theme, selected, format!("move-project-{}", space.id))
+                        .id(("move-project-row", index))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(dialog) = this.move_project_dialog.as_mut() {
+                                dialog.selected_space_id = Some(space.id.clone());
+                            }
+                            cx.notify();
+                        }))
+                        .child(
+                            icon(icons::FOLDER)
+                                .size(px(14.0))
+                                .text_color(theme.text_muted),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child(label))
+                })
+                .collect::<Vec<_>>();
+            let destination = selected_space_id
+                .as_deref()
+                .and_then(|id| spaces.iter().find(|space| space.id == id));
+            let (available, availability): (bool, SharedString) = match (chat.as_ref(), destination)
+            {
+                (Some(chat), Some(destination))
+                    if chat.space_id.as_deref() == Some(destination.id.as_str()) =>
+                {
+                    (false, "Already in this project".into())
+                }
+                (Some(chat), Some(destination)) if chat.device_id != destination.device_id => (
+                    false,
+                    "Unavailable: another machine/environment requires X03 handoff".into(),
+                ),
+                (Some(chat), Some(destination))
+                    if chat.checkout_id.is_some()
+                        && destination.checkout_id.is_some()
+                        && chat.checkout_id != destination.checkout_id =>
+                {
+                    (
+                        false,
+                        "Unavailable: a different checkout/worktree requires X03".into(),
+                    )
+                }
+                (Some(chat), Some(destination)) => {
+                    let cwd = chat.cwd.as_deref().unwrap_or("Unavailable");
+                    let provider = if chat
+                        .harness_session_id
+                        .as_deref()
+                        .is_some_and(|id| !id.is_empty())
+                    {
+                        "Provider session retained after canonical validation"
+                    } else {
+                        "Provider session unavailable; task identity/history remain"
+                    };
+                    (
+                        true,
+                        format!(
+                            "Destination: {}\nMachine: {}\nCanonical root: {}\nCurrent cwd: {}\nBranch: {}\n{}",
+                            destination.display_name(),
+                            destination.device_id,
+                            destination.path,
+                            cwd,
+                            chat.branch.as_deref().unwrap_or("Unavailable"),
+                            provider,
+                        )
+                        .into(),
+                    )
+                }
+                _ => (false, "Choose a destination project".into()),
+            };
+            let new_project_chat = chat_id.clone();
+            let card = popover::dialog_card(&theme)
+                .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" {
+                        this.move_project_dialog = None;
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(popover::dialog_title(&theme, "Move to project"))
+                .child(div().mt(px(6.0)).child(popover::dialog_body(
+                    &theme,
+                    format!("Source: {source_name}"),
+                )))
+                .child(
+                    div()
+                        .mt(px(12.0))
+                        .child(popover::dialog_field(search.into_any_element())),
+                )
+                .child(
+                    div()
+                        .id("move-project-list")
+                        .mt(px(6.0))
+                        .max_h(px(190.0))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .children(rows),
+                )
+                .child(
+                    popover::menu_row(&theme, false, "move-project-new")
+                        .id("move-project-new")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.pending_move_after_create = Some(new_project_chat.clone());
+                            this.move_project_dialog = None;
+                            this.open_add_space(cx);
+                        }))
+                        .child(
+                            icon(icons::PLUS)
+                                .size(px(14.0))
+                                .text_color(theme.text_muted),
+                        )
+                        .child(SharedString::from("New project…")),
+                )
+                .child(
+                    div()
+                        .mt(px(10.0))
+                        .child(popover::dialog_body(&theme, availability)),
+                )
+                .child(
+                    div()
+                        .mt(px(16.0))
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            popover::btn_ghost(&theme, "Cancel", "move-project-cancel")
+                                .id("move-project-cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.move_project_dialog = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .when(available, |actions| {
+                            actions.child(
+                                popover::btn_primary(&theme, "Move task")
+                                    .id("move-project-confirm")
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.submit_move_project(cx)),
+                                    ),
+                            )
+                        }),
+                )
+                .into_any_element();
+            overlays.push(popover::modal("move-project-dialog", viewport, card));
         }
 
         overlays.extend(self.render_space_overlays(viewport, window, cx));

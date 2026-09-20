@@ -463,6 +463,30 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
     assert_eq!(receipt.status, CommandReceiptStatus::Applied);
 }
 
+async fn create_task_in_space(
+    client: &RpcClient,
+    task_id: &str,
+    space_id: &str,
+    cwd: &std::path::Path,
+) {
+    let receipt = execute(
+        client,
+        envelope(
+            &format!("create-{task_id}"),
+            task_id,
+            None,
+            serde_json::json!({
+                "kind": "createChat",
+                "spaceId": space_id,
+                "cwd": cwd,
+                "config": task_config("synthetic")
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+}
+
 async fn create_configured_task(client: &RpcClient, task_id: &str, device_id: &str) {
     let receipt = execute(
         client,
@@ -2221,6 +2245,394 @@ async fn revision_binding_turn_and_lifecycle_fences_are_visible() {
         .unwrap();
     assert!(gap.reload_required);
     assert!(gap.events.is_empty());
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn organization_commands_are_durable_ordered_and_revision_fenced() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_ids = ["org-a", "org-b", "org-c"];
+    let core = assemble(root.path(), runs, false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    for task_id in task_ids {
+        let receipt = execute(
+            &client,
+            envelope(
+                &format!("create-{task_id}"),
+                task_id,
+                None,
+                serde_json::json!({ "kind": "createChat", "deviceId": core.device_id }),
+            ),
+        )
+        .await;
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+        let read = snapshot(&client, task_id).await;
+        let receipt = execute(
+            &client,
+            envelope(
+                &format!("pin-{task_id}"),
+                task_id,
+                Some(&read),
+                serde_json::json!({ "kind": "setPinned", "pinned": true }),
+            ),
+        )
+        .await;
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+    }
+
+    let before_reorder = snapshot(&client, "org-c").await;
+    let reorder = execute(
+        &client,
+        envelope(
+            "reorder-org-c",
+            "org-c",
+            Some(&before_reorder),
+            serde_json::json!({
+                "kind": "setPinned",
+                "pinned": true,
+                "beforeTaskId": "org-a"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(reorder.status, CommandReceiptStatus::Applied);
+    let duplicate = execute(
+        &client,
+        envelope(
+            "reorder-org-c",
+            "org-c",
+            Some(&before_reorder),
+            serde_json::json!({
+                "kind": "setPinned",
+                "pinned": true,
+                "beforeTaskId": "org-a"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(duplicate, reorder);
+
+    let mut pinned = core.workspace.read_chats().unwrap();
+    pinned.sort_by_key(|chat| (chat.pinned_order.unwrap_or(i64::MAX), chat.id.clone()));
+    assert_eq!(
+        pinned
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect::<Vec<_>>(),
+        ["org-c", "org-a", "org-b"]
+    );
+
+    let unread_snapshot = snapshot(&client, "org-a").await;
+    let unread = execute(
+        &client,
+        envelope(
+            "org-a-unread",
+            "org-a",
+            Some(&unread_snapshot),
+            serde_json::json!({ "kind": "setRead", "read": false }),
+        ),
+    )
+    .await;
+    assert_eq!(unread.status, CommandReceiptStatus::Applied);
+    let stale_read = execute(
+        &client,
+        envelope(
+            "org-a-stale-read",
+            "org-a",
+            Some(&unread_snapshot),
+            serde_json::json!({ "kind": "setRead", "read": true }),
+        ),
+    )
+    .await;
+    assert_eq!(stale_read.status, CommandReceiptStatus::Conflict);
+    assert_eq!(
+        stale_read.reason.unwrap().code,
+        CommandReasonCode::StaleTaskRevision
+    );
+
+    let archive = execute(
+        &client,
+        envelope(
+            "org-a-archive",
+            "org-a",
+            Some(&snapshot(&client, "org-a").await),
+            serde_json::json!({ "kind": "setArchived", "archived": true }),
+        ),
+    )
+    .await;
+    assert_eq!(archive.status, CommandReceiptStatus::Applied);
+    let archived = core.workspace.chat("org-a").unwrap().unwrap();
+    assert!(archived.archived);
+    assert_eq!(archived.pinned_order, None, "archive clears active pin");
+    assert!(archived.manually_unread);
+    let unarchive = execute(
+        &client,
+        envelope(
+            "org-a-unarchive",
+            "org-a",
+            Some(&snapshot(&client, "org-a").await),
+            serde_json::json!({ "kind": "setArchived", "archived": false }),
+        ),
+    )
+    .await;
+    assert_eq!(unarchive.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        core.workspace.chat("org-a").unwrap().unwrap().pinned_order,
+        None,
+        "unarchive returns unpinned"
+    );
+
+    core.shutdown().await;
+    drop(core);
+    let reopened = assemble(root.path(), Arc::new(AtomicUsize::new(0)), false);
+    let persisted = reopened.workspace.chat("org-a").unwrap().unwrap();
+    assert!(!persisted.archived);
+    assert!(persisted.manually_unread);
+    assert_eq!(persisted.pinned_order, None);
+    reopened.shutdown().await;
+}
+
+fn init_git_repo(path: &std::path::Path) {
+    std::fs::create_dir_all(path).unwrap();
+    let status = std::process::Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .arg(path)
+        .status()
+        .expect("run git init");
+    assert!(status.success());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_workspace_project_move_is_atomic_and_preserves_task_state() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let nested = repo.join("packages/app");
+    init_git_repo(&repo);
+    std::fs::create_dir_all(&nested).unwrap();
+    let other = root.path().join("other");
+    init_git_repo(&other);
+
+    let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), false);
+    core.workspace
+        .create_space(
+            "source-project",
+            &core.device_id,
+            nested.to_str().unwrap(),
+            Some("App".into()),
+            true,
+        )
+        .unwrap();
+    core.workspace
+        .create_space(
+            "root-project",
+            &core.device_id,
+            repo.to_str().unwrap(),
+            Some("Repository".into()),
+            true,
+        )
+        .unwrap();
+    core.workspace
+        .create_space(
+            "other-project",
+            &core.device_id,
+            other.to_str().unwrap(),
+            Some("Other".into()),
+            true,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task_in_space(&client, "move-task", "source-project", &nested).await;
+    core.workspace
+        .rename_chat("move-task", "Keep this task")
+        .unwrap();
+    core.workspace.set_chat_harness_session(
+        "move-task",
+        "provider-session-1",
+        nested.to_str().unwrap(),
+    );
+
+    let pin = execute(
+        &client,
+        envelope(
+            "move-pin",
+            "move-task",
+            Some(&snapshot(&client, "move-task").await),
+            serde_json::json!({ "kind": "setPinned", "pinned": true }),
+        ),
+    )
+    .await;
+    assert_eq!(pin.status, CommandReceiptStatus::Applied);
+    let unread = execute(
+        &client,
+        envelope(
+            "move-unread",
+            "move-task",
+            Some(&snapshot(&client, "move-task").await),
+            serde_json::json!({ "kind": "setRead", "read": false }),
+        ),
+    )
+    .await;
+    assert_eq!(unread.status, CommandReceiptStatus::Applied);
+    let before = core.workspace.chat("move-task").unwrap().unwrap();
+    let binding_before = core
+        .task_identity
+        .view("move-task")
+        .and_then(|view| view.current_binding);
+
+    let move_receipt = execute(
+        &client,
+        envelope(
+            "move-same-workspace",
+            "move-task",
+            Some(&snapshot(&client, "move-task").await),
+            serde_json::json!({
+                "kind": "moveProject",
+                "destinationSpaceId": "root-project"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(move_receipt.status, CommandReceiptStatus::Applied);
+    let after = core.workspace.chat("move-task").unwrap().unwrap();
+    assert_eq!(after.id, before.id);
+    assert_eq!(after.title, before.title);
+    assert_eq!(after.cwd, before.cwd);
+    assert_eq!(after.config, before.config);
+    assert_eq!(after.pinned_order, before.pinned_order);
+    assert_eq!(after.manually_unread, before.manually_unread);
+    assert_eq!(after.harness_session_id, before.harness_session_id);
+    assert_eq!(after.harness_session_cwd, before.harness_session_cwd);
+    assert_eq!(after.created_at, before.created_at);
+    assert_eq!(after.space_id.as_deref(), Some("root-project"));
+    assert_eq!(
+        core.task_identity
+            .view("move-task")
+            .and_then(|view| view.current_binding),
+        binding_before,
+        "binding/provider continuity is preserved"
+    );
+
+    let rejected = execute(
+        &client,
+        envelope(
+            "move-cross-workspace",
+            "move-task",
+            Some(&snapshot(&client, "move-task").await),
+            serde_json::json!({
+                "kind": "moveProject",
+                "destinationSpaceId": "other-project"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(rejected.status, CommandReceiptStatus::Rejected);
+    assert_eq!(
+        rejected.reason.unwrap().code,
+        CommandReasonCode::IncompatibleWorkspace
+    );
+    assert_eq!(
+        core.workspace
+            .chat("move-task")
+            .unwrap()
+            .unwrap()
+            .space_id
+            .as_deref(),
+        Some("root-project"),
+        "failed move leaves original ownership untouched"
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn active_task_cannot_move_under_execution() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let nested = repo.join("nested");
+    init_git_repo(&repo);
+    std::fs::create_dir_all(&nested).unwrap();
+    let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), true);
+    core.workspace
+        .create_space(
+            "source",
+            &core.device_id,
+            nested.to_str().unwrap(),
+            None,
+            true,
+        )
+        .unwrap();
+    core.workspace
+        .create_space(
+            "destination",
+            &core.device_id,
+            repo.to_str().unwrap(),
+            None,
+            true,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task_in_space(&client, "active-move", "source", &nested).await;
+    let run = execute(
+        &client,
+        envelope(
+            "active-move-run",
+            "active-move",
+            Some(&snapshot(&client, "active-move").await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": request("hold"),
+                    "messageId": "active-move-message"
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        run.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+    wait_for_receipt(&client, "active-move-run", CommandReceiptStatus::Applied).await;
+    let active = snapshot(&client, "active-move").await;
+    let move_receipt = execute(
+        &client,
+        envelope(
+            "active-move-command",
+            "active-move",
+            Some(&active),
+            serde_json::json!({
+                "kind": "moveProject",
+                "destinationSpaceId": "destination"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(move_receipt.status, CommandReceiptStatus::Conflict);
+    assert_eq!(
+        move_receipt.reason.unwrap().code,
+        CommandReasonCode::ActiveTurnConflict
+    );
+    assert_eq!(
+        core.workspace
+            .chat("active-move")
+            .unwrap()
+            .unwrap()
+            .space_id
+            .as_deref(),
+        Some("source")
+    );
+    let turn = active.snapshot.active_turn_id.unwrap();
+    let mut stop = envelope(
+        "active-move-stop",
+        "active-move",
+        Some(&snapshot(&client, "active-move").await),
+        serde_json::json!({ "kind": "session", "command": { "kind": "interrupt" } }),
+    );
+    stop["expectedTurnId"] = turn.into();
+    execute(&client, stop).await;
+    wait_for_receipt(&client, "active-move-stop", CommandReceiptStatus::Applied).await;
     core.shutdown().await;
 }
 

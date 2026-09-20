@@ -1199,6 +1199,7 @@ impl WorkspaceHost {
                 device_id: host_device.clone(),
                 title: None,
                 archived: false,
+                pinned_order: None,
                 cwd: Some(cwd.unwrap_or_else(|| {
                     space
                         .as_ref()
@@ -1220,6 +1221,7 @@ impl WorkspaceHost {
                 harness_session_cwd: None,
                 space_id: space.as_ref().map(|s| s.id.clone()),
                 last_seen_at: None,
+                manually_unread: false,
             })
         })?;
         Ok(())
