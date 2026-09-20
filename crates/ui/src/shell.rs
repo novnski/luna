@@ -24,7 +24,9 @@ use gpui::{
 
 use gpui_tokio::Tokio;
 use zeron_engine::InstanceLock;
-use zeron_proto::{AuthState, WorkspaceScope};
+use zeron_proto::{
+    AuthState, ConversationForkBoundaryKind, HarnessId, HistoryRecoveryView, WorkspaceScope,
+};
 use zeron_rpc::methods;
 
 use crate::changes::{Changes, ChangesEvent};
@@ -966,6 +968,33 @@ struct RenameChatDialog {
     _events: Subscription,
 }
 
+/// Confirmation surface for a provider-native independent task fork.
+struct HistoryForkDialog {
+    source_task_id: String,
+    boundary: ConversationForkBoundaryKind,
+    message_id: Option<String>,
+    title: Entity<ComposerInput>,
+    prompt: Entity<ComposerInput>,
+    focus_pending: bool,
+    _events: Subscription,
+}
+
+/// Staged earlier-message rewrite. The engine creates a native fork and a
+/// durable recovery snapshot before this text replaces conversation history.
+struct EditEarlierMessageDialog {
+    task_id: String,
+    message_id: String,
+    input: Entity<ComposerInput>,
+    focus_pending: bool,
+    _events: Subscription,
+}
+
+struct HistoryRecoveryDialog {
+    task_id: String,
+    recoveries: Vec<HistoryRecoveryView>,
+    selected: usize,
+}
+
 /// Searchable same-workspace project reassignment dialog. The UI previews
 /// known topology; the authoritative engine repeats canonical validation in
 /// the fenced command before committing any metadata.
@@ -1434,6 +1463,9 @@ pub struct Shell {
     /// Session-row context menu, including the Copy submenu.
     chat_menu: popover::Popup<ChatMenuState>,
     rename_dialog: Option<RenameChatDialog>,
+    history_fork_dialog: Option<HistoryForkDialog>,
+    edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
+    history_recovery_dialog: Option<HistoryRecoveryDialog>,
     move_project_dialog: Option<MoveProjectDialog>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
@@ -1810,6 +1842,9 @@ impl Shell {
             appearance_settings_sub: None,
             chat_menu: popover::Popup::default(),
             rename_dialog: None,
+            history_fork_dialog: None,
+            edit_earlier_message_dialog: None,
+            history_recovery_dialog: None,
             move_project_dialog: None,
             delete_confirm: None,
             space_menu: popover::Popup::default(),
@@ -3073,6 +3108,21 @@ impl Shell {
             TranscriptEvent::OpenAccounts => {
                 self.open_settings(SettingsSection::Agents, cx);
             }
+            TranscriptEvent::ForkMessage {
+                task_id,
+                message_id,
+                boundary,
+            } => self.open_history_fork(task_id.clone(), *boundary, Some(message_id.clone()), cx),
+            TranscriptEvent::EditEarlierMessage {
+                task_id,
+                message_id,
+                text,
+            } => self.open_edit_earlier_message(
+                task_id.clone(),
+                message_id.clone(),
+                text.clone(),
+                cx,
+            ),
         }
     }
 
@@ -4057,6 +4107,163 @@ impl Shell {
                 cx,
             );
         }
+        cx.notify();
+    }
+
+    fn open_history_fork(
+        &mut self,
+        source_task_id: String,
+        boundary: ConversationForkBoundaryKind,
+        message_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_chat_menu(cx);
+        let source_title = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == source_task_id)
+            .and_then(|chat| chat.title.as_deref())
+            .map(|title| format!("{title} (fork)"))
+            .unwrap_or_else(|| "Forked task".into());
+        let title = cx.new(|cx| ComposerInput::new("Task title (optional)", cx));
+        title.update(cx, |input, cx| input.set_text(source_title, cx));
+        let prompt = cx.new(|cx| ComposerInput::new("First prompt (optional)", cx));
+        let events = cx.subscribe(&prompt, |this: &mut Shell, _, event, cx| {
+            if matches!(event, ComposerInputEvent::Submitted) {
+                this.submit_history_fork(cx);
+            }
+        });
+        self.history_fork_dialog = Some(HistoryForkDialog {
+            source_task_id,
+            boundary,
+            message_id,
+            title,
+            prompt,
+            focus_pending: true,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn submit_history_fork(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.history_fork_dialog.take() else {
+            return;
+        };
+        let title = dialog.title.read(cx).text().trim().to_string();
+        let initial_prompt = dialog.prompt.read(cx).text().trim().to_string();
+        self.mutate_task(
+            dialog.source_task_id,
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": uuid::Uuid::new_v4().to_string(),
+                "boundary": dialog.boundary,
+                "messageId": dialog.message_id,
+                "title": (!title.is_empty()).then_some(title),
+                "initialPrompt": (!initial_prompt.is_empty()).then_some(initial_prompt),
+            }),
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn open_edit_earlier_message(
+        &mut self,
+        task_id: String,
+        message_id: String,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| ComposerInput::new("Replacement message", cx));
+        input.update(cx, |input, cx| input.set_text(text, cx));
+        let events = cx.subscribe(&input, |this: &mut Shell, _, event, cx| {
+            if matches!(event, ComposerInputEvent::Submitted) {
+                this.submit_edit_earlier_message(cx);
+            }
+        });
+        self.edit_earlier_message_dialog = Some(EditEarlierMessageDialog {
+            task_id,
+            message_id,
+            input,
+            focus_pending: true,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn submit_edit_earlier_message(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.edit_earlier_message_dialog.take() else {
+            return;
+        };
+        let text = dialog.input.read(cx).text().trim().to_string();
+        if !text.is_empty() {
+            self.mutate_task(
+                dialog.task_id,
+                serde_json::json!({
+                    "kind": "editEarlierMessage",
+                    "messageId": dialog.message_id,
+                    "text": text,
+                }),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    fn open_history_recovery(&mut self, task_id: String, cx: &mut Context<Self>) {
+        self.close_chat_menu(cx);
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.sidebar_notice = Some("Engine not connected".into());
+            cx.notify();
+            return;
+        };
+        let requested_task = task_id.clone();
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call_as::<Vec<HistoryRecoveryView>>(
+                    methods::LIST_HISTORY_RECOVERIES,
+                    serde_json::json!({ "taskId": requested_task }),
+                )
+                .await;
+            this.update(cx, |shell, cx| {
+                match result {
+                    Ok(recoveries) if !recoveries.is_empty() => {
+                        shell.history_recovery_dialog = Some(HistoryRecoveryDialog {
+                            task_id,
+                            selected: recoveries.len() - 1,
+                            recoveries,
+                        });
+                    }
+                    Ok(_) => {
+                        shell.sidebar_notice =
+                            Some("No earlier-message recovery is available.".into())
+                    }
+                    Err(error) => shell.sidebar_notice = Some(format!("{error}").into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn submit_history_recovery(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.history_recovery_dialog.take() else {
+            return;
+        };
+        let Some(recovery) = dialog.recoveries.get(dialog.selected) else {
+            cx.notify();
+            return;
+        };
+        self.mutate_task(
+            dialog.task_id,
+            serde_json::json!({
+                "kind": "restoreHistoryRecovery",
+                "recoveryId": recovery.recovery_id,
+            }),
+            cx,
+        );
         cx.notify();
     }
 
@@ -7065,6 +7272,21 @@ impl Shell {
             cx.notify();
             return true;
         }
+        if self.history_fork_dialog.is_some() {
+            self.history_fork_dialog = None;
+            cx.notify();
+            return true;
+        }
+        if self.edit_earlier_message_dialog.is_some() {
+            self.edit_earlier_message_dialog = None;
+            cx.notify();
+            return true;
+        }
+        if self.history_recovery_dialog.is_some() {
+            self.history_recovery_dialog = None;
+            cx.notify();
+            return true;
+        }
         if self.rename_space_dialog.is_some() {
             self.rename_space_dialog = None;
             cx.notify();
@@ -7176,7 +7398,7 @@ impl Shell {
             let rename_id = chat_id.clone();
             let archive_id = chat_id.clone();
             let delete_id = chat_id.clone();
-            let (archived, pinned, unread, can_move_up, can_move_down) = {
+            let (archived, pinned, unread, can_move_up, can_move_down, native_history_fork) = {
                 let state = self.state.read(cx);
                 let chat = state.chats.iter().find(|chat| chat.id == chat_id);
                 let mut pins: Vec<_> = state
@@ -7198,6 +7420,10 @@ impl Shell {
                     chat.is_some_and(zeron_proto::Chat::unseen),
                     pin_index.is_some_and(|index| index > 0),
                     pin_index.is_some_and(|index| index + 1 < pins.len()),
+                    chat.and_then(|chat| chat.config.as_ref())
+                        .is_some_and(|config| {
+                            matches!(config.harness, HarnessId::Codex | HarnessId::Opencode)
+                        }),
                 )
             };
             let pin_id = chat_id.clone();
@@ -7205,6 +7431,8 @@ impl Shell {
             let move_down_id = chat_id.clone();
             let read_id = chat_id.clone();
             let move_project_id = chat_id.clone();
+            let fork_task_id = chat_id.clone();
+            let recover_task_id = chat_id.clone();
             let menu = popover::popover_card(&theme)
                 .w(px(216.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -7301,6 +7529,53 @@ impl Shell {
                                     .text_color(theme.text_muted),
                             )
                             .child(SharedString::from("Move to project…")),
+                    )
+                    .child(
+                        popover::menu_row(&theme, false, format!("chat-menu-fork-{chat_id}"))
+                            .id("chat-menu-fork")
+                            .when(native_history_fork, |row| {
+                                row.on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_history_fork(
+                                        fork_task_id.clone(),
+                                        ConversationForkBoundaryKind::Tip,
+                                        None,
+                                        cx,
+                                    )
+                                }))
+                            })
+                            .when(!native_history_fork, |row| {
+                                row.opacity(0.5).on_click(cx.listener(|this, _, _, cx| {
+                                    this.close_chat_menu(cx);
+                                    this.sidebar_notice = Some(
+                                        "This provider has no verified native fork. Start a new task and pass context explicitly."
+                                            .into(),
+                                    );
+                                    cx.notify();
+                                }))
+                            })
+                            .child(
+                                icon(icons::GIT_BRANCH)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from(if native_history_fork {
+                                "Fork into new task…"
+                            } else {
+                                "Native fork unavailable"
+                            })),
+                    )
+                    .child(
+                        popover::menu_row(&theme, false, format!("chat-menu-recover-{chat_id}"))
+                            .id("chat-menu-recover")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_history_recovery(recover_task_id.clone(), cx)
+                            }))
+                            .child(
+                                icon(icons::REFRESH)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from("Restore earlier history…")),
                     )
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-archive-{chat_id}"))
@@ -7493,6 +7768,191 @@ impl Shell {
                 )
                 .into_any_element();
             overlays.push(popover::modal("rename-chat-dialog", viewport, card));
+        }
+
+        if let Some(dialog) = &mut self.history_fork_dialog {
+            if std::mem::take(&mut dialog.focus_pending) {
+                window.focus(&dialog.title.focus_handle(cx), cx);
+            }
+            let title = dialog.title.clone();
+            let prompt = dialog.prompt.clone();
+            let card = popover::dialog_card(&theme)
+                .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" {
+                        this.history_fork_dialog = None;
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(popover::dialog_title(&theme, "Fork into new task"))
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text_muted)
+                        .child("Creates an independent provider conversation. Files and external effects are not copied or rewound."),
+                )
+                .child(
+                    div()
+                        .mt(px(12.0))
+                        .child(popover::dialog_field(title.into_any_element())),
+                )
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .child(popover::dialog_field(prompt.into_any_element())),
+                )
+                .child(
+                    div()
+                        .mt(px(16.0))
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            popover::btn_ghost(&theme, "Cancel", "history-fork-cancel")
+                                .id("history-fork-cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.history_fork_dialog = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            popover::btn_primary(&theme, "Create fork")
+                                .id("history-fork-confirm")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.submit_history_fork(cx)
+                                })),
+                        ),
+                )
+                .into_any_element();
+            overlays.push(popover::modal("history-fork-dialog", viewport, card));
+        }
+
+        if let Some(dialog) = &mut self.edit_earlier_message_dialog {
+            if std::mem::take(&mut dialog.focus_pending) {
+                window.focus(&dialog.input.focus_handle(cx), cx);
+            }
+            let input = dialog.input.clone();
+            let card = popover::dialog_card(&theme)
+                .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" {
+                        this.edit_earlier_message_dialog = None;
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(popover::dialog_title(&theme, "Edit earlier message"))
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text_muted)
+                        .child("LUNA first stages a native conversation fork and recovery snapshot. Files, tool calls, and external effects are not undone."),
+                )
+                .child(
+                    div()
+                        .mt(px(12.0))
+                        .child(popover::dialog_field(input.into_any_element())),
+                )
+                .child(
+                    div()
+                        .mt(px(16.0))
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            popover::btn_ghost(&theme, "Cancel", "history-edit-cancel")
+                                .id("history-edit-cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.edit_earlier_message_dialog = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            popover::btn_primary(&theme, "Rewrite conversation")
+                                .id("history-edit-confirm")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.submit_edit_earlier_message(cx)
+                                })),
+                        ),
+                )
+                .into_any_element();
+            overlays.push(popover::modal("history-edit-dialog", viewport, card));
+        }
+
+        if let Some(dialog) = &self.history_recovery_dialog {
+            let recoveries = dialog.recoveries.clone();
+            let selected = dialog.selected;
+            let rows = recoveries
+                .iter()
+                .enumerate()
+                .map(|(index, recovery)| {
+                    let label = format!(
+                        "{} · {}",
+                        recovery.summary,
+                        chrono::DateTime::from_timestamp_millis(recovery.created_at_ms)
+                            .map(|value| value
+                                .with_timezone(&chrono::Local)
+                                .format("%b %-d, %-I:%M %p")
+                                .to_string())
+                            .unwrap_or_else(|| "unknown time".into())
+                    );
+                    popover::menu_row(
+                        &theme,
+                        index == selected,
+                        format!("history-recovery-{index}"),
+                    )
+                    .id(("history-recovery-row", index))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(dialog) = this.history_recovery_dialog.as_mut() {
+                            dialog.selected = index;
+                        }
+                        cx.notify();
+                    }))
+                    .child(SharedString::from(label))
+                })
+                .collect::<Vec<_>>();
+            let card = popover::dialog_card(&theme)
+                .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" {
+                        this.history_recovery_dialog = None;
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(popover::dialog_title(&theme, "Restore earlier history"))
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text_muted)
+                        .child("Restoring creates another independent provider fork and keeps the current conversation as an undo recovery. Files and external effects are unchanged."),
+                )
+                .child(div().mt(px(12.0)).flex().flex_col().children(rows))
+                .child(
+                    div()
+                        .mt(px(16.0))
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            popover::btn_ghost(&theme, "Cancel", "history-recovery-cancel")
+                                .id("history-recovery-cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.history_recovery_dialog = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            popover::btn_primary(&theme, "Restore")
+                                .id("history-recovery-confirm")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.submit_history_recovery(cx)
+                                })),
+                        ),
+                )
+                .into_any_element();
+            overlays.push(popover::modal("history-recovery-dialog", viewport, card));
         }
 
         if self.move_project_dialog.is_some() {

@@ -113,6 +113,10 @@ pub mod methods {
     pub const ENGINE_READY: &str = "EngineReady";
     /// Durable LUNA task identity and all preserved execution-binding generations.
     pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
+    /// Read the current provider-native history fork capability for one task.
+    pub const GET_HISTORY_CAPABILITY: &str = "GetHistoryCapability";
+    /// Read durable pre-edit recovery snapshots available for one task.
+    pub const LIST_HISTORY_RECOVERIES: &str = "ListHistoryRecoveries";
     /// Explicit supported-provider refresh for one task binding.
     pub const REFRESH_TASK_BINDING: &str = "RefreshTaskBinding";
     /// Read-only provider-native import preview. No task or provider state is mutated.

@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn fork_cutoff_includes_checkpoint_by_excluding_the_next_message() {
+    let messages = vec![
+        json!({"info":{"id":"user-1"}}),
+        json!({"info":{"id":"assistant-1"}}),
+        json!({"info":{"id":"user-2"}}),
+    ];
+    assert_eq!(
+        opencode_fork_cutoff(&messages, "assistant-1").unwrap(),
+        Some("user-2".into())
+    );
+    assert_eq!(opencode_fork_cutoff(&messages, "user-2").unwrap(), None);
+    assert!(opencode_fork_cutoff(&messages, "missing").is_err());
+}
+
+#[test]
 fn compact_routes_stay_provider_native_on_both_supported_protocols() {
     assert_eq!(
         compact_http_request(Protocol::V1, "session-1", Some("openai/gpt-5")).unwrap(),

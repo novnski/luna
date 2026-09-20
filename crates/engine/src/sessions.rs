@@ -3286,6 +3286,7 @@ async fn drive_run(
     let mut entry_id = new_id();
     let mut segment_started = now_ms();
     let mut writer: Option<SegmentWriter<'_>> = None;
+    let mut provider_checkpoint_id: Option<String> = None;
     let mut dirty = false;
     let mut flush_at = tokio::time::Instant::now();
     // Set when the engine interrupts the run: the harness gets this long to end its own
@@ -4065,6 +4066,14 @@ async fn drive_run(
             continue;
         }
 
+        if let AgentEvent::ProviderCheckpoint { checkpoint_id } = &event {
+            provider_checkpoint_id = Some(checkpoint_id.clone());
+            // Provider checkpoint ids are LUNA control-plane metadata. They
+            // are persisted on the completed assistant entry below, never in
+            // the visible event stream or transcript parts.
+            continue;
+        }
+
         match &event {
             AgentEvent::SessionStarted {
                 session_id, cwd, ..
@@ -4297,6 +4306,12 @@ async fn drive_run(
                     message_status,
                 ) {
                     tracing::warn!(chat = %chat_id, error = %err, "final segment finish failed");
+                }
+                if *status == DoneStatus::Completed
+                    && let Some(checkpoint_id) = provider_checkpoint_id.take()
+                    && let Err(error) = doc_ref.set_provider_checkpoint(&entry_id, &checkpoint_id)
+                {
+                    tracing::warn!(chat = %chat_id, %error, "provider checkpoint persistence failed");
                 }
                 inner.note_message(&chat_id, &folded_text(&folded));
             }

@@ -14,6 +14,7 @@ use crate::codex::resolve_codex_executable;
 use crate::jsonrpc::{Incoming, RpcClient};
 use crate::process::{Child, Command, Stdio};
 use crate::{HarnessError, compose_child_path, shutdown_child};
+use zeron_proto::{ProviderForkBoundary, ProviderForkRequest, ProviderForkResult};
 
 pub const VALIDATED_CODEX_CLI_VERSION: &str = "0.154.0";
 pub const NATIVE_CAPABILITIES: &[&str] = &[
@@ -149,6 +150,48 @@ impl CodexNativeClient {
         };
         self.call(method, json!({"threadId": thread_id})).await?;
         Ok(())
+    }
+
+    /// Fork a Codex rollout through the supported app-server operation. The
+    /// independent `thread/read` below is the completion readback; the RPC
+    /// response alone is only an acknowledgement that may race persistence.
+    pub async fn fork_thread(
+        &self,
+        request: ProviderForkRequest,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        let params = fork_params(&request);
+        let response = self.call("thread/fork", Value::Object(params)).await?;
+        let thread = response.get("thread").unwrap_or(&response);
+        let provider_session_id = string(thread, "id")?;
+        if provider_session_id == request.source_session_id {
+            return Err(HarnessError::Protocol(
+                "thread/fork returned the source Codex thread id".into(),
+            ));
+        }
+        let mut observed = None;
+        for attempt in 0..5 {
+            observed = self.observe_thread(&provider_session_id).await?;
+            if observed.is_some() {
+                break;
+            }
+            if attempt < 4 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+        let Some(observed) = observed else {
+            return Err(HarnessError::Protocol(
+                "forked Codex thread was not readable after acknowledgement".into(),
+            ));
+        };
+        if observed.id != provider_session_id {
+            return Err(HarnessError::Protocol(format!(
+                "thread/read returned {} for forked Codex thread {provider_session_id}",
+                observed.id
+            )));
+        }
+        Ok(ProviderForkResult {
+            provider_session_id,
+        })
     }
 
     /// Start asynchronous native compaction and wait for the provider's
@@ -327,6 +370,27 @@ impl CodexNativeClient {
             notifications: notification_rx,
         })
     }
+}
+
+fn fork_params(request: &ProviderForkRequest) -> serde_json::Map<String, Value> {
+    let mut params = serde_json::Map::new();
+    params.insert("threadId".into(), request.source_session_id.clone().into());
+    if !request.cwd.is_empty() {
+        params.insert("cwd".into(), request.cwd.clone().into());
+    }
+    if let Some(model) = request.model.as_ref().filter(|model| !model.is_empty()) {
+        params.insert("model".into(), model.clone().into());
+    }
+    match &request.boundary {
+        ProviderForkBoundary::Tip => {}
+        ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => {
+            params.insert("beforeTurnId".into(), checkpoint_id.clone().into());
+        }
+        ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+            params.insert("lastTurnId".into(), checkpoint_id.clone().into());
+        }
+    }
+    params
 }
 
 fn validate_compaction_resume(thread_id: &str, response: &Value) -> Result<(), HarnessError> {
@@ -566,5 +630,34 @@ mod tests {
             ),
             Some(CompactNotification::Failed("provider failed".into()))
         );
+    }
+
+    #[test]
+    fn fork_params_keep_before_exclusive_and_through_inclusive() {
+        let request = |boundary| ProviderForkRequest {
+            source_session_id: "source".into(),
+            boundary,
+            cwd: "/workspace".into(),
+            model: Some("gpt-5.6-sol".into()),
+            provider_home: None,
+            force_file_auth: false,
+        };
+        let before = fork_params(&request(ProviderForkBoundary::BeforeCheckpoint {
+            checkpoint_id: "turn-2".into(),
+        }));
+        assert_eq!(
+            before.get("beforeTurnId").and_then(Value::as_str),
+            Some("turn-2")
+        );
+        assert!(!before.contains_key("lastTurnId"));
+
+        let through = fork_params(&request(ProviderForkBoundary::ThroughCheckpoint {
+            checkpoint_id: "turn-1".into(),
+        }));
+        assert_eq!(
+            through.get("lastTurnId").and_then(Value::as_str),
+            Some("turn-1")
+        );
+        assert!(!through.contains_key("beforeTurnId"));
     }
 }

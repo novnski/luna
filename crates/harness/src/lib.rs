@@ -20,8 +20,8 @@ use tokio::sync::{mpsc, oneshot};
 pub use tokio_util::sync::CancellationToken;
 
 use zeron_proto::{
-    AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand, SteeringMode,
-    UserInputAnswer, UserInputQuestion,
+    AgentEvent, HarnessId, Model, ProviderForkCapability, ProviderForkRequest, ProviderForkResult,
+    ReasoningLevel, RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 /// Engine-only runtime-signature option. Account-aware adapters remove it
@@ -134,6 +134,23 @@ pub trait Harness: Send + Sync {
     /// stronger no-duplicate recovery contract.
     fn supports_safe_recovery_continuation(&self) -> bool {
         false
+    }
+    /// Provider-native conversation fork support. Ordinary resume support is
+    /// not sufficient: a fork must return a distinct independently writable
+    /// provider session.
+    fn fork_capability(&self) -> ProviderForkCapability {
+        ProviderForkCapability::None
+    }
+    /// Fork provider-owned history without replaying or summarizing it in
+    /// LUNA. Implementations must verify the returned session identity is
+    /// distinct from the source before returning success.
+    async fn fork_session(
+        &self,
+        _request: ProviderForkRequest,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        Err(HarnessError::Protocol(
+            "provider-backed session forks are not supported by this harness".into(),
+        ))
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
     /// Slash commands the agent advertises (ACP `availableCommands`); empty

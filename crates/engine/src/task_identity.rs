@@ -625,6 +625,103 @@ impl TaskIdentityService {
         )
     }
 
+    /// Stage a fully materialized independent fork identity. The provider
+    /// session already passed native readback, so the target binding never
+    /// shares the source session and never enters a half-visible pending-id
+    /// state.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_fork_task_with_command<R>(
+        &self,
+        source_task_id: &str,
+        target_task_id: &str,
+        provider_id: HarnessId,
+        provider_task_id: &str,
+        commit: impl FnOnce(&ExecutionBinding, Option<(&str, &[u8])>) -> Result<R, TaskProjectionError>,
+    ) -> Result<R, TaskProjectionError> {
+        if uuid::Uuid::parse_str(target_task_id).is_err() {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(
+                "fork target must use a stable UUID task id".into(),
+            )));
+        }
+        if provider_task_id.is_empty() {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(
+                "provider fork returned an empty session id".into(),
+            )));
+        }
+        if self.view(target_task_id).is_some() {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(
+                "fork target task already exists".into(),
+            )));
+        }
+        let source = self.view(source_task_id).ok_or_else(|| {
+            TaskProjectionError::Mutation(EngineError::Other(format!(
+                "unknown fork source task {source_task_id}"
+            )))
+        })?;
+        if source.task.tombstoned {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(
+                "fork source is deleted".into(),
+            )));
+        }
+        let at = now_ms();
+        let provider = self.provider_identity(provider_id);
+        let task = LunaTaskIdentity {
+            schema_version: TASK_IDENTITY_SCHEMA_VERSION,
+            task_id: target_task_id.to_string(),
+            origin: TaskOrigin::LunaCreated,
+            lineage: TaskLineage {
+                source_task_id: Some(source_task_id.to_string()),
+                lifecycle_owner_task_id: Some(target_task_id.to_string()),
+                ..TaskLineage::default()
+            },
+            workspace_id: source.workspace.workspace_id.clone(),
+            current_binding_id: None,
+            external_import_key: None,
+            tombstoned: false,
+            created_at_ms: at,
+        };
+        let binding = ExecutionBinding {
+            schema_version: TASK_IDENTITY_SCHEMA_VERSION,
+            binding_id: new_id(),
+            task_id: target_task_id.to_string(),
+            generation: 1,
+            provider_id,
+            provider_instance_id: provider.instance_id,
+            provider_profile_id: provider.profile_id,
+            provider_home_identity: provider.home_identity,
+            provider_task_id: provider_task_id.to_string(),
+            resume_cursor: None,
+            environment_id: source.workspace.environment_id.clone(),
+            workspace_id: source.workspace.workspace_id.clone(),
+            worktree_id: source.workspace.worktree_id.clone(),
+            origin: BindingOrigin::Forked,
+            provenance: format!("provider-backed fork of LUNA task {source_task_id}"),
+            capabilities: provider.capabilities,
+            reconciliation: ReconciliationRecord {
+                state: ReconciliationState::Current,
+                reason: "provider fork returned a distinct session and native readback succeeded"
+                    .into(),
+                observed_at_ms: at,
+                provider: None,
+            },
+            replaced_by_binding_id: None,
+            created_at_ms: at,
+            last_observed_at_ms: at,
+        };
+        self.commit_events_with_task_command(
+            vec![
+                TaskIdentityEvent::WorkspaceObserved {
+                    workspace: source.workspace,
+                },
+                TaskIdentityEvent::TaskRegistered { task },
+                TaskIdentityEvent::BindingCreated {
+                    binding: binding.clone(),
+                },
+            ],
+            |snapshot| commit(&binding, snapshot),
+        )
+    }
+
     /// L07 lifecycle boundary for delete. This never deletes provider-private
     /// data; it only stages the LUNA-owned identity tombstone.
     pub(crate) fn tombstone_task_with_command<R>(
@@ -1828,6 +1925,73 @@ impl TaskIdentityService {
         self.commit_events_with_task_command(events, |snapshot| commit(&replacement, snapshot))
     }
 
+    /// Stage a replacement binding whose independently forked provider id is
+    /// already known and read back. Used by earlier-message editing after the
+    /// provider rewind preparation succeeds.
+    pub(crate) fn replace_with_forked_binding_with_command<R>(
+        &self,
+        task_id: &str,
+        provider_task_id: &str,
+        commit: impl FnOnce(&ExecutionBinding, Option<(&str, &[u8])>) -> Result<R, TaskProjectionError>,
+    ) -> Result<R, TaskProjectionError> {
+        let view = self.view(task_id).ok_or_else(|| {
+            TaskProjectionError::Mutation(EngineError::Other(format!("unknown task {task_id}")))
+        })?;
+        let current = view.current_binding.ok_or_else(|| {
+            TaskProjectionError::Mutation(EngineError::Other(
+                "earlier-message edit requires a provider binding".into(),
+            ))
+        })?;
+        if provider_task_id.is_empty() || provider_task_id == current.provider_task_id {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(
+                "provider rewind did not create an independent session".into(),
+            )));
+        }
+        let at = now_ms();
+        let provider = self.provider_identity(current.provider_id);
+        let replacement = ExecutionBinding {
+            schema_version: TASK_IDENTITY_SCHEMA_VERSION,
+            binding_id: new_id(),
+            task_id: task_id.to_string(),
+            generation: current.generation + 1,
+            provider_id: current.provider_id,
+            provider_instance_id: provider.instance_id,
+            provider_profile_id: provider.profile_id,
+            provider_home_identity: provider.home_identity,
+            provider_task_id: provider_task_id.to_string(),
+            resume_cursor: None,
+            environment_id: view.workspace.environment_id,
+            workspace_id: view.workspace.workspace_id,
+            worktree_id: view.workspace.worktree_id,
+            origin: BindingOrigin::Forked,
+            provenance: "provider-backed earlier-message edit rewind".into(),
+            capabilities: provider.capabilities,
+            reconciliation: ReconciliationRecord {
+                state: ReconciliationState::Current,
+                reason: "staged provider rewind returned a distinct session and native readback succeeded"
+                    .into(),
+                observed_at_ms: at,
+                provider: None,
+            },
+            replaced_by_binding_id: None,
+            created_at_ms: at,
+            last_observed_at_ms: at,
+        };
+        self.commit_events_with_task_command(
+            vec![
+                TaskIdentityEvent::BindingReplaced {
+                    binding_id: current.binding_id,
+                    replacement_id: replacement.binding_id.clone(),
+                    at_ms: at,
+                },
+                TaskIdentityEvent::BindingCreated {
+                    binding: replacement.clone(),
+                },
+            ],
+            |snapshot| commit(&replacement, snapshot),
+        )
+    }
+
     pub async fn compact_task(
         &self,
         task_id: &str,
@@ -2036,7 +2200,10 @@ impl TaskIdentityService {
     }
 }
 
-fn codex_session_store_identity(device_id: &str, canonical_home: &Path) -> (String, String, String) {
+fn codex_session_store_identity(
+    device_id: &str,
+    canonical_home: &Path,
+) -> (String, String, String) {
     let home_identity = digest(&stable_path(canonical_home).to_string_lossy());
     let short = home_identity[..16].to_string();
     (

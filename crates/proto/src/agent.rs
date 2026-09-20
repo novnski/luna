@@ -594,6 +594,14 @@ pub enum AgentEvent {
         thread_id: String,
         turn_id: String,
     },
+    /// Provider-owned checkpoint for the current completed root turn. This is
+    /// control-plane metadata used by LUNA's provider-backed fork/edit path;
+    /// it is never rendered as transcript content. Adapters emit it only when
+    /// the provider exposes a stable native history boundary.
+    #[serde(rename_all = "camelCase")]
+    ProviderCheckpoint {
+        checkpoint_id: String,
+    },
     /// Kept as a harness passthrough (rate-limit probes); never persisted to docs.
     #[serde(rename_all = "camelCase")]
     Usage {

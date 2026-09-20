@@ -2,6 +2,7 @@
 //! All provider homes are synthetic and the harness is deterministic.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -18,8 +19,9 @@ use zeron_proto::{
     AgentEvent, BindingOrigin, COMPOSER_DRAFT_VERSION, ChatConfig, CommandReasonCode,
     CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftRead, ContextControlState,
     ContextHandoff, ContextHandoffKind, ContextOperationStatus, DoneStatus, DraftContext,
-    DraftSubmissionState, FollowUpBehavior, HarnessId, Model, PermissionMode, ReasoningLevel,
-    RunRequest, SandboxLevel, SteeringMode, TaskCommandRead,
+    DraftSubmissionState, FollowUpBehavior, HarnessId, HistoryRecoveryView, Model, PermissionMode,
+    ProviderForkCapability, ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest,
+    SandboxLevel, SteeringMode, TaskCommandRead,
 };
 use zeron_rpc::{RpcClient, methods};
 
@@ -42,6 +44,87 @@ struct CodexContextHarness {
     release_context: Arc<Notify>,
     release_done: Arc<Notify>,
     outcome: CodexContextOutcome,
+}
+
+struct HistoryHarness {
+    provider: HarnessId,
+    forks: Arc<Mutex<Vec<ProviderForkRequest>>>,
+    fork_sequence: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Harness for HistoryHarness {
+    fn id(&self) -> HarnessId {
+        self.provider
+    }
+
+    fn display_name(&self) -> &str {
+        "L13 synthetic provider history"
+    }
+
+    fn supports_steering(&self) -> bool {
+        false
+    }
+
+    fn steering_mode(&self) -> SteeringMode {
+        SteeringMode::TurnBoundary
+    }
+
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[ReasoningLevel::Medium]
+    }
+
+    fn fork_capability(&self) -> ProviderForkCapability {
+        ProviderForkCapability::Checkpoint
+    }
+
+    async fn fork_session(
+        &self,
+        request: ProviderForkRequest,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        self.forks.lock().unwrap().push(request);
+        let sequence = self.fork_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(ProviderForkResult {
+            provider_session_id: format!("synthetic-history-fork-{sequence}"),
+        })
+    }
+
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(Vec::new())
+    }
+
+    async fn run(
+        &self,
+        request: RunRequest,
+        _controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let session_id = request
+            .resume
+            .unwrap_or_else(|| "synthetic-history-source".into());
+        Ok(futures::stream::iter(vec![
+            Ok(AgentEvent::SessionStarted {
+                harness: self.provider,
+                model: "synthetic-history".into(),
+                tools: Vec::new(),
+                cwd: request.cwd,
+                session_id: session_id.clone(),
+                assistant_message_id: "assistant-history".into(),
+            }),
+            Ok(AgentEvent::TextDelta {
+                text: "synthetic completed answer".into(),
+            }),
+            Ok(AgentEvent::ProviderCheckpoint {
+                checkpoint_id: "provider-message-1".into(),
+            }),
+            Ok(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: Some(session_id),
+            }),
+        ])
+        .boxed())
+    }
 }
 
 #[async_trait]
@@ -318,6 +401,27 @@ fn assemble_codex_context(
     .unwrap()
 }
 
+fn assemble_history(
+    root: &std::path::Path,
+    forks: Arc<Mutex<Vec<ProviderForkRequest>>>,
+    provider: HarnessId,
+) -> EngineCore {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(HistoryHarness {
+        provider,
+        forks,
+        fork_sequence: Arc::new(AtomicUsize::new(0)),
+    }));
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(&root.join("data"), "l13-org", "l13-user"),
+        Arc::new(registry),
+        provider,
+        None,
+        account_config(root),
+    )
+    .unwrap()
+}
+
 fn task_config(model: &str) -> ChatConfig {
     ChatConfig {
         harness: HarnessId::Mock,
@@ -359,6 +463,19 @@ fn codex_task_config() -> ChatConfig {
     let mut config = task_config("synthetic-codex");
     config.harness = HarnessId::Codex;
     config
+}
+
+fn history_task_config(provider: HarnessId) -> ChatConfig {
+    let mut config = task_config("synthetic-history");
+    config.harness = provider;
+    config
+}
+
+fn history_request(prompt: &str, provider: HarnessId) -> RunRequest {
+    let mut request = request(prompt);
+    request.harness = Some(provider);
+    request.model = Some("synthetic-history".into());
+    request
 }
 
 fn codex_request(prompt: &str) -> RunRequest {
@@ -3747,5 +3864,317 @@ async fn model_change_waits_for_safe_turn_and_keeps_binding_generation() {
     assert_eq!(config.model.as_deref(), Some("synthetic-next"));
     assert_eq!(config.permission_mode, PermissionMode::Ask);
     assert!(config.provider_account_id.is_none());
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
+    let dir = tempfile::tempdir().unwrap();
+    let forks = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble_history(dir.path(), forks.clone(), HarnessId::Opencode);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let source_task_id = uuid::Uuid::new_v4().to_string();
+    let target_task_id = uuid::Uuid::new_v4().to_string();
+
+    let created = execute(
+        &client,
+        envelope(
+            "history-create-source",
+            &source_task_id,
+            None,
+            serde_json::json!({
+                "kind": "createChat",
+                "deviceId": core.device_id,
+                "cwd": "/tmp",
+                "config": history_task_config(HarnessId::Opencode),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(created.status, CommandReceiptStatus::Applied);
+
+    let started = execute(
+        &client,
+        envelope(
+            "history-materialize-source",
+            &source_task_id,
+            Some(&snapshot(&client, &source_task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": history_request("source prompt", HarnessId::Opencode),
+                    "messageId": "source-user-1",
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        started.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let materialized = core
+                .task_identity
+                .view(&source_task_id)
+                .and_then(|view| view.current_binding)
+                .is_some_and(|binding| !binding.provider_task_id.is_empty());
+            if materialized
+                && snapshot(&client, &source_task_id)
+                    .await
+                    .snapshot
+                    .active_turn_id
+                    .is_none()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let forked = execute(
+        &client,
+        envelope(
+            "history-fork-tip",
+            &source_task_id,
+            Some(&snapshot(&client, &source_task_id).await),
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": target_task_id,
+                "boundary": "tip",
+                "title": "Independent fork",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(forked.status, CommandReceiptStatus::Applied);
+
+    let source = core.task_identity.view(&source_task_id).unwrap();
+    let target = core.task_identity.view(&target_task_id).unwrap();
+    assert_eq!(
+        target.task.lineage.source_task_id.as_deref(),
+        Some(source_task_id.as_str())
+    );
+    assert_eq!(
+        target.task.lineage.lifecycle_owner_task_id.as_deref(),
+        Some(target_task_id.as_str())
+    );
+    let source_binding = source.current_binding.unwrap();
+    let target_binding = target.current_binding.unwrap();
+    assert_eq!(target_binding.origin, BindingOrigin::Forked);
+    assert_ne!(
+        source_binding.provider_task_id,
+        target_binding.provider_task_id
+    );
+    assert_eq!(target_binding.provider_task_id, "synthetic-history-fork-1");
+    let calls = forks.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(matches!(
+        calls[0].boundary,
+        zeron_proto::ProviderForkBoundary::Tip
+    ));
+    drop(calls);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let forks = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble_history(dir.path(), forks.clone(), HarnessId::Codex);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let task_id = uuid::Uuid::new_v4().to_string();
+
+    assert_eq!(
+        execute(
+            &client,
+            envelope(
+                "history-edit-create",
+                &task_id,
+                None,
+                serde_json::json!({
+                    "kind": "createChat",
+                    "deviceId": core.device_id,
+                    "cwd": "/tmp",
+                    "config": history_task_config(HarnessId::Codex),
+                }),
+            ),
+        )
+        .await
+        .status,
+        CommandReceiptStatus::Applied
+    );
+    execute(
+        &client,
+        envelope(
+            "history-edit-materialize",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": history_request("source prompt", HarnessId::Codex),
+                    "messageId": "edit-source-user",
+                }
+            }),
+        ),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ready = core
+                .task_identity
+                .view(&task_id)
+                .and_then(|view| view.current_binding)
+                .is_some_and(|binding| !binding.provider_task_id.is_empty());
+            let checkpoint = core.doc_host.open(&task_id).ok().and_then(|handle| {
+                handle
+                    .doc()
+                    .read_entries()
+                    .ok()?
+                    .into_iter()
+                    .find(|entry| entry.role == zeron_doc::MessageRole::Assistant)
+                    .and_then(|entry| handle.doc().provider_checkpoint(&entry.id))
+            });
+            if ready
+                && checkpoint.is_some()
+                && snapshot(&client, &task_id)
+                    .await
+                    .snapshot
+                    .active_turn_id
+                    .is_none()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let before_binding = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    let edited = execute(
+        &client,
+        envelope(
+            "history-edit-command",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "editEarlierMessage",
+                "messageId": "edit-source-user",
+                "text": "rewritten source prompt",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(edited.status, CommandReceiptStatus::Applied);
+
+    let after = core.task_identity.view(&task_id).unwrap();
+    let after_binding = after.current_binding.unwrap();
+    assert_eq!(after_binding.generation, before_binding.generation + 1);
+    assert_eq!(after_binding.origin, BindingOrigin::Forked);
+    assert_ne!(
+        after_binding.provider_task_id,
+        before_binding.provider_task_id
+    );
+    assert_eq!(
+        after
+            .bindings
+            .iter()
+            .find(|binding| binding.binding_id == before_binding.binding_id)
+            .and_then(|binding| binding.replaced_by_binding_id.as_deref()),
+        Some(after_binding.binding_id.as_str())
+    );
+    let recoveries: Vec<HistoryRecoveryView> = client
+        .call_as(
+            methods::LIST_HISTORY_RECOVERIES,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recoveries.len(), 1);
+    assert_eq!(recoveries[0].cutoff_message_id, "edit-source-user");
+    assert!(
+        core.store
+            .load_snapshot(&format!(
+                "luna-history-recovery:{}",
+                recoveries[0].recovery_id
+            ))
+            .unwrap()
+            .is_some()
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if snapshot(&client, &task_id)
+                .await
+                .snapshot
+                .active_turn_id
+                .is_none()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let restored = execute(
+        &client,
+        envelope(
+            "history-restore-command",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "restoreHistoryRecovery",
+                "recoveryId": recoveries[0].recovery_id,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(restored.status, CommandReceiptStatus::Applied);
+    let restored_binding = core
+        .task_identity
+        .view(&task_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(restored_binding.generation, after_binding.generation + 1);
+    let recoveries_after: Vec<HistoryRecoveryView> = client
+        .call_as(
+            methods::LIST_HISTORY_RECOVERIES,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recoveries_after.len(), 2);
+    assert!(
+        recoveries_after
+            .iter()
+            .any(|recovery| recovery.recovery_id == "restore:history-restore-command")
+    );
+    let calls = forks.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(matches!(
+        &calls[0].boundary,
+        zeron_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id }
+            if checkpoint_id == "provider-message-1"
+    ));
+    assert_eq!(calls[1].source_session_id, before_binding.provider_task_id);
+    assert!(matches!(
+        calls[1].boundary,
+        zeron_proto::ProviderForkBoundary::Tip
+    ));
+    drop(calls);
     core.shutdown().await;
 }

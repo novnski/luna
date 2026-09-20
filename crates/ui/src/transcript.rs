@@ -40,7 +40,7 @@ use gpui::{
 };
 
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
-use zeron_proto::ToolCall;
+use zeron_proto::{ConversationForkBoundaryKind, ToolCall};
 
 use crate::markdown::parser::{
     Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, parse_full,
@@ -1043,6 +1043,8 @@ pub struct Row {
     /// First row of its message entry (gets the turn gap).
     pub turn_start: bool,
     pub kind: RowKind,
+    /// Owning entry role, retained for safe history-action eligibility.
+    pub role: MessageRole,
     /// The owning message entry — hover anywhere on the entry's rows reveals
     /// its timestamp strip (zeron chat-view.tsx `group`/`group-hover`).
     pub entry_id: SharedString,
@@ -1276,6 +1278,7 @@ pub fn rows_for_entry(
                 badges: Arc::new(badges),
                 pending,
             },
+            role: entry.role,
             entry_id,
             // User rows always carry the strip (chat-view.tsx: whenever
             // `createdAt` exists — the optimistic echo included).
@@ -1307,6 +1310,7 @@ pub fn rows_for_entry(
                     tools: Arc::new(tools),
                     auto_open,
                 },
+                role: entry.role,
                 entry_id: entry.id.clone().into(),
                 timestamp: None,
                 copy_text: None,
@@ -1427,6 +1431,7 @@ pub fn rows_for_entry(
                                 entry_id: entry_id.clone(),
                                 timestamp: None,
                                 copy_text: None,
+                                role: entry.role,
                                 kind: if streaming {
                                     RowKind::LiveMarkdown {
                                         tree: tree.clone(),
@@ -1457,6 +1462,7 @@ pub fn rows_for_entry(
                             entry_id: entry_id.clone(),
                             timestamp: None,
                             copy_text: None,
+                            role: entry.role,
                             kind: RowKind::GeneratedImage {
                                 owner: entry.device_id.clone(),
                                 path: path.clone(),
@@ -1487,6 +1493,7 @@ pub fn rows_for_entry(
                                 header,
                                 resolved: *resolved,
                             },
+                            role: entry.role,
                             entry_id: entry_id.clone(),
                             timestamp: None,
                             copy_text: None,
@@ -1504,6 +1511,7 @@ pub fn rows_for_entry(
                                 // Harness-generated; the chip is one line.
                                 message: single_line(message).into(),
                             },
+                            role: entry.role,
                             entry_id: entry_id.clone(),
                             timestamp: None,
                             copy_text: None,
@@ -2814,6 +2822,16 @@ pub enum TranscriptEvent {
         frozen: bool,
     },
     OpenAccounts,
+    ForkMessage {
+        task_id: String,
+        message_id: String,
+        boundary: ConversationForkBoundaryKind,
+    },
+    EditEarlierMessage {
+        task_id: String,
+        message_id: String,
+        text: String,
+    },
 }
 
 impl gpui::EventEmitter<TranscriptEvent> for Transcript {}
@@ -6052,12 +6070,27 @@ impl Transcript {
         let copied_message = self.copied_message.as_ref() == Some(&row.entry_id);
         let copy_text = row.copy_text.clone();
         let copy_entry_id = row.entry_id.clone();
+        let history_task_id = self
+            .chat_id
+            .clone()
+            .or_else(|| self.state.read(cx).selected_chat.clone())
+            .filter(|_| self.doc_override.is_none());
+        let history_provider = history_task_id.as_ref().and_then(|task_id| {
+            self.state
+                .read(cx)
+                .chats
+                .iter()
+                .find(|chat| &chat.id == task_id)
+                .and_then(|chat| chat.config.as_ref())
+                .map(|config| config.harness)
+        });
+        let history_role = row.role;
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted.opacity(0.55))
                 .child(SharedString::from(format_timestamp(ms, &chrono::Local)));
-            let copy = copy_text.map(|text| {
+            let copy = copy_text.clone().map(|text| {
                 let entry_id = copy_entry_id.clone();
                 let fade_key = format!("copy-message-hover-{entry_id}");
                 div()
@@ -6089,12 +6122,84 @@ impl Transcript {
                         .text_color(theme.text_muted),
                     )
             });
+            let fork = history_task_id.clone().and_then(|task_id| {
+                let eligible = matches!(
+                    (history_provider, history_role),
+                    (
+                        Some(zeron_proto::HarnessId::Codex),
+                        MessageRole::User | MessageRole::Assistant
+                    ) | (
+                        Some(zeron_proto::HarnessId::Opencode),
+                        MessageRole::Assistant
+                    )
+                );
+                eligible.then(|| {
+                    let message_id = copy_entry_id.to_string();
+                    let boundary = if history_role == MessageRole::User {
+                        ConversationForkBoundaryKind::BeforeUserMessage
+                    } else {
+                        ConversationForkBoundaryKind::AfterCompletedTurn
+                    };
+                    div()
+                        .id(SharedString::from(format!("fork-message-{message_id}")))
+                        .size(px(Theme::SPACE_MD * 2.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(Theme::CONTROL_RADIUS))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(TranscriptEvent::ForkMessage {
+                                task_id: task_id.clone(),
+                                message_id: message_id.clone(),
+                                boundary,
+                            });
+                        }))
+                        .child(
+                            crate::icons::icon(crate::icons::GIT_BRANCH)
+                                .size(px(14.0))
+                                .text_color(theme.text_muted),
+                        )
+                })
+            });
+            let edit = history_task_id.clone().and_then(|task_id| {
+                (history_provider == Some(zeron_proto::HarnessId::Codex)
+                    && history_role == MessageRole::User)
+                    .then(|| {
+                        let message_id = copy_entry_id.to_string();
+                        let text = copy_text.clone().unwrap_or_default().to_string();
+                        div()
+                            .id(SharedString::from(format!("edit-message-{message_id}")))
+                            .size(px(Theme::SPACE_MD * 2.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(TranscriptEvent::EditEarlierMessage {
+                                    task_id: task_id.clone(),
+                                    message_id: message_id.clone(),
+                                    text: text.clone(),
+                                });
+                            }))
+                            .child(
+                                crate::icons::icon(crate::icons::PEN)
+                                    .size(px(14.0))
+                                    .text_color(theme.text_muted),
+                            )
+                    })
+            });
             let metadata = div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(px(Theme::SPACE_SM));
-            let metadata = metadata.child(timestamp).children(copy);
+            let metadata = metadata
+                .child(timestamp)
+                .children(fork)
+                .children(edit)
+                .children(copy);
             div()
                 .h(px(Theme::SPACE_SM + Theme::SPACE_MD * 2.0))
                 .pt(px(Theme::SPACE_SM))
@@ -9038,6 +9143,7 @@ mod tests {
             kind: RowKind::ErrorChip {
                 message: SharedString::default(),
             },
+            role: MessageRole::Assistant,
             entry_id: entry_id.into(),
             timestamp: None,
             copy_text: None,

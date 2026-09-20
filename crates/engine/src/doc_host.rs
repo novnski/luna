@@ -1091,6 +1091,7 @@ impl DocHost {
         binding_generation: Option<u32>,
         identity_snapshot: Option<(&str, &[u8])>,
         recovery: Option<&TaskRecoveryTransition>,
+        extra_snapshots: &[(&str, &[u8])],
         doc_mutation: impl FnOnce(&SessionDoc) -> Result<R, EngineError>,
         registry_mutation: impl FnOnce(&mut RegistryDoc) -> Result<(), EngineError>,
     ) -> Result<(R, CommandReceipt), crate::workspace_host::TaskProjectionError> {
@@ -1101,7 +1102,8 @@ impl DocHost {
         let prepared = self
             .prepare_queue_projection(&handle, command_id, doc_mutation)
             .map_err(crate::workspace_host::TaskProjectionError::Mutation)?;
-        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let mut snapshots = vec![(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        snapshots.extend_from_slice(extra_snapshots);
         let updates = Self::queue_projection_updates(&handle, &prepared);
         let (_, receipt) = self
             .workspace()

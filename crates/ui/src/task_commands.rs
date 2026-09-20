@@ -33,6 +33,9 @@ fn revision_fenced_kind(kind: Option<&str>) -> bool {
                 | "switchProvider"
                 | "setPermission"
                 | "setProviderAccount"
+                | "forkTask"
+                | "editEarlierMessage"
+                | "restoreHistoryRecovery"
         )
     )
 }
@@ -66,6 +69,9 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
                 | "switchProvider"
                 | "setPermission"
                 | "setProviderAccount"
+                | "forkTask"
+                | "editEarlierMessage"
+                | "restoreHistoryRecovery"
         )
     )
 }
@@ -209,6 +215,9 @@ mod tests {
             "markSeen",
             "setArchived",
             "moveProject",
+            "forkTask",
+            "editEarlierMessage",
+            "restoreHistoryRecovery",
         ] {
             assert!(revision_fenced_kind(Some(kind)), "revision fence: {kind}");
             assert!(binding_fenced_kind(Some(kind)), "binding fence: {kind}");

@@ -54,8 +54,9 @@ use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
-    RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
+    AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice,
+    ProviderForkCapability, ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest,
+    SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::jsonrpc::{Incoming, RpcClient, RpcRequestFailure};
@@ -583,6 +584,28 @@ impl Harness for CodexHarness {
         true
     }
 
+    fn fork_capability(&self) -> ProviderForkCapability {
+        ProviderForkCapability::Checkpoint
+    }
+
+    async fn fork_session(
+        &self,
+        request: ProviderForkRequest,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        let executable = self.resolve_executable()?;
+        let home = request
+            .provider_home
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
+            .or_else(|| crate::executable::home_dir().map(|home| home.join(".codex")))
+            .ok_or_else(|| HarnessError::Protocol("Codex home is unavailable".into()))?;
+        let client = native::CodexNativeClient::new(&home)
+            .with_executable(executable)
+            .for_execution_home(home, request.force_file_auth);
+        client.fork_thread(request).await
+    }
+
     /// The signed-in account's visible `model/list` is authoritative. A
     /// curated snapshot keeps the picker operational when the experimental
     /// discovery call is unavailable or temporarily fails; failed probes are
@@ -1106,7 +1129,18 @@ async fn run_session(session: Session) {
 
     let mut router = TurnRouter::default();
     match start_turn(&client, turn_params(&request.prompt)).await {
-        Ok(id) => router.adopt_started(id),
+        Ok(id) => {
+            router.adopt_started(id.clone());
+            if !send(
+                &event_tx,
+                AgentEvent::ProviderCheckpoint { checkpoint_id: id },
+            )
+            .await
+            {
+                shutdown_child(&mut child, kill_grace).await;
+                return;
+            }
+        }
         Err(e) => {
             let _ = event_tx
                 .send(Ok(AgentEvent::Done {
@@ -1698,15 +1732,23 @@ async fn steer_as_new_turn(
 ) -> bool {
     match start_turn(client, params).await {
         Ok(id) => {
-            router.adopt_started(id);
+            router.adopt_started(id.clone());
             *done_current = false;
             let (prev, next) = rotate(assistant_message_id);
-            send(
+            if !send(
                 event_tx,
                 AgentEvent::Steered {
                     assistant_message_id: Some(prev),
                     next_assistant_message_id: Some(next),
                 },
+            )
+            .await
+            {
+                return false;
+            }
+            send(
+                event_tx,
+                AgentEvent::ProviderCheckpoint { checkpoint_id: id },
             )
             .await
         }

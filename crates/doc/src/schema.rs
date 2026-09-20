@@ -422,6 +422,74 @@ impl SessionDoc {
             .collect())
     }
 
+    /// Attach a provider-owned completed-turn checkpoint to one assistant
+    /// transcript entry without exposing it as message content.
+    pub fn set_provider_checkpoint(
+        &self,
+        message_id: &str,
+        checkpoint_id: &str,
+    ) -> Result<(), DocError> {
+        if checkpoint_id.is_empty() {
+            return Err(DocError::Schema("provider checkpoint id is empty".into()));
+        }
+        if !self
+            .read_entries()?
+            .iter()
+            .any(|entry| entry.id == message_id)
+        {
+            return Err(DocError::Schema(format!(
+                "message {message_id} does not exist"
+            )));
+        }
+        self.doc
+            .get_map("providerCheckpoints")
+            .insert(message_id, checkpoint_id)?;
+        self.doc.commit();
+        Ok(())
+    }
+
+    pub fn provider_checkpoint(&self, message_id: &str) -> Option<String> {
+        match self.doc.get_map("providerCheckpoints").get(message_id) {
+            Some(loro::ValueOrContainer::Value(LoroValue::String(value))) => {
+                Some(value.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// Replace conversation rows while preserving drafts, queues, context
+    /// state, and every other doc-owned collection. Used only after a native
+    /// rewind has been staged and all command fences have been revalidated.
+    pub fn replace_conversation_entries(
+        &self,
+        entries: &[SessionMessageEntry],
+        checkpoints: &std::collections::HashMap<String, String>,
+    ) -> Result<(), DocError> {
+        let messages = self.doc.get_list("messages");
+        let len = messages.len();
+        if len > 0 {
+            messages.delete(0, len)?;
+        }
+        let checkpoint_map = self.doc.get_map("providerCheckpoints");
+        let old_keys = checkpoint_map.keys().collect::<Vec<_>>();
+        for key in old_keys {
+            checkpoint_map.delete(key.as_str())?;
+        }
+        for entry in entries {
+            let map = messages.push_container(LoroMap::new())?;
+            write_entry_scalar_fields(&map, entry)?;
+            let parts = map.insert_container("parts", LoroList::new())?;
+            for part in &entry.parts {
+                push_part(&parts, part)?;
+            }
+            if let Some(checkpoint) = checkpoints.get(&entry.id) {
+                checkpoint_map.insert(&entry.id, checkpoint.as_str())?;
+            }
+        }
+        self.doc.commit();
+        Ok(())
+    }
+
     /// Read the commands ledger.
     ///
     /// Same skip-not-fail policy as `read_entries`: any device can append
@@ -717,6 +785,14 @@ impl SessionDoc {
         self.doc
             .export(ExportMode::Snapshot)
             .map_err(|e| DocError::Schema(e.to_string()))
+    }
+
+    /// Materialize an isolated session document from a persisted snapshot.
+    pub fn from_snapshot(bytes: &[u8]) -> Result<Self, DocError> {
+        let doc = LoroDoc::new();
+        doc.import(bytes)
+            .map_err(|error| DocError::Schema(error.to_string()))?;
+        Ok(Self::from_doc(doc))
     }
 }
 
@@ -1364,6 +1440,31 @@ mod tests {
             }]
         );
         assert_eq!(doc.chat_id().as_deref(), Some("chat-1"));
+    }
+
+    #[test]
+    fn conversation_replacement_keeps_non_conversation_state() {
+        let doc = SessionDoc::init("chat-history-rewrite").unwrap();
+        doc.push_message(&user_entry("old", "old text")).unwrap();
+        doc.set_provider_checkpoint("old", "old-checkpoint")
+            .unwrap();
+        let context = zeron_proto::ContextControlState::default();
+        doc.set_context_control(&context).unwrap();
+
+        let replacement = user_entry("kept", "kept text");
+        let checkpoints =
+            std::collections::HashMap::from([("kept".to_string(), "new-checkpoint".to_string())]);
+        doc.replace_conversation_entries(std::slice::from_ref(&replacement), &checkpoints)
+            .unwrap();
+
+        assert_eq!(doc.read_entries().unwrap(), vec![replacement]);
+        assert_eq!(
+            doc.provider_checkpoint("kept").as_deref(),
+            Some("new-checkpoint")
+        );
+        assert_eq!(doc.provider_checkpoint("old"), None);
+        assert_eq!(doc.context_control(), context);
+        assert_eq!(doc.chat_id().as_deref(), Some("chat-history-rewrite"));
     }
 
     #[test]

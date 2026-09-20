@@ -49,7 +49,8 @@ use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand,
+    AgentEvent, DoneStatus, HarnessId, Model, ProviderForkBoundary, ProviderForkCapability,
+    ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest, SlashCommand,
     SteeringMode, TodoItem, ToolCall, UserInputAnswer, UserInputQuestion,
 };
 
@@ -342,6 +343,26 @@ impl Harness for OpencodeHarness {
     /// can retire its quiesce watchdogs.
     fn deterministic_turn_end(&self) -> bool {
         true
+    }
+
+    fn fork_capability(&self) -> ProviderForkCapability {
+        ProviderForkCapability::Checkpoint
+    }
+
+    async fn fork_session(
+        &self,
+        request: ProviderForkRequest,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        let mut server = self.server(Some(&request.cwd)).await?;
+        let result = server
+            .fork_session(
+                &request.source_session_id,
+                Some(&request.cwd),
+                &request.boundary,
+            )
+            .await;
+        server.shutdown(self.kill_grace).await;
+        result
     }
 
     /// Live discovery off `GET /provider` (what the desktop app populates its
@@ -742,6 +763,79 @@ impl Server {
         Ok(unwrap_data(info))
     }
 
+    async fn session_messages(
+        &self,
+        session_id: &str,
+        directory: Option<&str>,
+    ) -> Result<Vec<Value>, HarnessError> {
+        let path = match self.protocol().await {
+            Protocol::V1 => format!("/session/{session_id}/message"),
+            Protocol::V2 => format!("/api/session/{session_id}/message"),
+        };
+        let value = unwrap_data(self.get_json(&path, directory).await?);
+        value.as_array().cloned().ok_or_else(|| {
+            HarnessError::Protocol("opencode session messages response was not an array".into())
+        })
+    }
+
+    async fn fork_session(
+        &self,
+        source_session_id: &str,
+        directory: Option<&str>,
+        boundary: &ProviderForkBoundary,
+    ) -> Result<ProviderForkResult, HarnessError> {
+        let message_id = match boundary {
+            ProviderForkBoundary::Tip => None,
+            ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => Some(checkpoint_id.clone()),
+            ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+                let messages = self.session_messages(source_session_id, directory).await?;
+                opencode_fork_cutoff(&messages, checkpoint_id)?
+            }
+        };
+        let path = match self.protocol().await {
+            Protocol::V1 => format!("/session/{source_session_id}/fork"),
+            Protocol::V2 => format!("/api/session/{source_session_id}/fork"),
+        };
+        let body = message_id
+            .map(|message_id| json!({ "messageID": message_id }))
+            .unwrap_or_else(|| json!({}));
+        let value = unwrap_data(self.post_json(&path, directory, &body).await?);
+        let provider_session_id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| HarnessError::Protocol("opencode fork returned no session id".into()))?
+            .to_owned();
+        if provider_session_id == source_session_id {
+            return Err(HarnessError::Protocol(
+                "opencode fork returned the source session id".into(),
+            ));
+        }
+        let mut observed = None;
+        for attempt in 0..5 {
+            observed = self
+                .session_info(&provider_session_id, directory)
+                .await?
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if observed.as_deref() == Some(provider_session_id.as_str()) {
+                break;
+            }
+            if attempt < 4 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+        if observed.as_deref() != Some(provider_session_id.as_str()) {
+            return Err(HarnessError::Protocol(
+                "forked opencode session was not readable after acknowledgement".into(),
+            ));
+        }
+        Ok(ProviderForkResult {
+            provider_session_id,
+        })
+    }
+
     /// Provider catalog for the picker, variant picking, and context
     /// windows. V1 advertises it on `/provider`; 2.x splits it into a flat
     /// enabled-model list on `/api/model` that folds into the same shape.
@@ -839,6 +933,33 @@ impl Server {
             .await
             .map(|_| ())
     }
+}
+
+fn opencode_fork_cutoff(
+    messages: &[Value],
+    checkpoint_id: &str,
+) -> Result<Option<String>, HarnessError> {
+    let position = messages.iter().position(|message| {
+        message
+            .get("info")
+            .unwrap_or(message)
+            .get("id")
+            .and_then(Value::as_str)
+            == Some(checkpoint_id)
+    });
+    let Some(position) = position else {
+        return Err(HarnessError::Protocol(format!(
+            "opencode checkpoint {checkpoint_id} is not in source session"
+        )));
+    };
+    Ok(messages.get(position + 1).and_then(|message| {
+        message
+            .get("info")
+            .unwrap_or(message)
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    }))
 }
 
 fn compact_http_request(
@@ -1235,6 +1356,9 @@ struct TurnState {
     retry_reported: bool,
     /// This turn was aborted because the provider retry loop hit the cap.
     aborted_for_retry: bool,
+    /// Last provider assistant message in this root turn. OpenCode's native
+    /// fork endpoint uses message ids as history checkpoints.
+    provider_checkpoint_id: Option<String>,
     /// Deadline for the first session-scoped event after the prompt.
     stall_deadline: Option<tokio::time::Instant>,
 }
@@ -1249,6 +1373,7 @@ impl TurnState {
             error: None,
             retry_reported: false,
             aborted_for_retry: false,
+            provider_checkpoint_id: None,
             stall_deadline: stall.map(|d| tokio::time::Instant::now() + d),
         }
     }
@@ -1584,6 +1709,11 @@ async fn run_session(session: Session) {
             }
             let errored = turn.aborted_for_retry
                 || (turn.error.is_some() && !turn.saw_content);
+            if let Some(checkpoint_id) = turn.provider_checkpoint_id.clone()
+                && !send(&event_tx, AgentEvent::ProviderCheckpoint { checkpoint_id }).await
+            {
+                break $label;
+            }
             let _ = send(&event_tx, AgentEvent::Done {
                 status: if errored {
                     DoneStatus::Errored
@@ -2410,6 +2540,9 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                     .assistant_messages
                     .entry(message.to_owned())
                     .or_insert(role == "assistant");
+                if role == "assistant" {
+                    turn.provider_checkpoint_id = Some(message.to_owned());
+                }
                 // Token usage rides the assistant message; the last one
                 // before idle wins, emitted right before Done.
                 if role == "assistant"
