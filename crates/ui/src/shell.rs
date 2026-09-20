@@ -1651,6 +1651,11 @@ impl Shell {
                         s.selected_chat
                             .as_deref()
                             .is_some_and(|id| s.indicator_for(id, Utc::now()) != Indicator::None)
+                            || s.selected_chat.as_deref().is_some_and(|id| {
+                                s.session_for(id)
+                                    .and_then(|session| session.recovery.as_ref())
+                                    .is_some_and(|recovery| recovery.status.active())
+                            })
                             // The connection pill's retry countdown needs the
                             // same per-second refresh while degraded.
                             || matches!(
@@ -3034,6 +3039,9 @@ impl Shell {
                     cx,
                 );
             }
+            TranscriptEvent::OpenAccounts => {
+                self.open_settings(SettingsSection::Agents, cx);
+            }
         }
     }
 
@@ -3854,6 +3862,7 @@ impl Shell {
                     let escape_stops_active_agent = self.settings.escape_stops_active_agent;
                     let composer_send_behavior = self.settings.composer_send_behavior;
                     let follow_up_behavior = self.settings.follow_up_behavior;
+                    let automatic_retries_enabled = self.settings.automatic_retries_enabled;
                     let appshots_enabled = self.settings.appshots_enabled;
                     let appshot_sound_enabled = self.settings.appshot_sound_enabled;
                     let appshot_destination = self.settings.appshot_destination;
@@ -3864,6 +3873,7 @@ impl Shell {
                             escape_stops_active_agent,
                             composer_send_behavior,
                             follow_up_behavior,
+                            automatic_retries_enabled,
                             appshots_enabled,
                             appshot_sound_enabled,
                             appshot_destination,
@@ -3886,6 +3896,9 @@ impl Shell {
                                 }
                                 ShortcutsEvent::FollowUpBehaviorChanged(behavior) => {
                                     this.settings.follow_up_behavior = *behavior;
+                                }
+                                ShortcutsEvent::AutomaticRetriesChanged(enabled) => {
+                                    this.settings.automatic_retries_enabled = *enabled;
                                 }
                                 ShortcutsEvent::AppshotsChanged {
                                     enabled,

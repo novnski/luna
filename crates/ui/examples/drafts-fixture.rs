@@ -34,6 +34,7 @@ const PNG_B64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 struct L09FixtureHarness {
+    generation: &'static str,
     safety_deadline: Duration,
     steer_outcome: FixtureSteerOutcome,
     control_path: PathBuf,
@@ -64,6 +65,8 @@ impl FixtureSteerOutcome {
 enum FixtureControlAction {
     Tool,
     Done,
+    FailOverload,
+    FailSubscription,
 }
 
 impl FixtureControlAction {
@@ -71,6 +74,8 @@ impl FixtureControlAction {
         match self {
             Self::Tool => "tool",
             Self::Done => "done",
+            Self::FailOverload => "failOverload",
+            Self::FailSubscription => "failSubscription",
         }
     }
 }
@@ -80,6 +85,8 @@ impl FixtureControlAction {
 struct FixtureControlCommand {
     sequence: u64,
     action: FixtureControlAction,
+    #[serde(default)]
+    reset_at_ms: Option<i64>,
 }
 
 struct FixtureLifecycleControl {
@@ -160,7 +167,11 @@ impl Harness for L09FixtureHarness {
     }
 
     fn display_name(&self) -> &str {
-        "L09 QA Mock"
+        if self.generation == "L10" {
+            "L10 QA Mock"
+        } else {
+            "L09 QA Mock"
+        }
     }
 
     fn supports_steering(&self) -> bool {
@@ -179,10 +190,14 @@ impl Harness for L09FixtureHarness {
         true
     }
 
+    fn supports_safe_recovery_continuation(&self) -> bool {
+        true
+    }
+
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         Ok(vec![Model {
             id: "mock-1".into(),
-            label: "L09 QA Mock".into(),
+            label: format!("{} QA Mock", self.generation),
             description: Some("bounded fixture-only synthetic harness".into()),
             reasoning_levels: vec![ReasoningLevel::Medium],
             options: Vec::new(),
@@ -196,11 +211,18 @@ impl Harness for L09FixtureHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let safety_deadline = self.safety_deadline;
         let steer_outcome = self.steer_outcome;
+        let generation = self.generation;
         let control_path = self.control_path.clone();
         let trace_path = self.trace_path.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
-            let session_id = format!("l09-qa-{}", uuid::Uuid::new_v4());
+            let session_id = request.resume.clone().unwrap_or_else(|| {
+                format!(
+                    "{}-qa-{}",
+                    generation.to_ascii_lowercase(),
+                    uuid::Uuid::new_v4()
+                )
+            });
             let mut lifecycle = FixtureLifecycleControl::new(control_path, trace_path);
             lifecycle.trace(
                 &session_id,
@@ -209,9 +231,18 @@ impl Harness for L09FixtureHarness {
                     "baselineSequence": lifecycle.last_sequence,
                     "steerOutcome": steer_outcome.as_str(),
                     "safetyDeadlineMs": safety_deadline.as_millis(),
+                    "prompt": request.prompt.clone(),
+                    "attachments": request.attachments.clone(),
+                    "resume": request.resume.clone(),
+                    "model": request.model.clone(),
+                    "permissionMode": request.permission_mode,
                 }),
             );
-            let mut assistant_message_id = format!("l09-qa-assistant-{}", uuid::Uuid::new_v4());
+            let mut assistant_message_id = format!(
+                "{}-qa-assistant-{}",
+                generation.to_ascii_lowercase(),
+                uuid::Uuid::new_v4()
+            );
             let _ = tx.send(Ok(AgentEvent::SessionStarted {
                 harness: HarnessId::Mock,
                 model: "mock-1".into(),
@@ -221,7 +252,9 @@ impl Harness for L09FixtureHarness {
                 assistant_message_id: assistant_message_id.clone(),
             }));
             let _ = tx.send(Ok(AgentEvent::TextDelta {
-                text: "L09 isolated synthetic turn accepted. No provider was contacted.".into(),
+                text: format!(
+                    "{generation} isolated synthetic turn accepted. No provider was contacted."
+                ),
             }));
             let interrupt = controls.interrupt;
             let mut steering = controls.steering;
@@ -230,15 +263,15 @@ impl Harness for L09FixtureHarness {
             let mut control_poll = tokio::time::interval(Duration::from_millis(100));
             let mut steering_open = true;
             let mut tool_emitted = false;
-            let status = loop {
+            let (status, done_error) = loop {
                 tokio::select! {
                     _ = interrupt.cancelled() => {
                         lifecycle.trace(&session_id, "interrupted", serde_json::json!({}));
-                        break DoneStatus::Interrupted;
+                        break (DoneStatus::Interrupted, None);
                     }
                     _ = &mut deadline => {
                         lifecycle.trace(&session_id, "safetyDeadline", serde_json::json!({}));
-                        break DoneStatus::Completed;
+                        break (DoneStatus::Completed, None);
                     }
                     _ = control_poll.tick() => {
                         let Some(command) = lifecycle.poll() else {
@@ -288,7 +321,37 @@ impl Harness for L09FixtureHarness {
                                         "action": command.action.as_str(),
                                     }),
                                 );
-                                break DoneStatus::Completed;
+                                break (DoneStatus::Completed, None);
+                            }
+                            FixtureControlAction::FailOverload => {
+                                let message = "synthetic provider overloaded".to_string();
+                                lifecycle.trace(
+                                    &session_id,
+                                    "controlApplied",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "action": command.action.as_str(),
+                                    }),
+                                );
+                                break (DoneStatus::Errored, Some(message));
+                            }
+                            FixtureControlAction::FailSubscription => {
+                                let reset_at_ms = command.reset_at_ms.unwrap_or_else(|| {
+                                    chrono::Utc::now().timestamp_millis() + 10 * 60 * 1_000
+                                });
+                                let message = format!(
+                                    "synthetic subscription window exhausted reset_at_ms={reset_at_ms}"
+                                );
+                                lifecycle.trace(
+                                    &session_id,
+                                    "controlApplied",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "action": command.action.as_str(),
+                                        "resetAtMs": reset_at_ms,
+                                    }),
+                                );
+                                break (DoneStatus::Errored, Some(message));
                             }
                         }
                     }
@@ -309,7 +372,8 @@ impl Harness for L09FixtureHarness {
                                         let _ = acceptance.send(SteerAcceptance::Accepted);
                                     }
                                     let next = format!(
-                                        "l09-qa-assistant-{}",
+                                        "{}-qa-assistant-{}",
+                                        generation.to_ascii_lowercase(),
                                         uuid::Uuid::new_v4()
                                     );
                                     let _ = tx.send(Ok(AgentEvent::Steered {
@@ -361,7 +425,7 @@ impl Harness for L09FixtureHarness {
             let _ = tx.send(Ok(AgentEvent::Done {
                 status,
                 result: None,
-                error: None,
+                error: done_error,
                 session_id: Some(session_id),
             }));
         });
@@ -374,7 +438,8 @@ impl Harness for L09FixtureHarness {
 
 fn fixture_safety_deadline() -> Duration {
     Duration::from_millis(
-        std::env::var("L09_QA_SAFETY_MS")
+        std::env::var("L10_QA_SAFETY_MS")
+            .or_else(|_| std::env::var("L09_QA_SAFETY_MS"))
             .or_else(|_| std::env::var("L09_QA_MOCK_HOLD_MS"))
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -581,6 +646,81 @@ async fn seed_queue(core: &EngineCore) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let project = root.join("fixture-project");
+    std::fs::create_dir_all(&project)?;
+    core.doc_host.open(TASK_A)?;
+    client
+        .call(
+            methods::UPLOAD_CHUNK,
+            serde_json::json!({
+                "uploadId":"l10-native-attachment",
+                "data":PNG_B64,
+                "seq":0
+            }),
+        )
+        .await?;
+    let committed = client
+        .call(
+            methods::UPLOAD_COMMIT,
+            serde_json::json!({
+                "uploadId":"l10-native-attachment",
+                "fileName":"l10-frozen.png"
+            }),
+        )
+        .await?;
+    let attachment = committed["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("fixture upload returned no path"))?;
+    let receipt: zeron_proto::CommandReceipt = client
+        .call_as(
+            methods::EXECUTE_TASK_COMMAND,
+            serde_json::json!({
+                "commandId":"l10-native-original-command",
+                "actorId":"l10-native-fixture",
+                "clientId":"l10-native-fixture",
+                "clientSessionId":"isolated",
+                "taskId":TASK_A,
+                "intent": {
+                    "kind":"session",
+                    "command": {
+                        "kind":"run",
+                        "messageId":"l10-native-original-message",
+                        "request": {
+                            "prompt":"L10 frozen request with one attachment",
+                            "harness":"mock",
+                            "providerAccountId":null,
+                            "model":"mock-1",
+                            "reasoning":null,
+                            "modelOptions":{},
+                            "cwd":project.to_string_lossy(),
+                            "sandbox":"workspace-write",
+                            "autoApprove":false,
+                            "permissionMode":"ask",
+                            "parentPermissionCeiling":null,
+                            "environmentPermissionCeiling":null,
+                            "permissionPolicy":null,
+                            "attachments":[attachment],
+                            "resume":null,
+                            "worktree":null
+                        }
+                    },
+                    "transfers":[]
+                }
+            }),
+        )
+        .await?;
+    anyhow::ensure!(
+        matches!(
+            receipt.status,
+            zeron_proto::CommandReceiptStatus::Pending | zeron_proto::CommandReceiptStatus::Applied
+        ),
+        "fixture recovery request was not accepted"
+    );
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated fixture data root"));
@@ -604,11 +744,21 @@ fn main() -> anyhow::Result<()> {
     let accounts = account_config(&root);
     accounts.disable_claude_keychain_fallback()?;
     let registry = HarnessRegistry::new();
+    let l10 = mode == "turn-recovery";
     registry.register(Arc::new(L09FixtureHarness {
+        generation: if l10 { "L10" } else { "L09" },
         safety_deadline: fixture_safety_deadline(),
         steer_outcome: fixture_steer_outcome(),
-        control_path: root.join("l09-fixture-control.json"),
-        trace_path: root.join("l09-fixture-control-trace.jsonl"),
+        control_path: root.join(if l10 {
+            "l10-fixture-control.json"
+        } else {
+            "l09-fixture-control.json"
+        }),
+        trace_path: root.join(if l10 {
+            "l10-fixture-control-trace.jsonl"
+        } else {
+            "l09-fixture-control-trace.jsonl"
+        }),
     }));
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
@@ -619,6 +769,11 @@ fn main() -> anyhow::Result<()> {
             accounts,
         )
     })?;
+    // The fixture deliberately separates engine stores from UI preferences;
+    // point the recovery policy at the same isolated settings file the native
+    // Settings page writes so the automatic-retries toggle is testable.
+    core.sessions
+        .set_recovery_settings_path(ui_data.join("ui-settings.json"));
     let mut auth_config = AuthConfig::new("http://127.0.0.1:1", root.join("auth"));
     auth_config.dev_user_id = "l09-fixture-user".into();
     auth_config.use_in_memory_credentials_for_tests();
@@ -652,6 +807,9 @@ fn main() -> anyhow::Result<()> {
     } else if mode == "queue" {
         core.workspace.rename_chat(TASK_A, "L09 Durable Queue")?;
         runtime.block_on(seed_queue(&core))?;
+    } else if mode == "turn-recovery" {
+        core.workspace.rename_chat(TASK_A, "L10 Failure Recovery")?;
+        runtime.block_on(seed_turn_recovery(&core, &root))?;
     }
 
     let ipc_port = unused_port();
@@ -668,7 +826,7 @@ fn main() -> anyhow::Result<()> {
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
     let chats = core.workspace.read_chats()?;
     let device = core.device_id.clone();
-    let seed = matches!(mode.as_str(), "seed" | "queue");
+    let seed = matches!(mode.as_str(), "seed" | "queue" | "turn-recovery");
 
     gpui_platform::application()
         .with_assets(icons::Assets)
@@ -830,6 +988,7 @@ mod tests {
         let trace = root.path().join("trace.jsonl");
         write_control(&command, 1, "done");
         let harness = L09FixtureHarness {
+            generation: "L09",
             safety_deadline: Duration::from_secs(5),
             steer_outcome: FixtureSteerOutcome::Incorporated,
             control_path: command.clone(),

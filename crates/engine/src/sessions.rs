@@ -25,16 +25,24 @@ use futures::StreamExt;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast, mpsc, oneshot, watch};
 
 use zeron_doc::{
-    DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter, SessionDoc,
-    SessionMessageEntry, fold_event_into_parts, sanitize_tool_call,
+    DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter,
+    SessionCommandPayload, SessionDoc, SessionMessageEntry, fold_event_into_parts,
+    sanitize_tool_call,
 };
-use zeron_harness::{CancellationToken, Harness, RunControls, SteerAcceptance, SteerMessage};
+use zeron_harness::{
+    CancellationToken, Harness, HarnessError, RunControls, SteerAcceptance, SteerMessage,
+};
 use zeron_proto::{
-    AgentEvent, ChatConfig, DoneStatus, HarnessId, PermissionAuditEntry, PermissionMode,
-    PermissionPolicy, RunRequest, Session, SessionStatus, UserInputAnswer, UserInputQuestion,
+    AgentEvent, ChatConfig, CommandReceiptStatus, DoneStatus, HarnessId, PermissionAuditEntry,
+    PermissionMode, PermissionPolicy, RecoveryAcceptance, RecoveryFailure, RecoveryStatus,
+    RunRequest, Session, SessionStatus, TaskRecovery, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::doc_host::{ChatDocHandle, DocHost};
+use crate::recovery::{
+    MAX_AUTO_RETRIES, MAX_AUTO_WAIT_MS, RecoveryRecord, RecoveryStore, classify_failure,
+    recovery_decision,
+};
 use crate::registry::{HarnessDescriptor, HarnessRegistry};
 use crate::run_journal::RunJournal;
 use crate::{EngineError, new_id, now_ms};
@@ -253,6 +261,7 @@ struct RoutedSteer {
 struct Inner {
     device_id: String,
     journal: Arc<RunJournal>,
+    recovery: Arc<RecoveryStore>,
     registry: Arc<HarnessRegistry>,
     /// Set-once (first wins), cleared on runtime retirement: sessions and
     /// doc-host reference each other through Arcs, so this back-edge must be
@@ -268,6 +277,10 @@ struct Inner {
     hubs: Mutex<HashMap<String, broadcast::Sender<JournaledEvent>>>,
     statuses: Mutex<HashMap<String, Session>>,
     sessions_tx: watch::Sender<Vec<Session>>,
+    /// One process-local wakeup per durable active chain. The ledger remains
+    /// authoritative across restart; these handles are only timers.
+    recovery_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    recovery_settings_path: Mutex<Option<std::path::PathBuf>>,
     /// Last dispatched request per chat — the steer→new-turn fallback re-derives its
     /// run config from this (chat config rows land with the workspace doc in M4).
     last_requests: Mutex<HashMap<String, RunRequest>>,
@@ -311,10 +324,16 @@ impl SessionsEngine {
         registry: Arc<HarnessRegistry>,
     ) -> Self {
         let (sessions_tx, _) = watch::channel(Vec::new());
+        let recovery_root = journal
+            .root()
+            .parent()
+            .unwrap_or_else(|| journal.root())
+            .join("recovery");
         Self {
             inner: Arc::new(Inner {
                 device_id,
                 journal,
+                recovery: Arc::new(RecoveryStore::new(recovery_root)),
                 registry,
                 doc_host: Mutex::new(None),
                 runs: Mutex::new(HashMap::new()),
@@ -322,6 +341,8 @@ impl SessionsEngine {
                 hubs: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
                 sessions_tx,
+                recovery_tasks: Mutex::new(HashMap::new()),
+                recovery_settings_path: Mutex::new(None),
                 last_requests: Mutex::new(HashMap::new()),
                 harness_sessions: Mutex::new(HashMap::new()),
                 titles: OnceLock::new(),
@@ -332,6 +353,10 @@ impl SessionsEngine {
                 turn_listener: OnceLock::new(),
             }),
         }
+    }
+
+    pub fn set_recovery_settings_path(&self, path: std::path::PathBuf) {
+        *lock(&self.inner.recovery_settings_path) = Some(path);
     }
 
     /// Wire the doc host (called once at engine assembly; the two services are mutually
@@ -739,24 +764,19 @@ impl SessionsEngine {
         request: RunRequest,
         message_id: Option<String>,
     ) -> Result<String, EngineError> {
-        self.dispatch_with(chat_id, harness_id, request, message_id, false)
+        self.dispatch_with_context(chat_id, harness_id, request, message_id, None)
             .await
     }
 
-    /// [`Self::dispatch`] with the startup-crash retry marker: the retry
-    /// re-dispatches with `startup_retry = true`, which makes that attempt
-    /// final (its own startup death surfaces instead of retrying again).
-    /// Boxed future: `drive_run` re-enters this for that retry, and the
-    /// erasure breaks the opaque-type cycle the recursion would otherwise form.
-    fn dispatch_with<'a>(
+    fn dispatch_with_context<'a>(
         &'a self,
         chat_id: &'a str,
         harness_id: HarnessId,
         request: RunRequest,
         message_id: Option<String>,
-        startup_retry: bool,
+        recovery: Option<RecoveryAttemptContext>,
     ) -> futures::future::BoxFuture<'a, Result<String, EngineError>> {
-        Box::pin(self.dispatch_inner(chat_id, harness_id, request, message_id, startup_retry))
+        Box::pin(self.dispatch_inner(chat_id, harness_id, request, message_id, recovery))
     }
 
     async fn dispatch_inner(
@@ -765,13 +785,30 @@ impl SessionsEngine {
         harness_id: HarnessId,
         mut request: RunRequest,
         mut message_id: Option<String>,
-        startup_retry: bool,
+        recovery: Option<RecoveryAttemptContext>,
     ) -> Result<String, EngineError> {
         // Provider selection and runtime routing/startup are one boundary: an
         // account mutation cannot race a warm steer or a fresh process spawn.
         let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
+        if let Some(recovery) = recovery.as_ref() {
+            let Some(record) = self.inner.recovery.start_attempt(
+                chat_id,
+                &recovery.chain_id,
+                recovery.attempt_count,
+                now_ms(),
+            )?
+            else {
+                return Err(EngineError::Other(
+                    "recovery chain was cancelled or superseded before dispatch".into(),
+                ));
+            };
+            self.inner
+                .publish_recovery(chat_id, Some(record.view.clone()));
+        } else {
+            self.supersede_recovery(chat_id, "Superseded by newer user activity.")?;
+        }
         // Project-less chats store cwd `~` (the creating device can't know the
         // host's home); expand it here, on the host, where the run spawns.
         request.cwd = expand_home(&request.cwd);
@@ -932,7 +969,6 @@ impl SessionsEngine {
         // startup-crash retry injects too — a stale id is the harness's
         // problem now (`session/load` falls back to `session/new` internally),
         // and starting the retry fresh silently dropped a good conversation.
-        let mut resume_injected = false;
         let explicit_resume = request.resume.clone();
         let managed = if let Some(task_identity) = self.inner.task_identity.get() {
             task_identity
@@ -951,7 +987,6 @@ impl SessionsEngine {
             }
             if explicit_resume.is_none() {
                 request.resume = Some(expected);
-                resume_injected = true;
             }
             if harness_id == HarnessId::Codex {
                 request.model_options.insert(
@@ -961,7 +996,6 @@ impl SessionsEngine {
             }
         } else if request.resume.is_none() {
             request.resume = self.inner.resume_for(chat_id, &request.cwd);
-            resume_injected = request.resume.is_some();
         }
         if harness_id == HarnessId::Codex
             && let Some(workspace) = self.inner.workspace()
@@ -1061,8 +1095,7 @@ impl SessionsEngine {
             cancel_rx,
             RunResumeState {
                 user_message_id: user_id,
-                resume_injected,
-                startup_retry,
+                recovery,
             },
         ));
         Ok(run_id)
@@ -1239,17 +1272,400 @@ impl SessionsEngine {
         Ok(true)
     }
 
-    /// Boot recovery: for every journal whose last event is not `Done` (a run died
-    /// mid-stream), stamp this device's abandoned `streaming` doc entries `aborted`
-    /// with a VISIBLE "Run interrupted by engine restart" error part, close the
-    /// journal with a synthetic `Done{interrupted}` — and then PICK THE RUN BACK
-    /// UP: a fresh crashed turn with revival budget left is re-dispatched against
-    /// the remembered harness session (zeron: "not just eulogized";
-    /// `MAX_AUTO_RESUME` = 3 consecutive revivals, fresh = crashed < 12h ago).
-    pub fn recover_stale(&self) -> Result<usize, EngineError> {
-        const MAX_AUTO_RESUME: u32 = 3;
-        const RESUME_FRESH_MS: i64 = 12 * 60 * 60 * 1000;
+    fn automatic_retries_enabled(&self) -> bool {
+        let Some(path) = lock(&self.inner.recovery_settings_path).clone() else {
+            return true;
+        };
+        std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|value| {
+                value
+                    .get("automaticRetriesEnabled")
+                    .and_then(|value| value.as_bool())
+            })
+            .unwrap_or(true)
+    }
 
+    fn safe_recovery_continuation(&self, harness: HarnessId, session_id: Option<&str>) -> bool {
+        session_id.is_some()
+            && self
+                .inner
+                .registry
+                .resolve(harness)
+                .is_ok_and(|harness| harness.supports_safe_recovery_continuation())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_recovery_failure(
+        &self,
+        chat_id: &str,
+        harness: HarnessId,
+        request: RunRequest,
+        message_id: String,
+        acceptance: RecoveryAcceptance,
+        failure: RecoveryFailure,
+        detail: String,
+        provider_session_id: Option<String>,
+        attempt: Option<&RecoveryAttemptContext>,
+    ) -> Result<TaskRecovery, EngineError> {
+        let now = now_ms();
+        let existing = attempt.and_then(|attempt| {
+            self.inner
+                .recovery
+                .latest(chat_id)
+                .ok()
+                .flatten()
+                .filter(|record| record.view.chain_id == attempt.chain_id)
+        });
+        if let Some(existing) = existing.as_ref()
+            && !existing.view.status.active()
+        {
+            return Ok(existing.view.clone());
+        }
+        let chain_id = existing
+            .as_ref()
+            .map(|record| record.view.chain_id.clone())
+            .unwrap_or_else(new_id);
+        let created_at_ms = existing
+            .as_ref()
+            .map(|record| record.view.created_at_ms)
+            .unwrap_or(now);
+        let attempt_count = attempt.map(|attempt| attempt.attempt_count).unwrap_or(0);
+        let receipt = self.inner.doc_host().and_then(|host| {
+            host.task_command_receipt_for_correlation(chat_id, &message_id)
+                .ok()
+                .flatten()
+        });
+        let binding = self
+            .inner
+            .task_identity
+            .get()
+            .and_then(|identity| identity.view(chat_id))
+            .and_then(|view| view.current_binding);
+        let safe_continuation =
+            self.safe_recovery_continuation(harness, provider_session_id.as_deref());
+        let jitter_seed = chain_id.bytes().fold(attempt_count as u64, |state, byte| {
+            state.wrapping_mul(131).wrapping_add(byte as u64)
+        });
+        let decision = recovery_decision(
+            acceptance,
+            &failure,
+            now,
+            created_at_ms,
+            attempt_count,
+            self.automatic_retries_enabled(),
+            safe_continuation,
+            jitter_seed,
+        );
+        let view = TaskRecovery {
+            chain_id: chain_id.clone(),
+            task_id: chat_id.to_string(),
+            original_message_id: message_id,
+            original_command_id: receipt.map(|receipt| receipt.command_id),
+            acceptance,
+            failure,
+            action: decision.action,
+            status: decision.status,
+            attempt_count,
+            max_attempts: MAX_AUTO_RETRIES,
+            automatic: decision.automatic,
+            retry_at_ms: decision.retry_at_ms,
+            automatic_deadline_ms: created_at_ms.saturating_add(MAX_AUTO_WAIT_MS),
+            environment_id: binding
+                .as_ref()
+                .map(|binding| binding.environment_id.clone())
+                .unwrap_or_else(|| self.inner.device_id.clone()),
+            binding_id: binding.as_ref().map(|binding| binding.binding_id.clone()),
+            binding_generation: binding.as_ref().map(|binding| binding.generation),
+            detail: if detail.trim().is_empty() {
+                decision.detail
+            } else {
+                format!("{} {}", decision.detail, detail.trim())
+            },
+            created_at_ms,
+            updated_at_ms: now,
+        };
+        let record = self.inner.recovery.put(RecoveryRecord {
+            view: view.clone(),
+            harness,
+            request,
+            provider_session_id,
+        })?;
+        self.inner
+            .publish_recovery(chat_id, Some(record.view.clone()));
+        if record.view.status == RecoveryStatus::Scheduled {
+            self.arm_recovery(record);
+        }
+        Ok(view)
+    }
+
+    fn arm_recovery(&self, record: RecoveryRecord) {
+        let Some(retry_at_ms) = record.view.retry_at_ms else {
+            return;
+        };
+        if let Some(previous) = lock(&self.inner.recovery_tasks).remove(&record.view.task_id) {
+            previous.abort();
+        }
+        let engine = self.clone();
+        let task_id = record.view.task_id.clone();
+        let chain_id = record.view.chain_id.clone();
+        let task_key = task_id.clone();
+        let handle = tokio::spawn(async move {
+            let wait_ms = retry_at_ms.saturating_sub(now_ms()).max(0) as u64;
+            tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+            lock(&engine.inner.recovery_tasks).remove(&task_key);
+            if !engine.automatic_retries_enabled() {
+                if let Err(error) = engine.hold_recovery(
+                    &task_id,
+                    "Automatic retries were disabled in Settings. Review and use Send now if recovery is still needed.",
+                ) {
+                    tracing::warn!(task = %task_id, chain = %chain_id, %error, "automatic recovery disable failed");
+                }
+                return;
+            }
+            if let Err(error) = engine.execute_recovery(&task_id, &chain_id).await {
+                tracing::warn!(task = %task_id, chain = %chain_id, %error, "automatic recovery failed");
+            }
+        });
+        lock(&self.inner.recovery_tasks).insert(record.view.task_id, handle);
+    }
+
+    async fn execute_recovery(&self, task_id: &str, chain_id: &str) -> Result<(), EngineError> {
+        let Some(record) = self.inner.recovery.latest(task_id)? else {
+            return Ok(());
+        };
+        if record.view.chain_id != chain_id || !record.view.status.active() {
+            return Ok(());
+        }
+        if self.has_live_run(task_id) {
+            return self.hold_recovery(task_id, "Held while another turn is active.");
+        }
+        if let Some(binding) = self
+            .inner
+            .task_identity
+            .get()
+            .and_then(|identity| identity.view(task_id))
+            .and_then(|view| view.current_binding)
+            && (record.view.binding_id.as_deref() != Some(binding.binding_id.as_str())
+                || record.view.binding_generation != Some(binding.generation))
+        {
+            return self.supersede_recovery(
+                task_id,
+                "Recovery cancelled because the provider binding changed.",
+            );
+        }
+        if matches!(
+            record.view.action,
+            zeron_proto::RecoveryAction::ObserveOnly
+                | zeron_proto::RecoveryAction::FixConfiguration
+        ) {
+            return Ok(());
+        }
+
+        let mut request = record.request.clone();
+        if matches!(
+            record.view.action,
+            zeron_proto::RecoveryAction::ContinueSession
+                | zeron_proto::RecoveryAction::SignInThenContinue
+        ) && record.view.acceptance == RecoveryAcceptance::Accepted
+        {
+            let Some(session_id) = record.provider_session_id.clone() else {
+                return self.hold_recovery(
+                    task_id,
+                    "Recovery needs the original provider session, but no verified session identity is available.",
+                );
+            };
+            if !self.safe_recovery_continuation(record.harness, Some(&session_id)) {
+                return self.hold_recovery(
+                    task_id,
+                    "Recovery needs a same-session continuation contract that this adapter does not provide.",
+                );
+            }
+            request.prompt = "Continue from the preserved provider session. Do not repeat completed tool or external effects; first inspect the current state and resume only unfinished work.".into();
+            request.attachments.clear();
+            request.resume = Some(session_id);
+        }
+        let context = RecoveryAttemptContext {
+            chain_id: record.view.chain_id.clone(),
+            attempt_count: record.view.attempt_count.saturating_add(1),
+        };
+        if let Err(error) = self
+            .dispatch_with_context(
+                task_id,
+                record.harness,
+                request.clone(),
+                Some(record.view.original_message_id.clone()),
+                Some(context.clone()),
+            )
+            .await
+        {
+            let still_current = self.inner.recovery.latest(task_id)?.is_some_and(|latest| {
+                latest.view.chain_id == context.chain_id && latest.view.status.active()
+            });
+            if !still_current {
+                return Ok(());
+            }
+            self.record_recovery_failure(
+                task_id,
+                record.harness,
+                record.request,
+                record.view.original_message_id,
+                RecoveryAcceptance::RejectedBeforeAcceptance,
+                classify_failure(&error.to_string()),
+                error.to_string(),
+                record.provider_session_id,
+                Some(&context),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub async fn retry_recovery_now(
+        &self,
+        task_id: &str,
+        chain_id: &str,
+    ) -> Result<bool, EngineError> {
+        let Some(record) = self.inner.recovery.latest(task_id)? else {
+            return Ok(false);
+        };
+        if record.view.chain_id != chain_id || !record.view.status.active() {
+            return Ok(false);
+        }
+        if matches!(
+            record.view.action,
+            zeron_proto::RecoveryAction::ObserveOnly
+                | zeron_proto::RecoveryAction::FixConfiguration
+        ) {
+            return Ok(false);
+        }
+        if let Some(task) = lock(&self.inner.recovery_tasks).remove(task_id) {
+            task.abort();
+        }
+        self.execute_recovery(task_id, chain_id).await?;
+        Ok(true)
+    }
+
+    pub fn cancel_recovery(&self, task_id: &str, chain_id: &str) -> Result<bool, EngineError> {
+        let Some(current) = self.inner.recovery.latest(task_id)? else {
+            return Ok(false);
+        };
+        if current.view.chain_id != chain_id || !current.view.status.active() {
+            return Ok(false);
+        }
+        if let Some(task) = lock(&self.inner.recovery_tasks).remove(task_id) {
+            task.abort();
+        }
+        let Some(record) = self.inner.recovery.update(task_id, chain_id, |record| {
+            record.view.status = RecoveryStatus::Cancelled;
+            record.view.automatic = false;
+            record.view.retry_at_ms = None;
+            record.view.detail = "Automatic recovery cancelled. Partial output and completed effects were preserved.".into();
+            record.view.updated_at_ms = now_ms();
+        })? else {
+            return Ok(false);
+        };
+        self.inner.publish_recovery(task_id, Some(record.view));
+        Ok(true)
+    }
+
+    pub fn hold_recovery(&self, task_id: &str, detail: &str) -> Result<(), EngineError> {
+        if let Some(task) = lock(&self.inner.recovery_tasks).remove(task_id) {
+            task.abort();
+        }
+        let Some(current) = self.inner.recovery.current(task_id)? else {
+            return Ok(());
+        };
+        if let Some(record) =
+            self.inner
+                .recovery
+                .update(task_id, &current.view.chain_id, |record| {
+                    record.view.status = RecoveryStatus::Held;
+                    record.view.automatic = false;
+                    record.view.retry_at_ms = None;
+                    record.view.detail = detail.into();
+                    record.view.updated_at_ms = now_ms();
+                })?
+        {
+            self.inner.publish_recovery(task_id, Some(record.view));
+        }
+        Ok(())
+    }
+
+    pub fn supersede_recovery(&self, task_id: &str, detail: &str) -> Result<(), EngineError> {
+        if let Some(task) = lock(&self.inner.recovery_tasks).remove(task_id) {
+            task.abort();
+        }
+        let Some(current) = self.inner.recovery.current(task_id)? else {
+            return Ok(());
+        };
+        if let Some(record) =
+            self.inner
+                .recovery
+                .update(task_id, &current.view.chain_id, |record| {
+                    record.view.status = RecoveryStatus::Superseded;
+                    record.view.automatic = false;
+                    record.view.retry_at_ms = None;
+                    record.view.detail = detail.into();
+                    record.view.updated_at_ms = now_ms();
+                })?
+        {
+            self.inner.publish_recovery(task_id, Some(record.view));
+        }
+        Ok(())
+    }
+
+    fn mark_recovery_accepted(
+        &self,
+        task_id: &str,
+        attempt: Option<&RecoveryAttemptContext>,
+        session_id: &str,
+    ) -> Result<(), EngineError> {
+        let Some(attempt) = attempt else {
+            return Ok(());
+        };
+        if let Some(record) = self
+            .inner
+            .recovery
+            .update(task_id, &attempt.chain_id, |record| {
+                if record.view.status.active() {
+                    record.view.acceptance = RecoveryAcceptance::Accepted;
+                    record.provider_session_id = Some(session_id.into());
+                    record.view.updated_at_ms = now_ms();
+                }
+            })?
+        {
+            self.inner.publish_recovery(task_id, Some(record.view));
+        }
+        Ok(())
+    }
+
+    fn complete_recovery(
+        &self,
+        task_id: &str,
+        attempt: Option<&RecoveryAttemptContext>,
+    ) -> Result<(), EngineError> {
+        let Some(attempt) = attempt else {
+            return Ok(());
+        };
+        if let Some(record) = self.inner.recovery.update(task_id, &attempt.chain_id, |record| {
+            if record.view.status == RecoveryStatus::Running {
+                record.view.status = RecoveryStatus::Completed;
+                record.view.automatic = false;
+                record.view.retry_at_ms = None;
+                record.view.detail = "Recovery completed on the preserved request/session without replaying completed effects.".into();
+                record.view.updated_at_ms = now_ms();
+            }
+        })? {
+            self.inner.publish_recovery(task_id, Some(record.view));
+        }
+        Ok(())
+    }
+
+    /// Boot recovery closes abandoned journals and creates an acceptance-aware
+    /// chain from the frozen Run command, provider/session journal, L06 binding,
+    /// and L07 receipt. It never replays the last transcript text blindly.
+    pub fn recover_stale(&self) -> Result<usize, EngineError> {
         let stale = self.inner.journal.stale_sessions()?;
         let mut recovered = 0usize;
         for chat_id in stale {
@@ -1257,18 +1673,28 @@ impl SessionsEngine {
                 continue; // a live run owns this journal
             }
             let handle = self.doc_handle(&chat_id)?;
-            // Harness continuity first: the crashed run's session id may only
-            // exist in the journal (the debounced workspace-row write may
-            // never have landed) — remember it so the revived run resumes the
-            // same harness conversation (zeron recoverDraft, sessions.ts:538).
-            if let Some((session_id, cwd)) = self.inner.journal_harness_session(&chat_id) {
+            let replay = self.inner.journal.replay(&chat_id, 0)?;
+            let last_done = replay
+                .iter()
+                .rposition(|(_, event)| matches!(event, AgentEvent::Done { .. }));
+            let run_events = replay.iter().skip(last_done.map_or(0, |index| index + 1));
+            let accepted_session = run_events
+                .filter_map(|(_, event)| match event {
+                    AgentEvent::SessionStarted {
+                        harness,
+                        session_id,
+                        ..
+                    } => Some((*harness, session_id.clone())),
+                    _ => None,
+                })
+                .next_back();
+            if let Some((_, session_id)) = accepted_session.as_ref()
+                && let Some((_, cwd)) = self.inner.journal_harness_session(&chat_id)
+            {
                 self.inner
-                    .remember_harness_session(&chat_id, &session_id, &cwd);
+                    .remember_harness_session(&chat_id, session_id, &cwd);
             }
-            // The revival prompt: the last user message (idempotent re-dispatch
-            // under the SAME id — `write_user_message` dedupes by id, so the
-            // transcript never shows a duplicate).
-            let prompt = handle.doc().read_entries().ok().and_then(|entries| {
+            let message = handle.doc().read_entries().ok().and_then(|entries| {
                 entries
                     .iter()
                     .rev()
@@ -1280,26 +1706,7 @@ impl SessionsEngine {
                         })
                     })
             });
-            let attempts = self.inner.journal.resume_attempts(&chat_id);
-            let fresh = handle
-                .doc()
-                .read_entries()
-                .ok()
-                .and_then(|entries| {
-                    entries
-                        .iter()
-                        .rev()
-                        .find(|e| e.status == Some(MessageStatus::Streaming))
-                        .map(|e| now_ms() - e.created_at < RESUME_FRESH_MS)
-                })
-                .unwrap_or(false);
-            let will_resume = fresh && prompt.is_some() && attempts < MAX_AUTO_RESUME;
-
-            let note = if will_resume {
-                "Run interrupted by engine restart — resuming"
-            } else {
-                "Run interrupted by engine restart"
-            };
+            let note = "Run interrupted by engine restart — reconciling delivery";
             let done = AgentEvent::Done {
                 status: DoneStatus::Interrupted,
                 result: None,
@@ -1309,77 +1716,113 @@ impl SessionsEngine {
             self.inner.publish(&chat_id, &done);
             let stamped = handle.mark_abandoned_streams(note)?.len();
             self.set_status(&chat_id, SessionStatus::Idle, false);
-            tracing::info!(chat = %chat_id, stamped, will_resume, attempts, "recovered stale session journal");
+            tracing::info!(chat = %chat_id, stamped, "reconciled stale session journal");
             recovered += 1;
 
-            if !will_resume {
+            let Some((message_id, prompt_text)) = message else {
                 continue;
-            }
-            let attempt = self.inner.journal.note_resume_attempt(&chat_id);
-            let (user_id, prompt_text) = prompt.expect("gated by will_resume");
-            let sessions = self.clone();
-            tokio::spawn(async move {
-                let Some(host) = sessions.inner.doc_host() else {
-                    return;
-                };
-                let request = sessions
-                    .last_request(&chat_id)
-                    .or_else(|| host.request_from_chat_row(&chat_id, &prompt_text))
-                    // Last resort: the journal's own cwd (zeron's draft config)
-                    // — a crash can predate the debounced workspace-row write.
-                    .or_else(|| {
-                        let (_, cwd) = sessions.inner.journal_harness_session(&chat_id)?;
-                        Some(RunRequest {
-                            prompt: String::new(),
-                            harness: None,
-                            provider_account_id: None,
-                            model: None,
-                            reasoning: None,
-                            model_options: Default::default(),
-                            cwd,
-                            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
-                            auto_approve: false,
-                            permission_mode: zeron_proto::PermissionMode::Ask,
-                            parent_permission_ceiling: None,
-                            environment_permission_ceiling: None,
-                            permission_policy: None,
-                            attachments: Vec::new(),
-                            resume: None,
-                            worktree: None,
-                        })
-                    });
-                let Some(mut request) = request else {
-                    tracing::warn!(chat = %chat_id, "auto-resume skipped: no run config");
-                    return;
-                };
-                request.prompt = prompt_text;
-                request.resume = None; // dispatch re-injects the remembered session
-                request.attachments = Vec::new();
-                let harness_id = host.harness_for_request(&chat_id, &request);
-                match host
-                    .dispatch_with_source_context(
-                        &sessions,
-                        &chat_id,
-                        harness_id,
+            };
+            let commands = handle.doc().read_commands().unwrap_or_default();
+            let frozen = commands
+                .iter()
+                .rev()
+                .find_map(|command| match &command.payload {
+                    SessionCommandPayload::Run {
                         request,
-                        Some(user_id),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        tracing::info!(chat = %chat_id, attempt, "auto-resumed crashed run")
-                    }
-                    Err(err) => {
-                        tracing::warn!(chat = %chat_id, error = %err, "auto-resume dispatch failed")
-                    }
-                }
+                        message_id: candidate,
+                    } if candidate == &message_id => Some((command.id.clone(), request.clone())),
+                    _ => None,
+                });
+            let receipt = self.inner.doc_host().and_then(|host| {
+                host.task_command_receipt_for_correlation(&chat_id, &message_id)
+                    .ok()
+                    .flatten()
             });
+            let acceptance = if accepted_session.is_some()
+                || receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.status == CommandReceiptStatus::Applied)
+            {
+                RecoveryAcceptance::Accepted
+            } else if receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.status == CommandReceiptStatus::Rejected)
+            {
+                RecoveryAcceptance::RejectedBeforeAcceptance
+            } else {
+                RecoveryAcceptance::Unknown
+            };
+            let Some(host) = self.inner.doc_host() else {
+                continue;
+            };
+            let request = frozen
+                .map(|(_, request)| request)
+                .or_else(|| host.request_from_chat_row(&chat_id, &prompt_text));
+            let Some(request) = request else {
+                tracing::warn!(chat = %chat_id, "recovery needs a frozen run request");
+                continue;
+            };
+            let harness = accepted_session
+                .as_ref()
+                .map(|(harness, _)| *harness)
+                .unwrap_or_else(|| host.harness_for_request(&chat_id, &request));
+            let provider_session_id = accepted_session
+                .as_ref()
+                .map(|(_, session_id)| session_id.clone())
+                .or_else(|| {
+                    self.inner
+                        .journal_harness_session(&chat_id)
+                        .map(|(id, _)| id)
+                });
+            self.record_recovery_failure(
+                &chat_id,
+                harness,
+                request,
+                message_id,
+                acceptance,
+                RecoveryFailure::Interrupted,
+                note.into(),
+                provider_session_id,
+                None,
+            )?;
+        }
+        for record in self.inner.recovery.latest_records()? {
+            self.inner
+                .publish_recovery(&record.view.task_id, Some(record.view.clone()));
+            if record.view.status == RecoveryStatus::Scheduled {
+                if !self.automatic_retries_enabled() {
+                    self.hold_recovery(
+                        &record.view.task_id,
+                        "Automatic retries are disabled in Settings. Review and use Send now if recovery is still needed.",
+                    )?;
+                } else if now_ms() > record.view.automatic_deadline_ms {
+                    if let Some(expired) = self.inner.recovery.update(
+                        &record.view.task_id,
+                        &record.view.chain_id,
+                        |record| {
+                            record.view.status = RecoveryStatus::RecoveryNeeded;
+                            record.view.automatic = false;
+                            record.view.retry_at_ms = None;
+                            record.view.detail = "The initial six-hour automatic recovery window expired. Partial output and completed effects remain preserved.".into();
+                            record.view.updated_at_ms = now_ms();
+                        },
+                    )? {
+                        let task_id = expired.view.task_id.clone();
+                        self.inner.publish_recovery(&task_id, Some(expired.view));
+                    }
+                } else {
+                    self.arm_recovery(record);
+                }
+            }
         }
         Ok(recovered)
     }
 
     /// Graceful shutdown: interrupt every live run so streaming entries settle.
     pub async fn shutdown(&self) {
+        for (_, timer) in lock(&self.inner.recovery_tasks).drain() {
+            timer.abort();
+        }
         let chats: Vec<String> = lock(&self.inner.runs).keys().cloned().collect();
         for chat_id in chats {
             if let Err(err) = self.interrupt(&chat_id).await {
@@ -1604,6 +2047,7 @@ impl Inner {
                     status,
                     started_at: None,
                     updated_at: now,
+                    recovery: None,
                 });
             // `started_at` is the elapsed-timer base and must only ever mean
             // "this turn". Entering Working from a settled state always
@@ -1645,6 +2089,34 @@ impl Inner {
         // remote devices' sidebars show this run (staleness-checked client-side).
         if let Some(ws) = self.workspace() {
             ws.record_session(&session);
+        }
+    }
+
+    fn publish_recovery(&self, chat_id: &str, recovery: Option<TaskRecovery>) {
+        let now = Utc::now();
+        let session = {
+            let mut statuses = lock(&self.statuses);
+            let entry = statuses
+                .entry(chat_id.to_string())
+                .or_insert_with(|| Session {
+                    last_completed_turn: None,
+                    chat_id: chat_id.to_string(),
+                    device_id: self.device_id.clone(),
+                    status: SessionStatus::Idle,
+                    started_at: None,
+                    updated_at: now,
+                    recovery: None,
+                });
+            entry.recovery = recovery;
+            entry.updated_at = now;
+            let session = entry.clone();
+            let mut list: Vec<Session> = statuses.values().cloned().collect();
+            list.sort_by(|a, b| a.chat_id.cmp(&b.chat_id));
+            self.sessions_tx.send_replace(list);
+            session
+        };
+        if let Some(workspace) = self.workspace() {
+            workspace.record_session(&session);
         }
     }
 
@@ -2043,8 +2515,13 @@ fn expand_home(cwd: &str) -> String {
 /// and whether this run already IS the retry (one attempt only).
 struct RunResumeState {
     user_message_id: String,
-    resume_injected: bool,
-    startup_retry: bool,
+    recovery: Option<RecoveryAttemptContext>,
+}
+
+#[derive(Debug, Clone)]
+struct RecoveryAttemptContext {
+    chain_id: String,
+    attempt_count: u8,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2069,16 +2546,15 @@ async fn drive_run(
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
     }
-    // Kept whole for the startup-crash retry (same user entry; dispatch
-    // re-injects the stored resume id). Option so the retry branch (inside
-    // the event loop) can take ownership.
-    let mut retry_request = Some(RunRequest {
-        resume: None,
-        ..request.clone()
-    });
+    let recovery_request = request.clone();
     let mut stream = match harness.run(request, controls).await {
         Ok(stream) => stream,
         Err(err) => {
+            let acceptance = if matches!(err, HarnessError::RejectedBeforeAcceptance(_)) {
+                RecoveryAcceptance::RejectedBeforeAcceptance
+            } else {
+                RecoveryAcceptance::Unknown
+            };
             let message = err.to_string();
             inner.publish(
                 &chat_id,
@@ -2091,12 +2567,28 @@ async fn drive_run(
                 &AgentEvent::Done {
                     status: DoneStatus::Errored,
                     result: None,
-                    error: Some(message),
+                    error: Some(message.clone()),
                     session_id: None,
                 },
             );
             inner.remove_run(&chat_id, &run_id);
             inner.set_status(&chat_id, SessionStatus::Errored, false);
+            let engine = SessionsEngine {
+                inner: inner.clone(),
+            };
+            if let Err(error) = engine.record_recovery_failure(
+                &chat_id,
+                harness_id,
+                recovery_request,
+                resume_state.user_message_id,
+                acceptance,
+                classify_failure(&message),
+                message,
+                None,
+                resume_state.recovery.as_ref(),
+            ) {
+                tracing::error!(chat = %chat_id, %error, "failed to record pre-accept recovery");
+            }
             return;
         }
     };
@@ -2132,6 +2624,8 @@ async fn drive_run(
     let mut interrupt_deadline: Option<tokio::time::Instant> = None;
     let mut interrupted = false;
     let mut saw_session_started = false;
+    let mut recovery_session_id = recovery_request.resume.clone();
+    let mut last_error_message: Option<String> = None;
     // Liveness heartbeat: this loop RUNNING is proof the harness stream is
     // open, so freshness must not depend on events arriving. Silent stretches
     // are normal and UNBOUNDED — a long tool call, redacted thinking, an
@@ -2706,59 +3200,6 @@ async fn drive_run(
             _ => {}
         }
 
-        // Startup-crash retry: a run that dies before ever starting (errored
-        // Done, no SessionStarted, nothing streamed) means the AGENT CHILD
-        // failed to come up — not that the injected resume id was bad. Since
-        // the ACP conversion (2026-08-08) a stale id is handled inside the
-        // harness (`session/load` falls back to `session/new`), so the old
-        // guess here — tombstone the id, retry fresh — fired only on child
-        // startup failures and permanently severed GOOD conversations (user
-        // incident 2026-08-13). The id stays; retry ONCE against the same
-        // user entry, resume and all, in case the crash was transient. A
-        // helper that is down hard fails the retry too and surfaces its
-        // crash text (the harness now appends exit status + stderr).
-        if resume_state.resume_injected
-            && !resume_state.startup_retry
-            && !saw_session_started
-            && folded.is_empty()
-            && !interrupted
-            && matches!(
-                &event,
-                AgentEvent::Done {
-                    status: DoneStatus::Errored,
-                    ..
-                }
-            )
-            && let Some(retry) = retry_request.take()
-        {
-            tracing::warn!(
-                chat = %chat_id,
-                "run died before session start; retrying once (resume kept)"
-            );
-            inner.remove_run(&chat_id, &run_id);
-            let engine = SessionsEngine {
-                inner: inner.clone(),
-            };
-            let chat = chat_id.clone();
-            let message_id = resume_state.user_message_id.clone();
-            tokio::spawn(async move {
-                // The user entry write inside dispatch is idempotent by
-                // message id; `startup_retry` makes this attempt final.
-                if let Err(err) = engine
-                    .dispatch_with(&chat, harness_id, retry, Some(message_id), true)
-                    .await
-                {
-                    tracing::error!(chat = %chat, error = %err, "startup-crash retry dispatch failed");
-                    // No run is coming: leaving the row Working would spin
-                    // the session forever with nothing behind it.
-                    engine
-                        .inner
-                        .set_status(&chat, SessionStatus::Errored, false);
-                }
-            });
-            return;
-        }
-
         // A steer boundary splits the assistant entry exactly where the fold resets.
         if let AgentEvent::Steered {
             next_assistant_message_id,
@@ -2875,6 +3316,17 @@ async fn drive_run(
                 session_id, cwd, ..
             } => {
                 saw_session_started = true;
+                recovery_session_id = Some(session_id.clone());
+                let engine = SessionsEngine {
+                    inner: inner.clone(),
+                };
+                if let Err(error) = engine.mark_recovery_accepted(
+                    &chat_id,
+                    resume_state.recovery.as_ref(),
+                    session_id,
+                ) {
+                    tracing::warn!(chat = %chat_id, %error, "recovery acceptance persistence failed");
+                }
                 if let Some(policy) = permission_policy.as_ref()
                     && let Some(workspace) = inner.workspace()
                     && let Ok(Some(chat)) = workspace.chat(&chat_id)
@@ -2919,6 +3371,22 @@ async fn drive_run(
                     );
                     inner.remove_run(&chat_id, &run_id);
                     inner.set_status(&chat_id, SessionStatus::Errored, false);
+                    let engine = SessionsEngine {
+                        inner: inner.clone(),
+                    };
+                    if let Err(recovery_error) = engine.record_recovery_failure(
+                        &chat_id,
+                        harness_id,
+                        recovery_request.clone(),
+                        resume_state.user_message_id.clone(),
+                        RecoveryAcceptance::Accepted,
+                        RecoveryFailure::InvalidConfiguration,
+                        error.to_string(),
+                        Some(session_id.clone()),
+                        resume_state.recovery.as_ref(),
+                    ) {
+                        tracing::warn!(chat = %chat_id, %recovery_error, "binding-failure recovery persistence failed");
+                    }
                     return;
                 }
                 inner.remember_harness_session(&chat_id, session_id, cwd);
@@ -2962,7 +3430,11 @@ async fn drive_run(
                 session_id: Some(session_id),
                 ..
             } => {
+                recovery_session_id = Some(session_id.clone());
                 inner.remember_harness_session(&chat_id, session_id, &run_cwd);
+            }
+            AgentEvent::Error { message } => {
+                last_error_message = Some(message.clone());
             }
             AgentEvent::InputRequested { questions, .. } => {
                 // Known-id guaranteed: the unknown-id twin was dropped above,
@@ -3009,7 +3481,7 @@ async fn drive_run(
             // still in place and tested.
         }
 
-        if let AgentEvent::Done { status, .. } = &event {
+        if let AgentEvent::Done { status, error, .. } = &event {
             // A question still pending at turn end can never be legitimately
             // answered (its turn is over): drain the resolvers NOW, or a late
             // `respond_input` finds one, emits InputResolved, and un-parks
@@ -3060,6 +3532,51 @@ async fn drive_run(
                 // A cleanly completed turn resets the auto-resume revival
                 // budget: only consecutive crash-revive-crash cycles spend it.
                 inner.journal.clear_resume_attempts(&chat_id);
+            }
+            let engine = SessionsEngine {
+                inner: inner.clone(),
+            };
+            match status {
+                DoneStatus::Completed => {
+                    if let Err(error) =
+                        engine.complete_recovery(&chat_id, resume_state.recovery.as_ref())
+                    {
+                        tracing::warn!(chat = %chat_id, %error, "recovery completion persistence failed");
+                    }
+                }
+                DoneStatus::Interrupted if resume_state.recovery.is_some() => {
+                    if let Err(error) = engine.hold_recovery(
+                        &chat_id,
+                        "Recovery held by Stop. Queued work and partial output were preserved.",
+                    ) {
+                        tracing::warn!(chat = %chat_id, %error, "recovery hold persistence failed");
+                    }
+                }
+                DoneStatus::Errored => {
+                    let message = error
+                        .clone()
+                        .or_else(|| last_error_message.clone())
+                        .unwrap_or_else(|| "provider turn failed".into());
+                    let acceptance = if saw_session_started {
+                        RecoveryAcceptance::Accepted
+                    } else {
+                        RecoveryAcceptance::Unknown
+                    };
+                    if let Err(recovery_error) = engine.record_recovery_failure(
+                        &chat_id,
+                        harness_id,
+                        recovery_request.clone(),
+                        resume_state.user_message_id.clone(),
+                        acceptance,
+                        classify_failure(&message),
+                        message,
+                        recovery_session_id.clone(),
+                        resume_state.recovery.as_ref(),
+                    ) {
+                        tracing::warn!(chat = %chat_id, %recovery_error, "turn recovery persistence failed");
+                    }
+                }
+                DoneStatus::Interrupted => {}
             }
             // Exchange completed on an untitled chat → name it (fire-and-forget;
             // interrupted/errored turns never trigger naming).
@@ -3470,6 +3987,7 @@ mod tests {
                 status: SessionStatus::Working,
                 started_at: Some(now),
                 updated_at: now,
+                recovery: None,
             },
         );
 

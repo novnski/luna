@@ -575,6 +575,13 @@ impl Harness for CodexHarness {
     fn deterministic_turn_end(&self) -> bool {
         true
     }
+    /// Managed Codex task resumes are strict: the engine supplies
+    /// `lunaStrictResume`, and this adapter returns the resume error instead of
+    /// silently starting a fresh thread. That is the no-duplicate contract L10
+    /// needs for accepted-turn continuation.
+    fn supports_safe_recovery_continuation(&self) -> bool {
+        true
+    }
 
     /// The signed-in account's visible `model/list` is authoritative. A
     /// curated snapshot keeps the picker operational when the experimental

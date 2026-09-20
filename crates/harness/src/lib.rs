@@ -36,6 +36,12 @@ pub enum HarnessError {
     NotInstalled(String),
     #[error("harness protocol error: {0}")]
     Protocol(String),
+    /// The adapter has authoritative evidence that the provider rejected the
+    /// request before accepting it. Only this typed boundary permits recovery
+    /// to resend the frozen original request; generic startup/transport errors
+    /// remain delivery-unknown.
+    #[error("request rejected before provider acceptance: {0}")]
+    RejectedBeforeAcceptance(String),
     /// A managed adapter install (npm) failed; carries npm's own output so
     /// the cause is diagnosable from the chat error alone.
     #[error("adapter install failed: {0}")]
@@ -112,6 +118,13 @@ pub trait Harness: Send + Sync {
     /// Unlike deterministic_turn_end, this need not cover autonomous activity.
     fn authoritative_prompt_end(&self) -> bool {
         self.deterministic_turn_end()
+    }
+    /// Whether the adapter can guarantee that an explicit recovery resume
+    /// stays on the named provider session instead of silently creating a new
+    /// one. Default false: ordinary resume support is not proof of this
+    /// stronger no-duplicate recovery contract.
+    fn supports_safe_recovery_continuation(&self) -> bool {
+        false
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
     /// Slash commands the agent advertises (ACP `availableCommands`); empty

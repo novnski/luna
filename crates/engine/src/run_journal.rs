@@ -58,6 +58,10 @@ impl RunJournal {
         })
     }
 
+    pub(crate) fn root(&self) -> &Path {
+        &self.dir
+    }
+
     fn lock(&self) -> MutexGuard<'_, HashMap<String, ChatJournal>> {
         self.open_files
             .lock()

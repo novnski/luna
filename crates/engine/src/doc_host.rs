@@ -975,6 +975,17 @@ impl DocHost {
         Ok(self.inner.store.task_command_receipt(command_id)?)
     }
 
+    pub(crate) fn task_command_receipt_for_correlation(
+        &self,
+        task_id: &str,
+        correlation_id: &str,
+    ) -> Result<Option<CommandReceipt>, EngineError> {
+        Ok(self
+            .inner
+            .store
+            .task_command_receipt_for_correlation(task_id, correlation_id)?)
+    }
+
     pub fn task_command_snapshot(&self, task_id: &str) -> Result<TaskCommandRead, EngineError> {
         Ok(self.inner.store.task_command_snapshot(task_id)?)
     }
@@ -4565,7 +4576,13 @@ impl DocHost {
         }
         handle.queue_paused.store(true, Ordering::Release);
         match sessions.interrupt(&handle.chat_id).await {
-            Ok(true) => Ok(true),
+            Ok(true) => {
+                sessions.hold_recovery(
+                    &handle.chat_id,
+                    "Recovery held by Stop. Queued work and partial output were preserved.",
+                )?;
+                Ok(true)
+            }
             Ok(false) => {
                 handle.queue_paused.store(false, Ordering::Release);
                 Ok(false)

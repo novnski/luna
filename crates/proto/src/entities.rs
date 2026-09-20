@@ -270,6 +270,10 @@ pub struct Session {
     pub status: SessionStatus,
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+    /// Durable acceptance-aware recovery for the latest failed original
+    /// request. Additive so older clients simply ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<crate::TaskRecovery>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

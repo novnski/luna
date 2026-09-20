@@ -8,8 +8,8 @@
 //!   (zeron recoverDraft, sessions.ts:538-552) and stamps streaming entries
 //!   `aborted`;
 //! - resume is cwd-scoped (harness session stores are keyed by cwd);
-//! - a startup crash retries once with the resume kept, and a helper that is
-//!   down hard never tombstones the stored session id;
+//! - an uncertain startup crash is surfaced for delivery reconciliation with
+//!   no blind replay, while preserving the stored session id;
 //! - a steer with no live run after a restart dispatches as a new turn that
 //!   still resumes the prior conversation.
 
@@ -21,13 +21,14 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 
 use zeron_doc::{
-    MessagePart, MessageRole, MessageStatus, SessionCommandPayload, SessionDoc, SessionMessageEntry,
+    MessagePart, MessageRole, MessageStatus, SessionCommandEntry, SessionCommandPayload,
+    SessionCommandStatus, SessionDoc, SessionMessageEntry,
 };
 use zeron_engine::{EngineCore, HarnessRegistry, RunJournal};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
-    SteeringMode,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RecoveryAcceptance, RecoveryAction,
+    RecoveryStatus, RunRequest, SandboxLevel, SteeringMode,
 };
 use zeron_sync::DocsStore;
 
@@ -569,7 +570,7 @@ async fn persistent_session_serves_multiple_turns_on_one_child() {
 }
 
 #[tokio::test]
-async fn fresh_crash_auto_resumes_and_notes_the_interruption() {
+async fn fresh_crash_requires_safe_reconciliation_without_replay() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("data");
     std::fs::create_dir_all(&dir).unwrap();
@@ -610,6 +611,20 @@ async fn fresh_crash_auto_resumes_and_notes_the_interruption() {
             continuation_of: None,
         })
         .unwrap();
+        doc.queue_command(&SessionCommandEntry {
+            id: "cmd-crashed-run".into(),
+            payload: SessionCommandPayload::Run {
+                request: run_request("long task", "/tmp"),
+                message_id: "msg-user-1".into(),
+            },
+            issued_by: "dev-crash".into(),
+            issued_at: now - 60_000,
+            based_on: None,
+            expires_at: None,
+            status: SessionCommandStatus::Applied,
+            resolution: None,
+        })
+        .unwrap();
         store
             .save_snapshot(CHAT, &doc.export_snapshot().unwrap())
             .unwrap();
@@ -648,16 +663,23 @@ async fn fresh_crash_auto_resumes_and_notes_the_interruption() {
         },
     );
 
-    // The run is PICKED BACK UP without any user action (zeron: "not just
-    // eulogized"): recovery re-dispatches the crashed prompt itself.
+    // The journal proves provider acceptance, but this synthetic adapter does
+    // not advertise a safe continuation primitive. Recovery therefore keeps
+    // the partial output and asks for reconciliation instead of replaying the
+    // original prompt.
     wait_for(
-        || complete_assistant_count(&core) == 1,
-        "auto-resumed turn to complete",
+        || {
+            core.sessions
+                .session_status(CHAT)
+                .and_then(|session| session.recovery)
+                .is_some()
+        },
+        "accepted interruption recovery to be published",
     )
     .await;
 
     let entries = entries_now(&core);
-    // The aborted entry SAYS why it ended — and that the run is resuming.
+    // The aborted entry says why it ended without promising a resend.
     let aborted = entries
         .iter()
         .find(|e| e.status == Some(MessageStatus::Aborted))
@@ -666,11 +688,12 @@ async fn fresh_crash_auto_resumes_and_notes_the_interruption() {
         aborted.parts.iter().any(|p| matches!(
             p,
             MessagePart::Error { message, .. }
-                if message.contains("engine restart") && message.contains("resuming")
+                if message.contains("engine restart") && message.contains("reconciling delivery")
         )),
         "aborted entry carries the visible interruption note"
     );
-    // Re-dispatch reuses the original user message id — never a duplicate.
+    // Reconciliation preserves the original user entry and partial assistant
+    // output without sending either to the provider again.
     assert_eq!(
         entries
             .iter()
@@ -678,18 +701,22 @@ async fn fresh_crash_auto_resumes_and_notes_the_interruption() {
             .count(),
         1
     );
-    // The revived run continues the journal-recovered harness conversation.
-    // (An auto-title request may precede it — titling fires at dispatch.)
-    let recorded = requests.lock().unwrap().clone();
-    let revived = recorded
-        .iter()
-        .find(|r| r.prompt == "long task")
-        .expect("auto-resumed dispatch reached the harness");
-    assert_eq!(
-        revived.resume.as_deref(),
-        Some("hs-crash"),
-        "auto-resume must reattach the crashed harness session"
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.prompt != "long task"),
+        "startup reconciliation must never replay the original request"
     );
+    let recovery = core
+        .sessions
+        .session_status(CHAT)
+        .and_then(|session| session.recovery)
+        .expect("visible durable recovery state");
+    assert_eq!(recovery.acceptance, RecoveryAcceptance::Accepted);
+    assert_eq!(recovery.action, RecoveryAction::ObserveOnly);
+    assert_eq!(recovery.status, RecoveryStatus::RecoveryNeeded);
     core.shutdown().await;
 }
 
@@ -731,18 +758,16 @@ async fn resume_is_cwd_scoped() {
 }
 
 #[tokio::test]
-async fn startup_crash_retries_once_with_resume_kept() {
+async fn uncertain_startup_crash_is_not_replayed_and_keeps_resume() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("data");
     let requests: RequestLog = Arc::new(Mutex::new(Vec::new()));
 
     run_one_turn_and_shutdown(&dir, &requests, "hs-live").await;
 
-    // Relaunch with a harness whose child dies at startup ONCE (a transient
-    // spawn blip). Since the ACP conversion a stale id falls back inside the
-    // harness (`session/load` → `session/new`), so a startup death never
-    // indicts the stored id: the retry must carry the SAME session id, not
-    // start fresh — and never tombstone it.
+    // Relaunch with a harness whose child dies before SessionStarted. The
+    // provider may have received the request even though LUNA saw no
+    // acceptance event, so the safe state is Checking delivery: no replay.
     let core = assemble(
         &dir,
         RecordingHarness {
@@ -753,35 +778,45 @@ async fn startup_crash_retries_once_with_resume_kept() {
     );
     queue_run(&core, "second turn", "/tmp", "msg-user-2");
     wait_for(
-        || complete_assistant_count(&core) == 2,
-        "retried turn to complete",
+        || {
+            core.sessions
+                .session_status(CHAT)
+                .and_then(|session| session.recovery)
+                .is_some_and(|recovery| recovery.status == RecoveryStatus::CheckingDelivery)
+        },
+        "uncertain startup failure to enter delivery reconciliation",
     )
     .await;
 
-    // The crashed attempt, then exactly one retry — resume kept both times.
+    // The original attempt keeps the prior native session, but there is no
+    // second provider call without new evidence.
     {
         let log = requests.lock().unwrap();
-        assert_eq!(log.len(), 3, "one crashed attempt + one retry");
+        assert_eq!(log.len(), 2, "the uncertain attempt must not be replayed");
         assert_eq!(log[1].resume.as_deref(), Some("hs-live"));
-        assert_eq!(
-            log[2].resume.as_deref(),
-            Some("hs-live"),
-            "the retry must keep the stored conversation"
-        );
-        assert_eq!(log[2].prompt, "second turn");
     }
-    // The retry reused the same user entry — no duplicates, no error turn.
+    // The failed original turn remains visible once, with explicit recovery.
     let entries = entries_now(&core);
     let users: Vec<_> = entries
         .iter()
         .filter(|e| e.role == MessageRole::User)
         .collect();
-    assert_eq!(users.len(), 2, "retry must not duplicate the user entry");
-    assert_eq!(entries.len(), 4, "user+assistant per turn: {entries:#?}");
-    // The successful turn's session id replaces the stored one as usual.
+    assert_eq!(
+        users.len(),
+        2,
+        "reconciliation must not duplicate the user entry"
+    );
+    let recovery = core
+        .sessions
+        .session_status(CHAT)
+        .and_then(|session| session.recovery)
+        .expect("visible recovery state");
+    assert_eq!(recovery.acceptance, RecoveryAcceptance::Unknown);
+    assert_eq!(recovery.action, RecoveryAction::ObserveOnly);
+    // An uncertain failure never tombstones the previously confirmed session.
     assert_eq!(
         stored_harness_session(&core),
-        Some(("hs-next".into(), Some("/tmp".into())))
+        Some(("hs-live".into(), Some("/tmp".into())))
     );
     core.shutdown().await;
 }
@@ -806,18 +841,23 @@ async fn persistent_startup_crash_keeps_stored_session_id() {
         },
     );
     queue_run(&core, "second turn", "/tmp", "msg-user-2");
-    // Crashed attempt + its single retry — then it must STOP (no spawn loop).
+    // The crashed attempt is uncertain and must STOP immediately (no spawn
+    // loop, and no assumption that resending would be idempotent).
     wait_for(
-        || requests.lock().unwrap().len() == 3,
-        "crashed attempt and retry to be recorded",
+        || {
+            core.sessions
+                .session_status(CHAT)
+                .and_then(|session| session.recovery)
+                .is_some_and(|recovery| recovery.status == RecoveryStatus::CheckingDelivery)
+        },
+        "uncertain crash to enter delivery reconciliation",
     )
     .await;
     tokio::time::sleep(Duration::from_millis(150)).await;
     {
         let log = requests.lock().unwrap();
-        assert_eq!(log.len(), 3, "exactly one retry, no revival loop");
+        assert_eq!(log.len(), 2, "no blind retry and no revival loop");
         assert_eq!(log[1].resume.as_deref(), Some("hs-live"));
-        assert_eq!(log[2].resume.as_deref(), Some("hs-live"));
     }
     // THE fix: the stored id survives the startup failures — the next send
     // (say, after the restart that heals the helper) resumes the same

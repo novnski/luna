@@ -2813,6 +2813,7 @@ pub enum TranscriptEvent {
         title: String,
         frozen: bool,
     },
+    OpenAccounts,
 }
 
 impl gpui::EventEmitter<TranscriptEvent> for Transcript {}
@@ -5503,6 +5504,172 @@ impl Transcript {
         }
     }
 
+    fn recovery_command(&mut self, retry: bool, cx: &mut Context<Self>) {
+        let Some(chat_id) = self.chat_id.clone() else {
+            return;
+        };
+        let (engine, chain_id) = {
+            let state = self.state.read(cx);
+            let chain_id = state
+                .session_for(&chat_id)
+                .and_then(|session| session.recovery.as_ref())
+                .map(|recovery| recovery.chain_id.clone());
+            (state.engine().cloned(), chain_id)
+        };
+        let (Some(engine), Some(chain_id)) = (engine, chain_id) else {
+            return;
+        };
+        let intent = serde_json::json!({
+            "kind": if retry { "retryRecovery" } else { "cancelRecovery" },
+            "chainId": chain_id,
+        });
+        cx.spawn(async move |_, _| {
+            if let Err(error) = crate::task_commands::execute(&engine, &chat_id, intent).await {
+                tracing::warn!(%error, "recovery control failed");
+            }
+        })
+        .detach();
+    }
+
+    fn render_recovery_trailer(&self, chat_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let recovery = self
+            .state
+            .read(cx)
+            .session_for(chat_id)?
+            .recovery
+            .as_ref()?
+            .clone();
+        if matches!(
+            recovery.status,
+            zeron_proto::RecoveryStatus::Completed
+                | zeron_proto::RecoveryStatus::Cancelled
+                | zeron_proto::RecoveryStatus::Superseded
+        ) {
+            return None;
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let headline = match recovery.status {
+            zeron_proto::RecoveryStatus::Scheduled => {
+                let seconds = recovery
+                    .retry_at_ms
+                    .map(|at| at.saturating_sub(now).saturating_add(999) / 1_000)
+                    .unwrap_or_default()
+                    .max(0);
+                format!(
+                    "Retrying in {seconds}s · attempt {}/{}",
+                    recovery.attempt_count + 1,
+                    recovery.max_attempts
+                )
+            }
+            zeron_proto::RecoveryStatus::Running => "Recovering safely…".into(),
+            zeron_proto::RecoveryStatus::CheckingDelivery => "Checking delivery".into(),
+            zeron_proto::RecoveryStatus::RecoveryNeeded => "Recovery needed".into(),
+            zeron_proto::RecoveryStatus::WaitingForSignIn => {
+                format!("Sign in on {}", recovery.environment_id)
+            }
+            zeron_proto::RecoveryStatus::Held => "Recovery held".into(),
+            zeron_proto::RecoveryStatus::Exhausted => "Automatic retry limit reached".into(),
+            _ => return None,
+        };
+        let theme = Theme::of(cx).clone();
+        let can_send = recovery.status.active()
+            && !matches!(
+                recovery.status,
+                zeron_proto::RecoveryStatus::Running
+                    | zeron_proto::RecoveryStatus::CheckingDelivery
+            )
+            && !matches!(
+                recovery.action,
+                zeron_proto::RecoveryAction::ObserveOnly
+                    | zeron_proto::RecoveryAction::FixConfiguration
+            );
+        let show_accounts = matches!(
+            recovery.failure,
+            zeron_proto::RecoveryFailure::AuthenticationExpired
+        );
+        Some(
+            div()
+                .id("turn-recovery")
+                .flex()
+                .flex_col()
+                .gap(px(Theme::SPACE_XS))
+                .pt(px(Theme::SPACE_LG))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(Theme::SPACE_SM))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(
+                            if recovery.status == zeron_proto::RecoveryStatus::CheckingDelivery {
+                                theme.warning
+                            } else {
+                                theme.danger
+                            },
+                        )
+                        .child(SharedString::from(headline))
+                        .when(show_accounts, |row| {
+                            row.child(
+                                div()
+                                    .id("recovery-open-accounts")
+                                    .cursor_pointer()
+                                    .text_color(theme.accent)
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        cx.emit(TranscriptEvent::OpenAccounts)
+                                    }))
+                                    .child("Open Accounts"),
+                            )
+                        })
+                        .when(can_send, |row| {
+                            row.child(
+                                div()
+                                    .id("recovery-send-now")
+                                    .cursor_pointer()
+                                    .text_color(theme.accent)
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.recovery_command(true, cx)
+                                        }),
+                                    )
+                                    .child(
+                                        if recovery.status == zeron_proto::RecoveryStatus::Held {
+                                            "Continue"
+                                        } else {
+                                            "Send now"
+                                        },
+                                    ),
+                            )
+                        })
+                        .when(
+                            recovery.status.active()
+                                && recovery.status != zeron_proto::RecoveryStatus::Running,
+                            |row| {
+                                row.child(
+                                    div()
+                                        .id("recovery-cancel")
+                                        .cursor_pointer()
+                                        .text_color(theme.text_muted)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.recovery_command(false, cx)
+                                        }))
+                                        .child("Cancel"),
+                                )
+                            },
+                        ),
+                )
+                .child(
+                    div()
+                        .max_w(px(640.0))
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .line_height(px(16.0))
+                        .text_color(theme.text_muted)
+                        .child(SharedString::from(recovery.detail)),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_working_trailer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let now = chrono::Utc::now();
         let (sending, queued, elapsed_secs, seed) = if let Some(doc_id) = &self.doc_override {
@@ -5526,6 +5693,9 @@ impl Transcript {
             (false, false, elapsed, flavour_seed(doc_id))
         } else {
             let chat_id = self.chat_id.clone()?;
+            if let Some(recovery) = self.render_recovery_trailer(&chat_id, cx) {
+                return Some(recovery);
+            }
             // Failed-send state first: past the grace window the trailer IS
             // the retry affordance, whatever the indicator fell back to.
             if self.state.read(cx).send_undelivered(&chat_id, now) {
@@ -10530,6 +10700,7 @@ mod tests {
                             status: zeron_proto::SessionStatus::Working,
                             started_at: Some(chrono::Utc::now()),
                             updated_at: chrono::Utc::now(),
+                            recovery: None,
                         })
                     });
                     this.on_own_send("chat".into(), "prompt".into(), cx);

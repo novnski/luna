@@ -298,6 +298,14 @@ enum TaskCommandIntent {
         expected_queue_revision: Option<u64>,
     },
     #[serde(rename_all = "camelCase")]
+    RetryRecovery {
+        chain_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    CancelRecovery {
+        chain_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
     MarkSeen {
         #[serde(default)]
         at: Option<i64>,
@@ -330,6 +338,8 @@ impl TaskCommandIntent {
             Self::RemoveQueuedMessage { .. } => "removeQueuedMessage",
             Self::SendQueuedNow { .. } => "sendQueuedNow",
             Self::SteerQueuedNow { .. } => "steerQueuedNow",
+            Self::RetryRecovery { .. } => "retryRecovery",
+            Self::CancelRecovery { .. } => "cancelRecovery",
             Self::MarkSeen { .. } => "markSeen",
         }
     }
@@ -1674,7 +1684,8 @@ impl EngineRpc {
             }
             TaskCommandIntent::Session { .. }
             | TaskCommandIntent::SendQueuedNow { .. }
-            | TaskCommandIntent::SteerQueuedNow { .. } => false,
+            | TaskCommandIntent::SteerQueuedNow { .. }
+            | TaskCommandIntent::RetryRecovery { .. } => false,
             _ => true,
         }
     }
@@ -1907,6 +1918,12 @@ impl EngineRpc {
                         doc.set_chat_branch(&owned_task_id, &branch)?;
                         Ok(())
                     })?;
+                self.sessions
+                    .supersede_recovery(
+                        task_id,
+                        "Recovery cancelled because the checkout branch changed.",
+                    )
+                    .map_err(TaskProjectionError::Mutation)?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetCwd { cwd } => {
@@ -1916,6 +1933,12 @@ impl EngineRpc {
                         doc.set_chat_cwd(&owned_task_id, &cwd)?;
                         Ok(())
                     })?;
+                self.sessions
+                    .supersede_recovery(
+                        task_id,
+                        "Recovery cancelled because the working directory changed.",
+                    )
+                    .map_err(TaskProjectionError::Mutation)?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetActivity {
@@ -1954,6 +1977,12 @@ impl EngineRpc {
                         doc.upsert_chat(&chat)?;
                         Ok(())
                     })?;
+                self.sessions
+                    .supersede_recovery(
+                        task_id,
+                        "Recovery cancelled because the owning environment changed.",
+                    )
+                    .map_err(TaskProjectionError::Mutation)?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetConfig { config } => {
@@ -1963,6 +1992,12 @@ impl EngineRpc {
                         doc.set_chat_config(&owned_task_id, &config)?;
                         Ok(())
                     })?;
+                self.sessions
+                    .supersede_recovery(
+                        task_id,
+                        "Recovery cancelled because the task configuration changed.",
+                    )
+                    .map_err(TaskProjectionError::Mutation)?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetPermission { mode, actor } => {
@@ -1979,6 +2014,12 @@ impl EngineRpc {
                         Ok(())
                     })?;
                 drop(prepared);
+                self.sessions
+                    .supersede_recovery(
+                        task_id,
+                        "Recovery cancelled because the permission grant changed.",
+                    )
+                    .map_err(TaskProjectionError::Mutation)?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetProviderAccount { account_id } => {
@@ -1997,6 +2038,12 @@ impl EngineRpc {
                     })?;
                 self.sessions.invalidate_provider_account_caches(harness);
                 drop(prepared);
+                self.sessions
+                    .supersede_recovery(
+                        task_id,
+                        "Recovery cancelled because the provider account changed.",
+                    )
+                    .map_err(TaskProjectionError::Mutation)?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::QueueMessage {
@@ -2355,6 +2402,77 @@ impl EngineRpc {
                         Ok(Some(receipt))
                     }
                 }
+            }
+            TaskCommandIntent::RetryRecovery { chain_id } => {
+                let applied = self
+                    .sessions
+                    .retry_recovery_now(task_id, &chain_id)
+                    .await
+                    .map_err(TaskProjectionError::Mutation)?;
+                let receipt = self
+                    .finish_task_command(
+                        command_id,
+                        if applied {
+                            CommandReceiptStatus::Applied
+                        } else {
+                            CommandReceiptStatus::Rejected
+                        },
+                        applied,
+                        if applied {
+                            CommandReasonCode::OperationFailed
+                        } else {
+                            CommandReasonCode::OperationRejected
+                        },
+                        if applied {
+                            ""
+                        } else {
+                            "the recovery chain is no longer active"
+                        },
+                        if applied {
+                            ""
+                        } else {
+                            "Reload task state before choosing another recovery action."
+                        },
+                    )
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                    })?;
+                Ok(Some(receipt))
+            }
+            TaskCommandIntent::CancelRecovery { chain_id } => {
+                let applied = self
+                    .sessions
+                    .cancel_recovery(task_id, &chain_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let receipt = self
+                    .finish_task_command(
+                        command_id,
+                        if applied {
+                            CommandReceiptStatus::Applied
+                        } else {
+                            CommandReceiptStatus::Rejected
+                        },
+                        applied,
+                        if applied {
+                            CommandReasonCode::OperationFailed
+                        } else {
+                            CommandReasonCode::OperationRejected
+                        },
+                        if applied {
+                            ""
+                        } else {
+                            "the recovery chain is no longer active"
+                        },
+                        if applied {
+                            ""
+                        } else {
+                            "Reload task recovery state."
+                        },
+                    )
+                    .map_err(|error| {
+                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                    })?;
+                Ok(Some(receipt))
             }
             TaskCommandIntent::MarkSeen { at } => {
                 let at = at

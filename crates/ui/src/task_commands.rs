@@ -97,6 +97,8 @@ pub async fn execute_receipt_on_with_id(
                     | "removeQueuedMessage"
                     | "sendQueuedNow"
                     | "steerQueuedNow"
+                    | "retryRecovery"
+                    | "cancelRecovery"
             )
         )
         || matches!(

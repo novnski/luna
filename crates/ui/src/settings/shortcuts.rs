@@ -52,6 +52,7 @@ pub enum ShortcutsEvent {
     ComposerSendBehaviorChanged(ComposerSendBehavior),
     /// The active-turn follow-up behavior changed — persist only.
     FollowUpBehaviorChanged(FollowUpBehavior),
+    AutomaticRetriesChanged(bool),
     AppshotsChanged {
         enabled: bool,
         sound_enabled: bool,
@@ -68,6 +69,7 @@ pub struct ShortcutsPage {
     escape_stops_active_agent: bool,
     composer_send_behavior: ComposerSendBehavior,
     follow_up_behavior: FollowUpBehavior,
+    automatic_retries_enabled: bool,
     recording: Option<ShortcutId>,
     recording_blur: Option<gpui::Subscription>,
     recording_interceptor: Option<gpui::Subscription>,
@@ -95,6 +97,7 @@ impl ShortcutsPage {
         escape_stops_active_agent: bool,
         composer_send_behavior: ComposerSendBehavior,
         follow_up_behavior: FollowUpBehavior,
+        automatic_retries_enabled: bool,
         appshots_enabled: bool,
         appshot_sound_enabled: bool,
         appshot_destination: AppshotDestination,
@@ -110,6 +113,7 @@ impl ShortcutsPage {
             escape_stops_active_agent,
             composer_send_behavior,
             follow_up_behavior,
+            automatic_retries_enabled,
             recording: None,
             recording_blur: None,
             recording_interceptor: None,
@@ -196,6 +200,14 @@ impl ShortcutsPage {
         if self.follow_up_behavior != behavior {
             self.follow_up_behavior = behavior;
             cx.emit(ShortcutsEvent::FollowUpBehaviorChanged(behavior));
+            cx.notify();
+        }
+    }
+
+    fn set_automatic_retries(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.automatic_retries_enabled != enabled {
+            self.automatic_retries_enabled = enabled;
+            cx.emit(ShortcutsEvent::AutomaticRetriesChanged(enabled));
             cx.notify();
         }
     }
@@ -547,10 +559,12 @@ impl Render for ShortcutsPage {
         let escape_stops_active_agent = self.escape_stops_active_agent;
         let send_behavior = self.composer_send_behavior;
         let follow_up_behavior = self.follow_up_behavior;
+        let automatic_retries_enabled = self.automatic_retries_enabled;
         let customized = self.keymap != KeymapConfig::default()
             || escape_stops_active_agent
             || send_behavior != ComposerSendBehavior::default()
-            || follow_up_behavior != FollowUpBehavior::default();
+            || follow_up_behavior != FollowUpBehavior::default()
+            || !automatic_retries_enabled;
         let modifier_label = modifier_send_label(cfg!(target_os = "macos"));
 
         let escape_behavior_row = widgets::section_card(&theme).child(
@@ -760,6 +774,37 @@ impl Render for ShortcutsPage {
                         ),
                 ),
         );
+        let automatic_retries_row = widgets::section_card(&theme).child(
+            widgets::card_row(&theme, true)
+                .min_h(px(84.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(widgets::row_title(&theme, "Automatic retries"))
+                        .child(
+                            div()
+                                .mt(px(4.0))
+                                .max_w(px(430.0))
+                                .text_size(px(11.5))
+                                .line_height(px(17.0))
+                                .text_color(theme.text_muted.opacity(0.65))
+                                .child(SharedString::from(
+                                    "Retry temporary overloads and known subscription resets within four attempts and six hours. Unknown delivery, authentication, credits, model, and configuration failures still require review.",
+                                )),
+                        ),
+                )
+                .child(
+                    widgets::toggle_switch(&theme, automatic_retries_enabled)
+                        .id("automatic-retries-toggle")
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_automatic_retries(!automatic_retries_enabled, cx);
+                        })),
+                ),
+        );
         // One card per group, each under its small section label — the flat
         // 16-row table read as one undifferentiated wall. `ix` (the id's
         // position in ALL) keys the interactive elements, so ids stay unique
@@ -871,6 +916,7 @@ impl Render for ShortcutsPage {
                                                             FollowUpBehavior::Queue,
                                                             cx,
                                                         );
+                                                        this.set_automatic_retries(true, cx);
                                                     }),
                                                 )
                                             })
@@ -884,6 +930,7 @@ impl Render for ShortcutsPage {
                             )
                             .child(send_behavior_row.mt(px(32.0)))
                             .child(follow_up_row.mt(px(16.0)))
+                            .child(automatic_retries_row.mt(px(16.0)))
                             .child(
                                 div()
                                     .mt(px(28.0))
@@ -929,6 +976,7 @@ mod tests {
                 false,
                 ComposerSendBehavior::default(),
                 FollowUpBehavior::default(),
+                true,
                 false,
                 false,
                 AppshotDestination::Automatic,
@@ -1023,6 +1071,7 @@ mod tests {
                 false,
                 ComposerSendBehavior::default(),
                 FollowUpBehavior::default(),
+                true,
                 false,
                 true,
                 AppshotDestination::Automatic,

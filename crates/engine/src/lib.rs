@@ -29,6 +29,7 @@ pub mod local_import;
 mod macos_keychain;
 pub mod permissions;
 pub mod profile;
+pub mod recovery;
 pub mod registry;
 pub mod repos;
 pub mod rpc;
@@ -62,6 +63,7 @@ pub use doc_host::{ChatDocHandle, DocHost, DocHostConfig, EdgeConfig};
 pub use instance_lock::InstanceLock;
 pub use permissions::{provider_capabilities, provider_capabilities_for, resolve_run_policy};
 pub use profile::EngineProfile;
+pub use recovery::{RecoveryDecision, classify_failure, recovery_decision};
 pub use registry::{HarnessDescriptor, HarnessRegistry, default_registry};
 pub use repos::{CheckoutIdentity, Repos, worktree_branch_from_title};
 pub use rpc::EngineRpc;
@@ -100,6 +102,8 @@ pub enum EngineError {
     Harness(#[from] zeron_harness::HarnessError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("{0}")]
     Other(String),
 }
@@ -293,6 +297,7 @@ impl EngineCore {
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
         let sessions = SessionsEngine::new(device_id.clone(), journal, registry.clone());
+        sessions.set_recovery_settings_path(profile.device_root().join("ui-settings.json"));
         let doc_host = DocHost::new(
             store.clone(),
             DocHostConfig {

@@ -612,6 +612,10 @@ pub struct UiSettings {
     pub composer_send_behavior: ComposerSendBehavior,
     /// What a primary submit does while the selected task has a live turn.
     pub follow_up_behavior: zeron_proto::FollowUpBehavior,
+    /// Allow the engine's bounded, acceptance-aware recovery policy to arm
+    /// automatic retries. Unknown delivery and action-required failures never
+    /// retry regardless of this preference.
+    pub automatic_retries_enabled: bool,
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
     /// Legacy: the grouped-by-project toggle predates spaces (which group by
@@ -773,6 +777,7 @@ impl Default for UiSettings {
             escape_stops_active_agent: false,
             composer_send_behavior: ComposerSendBehavior::default(),
             follow_up_behavior: zeron_proto::FollowUpBehavior::default(),
+            automatic_retries_enabled: true,
             appshots_enabled: false,
             appshot_sound_enabled: true,
             appshot_destination: crate::appshots::AppshotDestination::Automatic,
@@ -1947,6 +1952,7 @@ mod tests {
             escape_stops_active_agent: true,
             composer_send_behavior: ComposerSendBehavior::ModEnter,
             follow_up_behavior: zeron_proto::FollowUpBehavior::Steer,
+            automatic_retries_enabled: false,
             appshots_enabled: false,
             appshot_sound_enabled: true,
             // The destination is only persisted where Appshots exist (macOS and

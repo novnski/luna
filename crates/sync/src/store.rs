@@ -1274,6 +1274,31 @@ impl DocsStore {
             .transpose()
     }
 
+    /// Latest durable command whose provider correlation is this message id.
+    /// Used by recovery to distinguish accepted, rejected, and unknown without
+    /// guessing from transcript text.
+    pub fn task_command_receipt_for_correlation(
+        &self,
+        task_id: &str,
+        correlation_id: &str,
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT receipt_json FROM task_command_receipts
+             WHERE task_id=?1 ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![task_id], |row| row.get::<_, Vec<u8>>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for bytes in rows {
+            let receipt: CommandReceipt = serde_json::from_slice(&bytes)?;
+            if receipt.correlation_id.as_deref() == Some(correlation_id) {
+                return Ok(Some(receipt));
+            }
+        }
+        Ok(None)
+    }
+
     /// Read only the authoritative task projection. This is the normal UI
     /// bootstrap path and deliberately does not scan command history.
     pub fn task_command_snapshot(&self, task_id: &str) -> Result<TaskCommandRead, StoreError> {

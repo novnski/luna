@@ -63,6 +63,9 @@ impl Harness for MockHarness {
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
         &[ReasoningLevel::Medium]
     }
+    fn supports_safe_recovery_continuation(&self) -> bool {
+        true
+    }
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         Ok(vec![
             Model {
