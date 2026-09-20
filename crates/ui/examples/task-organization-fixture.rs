@@ -2,14 +2,17 @@
 //!
 //! The only accepted argument is an explicit synthetic root. Engine, UI,
 //! provider homes, repository folders, credentials, and temporary files stay
-//! below that root. Codex native metadata access and OS-Keychain fallback are
-//! disabled; no provider process or live account is used.
+//! below that root. Auth uses an in-memory credential broker; Codex native
+//! metadata access and every platform-Keychain fallback are disabled. No
+//! provider process or live account is used.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use zeron_engine::{
+    AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
+};
 use zeron_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
 use zeron_rpc::{RpcClient, methods};
 use zeron_ui::*;
@@ -30,6 +33,13 @@ fn account_config(root: &Path) -> AgentAccountsConfig {
         codex_home: root.join("synthetic-codex"),
         cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
     }
+}
+
+fn fixture_auth_config(root: &Path) -> AuthConfig {
+    let mut config = AuthConfig::new("http://127.0.0.1:1", root.join("synthetic-auth"));
+    config.dev_user_id = "l12-fixture-user".into();
+    config.use_in_memory_credentials_for_tests();
+    config
 }
 
 fn task_config() -> ChatConfig {
@@ -274,10 +284,13 @@ fn main() -> anyhow::Result<()> {
             accounts,
         )
     })?;
+    // Attach hermetic auth before seed creates an in-memory RPC client and
+    // before IPC/bootstrap can lazily request EngineCore::auth().
+    core.set_auth(Auth::new(fixture_auth_config(&root)));
     runtime.block_on(seed(&core, &root))?;
     std::fs::write(
         root.join("SAFETY.txt"),
-        "L12 synthetic fixture only. Native provider metadata and Keychain fallback disabled. No live provider/account/store access.\n",
+        "L12 synthetic fixture only. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n",
     )?;
 
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
@@ -377,4 +390,28 @@ fn main() -> anyhow::Result<()> {
         });
     runtime.block_on(core.shutdown());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_auth_broker_is_hermetic_and_has_no_platform_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let config = fixture_auth_config(root.path());
+        assert_eq!(config.data_dir, root.path().join("synthetic-auth"));
+        assert_eq!(config.dev_user_id, "l12-fixture-user");
+
+        let broker = config.test_credential_broker();
+        assert!(
+            broker.independent_in_memory_handle_for_tests().is_some(),
+            "only the in-memory broker exposes an independent test handle"
+        );
+        assert!(
+            broker.set_in_memory_store_locked_for_tests(true),
+            "production/platform brokers reject this in-memory-only hook"
+        );
+        assert!(broker.set_in_memory_store_locked_for_tests(false));
+    }
 }
