@@ -5,6 +5,8 @@
 //! (`delta`/`textDelta`, `exitCode`/`exit_code`, camelCase/snake_case item
 //! types) are accepted, and unknown item types map to nothing.
 
+use std::collections::VecDeque;
+
 use serde_json::Value;
 use zeron_proto::{AgentEvent, ContextOperationStatus, DoneStatus, TodoItem, ToolCall};
 
@@ -28,6 +30,7 @@ struct ActiveContextCompaction {
 #[derive(Default)]
 pub(crate) struct ContextCompactionStream {
     active: Option<ActiveContextCompaction>,
+    settled: VecDeque<(String, String, String)>,
 }
 
 impl ContextCompactionStream {
@@ -35,7 +38,7 @@ impl ContextCompactionStream {
         &mut self,
         phase: Phase,
         root_thread_id: &str,
-        known_turn_id: Option<&str>,
+        active_turn_id: Option<&str>,
         params: &Value,
         item: &Value,
     ) -> Option<AgentEvent> {
@@ -47,16 +50,19 @@ impl ContextCompactionStream {
             .and_then(Value::as_str)
             .unwrap_or("");
         let item_id = str_field(item, &["id"]);
-        if thread_id != root_thread_id
-            || turn_id.is_empty()
-            || item_id.is_empty()
-            || known_turn_id != Some(turn_id)
-        {
+        if thread_id != root_thread_id || turn_id.is_empty() || item_id.is_empty() {
             return None;
         }
         let operation_id = format!("codex-auto:{thread_id}:{turn_id}:{item_id}");
         match phase {
             Phase::Started => {
+                if active_turn_id != Some(turn_id)
+                    || self.settled.iter().any(|settled| {
+                        settled.0 == thread_id && settled.1 == turn_id && settled.2 == item_id
+                    })
+                {
+                    return None;
+                }
                 if self.active.as_ref().is_some_and(|active| {
                     active.thread_id == thread_id
                         && active.turn_id == turn_id
@@ -89,6 +95,7 @@ impl ContextCompactionStream {
                     return None;
                 }
                 let active = self.active.take().unwrap();
+                self.remember_settled(&active);
                 Some(AgentEvent::ContextCompaction {
                     operation_id: active.operation_id,
                     status: ContextOperationStatus::Completed,
@@ -125,12 +132,24 @@ impl ContextCompactionStream {
 
     pub(crate) fn take_unknown(&mut self) -> Option<AgentEvent> {
         let active = self.active.take()?;
+        self.remember_settled(&active);
         Some(AgentEvent::ContextCompaction {
             operation_id: active.operation_id,
             status: ContextOperationStatus::Unknown,
             thread_id: active.thread_id,
             turn_id: active.turn_id,
         })
+    }
+
+    fn remember_settled(&mut self, active: &ActiveContextCompaction) {
+        self.settled.push_back((
+            active.thread_id.clone(),
+            active.turn_id.clone(),
+            active.item_id.clone(),
+        ));
+        while self.settled.len() > 32 {
+            self.settled.pop_front();
+        }
     }
 }
 
@@ -227,12 +246,6 @@ pub(crate) fn turn_id(params: &Value) -> String {
         .get("turn")
         .map(|t| str_field(t, &["id"]))
         .unwrap_or_default()
-}
-
-pub(crate) fn item_turn_id(params: &Value) -> &str {
-    field(params, &["turnId", "turn_id"])
-        .and_then(Value::as_str)
-        .unwrap_or("")
 }
 
 /// `params.turn.error.message` (turn/completed carries an optional error;

@@ -199,13 +199,42 @@ case "$turnline" in
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-auto-context\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-auto-context"}}}'
   emit '{"method":"thread/tokenUsage/updated","params":{"threadId":"th-1","tokenUsage":{"last":{"totalTokens":95000},"modelContextWindow":100000}}}'
-  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-auto-context","status":"completed"}}}'
   emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-auto-context","item":{"id":"compact-auto","type":"contextCompaction"}}}'
   emit '{"method":"item/started","params":{"threadId":"child-auto","turnId":"child-turn","item":{"id":"compact-child","type":"contextCompaction"}}}'
   emit '{"method":"item/completed","params":{"threadId":"child-auto","turnId":"child-turn","item":{"id":"compact-child","type":"contextCompaction"}}}'
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-auto-context","item":{"id":"compact-stale","type":"contextCompaction"}}}'
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-auto-context","item":{"id":"compact-auto","type":"contextCompaction"}}}'
   emit '{"method":"thread/tokenUsage/updated","params":{"threadId":"th-1","tokenUsage":{"last":{"totalTokens":0},"modelContextWindow":100000}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-auto-context","status":"completed"}}}'
+  ;;
+
+*scenario:auto-context-stale-duplicate*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-stale-a\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-stale-a"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-stale-a","status":"completed"}}}'
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-current-b"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-stale-a","item":{"id":"compact-stale-a","type":"contextCompaction"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-current-b","item":{"id":"compact-current-b","type":"contextCompaction"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-current-b","item":{"id":"compact-current-b","type":"contextCompaction"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-current-b","item":{"id":"compact-current-b","type":"contextCompaction"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-current-b","item":{"id":"compact-current-b","type":"contextCompaction"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-current-b","status":"completed"}}}'
+  ;;
+
+*scenario:auto-context-terminal-failed*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-terminal-failed\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-terminal-failed"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-terminal-failed","item":{"id":"compact-terminal-failed","type":"contextCompaction"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-terminal-failed","status":"failed","error":{"message":"synthetic terminal failure"}}}}'
+  sleep 1
+  ;;
+
+*scenario:auto-context-terminal-success-missing*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-terminal-success\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-terminal-success"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-terminal-success","item":{"id":"compact-terminal-success","type":"contextCompaction"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-terminal-success","status":"completed"}}}'
+  sleep 1
   ;;
 
 *scenario:auto-context-interrupted*)

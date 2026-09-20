@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use tokio::sync::Notify;
 use zeron_doc::{
     MessageRole, QueueClaimMode, QueueDeliveryGate, QueueHoldReason, QueueMessageStatus,
 };
@@ -28,6 +29,113 @@ struct CountingHarness {
     compact_error: bool,
     hold: bool,
     steering: SteeringMode,
+}
+
+#[derive(Clone, Copy)]
+enum CodexContextOutcome {
+    Completed,
+    Missing,
+}
+
+struct CodexContextHarness {
+    runs: Arc<AtomicUsize>,
+    release_context: Arc<Notify>,
+    release_done: Arc<Notify>,
+    outcome: CodexContextOutcome,
+}
+
+#[async_trait]
+impl Harness for CodexContextHarness {
+    fn id(&self) -> HarnessId {
+        HarnessId::Codex
+    }
+
+    fn display_name(&self) -> &str {
+        "Synthetic Codex context lifecycle"
+    }
+
+    fn supports_steering(&self) -> bool {
+        false
+    }
+
+    fn steering_mode(&self) -> SteeringMode {
+        SteeringMode::StepBoundary
+    }
+
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[ReasoningLevel::Medium]
+    }
+
+    fn deterministic_turn_end(&self) -> bool {
+        true
+    }
+
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(Vec::new())
+    }
+
+    async fn run(
+        &self,
+        request: RunRequest,
+        _controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let run_index = self.runs.fetch_add(1, Ordering::SeqCst);
+        let release_context = self.release_context.clone();
+        let release_done = self.release_done.clone();
+        let outcome = self.outcome;
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            let thread_id = request
+                .resume
+                .unwrap_or_else(|| "synthetic-codex-thread".into());
+            let _ = tx
+                .send(Ok(AgentEvent::SessionStarted {
+                    harness: HarnessId::Codex,
+                    model: "synthetic-codex".into(),
+                    tools: Vec::new(),
+                    cwd: request.cwd,
+                    session_id: thread_id.clone(),
+                    assistant_message_id: format!("synthetic-codex-assistant-{run_index}"),
+                }))
+                .await;
+            if run_index == 0 {
+                let operation_id =
+                    format!("codex-auto:{thread_id}:synthetic-turn:synthetic-compact");
+                let _ = tx
+                    .send(Ok(AgentEvent::ContextCompaction {
+                        operation_id: operation_id.clone(),
+                        status: ContextOperationStatus::Running,
+                        thread_id: thread_id.clone(),
+                        turn_id: "synthetic-turn".into(),
+                    }))
+                    .await;
+                release_context.notified().await;
+                if matches!(outcome, CodexContextOutcome::Completed) {
+                    let _ = tx
+                        .send(Ok(AgentEvent::ContextCompaction {
+                            operation_id,
+                            status: ContextOperationStatus::Completed,
+                            thread_id: thread_id.clone(),
+                            turn_id: "synthetic-turn".into(),
+                        }))
+                        .await;
+                }
+                release_done.notified().await;
+            }
+            let _ = tx
+                .send(Ok(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    result: None,
+                    error: None,
+                    session_id: Some(thread_id),
+                }))
+                .await;
+        });
+        Ok(futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|event| (event, rx))
+        })
+        .boxed())
+    }
 }
 
 #[async_trait]
@@ -186,6 +294,30 @@ fn assemble_context(
     .unwrap()
 }
 
+fn assemble_codex_context(
+    root: &std::path::Path,
+    runs: Arc<AtomicUsize>,
+    release_context: Arc<Notify>,
+    release_done: Arc<Notify>,
+    outcome: CodexContextOutcome,
+) -> EngineCore {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(CodexContextHarness {
+        runs,
+        release_context,
+        release_done,
+        outcome,
+    }));
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(&root.join("data"), "l07-org", "l07-user"),
+        Arc::new(registry),
+        HarnessId::Codex,
+        None,
+        account_config(root),
+    )
+    .unwrap()
+}
+
 fn task_config(model: &str) -> ChatConfig {
     ChatConfig {
         harness: HarnessId::Mock,
@@ -221,6 +353,19 @@ fn request(prompt: &str) -> RunRequest {
         attachments: Vec::new(),
         worktree: None,
     }
+}
+
+fn codex_task_config() -> ChatConfig {
+    let mut config = task_config("synthetic-codex");
+    config.harness = HarnessId::Codex;
+    config
+}
+
+fn codex_request(prompt: &str) -> RunRequest {
+    let mut request = request(prompt);
+    request.harness = Some(HarnessId::Codex);
+    request.model = Some("synthetic-codex".into());
+    request
 }
 
 fn composer_draft(task_id: &str, text: &str) -> ComposerDraft {
@@ -335,6 +480,76 @@ async fn create_configured_task(client: &RpcClient, task_id: &str, device_id: &s
     )
     .await;
     assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+}
+
+async fn create_codex_context_task(client: &RpcClient, task_id: &str, device_id: &str) {
+    let receipt = execute(
+        client,
+        envelope(
+            "create-codex-context-task",
+            task_id,
+            None,
+            serde_json::json!({
+                "kind": "createChat",
+                "deviceId": device_id,
+                "cwd": "/tmp",
+                "config": codex_task_config()
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+}
+
+async fn start_codex_context_run(client: &RpcClient, task_id: &str) {
+    let receipt = execute(
+        client,
+        envelope(
+            "codex-context-run",
+            task_id,
+            Some(&snapshot(client, task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": codex_request("exercise automatic context lifecycle"),
+                    "messageId": "codex-context-run-message"
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        receipt.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+}
+
+async fn wait_for_context_status(core: &EngineCore, task_id: &str, status: ContextOperationStatus) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if core
+                .doc_host
+                .context_control(task_id)
+                .is_ok_and(|context| context.compact.status == status)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_for_run_count(runs: &AtomicUsize, count: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while runs.load(Ordering::SeqCst) < count {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 async fn run_once(client: &RpcClient, task_id: &str, command_id: &str, prompt: &str) {
@@ -2495,6 +2710,199 @@ async fn compact_is_idempotent_and_restart_unknown_is_never_replayed() {
             .status,
         QueueMessageStatus::Held
     ));
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn automatic_codex_context_events_gate_real_queue_drain_and_restart() {
+    let completed_root = tempfile::tempdir().unwrap();
+    let completed_runs = Arc::new(AtomicUsize::new(0));
+    let completed_context = Arc::new(Notify::new());
+    let completed_done = Arc::new(Notify::new());
+    let completed_task = uuid::Uuid::new_v4().to_string();
+    let completed_core = assemble_codex_context(
+        completed_root.path(),
+        completed_runs.clone(),
+        completed_context.clone(),
+        completed_done.clone(),
+        CodexContextOutcome::Completed,
+    );
+    let completed_client = zeron_rpc::memory_client(completed_core.rpc_service());
+    create_codex_context_task(
+        &completed_client,
+        &completed_task,
+        &completed_core.device_id,
+    )
+    .await;
+    start_codex_context_run(&completed_client, &completed_task).await;
+    wait_for_context_status(
+        &completed_core,
+        &completed_task,
+        ContextOperationStatus::Running,
+    )
+    .await;
+    completed_core
+        .doc_host
+        .queue_message_with_id_and_execution(
+            &completed_task,
+            "eligible-after-completed",
+            "dispatch only after the real turn ends",
+            Vec::new(),
+            true,
+            FollowUpBehavior::Queue,
+            None,
+        )
+        .unwrap();
+    completed_context.notify_one();
+    wait_for_context_status(
+        &completed_core,
+        &completed_task,
+        ContextOperationStatus::Completed,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(completed_runs.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        completed_core
+            .doc_host
+            .queued_message(&completed_task, "eligible-after-completed")
+            .unwrap()
+            .unwrap()
+            .status,
+        QueueMessageStatus::Held
+    ));
+    let completed_operation = "codex-auto:synthetic-codex-thread:synthetic-turn:synthetic-compact";
+    for status in ["Running", "Completed"] {
+        assert!(
+            completed_core
+                .doc_host
+                .task_command_receipt(&format!("provider-context:{completed_operation}:{status}"))
+                .unwrap()
+                .is_none(),
+            "automatic provider lifecycle must not create a manual receipt"
+        );
+    }
+    completed_done.notify_one();
+    wait_for_run_count(&completed_runs, 2).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while completed_core
+            .doc_host
+            .queued_message(&completed_task, "eligible-after-completed")
+            .unwrap()
+            .is_some()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    wait_for_no_live_run(&completed_core, &completed_task).await;
+    completed_core.shutdown().await;
+
+    let unknown_root = tempfile::tempdir().unwrap();
+    let unknown_runs = Arc::new(AtomicUsize::new(0));
+    let unknown_context = Arc::new(Notify::new());
+    let unknown_done = Arc::new(Notify::new());
+    let unknown_task = uuid::Uuid::new_v4().to_string();
+    let unknown_core = assemble_codex_context(
+        unknown_root.path(),
+        unknown_runs.clone(),
+        unknown_context.clone(),
+        unknown_done.clone(),
+        CodexContextOutcome::Missing,
+    );
+    let unknown_client = zeron_rpc::memory_client(unknown_core.rpc_service());
+    create_codex_context_task(&unknown_client, &unknown_task, &unknown_core.device_id).await;
+    start_codex_context_run(&unknown_client, &unknown_task).await;
+    wait_for_context_status(
+        &unknown_core,
+        &unknown_task,
+        ContextOperationStatus::Running,
+    )
+    .await;
+    unknown_core
+        .doc_host
+        .queue_message_with_id_and_execution(
+            &unknown_task,
+            "eligible-after-unknown",
+            "must remain held without replay",
+            Vec::new(),
+            true,
+            FollowUpBehavior::Queue,
+            None,
+        )
+        .unwrap();
+    unknown_context.notify_one();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        unknown_core
+            .doc_host
+            .context_control(&unknown_task)
+            .unwrap()
+            .compact
+            .status,
+        ContextOperationStatus::Running,
+        "missing provider completion must remain Running until the real terminal boundary"
+    );
+    unknown_done.notify_one();
+    wait_for_context_status(
+        &unknown_core,
+        &unknown_task,
+        ContextOperationStatus::Unknown,
+    )
+    .await;
+    wait_for_no_live_run(&unknown_core, &unknown_task).await;
+    assert_eq!(unknown_runs.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        unknown_core
+            .doc_host
+            .queued_message(&unknown_task, "eligible-after-unknown")
+            .unwrap()
+            .unwrap()
+            .status,
+        QueueMessageStatus::Held
+    ));
+    for suffix in ["Running", "Unknown"] {
+        assert!(
+            unknown_core
+                .doc_host
+                .task_command_receipt(&format!("provider-context:{completed_operation}:{suffix}"))
+                .unwrap()
+                .is_none()
+        );
+    }
+    unknown_core.doc_host.flush_all();
+    unknown_core.shutdown().await;
+    drop(unknown_client);
+    drop(unknown_core);
+
+    let reopened = assemble_codex_context(
+        unknown_root.path(),
+        unknown_runs.clone(),
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+        CodexContextOutcome::Missing,
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        reopened
+            .doc_host
+            .context_control(&unknown_task)
+            .unwrap()
+            .compact
+            .status,
+        ContextOperationStatus::Unknown
+    );
+    assert!(matches!(
+        reopened
+            .doc_host
+            .queued_message(&unknown_task, "eligible-after-unknown")
+            .unwrap()
+            .unwrap()
+            .status,
+        QueueMessageStatus::Held
+    ));
+    assert_eq!(unknown_runs.load(Ordering::SeqCst), 1);
     reopened.shutdown().await;
 }
 

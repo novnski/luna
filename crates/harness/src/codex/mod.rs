@@ -63,9 +63,8 @@ use crate::process::{Child, Command, Stdio};
 use crate::{Harness, HarnessError, RunControls, SteerAcceptance};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
 use normalize::{
-    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_turn_id,
-    item_type, notification_thread_id, route_child_notification, turn_error_message, turn_id,
-    usage_event,
+    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_type,
+    notification_thread_id, route_child_notification, turn_error_message, turn_id, usage_event,
 };
 
 /// Engine-only model-option keys. They are consumed by this adapter and never
@@ -794,8 +793,8 @@ impl TurnRouter {
         self.completed.iter().any(|c| c == id)
     }
 
-    fn knows(&self, id: &str) -> bool {
-        !id.is_empty() && (self.active.as_deref() == Some(id) || self.is_completed(id))
+    fn active_id(&self) -> Option<&str> {
+        self.active.as_deref()
     }
 
     fn note_started(&mut self, id: String) {
@@ -1230,11 +1229,10 @@ async fn run_session(session: Session) {
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
                         if matches!(item_type(item), "contextCompaction" | "context_compaction") {
-                            let item_turn = item_turn_id(&params);
                             if let Some(event) = context_compactions.map_item(
                                 phase,
                                 &thread_id,
-                                router.knows(item_turn).then_some(item_turn),
+                                router.active_id(),
                                 &params,
                                 item,
                             ) && !send(&event_tx, event).await
@@ -1305,6 +1303,12 @@ async fn run_session(session: Session) {
 
                     "turn/completed" => {
                         let id = turn_id(&params);
+                        if let Some(event) = context_compactions
+                            .unknown_for_turn(&thread_id, &id)
+                            && !send(&event_tx, event).await
+                        {
+                            break 'main;
+                        }
                         clear_explicit_steer_turn(&mut explicit_steer_turn, &id);
                         router.note_completed(&id);
                         // Item ids never span turns; without this the set grew

@@ -372,6 +372,7 @@ struct Inner {
     reconcile_gates: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     device_id: String,
     codex: CodexNativeClient,
+    native_codex_metadata: bool,
     provider_home_identity: String,
     provider_instance_id: String,
     provider_profile_id: String,
@@ -390,7 +391,7 @@ impl TaskIdentityService {
         codex_home: PathBuf,
     ) -> Result<Self, EngineError> {
         let codex = CodexNativeClient::new(codex_home);
-        Self::open_with_codex_client(store, workspace, device_id, codex)
+        Self::open_with_codex_client_and_metadata(store, workspace, device_id, codex, true)
     }
 
     #[doc(hidden)]
@@ -399,6 +400,36 @@ impl TaskIdentityService {
         workspace: WorkspaceHost,
         device_id: &str,
         codex: CodexNativeClient,
+    ) -> Result<Self, EngineError> {
+        Self::open_with_codex_client_and_metadata(store, workspace, device_id, codex, true)
+    }
+
+    /// Hermetic fixture seam: Codex-shaped harness events still exercise the
+    /// production binding and context-control paths, while every provider
+    /// metadata mutation/read is disabled so no installed executable can be
+    /// discovered or spawned.
+    #[doc(hidden)]
+    pub fn open_without_codex_metadata(
+        store: Arc<DocsStore>,
+        workspace: WorkspaceHost,
+        device_id: &str,
+        codex_home: PathBuf,
+    ) -> Result<Self, EngineError> {
+        Self::open_with_codex_client_and_metadata(
+            store,
+            workspace,
+            device_id,
+            CodexNativeClient::new(codex_home),
+            false,
+        )
+    }
+
+    fn open_with_codex_client_and_metadata(
+        store: Arc<DocsStore>,
+        workspace: WorkspaceHost,
+        device_id: &str,
+        codex: CodexNativeClient,
+        native_codex_metadata: bool,
     ) -> Result<Self, EngineError> {
         let log = match store.load_snapshot(TASK_IDENTITY_LOG_ID)? {
             Some(bytes) => serde_json::from_slice::<TaskIdentityLog>(&bytes).map_err(|error| {
@@ -431,6 +462,7 @@ impl TaskIdentityService {
                 reconcile_gates: Mutex::new(HashMap::new()),
                 device_id: device_id.to_string(),
                 codex,
+                native_codex_metadata,
                 provider_home_identity,
                 provider_instance_id,
                 provider_profile_id,
@@ -895,7 +927,7 @@ impl TaskIdentityService {
                 "task workspace changed; an explicit binding generation is required".into(),
             ));
         }
-        if provider_id != HarnessId::Codex {
+        if provider_id != HarnessId::Codex || !self.inner.native_codex_metadata {
             // L06 has no provider-native reconciliation contract for this
             // harness. Keep the binding for ordinary engine-owned continuation
             // without treating the honest `unsupported` native state as a
@@ -960,6 +992,18 @@ impl TaskIdentityService {
                 provider: binding.reconciliation.provider.clone(),
             };
             self.record_reconciliation(&binding.binding_id, record)?;
+            return Ok(self.view(task_id).expect("task survives reconciliation"));
+        }
+        if !self.inner.native_codex_metadata {
+            self.record_reconciliation(
+                &binding.binding_id,
+                ReconciliationRecord {
+                    state: ReconciliationState::Unsupported,
+                    reason: "synthetic Codex harness has provider metadata access disabled".into(),
+                    observed_at_ms: now_ms(),
+                    provider: binding.reconciliation.provider.clone(),
+                },
+            )?;
             return Ok(self.view(task_id).expect("task survives reconciliation"));
         }
         let current = self.provider_identity(HarnessId::Codex);
@@ -1133,6 +1177,11 @@ impl TaskIdentityService {
         space_id: Option<&str>,
         device_id: Option<&str>,
     ) -> Result<ProviderImportPreview, EngineError> {
+        if !self.inner.native_codex_metadata {
+            return Err(EngineError::Other(
+                "provider metadata access is disabled for this synthetic runtime".into(),
+            ));
+        }
         if provider_id != HarnessId::Codex {
             return Err(EngineError::Other(format!(
                 "native imports are unsupported for {provider_id:?}"
@@ -1470,6 +1519,11 @@ impl TaskIdentityService {
             .cloned()
             .collect::<Vec<_>>();
         task_ids.sort();
+        if !self.inner.native_codex_metadata && !task_ids.is_empty() {
+            return Err(EngineError::Other(
+                "pending provider materialization is disabled for this synthetic runtime".into(),
+            ));
+        }
         let mut first_error = None;
         for task_id in task_ids {
             if let Err(error) = self.materialize_pending_task(&task_id).await {
@@ -1486,6 +1540,11 @@ impl TaskIdentityService {
     }
 
     async fn materialize_pending_task(&self, task_id: &str) -> Result<(), EngineError> {
+        if !self.inner.native_codex_metadata {
+            return Err(EngineError::Other(
+                "provider materialization is disabled for this synthetic runtime".into(),
+            ));
+        }
         let intent = lock(&self.inner.state)
             .projection
             .pending_materializations
@@ -1792,6 +1851,11 @@ impl TaskIdentityService {
     }
 
     fn mutable_codex_binding(&self, task_id: &str) -> Result<ExecutionBinding, EngineError> {
+        if !self.inner.native_codex_metadata {
+            return Err(EngineError::Other(
+                "provider metadata mutations are disabled for this synthetic runtime".into(),
+            ));
+        }
         if self.has_pending_materialization(task_id) {
             return Err(EngineError::Other(
                 "provider adoption is not fully materialized".into(),

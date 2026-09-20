@@ -227,5 +227,7 @@ fi
 
 echo "Launching synthetic-only LUNA L11 QA" >&2
 echo "Profile: $PROFILE" >&2
-echo "Compaction control: scripts/l11-fixture-control.sh '$PROFILE' running|completed|unknown" >&2
+echo "Manual Compact control: scripts/l11-fixture-control.sh '$PROFILE' running|completed|unknown" >&2
+echo "Automatic context task: L11 Synthetic Codex Auto Context (synthetic in-process Codex identity; native metadata disabled)" >&2
+echo "Automatic context control: scripts/l11-fixture-control.sh '$PROFILE' auto-running, then auto-completed|auto-unknown, then auto-done" >&2
 exec open -W "$APP" --args "$PROFILE" context-controls

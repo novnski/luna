@@ -22,9 +22,9 @@ use zeron_engine::{
 };
 use zeron_harness::{ContextCompactRequest, Harness, HarnessError, RunControls, SteerAcceptance};
 use zeron_proto::{
-    AgentEvent, ChatConfig, ComposerDraft, DoneStatus, DraftBlob, DraftBlobState, DraftContext,
-    HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
-    TaskLineage, ToolCall,
+    AgentEvent, ChatConfig, ComposerDraft, ContextOperationStatus, DoneStatus, DraftBlob,
+    DraftBlobState, DraftContext, HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest,
+    SandboxLevel, SteeringMode, TaskLineage, ToolCall,
 };
 use zeron_rpc::RpcService as _;
 use zeron_rpc::methods;
@@ -34,6 +34,7 @@ const TASK_A: &str = "l08-native-a";
 const TASK_B: &str = "l08-native-b";
 const L11_TASK_A: &str = "11111111-1111-4111-8111-111111111111";
 const L11_TASK_B: &str = "22222222-2222-4222-8222-222222222222";
+const L11_TASK_C: &str = "33333333-3333-4333-8333-333333333333";
 const L11_BOOTSTRAP_MARKER: &str = "l11-bootstrap-v2.complete";
 const L11_RICH_DRAFT_TEXT: &str = "L11 rich draft survives clear, restart, and provider handoff";
 const MEDIUM_REASONING: &[ReasoningLevel] = &[ReasoningLevel::Medium];
@@ -53,6 +54,7 @@ struct L09FixtureHarness {
     control_path: PathBuf,
     trace_path: PathBuf,
     compact_control: Option<L11CompactControl>,
+    automatic_context_control: bool,
 }
 
 #[derive(Clone)]
@@ -111,6 +113,9 @@ enum FixtureControlAction {
     Done,
     FailOverload,
     FailSubscription,
+    AutoContextRunning,
+    AutoContextCompleted,
+    AutoContextUnknown,
 }
 
 impl FixtureControlAction {
@@ -120,6 +125,9 @@ impl FixtureControlAction {
             Self::Done => "done",
             Self::FailOverload => "failOverload",
             Self::FailSubscription => "failSubscription",
+            Self::AutoContextRunning => "autoContextRunning",
+            Self::AutoContextCompleted => "autoContextCompleted",
+            Self::AutoContextUnknown => "autoContextUnknown",
         }
     }
 }
@@ -378,6 +386,7 @@ impl Harness for L09FixtureHarness {
             .unwrap_or_else(|| model_id.to_string());
         let control_path = self.control_path.clone();
         let trace_path = self.trace_path.clone();
+        let automatic_context_control = self.automatic_context_control;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             let session_id = request.resume.clone().unwrap_or_else(|| {
@@ -424,7 +433,7 @@ impl Harness for L09FixtureHarness {
                     "{generation} isolated synthetic turn accepted. No provider was contacted."
                 ),
             }));
-            if generation == "L11" {
+            if generation == "L11" && !automatic_context_control {
                 let _ = tx.send(Ok(AgentEvent::ContextUsage {
                     tokens: Some(42_000),
                     window: Some(200_000),
@@ -449,6 +458,7 @@ impl Harness for L09FixtureHarness {
             let mut control_poll = tokio::time::interval(Duration::from_millis(100));
             let mut steering_open = true;
             let mut tool_emitted = false;
+            let mut active_context_operation: Option<String> = None;
             let (status, done_error) = loop {
                 tokio::select! {
                     _ = interrupt.cancelled() => {
@@ -538,6 +548,83 @@ impl Harness for L09FixtureHarness {
                                     }),
                                 );
                                 break (DoneStatus::Errored, Some(message));
+                            }
+                            FixtureControlAction::AutoContextRunning
+                                if automatic_context_control
+                                    && active_context_operation.is_none() =>
+                            {
+                                let operation_id = format!(
+                                    "codex-auto:{session_id}:fixture-turn:fixture-compact-{}",
+                                    command.sequence
+                                );
+                                active_context_operation = Some(operation_id.clone());
+                                lifecycle.trace(
+                                    &session_id,
+                                    "automaticContextRunning",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "operationId": operation_id,
+                                        "syntheticOnly": true,
+                                    }),
+                                );
+                                let _ = tx.send(Ok(AgentEvent::ContextCompaction {
+                                    operation_id,
+                                    status: ContextOperationStatus::Running,
+                                    thread_id: session_id.clone(),
+                                    turn_id: "fixture-turn".into(),
+                                }));
+                            }
+                            FixtureControlAction::AutoContextCompleted
+                            | FixtureControlAction::AutoContextUnknown
+                                if automatic_context_control
+                                    && active_context_operation.is_some() =>
+                            {
+                                let operation_id = active_context_operation
+                                    .take()
+                                    .expect("checked synthetic context operation");
+                                let status = if command.action
+                                    == FixtureControlAction::AutoContextCompleted
+                                {
+                                    ContextOperationStatus::Completed
+                                } else {
+                                    ContextOperationStatus::Unknown
+                                };
+                                lifecycle.trace(
+                                    &session_id,
+                                    if status == ContextOperationStatus::Completed {
+                                        "automaticContextCompleted"
+                                    } else {
+                                        "automaticContextUnknown"
+                                    },
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "operationId": operation_id,
+                                        "syntheticOnly": true,
+                                    }),
+                                );
+                                let _ = tx.send(Ok(AgentEvent::ContextCompaction {
+                                    operation_id,
+                                    status,
+                                    thread_id: session_id.clone(),
+                                    turn_id: "fixture-turn".into(),
+                                }));
+                            }
+                            FixtureControlAction::AutoContextRunning
+                            | FixtureControlAction::AutoContextCompleted
+                            | FixtureControlAction::AutoContextUnknown => {
+                                lifecycle.trace(
+                                    &session_id,
+                                    "controlIgnored",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "action": command.action.as_str(),
+                                        "reason": if automatic_context_control {
+                                            "automaticContextStateMismatch"
+                                        } else {
+                                            "automaticContextUnsupportedForHarness"
+                                        },
+                                    }),
+                                );
                             }
                         }
                     }
@@ -950,6 +1037,15 @@ fn l11_run_request(project: &Path) -> RunRequest {
     }
 }
 
+#[cfg(test)]
+fn l11_codex_context_request(project: &Path) -> RunRequest {
+    let mut request = l11_run_request(project);
+    request.prompt = "L11 synthetic Codex automatic context lifecycle".into();
+    request.harness = Some(HarnessId::Codex);
+    request.model = Some("l11-codex-synthetic".into());
+    request
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum L11SeedCheckpoint {
     Complete,
@@ -1011,10 +1107,19 @@ async fn execute_l11_fenced_command(
     command_id: &str,
     intent: serde_json::Value,
 ) -> anyhow::Result<zeron_proto::CommandReceipt> {
+    execute_l11_task_fenced_command(core, L11_TASK_A, command_id, intent).await
+}
+
+async fn execute_l11_task_fenced_command(
+    core: &EngineCore,
+    task_id: &str,
+    command_id: &str,
+    intent: serde_json::Value,
+) -> anyhow::Result<zeron_proto::CommandReceipt> {
     let read: zeron_proto::TaskCommandRead = l11_rpc_call(
         core,
         methods::GET_TASK_COMMAND_SNAPSHOT,
-        serde_json::json!({ "taskId": L11_TASK_A }),
+        serde_json::json!({ "taskId": task_id }),
     )
     .await?;
     let mut envelope = serde_json::json!({
@@ -1022,7 +1127,7 @@ async fn execute_l11_fenced_command(
         "actorId":"l11-native-fixture",
         "clientId":"l11-native-fixture",
         "clientSessionId":"isolated",
-        "taskId":L11_TASK_A,
+        "taskId":task_id,
         "intent":intent,
     });
     if let Some(generation) = read.snapshot.binding_generation {
@@ -1329,8 +1434,16 @@ fn initialize_fixture_workspace(
         let cwd = project.to_string_lossy();
         let task_a_exists = existing.iter().any(|chat| chat.id == L11_TASK_A);
         let task_b_exists = existing.iter().any(|chat| chat.id == L11_TASK_B);
+        let task_c_exists = existing.iter().any(|chat| chat.id == L11_TASK_C);
         core.task_identity.register_new_task(
             L11_TASK_A,
+            None,
+            Some(&core.device_id),
+            Some(cwd.as_ref()),
+            TaskLineage::default(),
+        )?;
+        core.task_identity.register_new_task(
+            L11_TASK_C,
             None,
             Some(&core.device_id),
             Some(cwd.as_ref()),
@@ -1364,6 +1477,20 @@ fn initialize_fixture_workspace(
             )?;
             core.workspace
                 .rename_chat(L11_TASK_B, "L11 Synthetic Handoff Target")?;
+        }
+        if !task_c_exists {
+            core.workspace.create_chat(
+                L11_TASK_C,
+                None,
+                Some(&core.device_id),
+                Some(l11_fixture_chat_config(
+                    HarnessId::Codex,
+                    "l11-codex-synthetic",
+                )),
+                Some(project.to_string_lossy().into_owned()),
+            )?;
+            core.workspace
+                .rename_chat(L11_TASK_C, "L11 Synthetic Codex Auto Context")?;
         }
         return Ok(FixtureStartup {
             task_id: L11_TASK_A,
@@ -1435,18 +1562,27 @@ fn register_l11_harnesses(registry: &HarnessRegistry, root: &Path) {
         trace_path: root.join("l11-context-control-trace.jsonl"),
         safety_deadline: fixture_safety_deadline(),
     };
-    for (harness_id, display_name, model_id, alternate_model_id) in [
+    for (harness_id, display_name, model_id, alternate_model_id, automatic_context_control) in [
         (
             HarnessId::Mock,
             "L11 QA Mock A",
             "l11-mock-a",
             "l11-mock-a-alt",
+            false,
         ),
         (
             HarnessId::Opencode,
             "L11 QA Mock B · no executable",
             "l11-mock-b",
             "l11-mock-b-alt",
+            false,
+        ),
+        (
+            HarnessId::Codex,
+            "L11 QA Synthetic Codex · no executable",
+            "l11-codex-synthetic",
+            "l11-codex-synthetic-alt",
+            true,
         ),
     ] {
         registry.register(Arc::new(L09FixtureHarness {
@@ -1460,7 +1596,8 @@ fn register_l11_harnesses(registry: &HarnessRegistry, root: &Path) {
             steer_outcome: FixtureSteerOutcome::Incorporated,
             control_path: root.join("l11-fixture-control.json"),
             trace_path: root.join("l11-context-control-trace.jsonl"),
-            compact_control: Some(compact_control.clone()),
+            compact_control: (!automatic_context_control).then(|| compact_control.clone()),
+            automatic_context_control,
         }));
     }
 }
@@ -1513,28 +1650,40 @@ fn main() -> anyhow::Result<()> {
                 "l09-fixture-control-trace.jsonl"
             }),
             compact_control: None,
+            automatic_context_control: false,
         }));
     }
     let core = runtime.block_on(async {
-        EngineCore::assemble_with_profile_and_agent_accounts_config(
-            EngineProfile::development(
-                &engine_data,
-                if l11 {
-                    "l11-native-org"
-                } else {
-                    "l08-native-org"
-                },
-                if l11 {
-                    "l11-native-user"
-                } else {
-                    "l08-native-user"
-                },
-            ),
-            Arc::new(registry),
-            HarnessId::Mock,
-            None,
-            accounts,
-        )
+        let profile = EngineProfile::development(
+            &engine_data,
+            if l11 {
+                "l11-native-org"
+            } else {
+                "l08-native-org"
+            },
+            if l11 {
+                "l11-native-user"
+            } else {
+                "l08-native-user"
+            },
+        );
+        if l11 {
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                profile,
+                Arc::new(registry),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )
+        } else {
+            EngineCore::assemble_with_profile_and_agent_accounts_config(
+                profile,
+                Arc::new(registry),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )
+        }
     })?;
     // The fixture deliberately separates engine stores from UI preferences;
     // point the recovery policy at the same isolated settings file the native
@@ -1694,14 +1843,19 @@ mod tests {
         accounts.disable_claude_keychain_fallback().unwrap();
         let registry = HarnessRegistry::new();
         register_l11_harnesses(&registry, root);
-        let core = EngineCore::assemble_with_profile_and_agent_accounts_config(
-            EngineProfile::development(&root.join("engine"), "l11-native-org", "l11-native-user"),
-            Arc::new(registry),
-            HarnessId::Mock,
-            None,
-            accounts,
-        )
-        .unwrap();
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                EngineProfile::development(
+                    &root.join("engine"),
+                    "l11-native-org",
+                    "l11-native-user",
+                ),
+                Arc::new(registry),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )
+            .unwrap();
         let mut auth_config = AuthConfig::new("http://127.0.0.1:1", root.join("auth"));
         auth_config.dev_user_id = "l11-fixture-user".into();
         auth_config.use_in_memory_credentials_for_tests();
@@ -1738,6 +1892,16 @@ mod tests {
         .unwrap();
     }
 
+    fn write_control_atomic(path: &Path, sequence: u64, action: &str) {
+        let temp = path.with_extension("json.tmp");
+        std::fs::write(
+            &temp,
+            serde_json::json!({ "sequence": sequence, "action": action }).to_string(),
+        )
+        .unwrap();
+        std::fs::rename(temp, path).unwrap();
+    }
+
     fn write_l11_compact_control(path: &Path, sequence: u64, outcome: &str) {
         std::fs::write(
             path,
@@ -1772,6 +1936,22 @@ mod tests {
         .unwrap_or_else(|_| panic!("trace never recorded {event}"));
     }
 
+    async fn wait_for_trace_count(path: &Path, event: &str, count: usize) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_to_string(path)
+                    .ok()
+                    .is_some_and(|trace| trace.matches(event).count() >= count)
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("trace never recorded {event} {count} times"));
+    }
+
     #[test]
     fn fixture_startup_loads_saved_settings_and_fresh_roots_default() {
         let fresh = tempfile::tempdir().unwrap();
@@ -1804,6 +1984,9 @@ mod tests {
         assert!(!first.stage_draft_evidence);
         assert!(core.task_identity.view(L11_TASK_A).is_some());
         assert!(core.task_identity.view(L11_TASK_B).is_some());
+        assert!(core.task_identity.view(L11_TASK_C).is_some());
+        let codex_chat = core.workspace.chat(L11_TASK_C).unwrap().unwrap();
+        assert_eq!(codex_chat.config.unwrap().harness, HarnessId::Codex);
         let chat = core.workspace.chat(L11_TASK_A).unwrap().unwrap();
         let config = chat.config.unwrap();
         assert_eq!(config.harness, HarnessId::Mock);
@@ -2105,6 +2288,166 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn l11_synthetic_codex_controls_production_automatic_context_projection() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble_l11_fixture_test_core(root.path());
+        initialize_fixture_workspace(&core, root.path(), "context-controls").unwrap();
+        let chat = core.workspace.chat(L11_TASK_C).unwrap().unwrap();
+        assert_eq!(chat.config.as_ref().unwrap().harness, HarnessId::Codex);
+        assert_eq!(
+            chat.title.as_deref(),
+            Some("L11 Synthetic Codex Auto Context")
+        );
+
+        let start = execute_l11_task_fenced_command(
+            &core,
+            L11_TASK_C,
+            "l11-synthetic-codex-auto-completed",
+            serde_json::json!({
+                "kind":"session",
+                "command": {
+                    "kind":"run",
+                    "messageId":"l11-synthetic-codex-auto-completed-message",
+                    "request":l11_codex_context_request(&l11_fixture_project(root.path()))
+                },
+                "transfers":[]
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            start.status,
+            zeron_proto::CommandReceiptStatus::Pending | zeron_proto::CommandReceiptStatus::Applied
+        ));
+        let trace = root.path().join("l11-context-control-trace.jsonl");
+        let control = root.path().join("l11-fixture-control.json");
+        wait_for_trace(&trace, "runStarted").await;
+        write_control_atomic(&control, 1, "autoContextRunning");
+        wait_for_trace(&trace, "automaticContextRunning").await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while core
+                .doc_host
+                .context_control(L11_TASK_C)
+                .unwrap()
+                .compact
+                .status
+                != ContextOperationStatus::Running
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        write_control_atomic(&control, 2, "autoContextCompleted");
+        wait_for_trace(&trace, "automaticContextCompleted").await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while core
+                .doc_host
+                .context_control(L11_TASK_C)
+                .unwrap()
+                .compact
+                .status
+                != ContextOperationStatus::Completed
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        write_control_atomic(&control, 3, "done");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while core.sessions.has_live_run(L11_TASK_C) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let second = execute_l11_task_fenced_command(
+            &core,
+            L11_TASK_C,
+            "l11-synthetic-codex-auto-unknown",
+            serde_json::json!({
+                "kind":"session",
+                "command": {
+                    "kind":"run",
+                    "messageId":"l11-synthetic-codex-auto-unknown-message",
+                    "request":l11_codex_context_request(&l11_fixture_project(root.path()))
+                },
+                "transfers":[]
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            second.status,
+            zeron_proto::CommandReceiptStatus::Pending | zeron_proto::CommandReceiptStatus::Applied
+        ));
+        wait_for_trace_count(&trace, "runStarted", 2).await;
+        write_control_atomic(&control, 4, "autoContextRunning");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while core
+                .doc_host
+                .context_control(L11_TASK_C)
+                .unwrap()
+                .compact
+                .status
+                != ContextOperationStatus::Running
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        write_control_atomic(&control, 5, "autoContextUnknown");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while core
+                .doc_host
+                .context_control(L11_TASK_C)
+                .unwrap()
+                .compact
+                .status
+                != ContextOperationStatus::Unknown
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        write_control_atomic(&control, 6, "done");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while core.sessions.has_live_run(L11_TASK_C) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let view = core
+            .task_identity
+            .reconcile_task(L11_TASK_C, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            view.current_binding.unwrap().reconciliation.state,
+            zeron_proto::ReconciliationState::Unsupported
+        );
+        assert!(
+            core.task_identity
+                .set_provider_name(L11_TASK_C, "must not reach provider metadata")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("disabled for this synthetic runtime")
+        );
+        assert!(
+            std::fs::read_to_string(&trace)
+                .unwrap()
+                .contains("\"syntheticOnly\":true")
+        );
+        core.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn l11_ipc_compact_consumes_script_control_and_applies_receipt() {
         let root = tempfile::tempdir().unwrap();
         let core = assemble_l11_fixture_test_core(root.path());
@@ -2275,6 +2618,7 @@ mod tests {
             control_path: command.clone(),
             trace_path: trace.clone(),
             compact_control: None,
+            automatic_context_control: false,
         };
         let (steering_tx, steering_rx) = tokio::sync::mpsc::channel(1);
         let controls = RunControls {

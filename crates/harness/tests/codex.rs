@@ -344,6 +344,99 @@ async fn automatic_context_compaction_is_correlated_and_never_completes_the_turn
 }
 
 #[tokio::test]
+async fn stale_turn_and_duplicate_full_compaction_lifecycles_are_ignored() {
+    let (run_controls, _steer, _token) = controls("Yes");
+    let events = run_to_end(
+        &harness(),
+        request("scenario:auto-context-stale-duplicate"),
+        run_controls,
+    )
+    .await;
+    let lifecycle = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ContextCompaction {
+                operation_id,
+                status,
+                turn_id,
+                ..
+            } => Some((operation_id, status, turn_id)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(lifecycle.len(), 2, "{events:?}");
+    assert_eq!(lifecycle[0].1, &ContextOperationStatus::Running);
+    assert_eq!(lifecycle[1].1, &ContextOperationStatus::Completed);
+    assert_eq!(lifecycle[0].0, lifecycle[1].0);
+    assert_eq!(lifecycle[0].2.as_str(), "t-current-b");
+    assert!(
+        lifecycle
+            .iter()
+            .all(|(_, _, turn)| turn.as_str() != "t-stale-a"),
+        "a completed turn must not reopen a compaction slot"
+    );
+}
+
+#[tokio::test]
+async fn canonical_terminal_turn_resolves_pending_compaction_before_done() {
+    for (scenario, expected_done) in [
+        ("scenario:auto-context-terminal-failed", DoneStatus::Errored),
+        (
+            "scenario:auto-context-terminal-success-missing",
+            DoneStatus::Completed,
+        ),
+    ] {
+        let (run_controls, steer, token) = controls("Yes");
+        let harness = harness();
+        let mut stream = harness
+            .run(request(scenario), run_controls)
+            .await
+            .expect("run starts");
+        let events = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                let event = event.expect("stream event");
+                let done = matches!(event, AgentEvent::Done { .. });
+                events.push(event);
+                if done {
+                    break;
+                }
+            }
+            events
+        })
+        .await
+        .expect("terminal event arrived");
+        let lifecycle = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::ContextCompaction { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lifecycle,
+            vec![
+                ContextOperationStatus::Running,
+                ContextOperationStatus::Unknown
+            ],
+            "{scenario}: {events:?}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(AgentEvent::Done { status, .. }) if *status == expected_done
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), stream.next())
+                .await
+                .is_err(),
+            "{scenario}: the provider process and steering mailbox must still be open after Done"
+        );
+        drop(steer);
+        token.cancel();
+    }
+}
+
+#[tokio::test]
 async fn interrupted_or_disconnected_automatic_compaction_becomes_unknown_once() {
     for (scenario, expected_done) in [
         ("scenario:auto-context-interrupted", DoneStatus::Interrupted),

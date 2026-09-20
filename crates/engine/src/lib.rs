@@ -252,6 +252,7 @@ impl EngineCore {
             edge,
             lock,
             None,
+            true,
         )
     }
 
@@ -276,6 +277,33 @@ impl EngineCore {
             edge,
             lock,
             Some(agent_accounts_config),
+            true,
+        )
+    }
+
+    /// Hermetic fixture/test assembly. Codex-shaped in-process harnesses can
+    /// exercise production identity and lifecycle reducers, but native Codex
+    /// metadata discovery/mutation is disabled and cannot resolve an installed
+    /// executable.
+    #[doc(hidden)]
+    pub fn assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        profile: EngineProfile,
+        registry: Arc<HarnessRegistry>,
+        default_harness: HarnessId,
+        edge: Option<EdgeConfig>,
+        agent_accounts_config: AgentAccountsConfig,
+    ) -> Result<Self, EngineError> {
+        let data_dir = profile.device_root();
+        std::fs::create_dir_all(data_dir)?;
+        let lock = InstanceLock::acquire(data_dir)?;
+        Self::assemble_with_profile_locked_and_accounts(
+            profile,
+            registry,
+            default_harness,
+            edge,
+            lock,
+            Some(agent_accounts_config),
+            false,
         )
     }
 
@@ -286,6 +314,7 @@ impl EngineCore {
         edge: Option<EdgeConfig>,
         lock: InstanceLock,
         agent_accounts_config: Option<AgentAccountsConfig>,
+        native_codex_metadata: bool,
     ) -> Result<Self, EngineError> {
         let data_dir = profile.device_root();
         std::fs::create_dir_all(data_dir)?;
@@ -321,12 +350,21 @@ impl EngineCore {
         )?;
         let agent_accounts_config =
             agent_accounts_config.unwrap_or_else(|| AgentAccountsConfig::detect(data_dir));
-        let task_identity = TaskIdentityService::open(
-            store.clone(),
-            workspace.clone(),
-            &device_id,
-            agent_accounts_config.codex_home.clone(),
-        )?;
+        let task_identity = if native_codex_metadata {
+            TaskIdentityService::open(
+                store.clone(),
+                workspace.clone(),
+                &device_id,
+                agent_accounts_config.codex_home.clone(),
+            )?
+        } else {
+            TaskIdentityService::open_without_codex_metadata(
+                store.clone(),
+                workspace.clone(),
+                &device_id,
+                agent_accounts_config.codex_home.clone(),
+            )?
+        };
         doc_host.set_workspace(workspace.clone());
         doc_host.set_sessions(sessions.clone());
         sessions.set_doc_host(doc_host.clone());

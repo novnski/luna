@@ -3134,6 +3134,26 @@ fn reduce_provider_context_compaction(
     }
 }
 
+fn reduce_provider_context_terminal(
+    current: &ContextControlState,
+    bound_thread_id: &str,
+    binding_generation: u32,
+) -> Option<ContextControlState> {
+    let operation_id = current.compact.operation_id.as_deref()?;
+    if !operation_id.starts_with(&format!("codex-auto:{bound_thread_id}:")) {
+        return None;
+    }
+    reduce_provider_context_compaction(
+        current,
+        bound_thread_id,
+        binding_generation,
+        operation_id,
+        ContextOperationStatus::Unknown,
+        bound_thread_id,
+    )
+    .map(|(next, _)| next)
+}
+
 fn frozen_run_for_message(
     handle: &ChatDocHandle,
     message_id: &str,
@@ -3778,6 +3798,36 @@ async fn drive_run(
                 tracing::warn!(chat = %chat_id, %operation_id, %error, "context compaction state write failed");
             }
             continue;
+        }
+        if harness_id == HarnessId::Codex && matches!(&event, AgentEvent::Done { .. }) {
+            let binding = inner
+                .task_identity
+                .get()
+                .and_then(|identity| identity.view(&chat_id))
+                .and_then(|view| view.current_binding)
+                .filter(|binding| binding.provider_id == HarnessId::Codex);
+            if let (Some(binding), Some(host)) = (binding, inner.doc_host())
+                && let Ok(current) = host.context_control(&chat_id)
+                && let Some(next) = reduce_provider_context_terminal(
+                    &current,
+                    &binding.provider_task_id,
+                    binding.generation,
+                )
+            {
+                let operation_id = next
+                    .compact
+                    .operation_id
+                    .as_deref()
+                    .unwrap_or("unknown-operation");
+                if let Err(error) = host.persist_provider_context_control(
+                    &chat_id,
+                    &format!("provider-context:{operation_id}:terminal:{run_id}"),
+                    &next,
+                    false,
+                ) {
+                    tracing::warn!(chat = %chat_id, %operation_id, %error, "terminal Codex context compaction state write failed");
+                }
+            }
         }
         // PARKED: a steer boundary, a terminal Done, or SELF-CONTINUED OUTPUT
         // re-opens the session; everything else stays gated. The ACP child
@@ -4458,8 +4508,8 @@ async fn drive_run(
 mod tests {
     use super::{
         PendingInput, RunHandle, RuntimeConfig, SessionsEngine, approval_answer,
-        expire_pending_approval, lock, reduce_provider_context_compaction, subagent_doc_id,
-        take_pending_ordinary_input,
+        expire_pending_approval, lock, reduce_provider_context_compaction,
+        reduce_provider_context_terminal, subagent_doc_id, take_pending_ordinary_input,
     };
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
@@ -4506,13 +4556,14 @@ mod tests {
 
     #[test]
     fn provider_context_compaction_is_bound_to_generation_and_operation() {
+        let operation = "codex-auto:thread-1:turn-1:item-1";
         let current = ContextControlState::default();
         assert!(
             reduce_provider_context_compaction(
                 &current,
                 "thread-1",
                 4,
-                "auto-1",
+                operation,
                 ContextOperationStatus::Running,
                 "stale-thread",
             )
@@ -4522,7 +4573,7 @@ mod tests {
             &current,
             "thread-1",
             4,
-            "auto-1",
+            operation,
             ContextOperationStatus::Running,
             "thread-1",
         )
@@ -4546,7 +4597,7 @@ mod tests {
                 &running,
                 "thread-1",
                 5,
-                "auto-1",
+                operation,
                 ContextOperationStatus::Completed,
                 "thread-1",
             )
@@ -4557,7 +4608,7 @@ mod tests {
             &running,
             "thread-1",
             4,
-            "auto-1",
+            operation,
             ContextOperationStatus::Completed,
             "thread-1",
         )
@@ -4565,6 +4616,11 @@ mod tests {
         assert!(clear_usage);
         assert_eq!(completed.compact.status, ContextOperationStatus::Completed);
         assert!(completed.provider_summary.is_none());
+        assert!(reduce_provider_context_terminal(&completed, "thread-1", 4).is_none());
+
+        let terminal = reduce_provider_context_terminal(&running, "thread-1", 4).unwrap();
+        assert_eq!(terminal.compact.status, ContextOperationStatus::Unknown);
+        assert!(terminal.compact.detail.unwrap().contains("will not replay"));
     }
 
     #[tokio::test]
