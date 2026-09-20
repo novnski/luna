@@ -5722,26 +5722,41 @@ impl DocHost {
             .is_some()
             .then_some("Reload task state; never replay this control against a replacement binding or turn.")
             .or(resolution);
-        let stop_recovery = (receipt_status == CommandReceiptStatus::Applied)
-            .then(|| {
-                handle
-                    .doc
-                    .read_commands()
-                    .ok()?
-                    .into_iter()
-                    .find(|command| command.id == command_id)
-                    .filter(|command| {
-                        matches!(command.payload, SessionCommandPayload::Interrupt {})
-                    })?;
-                self.sessions()?
-                    .prepare_hold_recovery(
-                        &handle.chat_id,
-                        "Recovery held by Stop. Queued work and partial output were preserved.",
-                    )
-                    .ok()
-                    .flatten()
-            })
-            .flatten();
+        let stop_command = if receipt_status == CommandReceiptStatus::Applied {
+            match handle.doc.read_commands() {
+                Ok(commands) => commands.into_iter().any(|command| {
+                    command.id == command_id
+                        && matches!(command.payload, SessionCommandPayload::Interrupt {})
+                }),
+                Err(error) => {
+                    tracing::error!(chat = %handle.chat_id, command = %command_id, %error,
+                        "Stop receipt finalization could not read its durable command");
+                    return;
+                }
+            }
+        } else {
+            false
+        };
+        let stop_recovery = if stop_command {
+            let Some(sessions) = self.sessions() else {
+                tracing::error!(chat = %handle.chat_id, command = %command_id,
+                    "Stop receipt finalization lost the sessions recovery authority");
+                return;
+            };
+            match sessions.prepare_hold_recovery(
+                &handle.chat_id,
+                "Recovery held by Stop. Queued work and partial output were preserved.",
+            ) {
+                Ok(change) => change,
+                Err(error) => {
+                    tracing::error!(chat = %handle.chat_id, command = %command_id, %error,
+                        "Stop receipt finalization could not prepare its durable recovery hold");
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let result = if let Some(change) = stop_recovery.as_ref() {
             match change.storage_transition() {
                 Ok(transition) => self.complete_task_command_with_recovery(

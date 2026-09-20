@@ -27,8 +27,8 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast, mpsc, oneshot
 
 use zeron_doc::{
     DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter,
-    SessionCommandPayload, SessionDoc, SessionMessageEntry, fold_event_into_parts,
-    sanitize_tool_call,
+    SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry,
+    fold_event_into_parts, sanitize_tool_call,
 };
 use zeron_harness::{
     CancellationToken, Harness, HarnessError, RunControls, SteerAcceptance, SteerMessage,
@@ -1961,6 +1961,23 @@ impl SessionsEngine {
         let stale = self.inner.journal.stale_sessions()?;
         let mut recovered = 0usize;
         let mut reconciled_running = std::collections::HashSet::new();
+        // Stop is authoritative even when the process died after the doc
+        // command landed but before receipt/recovery finalization. Restore the
+        // hold before any stale/terminal sweep can make the chain runnable.
+        for record in self.inner.recovery.latest_records()? {
+            if !record.view.status.active() {
+                continue;
+            }
+            let handle = self.doc_handle(&record.view.task_id)?;
+            if frozen_run_for_message(&handle, &record.view.original_message_id)?
+                .is_some_and(|run| run.stopped)
+            {
+                self.hold_recovery(
+                    &record.view.task_id,
+                    "Recovery held by Stop. Queued work and partial output were preserved.",
+                )?;
+            }
+        }
         for chat_id in stale {
             if lock(&self.inner.runs).contains_key(&chat_id) {
                 continue; // a live run owns this journal
@@ -2055,10 +2072,14 @@ impl SessionsEngine {
             } else {
                 RecoveryAcceptance::Unknown
             };
-            let Some(request) = frozen else {
+            let Some(frozen) = frozen else {
                 tracing::warn!(chat = %chat_id, "recovery has no exact frozen Run command; refusing reconstruction");
                 continue;
             };
+            if frozen.stopped {
+                continue;
+            }
+            let request = frozen.request;
             let Some(host) = self.inner.doc_host() else {
                 continue;
             };
@@ -2108,7 +2129,12 @@ impl SessionsEngine {
                 let AgentEvent::Done { status, error, .. } = &replay[done_index].1 else {
                     continue;
                 };
-                if *status == DoneStatus::Completed {
+                // A terminal Interrupted event is an authoritative engine/user
+                // interruption (Stop, shutdown, or equivalent), not evidence
+                // of a crash. Actual process loss is the non-terminal journal
+                // path above, which appends its own synthetic Done only after
+                // constructing fail-closed recovery.
+                if matches!(status, DoneStatus::Completed | DoneStatus::Interrupted) {
                     continue;
                 }
                 let handle = self.doc_handle(&chat.id)?;
@@ -2123,11 +2149,19 @@ impl SessionsEngine {
                 {
                     continue;
                 }
-                let Some(request) = frozen_run_for_message(&handle, &message_id)? else {
+                let Some(frozen) = frozen_run_for_message(&handle, &message_id)? else {
                     tracing::warn!(chat = %chat.id, message = %message_id,
                         "terminal recovery has no exact frozen Run command; refusing reconstruction");
                     continue;
                 };
+                if frozen.stopped {
+                    continue;
+                }
+                let FrozenRun {
+                    command_id,
+                    request,
+                    stopped: _,
+                } = frozen;
                 let previous_done = replay[..done_index]
                     .iter()
                     .rposition(|(_, event)| matches!(event, AgentEvent::Done { .. }));
@@ -2147,7 +2181,14 @@ impl SessionsEngine {
                 let Some(host) = self.inner.doc_host() else {
                     continue;
                 };
-                let receipt = host.task_command_receipt_for_correlation(&chat.id, &message_id)?;
+                let receipt = host
+                    .task_command_receipt_for_correlation(&chat.id, &message_id)?
+                    .filter(|receipt| receipt.command_id == command_id);
+                // `inner.publish(SessionStarted)` appends+flushes the journal
+                // before `confirm_task_command_correlation` can mark this exact
+                // Run receipt Applied. Without both the command id match and
+                // that Applied fence, the last terminal segment may belong to
+                // an older execution and its session identity is unusable.
                 let acceptance = match receipt.as_ref().map(|receipt| receipt.status) {
                     Some(CommandReceiptStatus::Applied) => RecoveryAcceptance::Accepted,
                     Some(CommandReceiptStatus::Rejected) => {
@@ -2158,11 +2199,7 @@ impl SessionsEngine {
                 let failure_detail = error
                     .clone()
                     .unwrap_or_else(|| "provider turn ended before recovery persisted".into());
-                let failure = if *status == DoneStatus::Interrupted {
-                    RecoveryFailure::Interrupted
-                } else {
-                    classify_failure(&failure_detail)
-                };
+                let failure = classify_failure(&failure_detail);
                 let harness = if acceptance == RecoveryAcceptance::Accepted {
                     accepted_session
                         .as_ref()
@@ -2982,19 +3019,38 @@ fn latest_user_message_id(handle: &ChatDocHandle) -> Result<Option<String>, Engi
 fn frozen_run_for_message(
     handle: &ChatDocHandle,
     message_id: &str,
-) -> Result<Option<RunRequest>, EngineError> {
-    Ok(handle
-        .doc()
-        .read_commands()?
-        .into_iter()
-        .rev()
-        .find_map(|command| match command.payload {
-            SessionCommandPayload::Run {
-                request,
-                message_id: candidate,
-            } if candidate == message_id => Some(request),
-            _ => None,
-        }))
+) -> Result<Option<FrozenRun>, EngineError> {
+    let commands = handle.doc().read_commands()?;
+    let Some((run_index, command_id, request)) =
+        commands
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, command)| match &command.payload {
+                SessionCommandPayload::Run {
+                    request,
+                    message_id: candidate,
+                } if candidate == message_id => Some((index, command.id.clone(), request.clone())),
+                _ => None,
+            })
+    else {
+        return Ok(None);
+    };
+    let stopped = commands.iter().skip(run_index + 1).any(|command| {
+        command.status == SessionCommandStatus::Applied
+            && matches!(command.payload, SessionCommandPayload::Interrupt {})
+    });
+    Ok(Some(FrozenRun {
+        command_id,
+        request,
+        stopped,
+    }))
+}
+
+struct FrozenRun {
+    command_id: String,
+    request: RunRequest,
+    stopped: bool,
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -31,6 +31,7 @@ enum FirstOutcome {
     AcceptedOverloadThenPending,
     AcceptedThenContinuationRejected,
     AcceptedThenContinuationUnknown,
+    OriginalPending,
     UnknownTransport,
 }
 
@@ -104,6 +105,23 @@ impl Harness for RecoveryHarness {
             .resume
             .clone()
             .unwrap_or_else(|| "l10-provider-session".into());
+        if run == 0 && matches!(self.outcome, FirstOutcome::OriginalPending) {
+            return Ok(futures::stream::iter(vec![
+                Ok(AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: request.model.unwrap_or_else(|| "mock-1".into()),
+                    tools: Vec::new(),
+                    cwd: request.cwd,
+                    session_id,
+                    assistant_message_id: "assistant-stopped".into(),
+                }),
+                Ok(AgentEvent::TextDelta {
+                    text: "partial output before explicit Stop".into(),
+                }),
+            ])
+            .chain(futures::stream::pending())
+            .boxed());
+        }
         if run == 1 && matches!(self.outcome, FirstOutcome::AcceptedOverloadThenPending) {
             return Ok(futures::stream::once(async move {
                 Ok(AgentEvent::SessionStarted {
@@ -273,6 +291,12 @@ async fn command(client: &RpcClient, id: &str, intent: serde_json::Value) -> Com
                 | "setProviderAccount"
         )
     );
+    let requires_turn = intent.get("kind").and_then(serde_json::Value::as_str) == Some("session")
+        && intent
+            .get("command")
+            .and_then(|command| command.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("interrupt");
     let mut value = serde_json::json!({
         "commandId":id,
         "actorId":"l10-test",
@@ -286,6 +310,9 @@ async fn command(client: &RpcClient, id: &str, intent: serde_json::Value) -> Com
     }
     if requires_revision {
         value["expectedTaskRevision"] = snapshot.snapshot.task_revision.into();
+    }
+    if requires_turn && let Some(turn_id) = snapshot.snapshot.active_turn_id {
+        value["expectedTurnId"] = turn_id.into();
     }
     client
         .call_as(methods::EXECUTE_TASK_COMMAND, value)
@@ -320,6 +347,40 @@ async fn wait_for_recovery(core: &EngineCore, status: RecoveryStatus) -> zeron_p
         assert!(
             tokio::time::Instant::now() < deadline,
             "recovery status timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_active_turn(core: &EngineCore) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(turn_id) = core.sessions.active_turn_id(TASK) {
+            return turn_id;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "active turn timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_receipt(
+    core: &EngineCore,
+    command_id: &str,
+    status: CommandReceiptStatus,
+) -> CommandReceipt {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(receipt) = core.doc_host.task_command_receipt(command_id).unwrap()
+            && receipt.status == status
+        {
+            return receipt;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "task receipt timeout"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -623,6 +684,200 @@ async fn accepted_failure_continues_same_session_without_repeating_effects() {
         |part| matches!(part, MessagePart::Text { text, .. } if text.contains("partial output"))
     ));
     core.shutdown().await;
+}
+
+#[tokio::test]
+async fn explicit_stop_survives_restart_without_recovery_or_queue_release() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("stopped.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::OriginalPending,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    wait_for_active_turn(&core).await;
+    wait_for_receipt(&core, "l10-original-command", CommandReceiptStatus::Applied).await;
+
+    let queued = command(
+        &client,
+        "l10-queue-before-stop",
+        serde_json::json!({
+            "kind":"queueMessage",
+            "messageId":"l10-held-after-stop",
+            "text":"preserve this queued follow-up",
+            "attachments":[]
+        }),
+    )
+    .await;
+    assert_eq!(queued.status, CommandReceiptStatus::Applied);
+    command(
+        &client,
+        "l10-stop-original",
+        serde_json::json!({
+            "kind":"session",
+            "command":{"kind":"interrupt"},
+            "transfers":[]
+        }),
+    )
+    .await;
+    wait_for_receipt(&core, "l10-stop-original", CommandReceiptStatus::Applied).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while core.sessions.active_turn_id(TASK).is_some() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "Stop did not settle"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        core.sessions
+            .session_status(TASK)
+            .and_then(|session| session.recovery)
+            .is_none()
+    );
+    let entries = core
+        .doc_host
+        .open(TASK)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    assert!(entries.iter().flat_map(|entry| &entry.parts).any(
+        |part| matches!(part, MessagePart::Text { text, .. } if text.contains("partial output before explicit Stop"))
+    ));
+    assert!(matches!(
+        core.doc_host
+            .open(TASK)
+            .unwrap()
+            .doc()
+            .read_queue()
+            .unwrap()[0]
+            .status,
+        zeron_doc::QueueMessageStatus::Held
+    ));
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::OriginalPending,
+        runs.clone(),
+        requests,
+    );
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "Stop must never become auto-retry"
+    );
+    assert!(
+        reopened
+            .sessions
+            .session_status(TASK)
+            .and_then(|session| session.recovery)
+            .is_none()
+    );
+    let handle = reopened.doc_host.open(TASK).unwrap();
+    let queue = handle.doc().read_queue().unwrap();
+    assert_eq!(queue.len(), 1);
+    assert!(matches!(
+        queue[0].status,
+        zeron_doc::QueueMessageStatus::Held
+    ));
+    let entries = handle.doc().read_entries().unwrap();
+    assert!(entries.iter().flat_map(|entry| &entry.parts).any(
+        |part| matches!(part, MessagePart::Text { text, .. } if text.contains("partial output before explicit Stop"))
+    ));
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn explicit_new_original_after_stop_is_not_suppressed() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("stopped-then-new.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::OriginalPending,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    wait_for_active_turn(&core).await;
+    command(
+        &client,
+        "l10-stop-before-new-original",
+        serde_json::json!({
+            "kind":"session",
+            "command":{"kind":"interrupt"},
+            "transfers":[]
+        }),
+    )
+    .await;
+    wait_for_receipt(
+        &core,
+        "l10-stop-before-new-original",
+        CommandReceiptStatus::Applied,
+    )
+    .await;
+
+    let mut newer = request(attachment.to_str().unwrap());
+    newer.prompt = "explicitly authorized after Stop".into();
+    command(
+        &client,
+        "l10-new-original-after-stop",
+        serde_json::json!({
+            "kind":"session",
+            "command":{
+                "kind":"run",
+                "request":newer,
+                "messageId":"l10-new-message-after-stop"
+            },
+            "transfers":[]
+        }),
+    )
+    .await;
+    wait_for_receipt(
+        &core,
+        "l10-new-original-after-stop",
+        CommandReceiptStatus::Applied,
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while runs.load(Ordering::SeqCst) < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "new original did not dispatch"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        requests.lock().unwrap()[1].prompt,
+        "explicitly authorized after Stop"
+    );
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::OriginalPending,
+        runs.clone(),
+        requests,
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    reopened.shutdown().await;
 }
 
 #[tokio::test]
@@ -1006,6 +1261,105 @@ async fn terminal_journal_failure_without_a_recovery_row_is_visible_after_restar
         private["request"]["attachments"].as_array().unwrap().len(),
         1
     );
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn terminal_sweep_does_not_borrow_an_older_segment_for_a_newer_pending_run() {
+    let root = tempfile::tempdir().unwrap();
+    let old_attachment = root.path().join("older-segment.png");
+    let new_attachment = root.path().join("newer-pending.png");
+    std::fs::write(&old_attachment, b"old").unwrap();
+    std::fs::write(&new_attachment, b"new").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests.clone(),
+    );
+    let old = request(old_attachment.to_str().unwrap());
+    persist_synthetic_run(
+        &core,
+        "l10-older-terminal-command",
+        "l10-older-terminal-message",
+        old,
+    );
+    persist_accepted_receipt(
+        &core,
+        "l10-older-terminal-command",
+        "l10-older-terminal-message",
+    );
+    let journal = RunJournal::open(store_root(root.path()).join("journals")).unwrap();
+    journal
+        .append(
+            TASK,
+            &AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: Vec::new(),
+                cwd: "/tmp".into(),
+                session_id: "older-provider-session".into(),
+                assistant_message_id: "older-assistant".into(),
+            },
+        )
+        .unwrap();
+    journal
+        .append(
+            TASK,
+            &AgentEvent::Done {
+                status: DoneStatus::Errored,
+                result: None,
+                error: Some("synthetic provider overloaded".into()),
+                session_id: Some("older-provider-session".into()),
+            },
+        )
+        .unwrap();
+
+    let mut newer = request(new_attachment.to_str().unwrap());
+    newer.prompt = "newer pending before first journal event".into();
+    newer
+        .model_options
+        .insert("segmentOwner".into(), "newer".into());
+    persist_synthetic_run(
+        &core,
+        "l10-newer-pending-command",
+        "l10-newer-pending-message",
+        newer.clone(),
+    );
+    persist_pending_receipt(
+        &core,
+        "l10-newer-pending-command",
+        "l10-newer-pending-message",
+    );
+    core.shutdown().await;
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        requests,
+    );
+    let recovered = wait_for_recovery(&reopened, RecoveryStatus::CheckingDelivery).await;
+    assert_eq!(recovered.original_message_id, "l10-newer-pending-message");
+    assert_eq!(
+        recovered.original_command_id.as_deref(),
+        Some("l10-newer-pending-command")
+    );
+    assert_eq!(recovered.original_acceptance, RecoveryAcceptance::Unknown);
+    assert_eq!(recovered.action, RecoveryAction::ObserveOnly);
+    let stored = DocsStore::open(store_root(root.path()))
+        .unwrap()
+        .task_recovery(TASK)
+        .unwrap()
+        .unwrap();
+    let private: serde_json::Value = serde_json::from_slice(&stored.record_json).unwrap();
+    assert_eq!(private["request"]["prompt"], newer.prompt);
+    assert_eq!(private["request"]["modelOptions"]["segmentOwner"], "newer");
+    assert!(private.get("providerSessionId").is_none());
     assert_eq!(runs.load(Ordering::SeqCst), 0);
     reopened.shutdown().await;
 }
@@ -1612,6 +1966,125 @@ async fn recovery_transition_storage_failure_rolls_back_receipt_and_reopens_safe
     );
     wait_for_recovery(&reopened, RecoveryStatus::Cancelled).await;
     assert_eq!(runs.load(Ordering::SeqCst), 1);
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn stop_recovery_storage_failure_never_acknowledges_without_a_durable_hold() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("stop-storage-failure.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverloadThenPending,
+        runs.clone(),
+        requests.clone(),
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    send_original(&client, request(attachment.to_str().unwrap())).await;
+    let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    command(
+        &client,
+        "l10-running-recovery-before-stop-fault",
+        serde_json::json!({"kind":"retryRecovery","chainId":scheduled.chain_id}),
+    )
+    .await;
+    wait_for_active_turn(&core).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if core
+            .sessions
+            .session_status(TASK)
+            .and_then(|session| session.recovery)
+            .is_some_and(|recovery| {
+                recovery.status == RecoveryStatus::Running
+                    && recovery.acceptance == RecoveryAcceptance::Accepted
+            })
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "recovery attempt acceptance timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let db_path = store_root(root.path()).join("docs.sqlite3");
+    let injection = rusqlite::Connection::open(&db_path).unwrap();
+    injection
+        .execute_batch(
+            "CREATE TRIGGER fail_stop_recovery_hold
+             BEFORE UPDATE ON task_recovery_state
+             BEGIN SELECT RAISE(ABORT, 'forced Stop recovery hold failure'); END;",
+        )
+        .unwrap();
+    let stop = command(
+        &client,
+        "l10-stop-storage-failure",
+        serde_json::json!({
+            "kind":"session",
+            "command":{"kind":"interrupt"},
+            "transfers":[]
+        }),
+    )
+    .await;
+    assert_eq!(stop.status, CommandReceiptStatus::Pending);
+    let settle_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while core.sessions.active_turn_id(TASK).is_some() {
+        assert!(
+            tokio::time::Instant::now() < settle_deadline,
+            "faulted Stop did not settle"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        core.doc_host
+            .task_command_receipt("l10-stop-storage-failure")
+            .unwrap()
+            .unwrap()
+            .status,
+        CommandReceiptStatus::Pending,
+        "Stop must not be acknowledged when its recovery hold rolls back"
+    );
+    assert_eq!(
+        DocsStore::open(store_root(root.path()))
+            .unwrap()
+            .task_recovery(TASK)
+            .unwrap()
+            .unwrap()
+            .status,
+        "running"
+    );
+    injection
+        .execute_batch("DROP TRIGGER fail_stop_recovery_hold")
+        .unwrap();
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let reopened = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverloadThenPending,
+        runs.clone(),
+        requests,
+    );
+    let held = wait_for_recovery(&reopened, RecoveryStatus::Held).await;
+    assert_eq!(held.attempt_count, 1);
+    assert!(held.detail.contains("held by Stop"));
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    assert_ne!(
+        reopened
+            .doc_host
+            .task_command_receipt("l10-stop-storage-failure")
+            .unwrap()
+            .unwrap()
+            .status,
+        CommandReceiptStatus::Applied
+    );
     reopened.shutdown().await;
 }
 
