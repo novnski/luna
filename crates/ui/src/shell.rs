@@ -25,7 +25,8 @@ use gpui::{
 use gpui_tokio::Tokio;
 use zeron_engine::InstanceLock;
 use zeron_proto::{
-    AuthState, ConversationForkBoundaryKind, HarnessId, HistoryRecoveryView, WorkspaceScope,
+    AuthState, ChatConfig, ConversationForkBoundaryKind, HarnessId, HistoryRecoveryView,
+    PermissionMode, SandboxLevel, TaskCommandSnapshot, WorkspaceScope,
 };
 use zeron_rpc::methods;
 
@@ -975,6 +976,10 @@ struct HistoryForkDialog {
     message_id: Option<String>,
     title: Entity<ComposerInput>,
     prompt: Entity<ComposerInput>,
+    snapshot: TaskCommandSnapshot,
+    review: serde_json::Value,
+    config: ChatConfig,
+    cwd: String,
     focus_pending: bool,
     _events: Subscription,
 }
@@ -985,6 +990,8 @@ struct EditEarlierMessageDialog {
     task_id: String,
     message_id: String,
     input: Entity<ComposerInput>,
+    snapshot: TaskCommandSnapshot,
+    review: serde_json::Value,
     focus_pending: bool,
     _events: Subscription,
 }
@@ -993,6 +1000,25 @@ struct HistoryRecoveryDialog {
     task_id: String,
     recoveries: Vec<HistoryRecoveryView>,
     selected: usize,
+    snapshot: TaskCommandSnapshot,
+    review: serde_json::Value,
+}
+
+fn history_flow_response_is_live(current_generation: u64, request_generation: u64) -> bool {
+    current_generation == request_generation
+}
+
+fn history_review_profile_unchanged(
+    reviewed_session: &Option<String>,
+    reviewed_cwd: &Option<String>,
+    reviewed_config: &Option<ChatConfig>,
+    current: Option<&zeron_proto::Chat>,
+) -> bool {
+    current.is_some_and(|current| {
+        current.harness_session_id == *reviewed_session
+            && current.cwd == *reviewed_cwd
+            && current.config == *reviewed_config
+    })
 }
 
 /// Searchable same-workspace project reassignment dialog. The UI previews
@@ -1466,6 +1492,7 @@ pub struct Shell {
     history_fork_dialog: Option<HistoryForkDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
     history_recovery_dialog: Option<HistoryRecoveryDialog>,
+    history_flow_generation: u64,
     move_project_dialog: Option<MoveProjectDialog>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
@@ -1845,6 +1872,7 @@ impl Shell {
             history_fork_dialog: None,
             edit_earlier_message_dialog: None,
             history_recovery_dialog: None,
+            history_flow_generation: 0,
             move_project_dialog: None,
             delete_confirm: None,
             space_menu: popover::Popup::default(),
@@ -4047,6 +4075,39 @@ impl Shell {
         }));
     }
 
+    fn mutate_task_reviewed(
+        &mut self,
+        task_id: String,
+        snapshot: TaskCommandSnapshot,
+        intent: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.sidebar_notice = Some("Engine not connected".into());
+            cx.notify();
+            return;
+        };
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            if let Err(error) =
+                crate::task_commands::execute_reviewed(&engine, &task_id, snapshot, intent).await
+            {
+                this.update(cx, |shell, cx| {
+                    shell.sidebar_notice = Some(error.to_string().into());
+                    cx.notify();
+                })
+                .ok();
+            }
+        }));
+    }
+
+    fn cancel_history_flow(&mut self, cx: &mut Context<Self>) {
+        self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+        self.history_fork_dialog = None;
+        self.edit_earlier_message_dialog = None;
+        self.history_recovery_dialog = None;
+        cx.notify();
+    }
+
     /// Non-task workspace mutations retain their existing owner. L07 does not
     /// widen task receipts into project/device lifecycle behavior.
     fn mutate(&mut self, params: serde_json::Value, cx: &mut Context<Self>) {
@@ -4118,33 +4179,127 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_chat_menu(cx);
-        let source_title = self
+        self.cancel_history_flow(cx);
+        let generation = self.history_flow_generation;
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.sidebar_notice = Some("Engine not connected".into());
+            return;
+        };
+        let Some(chat) = self
             .state
             .read(cx)
             .chats
             .iter()
             .find(|chat| chat.id == source_task_id)
-            .and_then(|chat| chat.title.as_deref())
-            .map(|title| format!("{title} (fork)"))
-            .unwrap_or_else(|| "Forked task".into());
-        let title = cx.new(|cx| ComposerInput::new("Task title (optional)", cx));
-        title.update(cx, |input, cx| input.set_text(source_title, cx));
-        let prompt = cx.new(|cx| ComposerInput::new("First prompt (optional)", cx));
-        let events = cx.subscribe(&prompt, |this: &mut Shell, _, event, cx| {
-            if matches!(event, ComposerInputEvent::Submitted) {
-                this.submit_history_fork(cx);
-            }
+            .cloned()
+        else {
+            self.sidebar_notice = Some("Task no longer exists".into());
+            return;
+        };
+        let message_text = message_id.as_ref().and_then(|id| {
+            self.state
+                .read(cx)
+                .transcript
+                .iter()
+                .find(|entry| &entry.id == id)
+                .map(|entry| {
+                    entry
+                        .parts
+                        .iter()
+                        .filter_map(|part| match part {
+                            zeron_doc::MessagePart::Text { text, .. } => Some(text.trim()),
+                            _ => None,
+                        })
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
         });
-        self.history_fork_dialog = Some(HistoryForkDialog {
-            source_task_id,
-            boundary,
-            message_id,
-            title,
-            prompt,
-            focus_pending: true,
-            _events: events,
-        });
-        cx.notify();
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let read = engine
+                .client()
+                .call_as::<zeron_proto::TaskCommandRead>(
+                    methods::GET_TASK_COMMAND_SNAPSHOT,
+                    serde_json::json!({ "taskId": source_task_id }),
+                )
+                .await;
+            this.update(cx, |shell, cx| {
+                if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                let current = shell
+                    .state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|candidate| candidate.id == chat.id);
+                let unchanged = history_review_profile_unchanged(
+                    &chat.harness_session_id,
+                    &chat.cwd,
+                    &chat.config,
+                    current,
+                );
+                let Ok(read) = read else {
+                    shell.sidebar_notice = Some("Could not review the current task state.".into());
+                    return;
+                };
+                let Some(config) = chat.config.clone() else {
+                    shell.sidebar_notice = Some("Task has no provider configuration.".into());
+                    return;
+                };
+                let Some(provider_session_id) = chat.harness_session_id.clone() else {
+                    shell.sidebar_notice = Some("Task has no provider history yet.".into());
+                    return;
+                };
+                let Some(binding_generation) = read.snapshot.binding_generation else {
+                    shell.sidebar_notice = Some("Task binding is not materialized.".into());
+                    return;
+                };
+                if !unchanged {
+                    shell.sidebar_notice =
+                        Some("Task changed while opening the fork review.".into());
+                    return;
+                }
+                let source_title = chat
+                    .title
+                    .as_deref()
+                    .map(|title| format!("{title} (fork)"))
+                    .unwrap_or_else(|| "Forked task".into());
+                let title = cx.new(|cx| ComposerInput::new("Task title (optional)", cx));
+                title.update(cx, |input, cx| input.set_text(source_title, cx));
+                let prompt = cx.new(|cx| ComposerInput::new("First prompt (optional)", cx));
+                let events = cx.subscribe(&prompt, |this: &mut Shell, _, event, cx| {
+                    if matches!(event, ComposerInputEvent::Submitted) {
+                        this.submit_history_fork(cx);
+                    }
+                });
+                let cwd = chat.cwd.clone().unwrap_or_else(|| ".".into());
+                let review = serde_json::json!({
+                    "taskRevision": read.snapshot.task_revision,
+                    "bindingGeneration": binding_generation,
+                    "providerSessionId": provider_session_id,
+                    "providerAccountId": config.provider_account_id,
+                    "cwd": cwd,
+                    "messageId": message_id,
+                    "messageText": message_text,
+                });
+                shell.history_fork_dialog = Some(HistoryForkDialog {
+                    source_task_id: chat.id,
+                    boundary,
+                    message_id,
+                    title,
+                    prompt,
+                    snapshot: read.snapshot,
+                    review,
+                    config,
+                    cwd,
+                    focus_pending: true,
+                    _events: events,
+                });
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     fn submit_history_fork(&mut self, cx: &mut Context<Self>) {
@@ -4153,8 +4308,19 @@ impl Shell {
         };
         let title = dialog.title.read(cx).text().trim().to_string();
         let initial_prompt = dialog.prompt.read(cx).text().trim().to_string();
-        self.mutate_task(
+        let state = self.state.read(cx);
+        let source_link = crate::links::workspace_locator(
+            state
+                .engine()
+                .map(|engine| engine.engine_info().workspace_scope),
+            state.auth.as_ref(),
+            state.local_device_id.as_deref(),
+        )
+        .map(|workspace| crate::links::zeron_conversation_link(&dialog.source_task_id, &workspace));
+        self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+        self.mutate_task_reviewed(
             dialog.source_task_id,
+            dialog.snapshot,
             serde_json::json!({
                 "kind": "forkTask",
                 "newTaskId": uuid::Uuid::new_v4().to_string(),
@@ -4162,6 +4328,9 @@ impl Shell {
                 "messageId": dialog.message_id,
                 "title": (!title.is_empty()).then_some(title),
                 "initialPrompt": (!initial_prompt.is_empty()).then_some(initial_prompt),
+                "config": dialog.config,
+                "review": dialog.review,
+                "sourceLink": source_link,
             }),
             cx,
         );
@@ -4175,21 +4344,98 @@ impl Shell {
         text: String,
         cx: &mut Context<Self>,
     ) {
-        let input = cx.new(|cx| ComposerInput::new("Replacement message", cx));
-        input.update(cx, |input, cx| input.set_text(text, cx));
-        let events = cx.subscribe(&input, |this: &mut Shell, _, event, cx| {
-            if matches!(event, ComposerInputEvent::Submitted) {
-                this.submit_edit_earlier_message(cx);
-            }
-        });
-        self.edit_earlier_message_dialog = Some(EditEarlierMessageDialog {
-            task_id,
-            message_id,
-            input,
-            focus_pending: true,
-            _events: events,
-        });
-        cx.notify();
+        self.cancel_history_flow(cx);
+        let generation = self.history_flow_generation;
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.sidebar_notice = Some("Engine not connected".into());
+            return;
+        };
+        let Some(chat) = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == task_id)
+            .cloned()
+        else {
+            self.sidebar_notice = Some("Task no longer exists".into());
+            return;
+        };
+        let reviewed_text = text.clone();
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let read = engine
+                .client()
+                .call_as::<zeron_proto::TaskCommandRead>(
+                    methods::GET_TASK_COMMAND_SNAPSHOT,
+                    serde_json::json!({ "taskId": task_id }),
+                )
+                .await;
+            this.update(cx, |shell, cx| {
+                if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                let current = shell
+                    .state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|candidate| candidate.id == chat.id);
+                let unchanged = history_review_profile_unchanged(
+                    &chat.harness_session_id,
+                    &chat.cwd,
+                    &chat.config,
+                    current,
+                );
+                let Ok(read) = read else {
+                    shell.sidebar_notice = Some("Could not review the current task state.".into());
+                    return;
+                };
+                let Some(config) = chat.config.as_ref() else {
+                    shell.sidebar_notice = Some("Task has no provider configuration.".into());
+                    return;
+                };
+                let Some(provider_session_id) = chat.harness_session_id.clone() else {
+                    shell.sidebar_notice = Some("Task has no provider history yet.".into());
+                    return;
+                };
+                let Some(binding_generation) = read.snapshot.binding_generation else {
+                    shell.sidebar_notice = Some("Task binding is not materialized.".into());
+                    return;
+                };
+                if !unchanged {
+                    shell.sidebar_notice =
+                        Some("Task changed while opening the edit review.".into());
+                    return;
+                }
+                let input = cx.new(|cx| ComposerInput::new("Replacement message", cx));
+                input.update(cx, |input, cx| input.set_text(text, cx));
+                let events = cx.subscribe(&input, |this: &mut Shell, _, event, cx| {
+                    if matches!(event, ComposerInputEvent::Submitted) {
+                        this.submit_edit_earlier_message(cx);
+                    }
+                });
+                let review = serde_json::json!({
+                    "taskRevision": read.snapshot.task_revision,
+                    "bindingGeneration": binding_generation,
+                    "providerSessionId": provider_session_id,
+                    "providerAccountId": config.provider_account_id,
+                    "cwd": chat.cwd.clone().unwrap_or_else(|| ".".into()),
+                    "messageId": message_id,
+                    "messageText": reviewed_text,
+                });
+                shell.edit_earlier_message_dialog = Some(EditEarlierMessageDialog {
+                    task_id: chat.id,
+                    message_id,
+                    input,
+                    snapshot: read.snapshot,
+                    review,
+                    focus_pending: true,
+                    _events: events,
+                });
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     fn submit_edit_earlier_message(&mut self, cx: &mut Context<Self>) {
@@ -4198,12 +4444,15 @@ impl Shell {
         };
         let text = dialog.input.read(cx).text().trim().to_string();
         if !text.is_empty() {
-            self.mutate_task(
+            self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+            self.mutate_task_reviewed(
                 dialog.task_id,
+                dialog.snapshot,
                 serde_json::json!({
                     "kind": "editEarlierMessage",
                     "messageId": dialog.message_id,
                     "text": text,
+                    "review": dialog.review,
                 }),
                 cx,
             );
@@ -4213,34 +4462,98 @@ impl Shell {
 
     fn open_history_recovery(&mut self, task_id: String, cx: &mut Context<Self>) {
         self.close_chat_menu(cx);
+        self.cancel_history_flow(cx);
+        let generation = self.history_flow_generation;
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.sidebar_notice = Some("Engine not connected".into());
             cx.notify();
             return;
         };
+        let Some(chat) = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == task_id)
+            .cloned()
+        else {
+            self.sidebar_notice = Some("Task no longer exists".into());
+            return;
+        };
         let requested_task = task_id.clone();
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
-            let result = engine
+            let recoveries = engine
                 .client()
                 .call_as::<Vec<HistoryRecoveryView>>(
                     methods::LIST_HISTORY_RECOVERIES,
                     serde_json::json!({ "taskId": requested_task }),
                 )
                 .await;
+            let snapshot = engine
+                .client()
+                .call_as::<zeron_proto::TaskCommandRead>(
+                    methods::GET_TASK_COMMAND_SNAPSHOT,
+                    serde_json::json!({ "taskId": requested_task }),
+                )
+                .await;
             this.update(cx, |shell, cx| {
-                match result {
-                    Ok(recoveries) if !recoveries.is_empty() => {
+                if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                let current = shell
+                    .state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|candidate| candidate.id == chat.id);
+                let unchanged = history_review_profile_unchanged(
+                    &chat.harness_session_id,
+                    &chat.cwd,
+                    &chat.config,
+                    current,
+                );
+                match (recoveries, snapshot) {
+                    (Ok(recoveries), Ok(read)) if !recoveries.is_empty() && unchanged => {
+                        let Some(config) = chat.config.as_ref() else {
+                            shell.sidebar_notice =
+                                Some("Task has no provider configuration.".into());
+                            return;
+                        };
+                        let Some(provider_session_id) = chat.harness_session_id.clone() else {
+                            shell.sidebar_notice = Some("Task has no provider history yet.".into());
+                            return;
+                        };
+                        let Some(binding_generation) = read.snapshot.binding_generation else {
+                            shell.sidebar_notice = Some("Task binding is not materialized.".into());
+                            return;
+                        };
+                        let review = serde_json::json!({
+                            "taskRevision": read.snapshot.task_revision,
+                            "bindingGeneration": binding_generation,
+                            "providerSessionId": provider_session_id,
+                            "providerAccountId": config.provider_account_id,
+                            "cwd": chat.cwd.clone().unwrap_or_else(|| ".".into()),
+                            "messageId": null,
+                            "messageText": null,
+                        });
                         shell.history_recovery_dialog = Some(HistoryRecoveryDialog {
                             task_id,
                             selected: recoveries.len() - 1,
                             recoveries,
+                            snapshot: read.snapshot,
+                            review,
                         });
                     }
-                    Ok(_) => {
+                    (Ok(recoveries), Ok(_)) if recoveries.is_empty() => {
                         shell.sidebar_notice =
                             Some("No earlier-message recovery is available.".into())
                     }
-                    Err(error) => shell.sidebar_notice = Some(format!("{error}").into()),
+                    (Ok(_), Ok(_)) => {
+                        shell.sidebar_notice = Some("Task changed while opening recovery.".into())
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        shell.sidebar_notice = Some(error.to_string().into())
+                    }
                 }
                 cx.notify();
             })
@@ -4256,13 +4569,46 @@ impl Shell {
             cx.notify();
             return;
         };
-        self.mutate_task(
+        let mut review = dialog.review;
+        review["messageText"] = recovery.source_provider_session_id.clone().into();
+        self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+        self.mutate_task_reviewed(
             dialog.task_id,
+            dialog.snapshot,
             serde_json::json!({
                 "kind": "restoreHistoryRecovery",
                 "recoveryId": recovery.recovery_id,
+                "review": review,
             }),
             cx,
+        );
+        cx.notify();
+    }
+
+    fn start_new_task_with_context(&mut self, task_id: &str, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        if state.selected_chat.as_deref() != Some(task_id) {
+            self.sidebar_notice =
+                Some("Open the source task before starting a new task with its context.".into());
+            cx.notify();
+            return;
+        }
+        let Some(handoff) = crate::pickers::recent_visible_handoff(&state.transcript) else {
+            self.sidebar_notice = Some("This task has no visible context to hand off.".into());
+            cx.notify();
+            return;
+        };
+        self.open_new_session(cx);
+        let draft = format!(
+            "[LUNA user-selected context handoff]\n{}\n[End handoff]\n\n",
+            handoff.text
+        );
+        self.composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit(draft, cx)
+        });
+        self.sidebar_notice = Some(
+            "Started a new task draft with the selected visible context. Review it before sending."
+                .into(),
         );
         cx.notify();
     }
@@ -7273,18 +7619,15 @@ impl Shell {
             return true;
         }
         if self.history_fork_dialog.is_some() {
-            self.history_fork_dialog = None;
-            cx.notify();
+            self.cancel_history_flow(cx);
             return true;
         }
         if self.edit_earlier_message_dialog.is_some() {
-            self.edit_earlier_message_dialog = None;
-            cx.notify();
+            self.cancel_history_flow(cx);
             return true;
         }
         if self.history_recovery_dialog.is_some() {
-            self.history_recovery_dialog = None;
-            cx.notify();
+            self.cancel_history_flow(cx);
             return true;
         }
         if self.rename_space_dialog.is_some() {
@@ -7432,6 +7775,7 @@ impl Shell {
             let read_id = chat_id.clone();
             let move_project_id = chat_id.clone();
             let fork_task_id = chat_id.clone();
+            let context_task_id = chat_id.clone();
             let recover_task_id = chat_id.clone();
             let menu = popover::popover_card(&theme)
                 .w(px(216.0))
@@ -7544,13 +7888,9 @@ impl Shell {
                                 }))
                             })
                             .when(!native_history_fork, |row| {
-                                row.opacity(0.5).on_click(cx.listener(|this, _, _, cx| {
+                                row.on_click(cx.listener(move |this, _, _, cx| {
                                     this.close_chat_menu(cx);
-                                    this.sidebar_notice = Some(
-                                        "This provider has no verified native fork. Start a new task and pass context explicitly."
-                                            .into(),
-                                    );
-                                    cx.notify();
+                                    this.start_new_task_with_context(&context_task_id, cx);
                                 }))
                             })
                             .child(
@@ -7561,7 +7901,7 @@ impl Shell {
                             .child(SharedString::from(if native_history_fork {
                                 "Fork into new task…"
                             } else {
-                                "Native fork unavailable"
+                                "Start new task with context…"
                             })),
                     )
                     .child(
@@ -7776,11 +8116,18 @@ impl Shell {
             }
             let title = dialog.title.clone();
             let prompt = dialog.prompt.clone();
+            let permission = dialog.config.permission_mode;
+            let permission_ceiling = dialog.config.effective_permission_mode;
+            let permission_label = match permission {
+                PermissionMode::Ask => "Ask",
+                PermissionMode::Auto => "Auto",
+                PermissionMode::Full => "Full",
+            };
+            let cwd = dialog.cwd.clone();
             let card = popover::dialog_card(&theme)
                 .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
                     if ev.keystroke.key == "escape" {
-                        this.history_fork_dialog = None;
-                        cx.notify();
+                        this.cancel_history_flow(cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -7804,6 +8151,54 @@ impl Shell {
                 )
                 .child(
                     div()
+                        .mt(px(12.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_color(theme.text_muted)
+                                .child(format!("Environment: current checkout · {cwd}")),
+                        )
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_color(theme.text_muted.opacity(0.55))
+                                .child("New worktree: unavailable for conversation-only forks"),
+                        )
+                        .child(
+                            popover::btn_ghost(
+                                &theme,
+                                &format!("Permission: {permission_label}"),
+                                "history-fork-permission",
+                            )
+                            .id("history-fork-permission")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(dialog) = this.history_fork_dialog.as_mut() {
+                                    let next = match dialog.config.permission_mode {
+                                        PermissionMode::Ask
+                                            if permission_ceiling >= PermissionMode::Auto =>
+                                        {
+                                            PermissionMode::Auto
+                                        }
+                                        PermissionMode::Auto
+                                            if permission_ceiling >= PermissionMode::Full =>
+                                        {
+                                            PermissionMode::Full
+                                        }
+                                        _ => PermissionMode::Ask,
+                                    };
+                                    dialog.config.permission_mode = next;
+                                    dialog.config.effective_permission_mode =
+                                        std::cmp::min(next, permission_ceiling);
+                                }
+                                cx.notify();
+                            })),
+                        ),
+                )
+                .child(
+                    div()
                         .mt(px(16.0))
                         .flex()
                         .justify_end()
@@ -7812,8 +8207,7 @@ impl Shell {
                             popover::btn_ghost(&theme, "Cancel", "history-fork-cancel")
                                 .id("history-fork-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.history_fork_dialog = None;
-                                    cx.notify();
+                                    this.cancel_history_flow(cx);
                                 })),
                         )
                         .child(
@@ -7836,8 +8230,7 @@ impl Shell {
             let card = popover::dialog_card(&theme)
                 .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
                     if ev.keystroke.key == "escape" {
-                        this.edit_earlier_message_dialog = None;
-                        cx.notify();
+                        this.cancel_history_flow(cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -7864,8 +8257,7 @@ impl Shell {
                             popover::btn_ghost(&theme, "Cancel", "history-edit-cancel")
                                 .id("history-edit-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.edit_earlier_message_dialog = None;
-                                    cx.notify();
+                                    this.cancel_history_flow(cx);
                                 })),
                         )
                         .child(
@@ -7915,8 +8307,7 @@ impl Shell {
             let card = popover::dialog_card(&theme)
                 .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
                     if ev.keystroke.key == "escape" {
-                        this.history_recovery_dialog = None;
-                        cx.notify();
+                        this.cancel_history_flow(cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -7939,8 +8330,7 @@ impl Shell {
                             popover::btn_ghost(&theme, "Cancel", "history-recovery-cancel")
                                 .id("history-recovery-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.history_recovery_dialog = None;
-                                    cx.notify();
+                                    this.cancel_history_flow(cx);
                                 })),
                         )
                         .child(
@@ -11112,6 +11502,77 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn history_chat(
+        session: &str,
+        cwd: &str,
+        permission_mode: PermissionMode,
+    ) -> zeron_proto::Chat {
+        zeron_proto::Chat {
+            id: "history-task".into(),
+            device_id: "device".into(),
+            title: None,
+            archived: false,
+            pinned_order: None,
+            cwd: Some(cwd.into()),
+            branch: None,
+            checkout_id: None,
+            source_context: None,
+            config: Some(ChatConfig {
+                harness: HarnessId::Codex,
+                provider_account_id: Some("account".into()),
+                model: Some("model".into()),
+                reasoning: None,
+                model_options: Default::default(),
+                sandbox: SandboxLevel::WorkspaceWrite,
+                permission_mode,
+                effective_permission_mode: permission_mode,
+                permission_ceiling_source: None,
+                permission_degradation_reason: None,
+                permission_audit: Vec::new(),
+            }),
+            last_message_preview: None,
+            last_message_at: None,
+            created_at: chrono::DateTime::UNIX_EPOCH,
+            harness_session_id: Some(session.into()),
+            harness_session_cwd: Some(cwd.into()),
+            space_id: None,
+            last_seen_at: None,
+            manually_unread: false,
+            room_gen: None,
+        }
+    }
+
+    #[test]
+    fn history_review_drops_late_cancelled_and_profile_changed_responses() {
+        assert!(history_flow_response_is_live(7, 7));
+        assert!(!history_flow_response_is_live(8, 7));
+
+        let reviewed = history_chat("session-a", "/workspace", PermissionMode::Ask);
+        let same = reviewed.clone();
+        assert!(history_review_profile_unchanged(
+            &reviewed.harness_session_id,
+            &reviewed.cwd,
+            &reviewed.config,
+            Some(&same),
+        ));
+        let mut changed_session = same.clone();
+        changed_session.harness_session_id = Some("session-b".into());
+        assert!(!history_review_profile_unchanged(
+            &reviewed.harness_session_id,
+            &reviewed.cwd,
+            &reviewed.config,
+            Some(&changed_session),
+        ));
+        let mut changed_permissions = same;
+        changed_permissions.config.as_mut().unwrap().permission_mode = PermissionMode::Auto;
+        assert!(!history_review_profile_unchanged(
+            &reviewed.harness_session_id,
+            &reviewed.cwd,
+            &reviewed.config,
+            Some(&changed_permissions),
+        ));
+    }
 
     #[test]
     fn sidebar_drag_nudges_each_edge_once_until_rearmed() {

@@ -84,6 +84,33 @@ pub async fn execute(
     execute_with_id(engine, task_id, uuid::Uuid::new_v4().to_string(), intent).await
 }
 
+pub async fn execute_reviewed(
+    engine: &EngineHandle,
+    task_id: &str,
+    snapshot: zeron_proto::TaskCommandSnapshot,
+    intent: serde_json::Value,
+) -> Result<CommandReceipt, RpcError> {
+    let receipt = execute_receipt_on_with_snapshot(
+        engine,
+        task_id,
+        None,
+        uuid::Uuid::new_v4().to_string(),
+        intent,
+        Some(snapshot),
+    )
+    .await?;
+    match receipt.status {
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied => Ok(receipt),
+        _ => Err(RpcError::Failed(
+            receipt
+                .reason
+                .as_ref()
+                .map(|reason| reason.message.clone())
+                .unwrap_or_else(|| format!("task command ended as {:?}", receipt.status)),
+        )),
+    }
+}
+
 pub async fn execute_with_id(
     engine: &EngineHandle,
     task_id: &str,
@@ -122,14 +149,32 @@ pub async fn execute_receipt_on_with_id(
     command_id: String,
     intent: serde_json::Value,
 ) -> Result<CommandReceipt, RpcError> {
+    execute_receipt_on_with_snapshot(engine, task_id, target_device_id, command_id, intent, None)
+        .await
+}
+
+async fn execute_receipt_on_with_snapshot(
+    engine: &EngineHandle,
+    task_id: &str,
+    target_device_id: Option<&str>,
+    command_id: String,
+    intent: serde_json::Value,
+    reviewed_snapshot: Option<zeron_proto::TaskCommandSnapshot>,
+) -> Result<CommandReceipt, RpcError> {
     let mut snapshot_params = serde_json::json!({ "taskId": task_id });
     if let Some(target) = target_device_id {
         snapshot_params["targetDeviceId"] = target.into();
     }
-    let read: TaskCommandRead = engine
-        .client()
-        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, snapshot_params)
-        .await?;
+    let snapshot = match reviewed_snapshot {
+        Some(snapshot) => snapshot,
+        None => {
+            engine
+                .client()
+                .call_as::<TaskCommandRead>(methods::GET_TASK_COMMAND_SNAPSHOT, snapshot_params)
+                .await?
+                .snapshot
+        }
+    };
     let session_kind = intent.get("kind").and_then(serde_json::Value::as_str);
     let control_kind = intent
         .get("command")
@@ -149,12 +194,12 @@ pub async fn execute_receipt_on_with_id(
         "intent": intent,
     });
     if revision_fenced {
-        params["expectedTaskRevision"] = read.snapshot.task_revision.into();
+        params["expectedTaskRevision"] = snapshot.task_revision.into();
     }
-    if binding_fenced && let Some(generation) = read.snapshot.binding_generation {
+    if binding_fenced && let Some(generation) = snapshot.binding_generation {
         params["expectedBindingGeneration"] = generation.into();
     }
-    if turn_fenced && let Some(turn_id) = read.snapshot.active_turn_id {
+    if turn_fenced && let Some(turn_id) = snapshot.active_turn_id {
         params["expectedTurnId"] = turn_id.into();
     }
     if let Some(target) = target_device_id {

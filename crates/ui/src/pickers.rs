@@ -89,7 +89,9 @@ fn slow_catalog_delay() -> Option<std::time::Duration> {
         .map(std::time::Duration::from_millis)
 }
 
-fn recent_visible_handoff(entries: &[zeron_doc::SessionMessageEntry]) -> Option<ContextHandoff> {
+pub(crate) fn recent_visible_handoff(
+    entries: &[zeron_doc::SessionMessageEntry],
+) -> Option<ContextHandoff> {
     let mut selected = Vec::new();
     let mut bytes = 0usize;
     for entry in entries.iter().rev() {

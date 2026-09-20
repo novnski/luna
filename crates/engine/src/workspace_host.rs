@@ -199,12 +199,15 @@ pub struct WorkspaceHost {
 pub(crate) enum TaskProjectionError {
     Mutation(EngineError),
     Commit(EngineError),
+    /// A provider mutation may have landed but local projection/readback did
+    /// not reach a provable terminal state. Never retry automatically.
+    ProviderUnknown(EngineError),
 }
 
 impl TaskProjectionError {
     pub(crate) fn message(&self) -> &EngineError {
         match self {
-            Self::Mutation(error) | Self::Commit(error) => error,
+            Self::Mutation(error) | Self::Commit(error) | Self::ProviderUnknown(error) => error,
         }
     }
 }

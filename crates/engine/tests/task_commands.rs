@@ -82,10 +82,31 @@ impl Harness for HistoryHarness {
         &self,
         request: ProviderForkRequest,
     ) -> Result<ProviderForkResult, HarnessError> {
+        let source_checkpoint = match &request.boundary {
+            zeron_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id }
+            | zeron_proto::ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+                checkpoint_id.clone()
+            }
+            zeron_proto::ProviderForkBoundary::Tip => {
+                if request.source_session_id == "synthetic-history-source" {
+                    "provider-message-1".into()
+                } else {
+                    let suffix = request
+                        .source_session_id
+                        .strip_prefix("synthetic-history-fork-")
+                        .unwrap_or("1");
+                    format!("fork-provider-message-{suffix}")
+                }
+            }
+        };
         self.forks.lock().unwrap().push(request);
         let sequence = self.fork_sequence.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(ProviderForkResult {
             provider_session_id: format!("synthetic-history-fork-{sequence}"),
+            checkpoint_map: std::collections::BTreeMap::from([(
+                source_checkpoint,
+                format!("fork-provider-message-{sequence}"),
+            )]),
         })
     }
 
@@ -508,6 +529,25 @@ async fn snapshot(client: &RpcClient, task_id: &str) -> TaskCommandRead {
         )
         .await
         .unwrap()
+}
+
+fn history_review(
+    core: &EngineCore,
+    snapshot: &TaskCommandRead,
+    task_id: &str,
+    message_id: Option<&str>,
+    message_text: Option<&str>,
+) -> serde_json::Value {
+    let chat = core.workspace.chat(task_id).unwrap().unwrap();
+    serde_json::json!({
+        "taskRevision": snapshot.snapshot.task_revision,
+        "bindingGeneration": snapshot.snapshot.binding_generation.unwrap(),
+        "providerSessionId": chat.harness_session_id.unwrap(),
+        "providerAccountId": chat.config.as_ref().and_then(|config| config.provider_account_id.clone()),
+        "cwd": chat.cwd.unwrap_or_else(|| ".".into()),
+        "messageId": message_id,
+        "messageText": message_text,
+    })
 }
 
 fn envelope(
@@ -3937,22 +3977,104 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     .await
     .unwrap();
 
+    let fork_snapshot = snapshot(&client, &source_task_id).await;
+    let fork_review = history_review(&core, &fork_snapshot, &source_task_id, None, None);
+    let invalid_target = execute(
+        &client,
+        envelope(
+            "history-fork-invalid-target",
+            &source_task_id,
+            Some(&fork_snapshot),
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": "not-a-uuid",
+                "boundary": "tip",
+                "sourceLink": format!("luna://open/chat/{source_task_id}?workspace=fixture"),
+                "review": fork_review.clone(),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(invalid_target.status, CommandReceiptStatus::Failed);
+    assert!(forks.lock().unwrap().is_empty());
+
+    let failed_target_task_id = uuid::Uuid::new_v4().to_string();
+    core.doc_host.flush_all();
+    let db_path = dir.path().join("data/orgs/l13-org/l13-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_history_target_snapshot BEFORE INSERT ON snapshots
+             WHEN NEW.doc_id='{failed_target_task_id}'
+             BEGIN SELECT RAISE(ABORT, 'forced history target snapshot failure'); END;"
+        ))
+        .unwrap();
+    }
+    let post_provider_failure = execute(
+        &client,
+        envelope(
+            "history-fork-post-provider-failure",
+            &source_task_id,
+            Some(&fork_snapshot),
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": failed_target_task_id,
+                "boundary": "tip",
+                "sourceLink": format!("luna://open/chat/{source_task_id}?workspace=fixture"),
+                "review": fork_review,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(post_provider_failure.status, CommandReceiptStatus::Pending);
+    assert_eq!(
+        post_provider_failure
+            .reason
+            .as_ref()
+            .map(|reason| reason.code),
+        Some(CommandReasonCode::ProviderAcceptanceUnknown)
+    );
+    assert_eq!(
+        post_provider_failure.correlation_id.as_deref(),
+        Some("synthetic-history-fork-1")
+    );
+    assert!(core.task_identity.view(&failed_target_task_id).is_none());
+    assert!(
+        core.workspace
+            .chat(&failed_target_task_id)
+            .unwrap()
+            .is_none()
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_history_target_snapshot")
+            .unwrap();
+    }
+
+    let fork_snapshot = snapshot(&client, &source_task_id).await;
+    let fork_review = history_review(&core, &fork_snapshot, &source_task_id, None, None);
     let forked = execute(
         &client,
         envelope(
             "history-fork-tip",
             &source_task_id,
-            Some(&snapshot(&client, &source_task_id).await),
+            Some(&fork_snapshot),
             serde_json::json!({
                 "kind": "forkTask",
                 "newTaskId": target_task_id,
                 "boundary": "tip",
                 "title": "Independent fork",
+                "sourceLink": format!("luna://open/chat/{source_task_id}?workspace=fixture"),
+                "review": fork_review,
             }),
         ),
     )
     .await;
     assert_eq!(forked.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        forked.correlation_id.as_deref(),
+        Some("synthetic-history-fork-2")
+    );
 
     let source = core.task_identity.view(&source_task_id).unwrap();
     let target = core.task_identity.view(&target_task_id).unwrap();
@@ -3971,13 +4093,39 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
         source_binding.provider_task_id,
         target_binding.provider_task_id
     );
-    assert_eq!(target_binding.provider_task_id, "synthetic-history-fork-1");
+    assert_eq!(target_binding.provider_task_id, "synthetic-history-fork-2");
+    let descendant_task_id = uuid::Uuid::new_v4().to_string();
+    let descendant_snapshot = snapshot(&client, &target_task_id).await;
+    let descendant_review =
+        history_review(&core, &descendant_snapshot, &target_task_id, None, None);
+    let descendant = execute(
+        &client,
+        envelope(
+            "history-fork-descendant",
+            &target_task_id,
+            Some(&descendant_snapshot),
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": descendant_task_id,
+                "boundary": "tip",
+                "sourceLink": format!("luna://open/chat/{target_task_id}?workspace=fixture"),
+                "review": descendant_review,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(descendant.status, CommandReceiptStatus::Applied);
     let calls = forks.lock().unwrap();
-    assert_eq!(calls.len(), 1);
+    assert_eq!(calls.len(), 3);
     assert!(matches!(
         calls[0].boundary,
         zeron_proto::ProviderForkBoundary::Tip
     ));
+    assert!(matches!(
+        calls[1].boundary,
+        zeron_proto::ProviderForkBoundary::Tip
+    ));
+    assert_eq!(calls[2].source_session_id, "synthetic-history-fork-2");
     drop(calls);
     core.shutdown().await;
 }
@@ -4058,22 +4206,122 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     .await
     .unwrap();
 
+    let unchanged_snapshot = snapshot(&client, &task_id).await;
+    let unchanged_review = history_review(
+        &core,
+        &unchanged_snapshot,
+        &task_id,
+        Some("edit-source-user"),
+        Some("source prompt"),
+    );
+    let unchanged = execute(
+        &client,
+        envelope(
+            "history-edit-unchanged",
+            &task_id,
+            Some(&unchanged_snapshot),
+            serde_json::json!({
+                "kind": "editEarlierMessage",
+                "messageId": "edit-source-user",
+                "text": "source prompt",
+                "review": unchanged_review,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(unchanged.status, CommandReceiptStatus::Failed);
+    assert_eq!(forks.lock().unwrap().len(), 0);
+
+    let stale_snapshot = snapshot(&client, &task_id).await;
+    let stale_review = history_review(
+        &core,
+        &stale_snapshot,
+        &task_id,
+        Some("edit-source-user"),
+        Some("source prompt"),
+    );
+    let changed = execute(
+        &client,
+        envelope(
+            "history-review-source-change",
+            &task_id,
+            Some(&stale_snapshot),
+            serde_json::json!({ "kind": "setRead", "read": false }),
+        ),
+    )
+    .await;
+    assert_eq!(changed.status, CommandReceiptStatus::Applied);
+    let fresh_snapshot = snapshot(&client, &task_id).await;
+    let stale = execute(
+        &client,
+        envelope(
+            "history-edit-stale-review",
+            &task_id,
+            Some(&fresh_snapshot),
+            serde_json::json!({
+                "kind": "editEarlierMessage",
+                "messageId": "edit-source-user",
+                "text": "stale overwrite",
+                "review": stale_review,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(stale.status, CommandReceiptStatus::Failed);
+    assert_eq!(forks.lock().unwrap().len(), 0);
+
+    let fingerprint_snapshot = snapshot(&client, &task_id).await;
+    let mut reused_id_review = history_review(
+        &core,
+        &fingerprint_snapshot,
+        &task_id,
+        Some("edit-source-user"),
+        Some("source prompt"),
+    );
+    reused_id_review["messageText"] = "different text under the same message id".into();
+    let reused_id = execute(
+        &client,
+        envelope(
+            "history-edit-reused-id",
+            &task_id,
+            Some(&fingerprint_snapshot),
+            serde_json::json!({
+                "kind": "editEarlierMessage",
+                "messageId": "edit-source-user",
+                "text": "replacement after reused id",
+                "review": reused_id_review,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(reused_id.status, CommandReceiptStatus::Failed);
+    assert_eq!(forks.lock().unwrap().len(), 0);
+
     let before_binding = core
         .task_identity
         .view(&task_id)
         .unwrap()
         .current_binding
         .unwrap();
+    let edit_snapshot = snapshot(&client, &task_id).await;
+    let edit_review = history_review(
+        &core,
+        &edit_snapshot,
+        &task_id,
+        Some("edit-source-user"),
+        Some("source prompt"),
+    );
     let edited = execute(
         &client,
         envelope(
             "history-edit-command",
             &task_id,
-            Some(&snapshot(&client, &task_id).await),
+            Some(&edit_snapshot),
             serde_json::json!({
                 "kind": "editEarlierMessage",
                 "messageId": "edit-source-user",
                 "text": "rewritten source prompt",
+                "review": edit_review,
             }),
         ),
     )
@@ -4096,6 +4344,13 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
             .and_then(|binding| binding.replaced_by_binding_id.as_deref()),
         Some(after_binding.binding_id.as_str())
     );
+    let edit_context = core.doc_host.context_control(&task_id).unwrap();
+    assert_eq!(
+        edit_context.binding_generation,
+        Some(after_binding.generation)
+    );
+    assert!(edit_context.pending_handoff.is_none());
+    assert!(edit_context.last_handoff.is_none());
     let recoveries: Vec<HistoryRecoveryView> = client
         .call_as(
             methods::LIST_HISTORY_RECOVERIES,
@@ -4116,11 +4371,21 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     );
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if snapshot(&client, &task_id)
-                .await
-                .snapshot
-                .active_turn_id
-                .is_none()
+            let command_settled = core
+                .doc_host
+                .open(&task_id)
+                .unwrap()
+                .doc()
+                .read_commands()
+                .unwrap()
+                .iter()
+                .all(|command| command.status != zeron_doc::SessionCommandStatus::Pending);
+            if command_settled
+                && snapshot(&client, &task_id)
+                    .await
+                    .snapshot
+                    .active_turn_id
+                    .is_none()
             {
                 break;
             }
@@ -4129,20 +4394,29 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     })
     .await
     .unwrap();
+    let restore_snapshot = snapshot(&client, &task_id).await;
+    let mut restore_review = history_review(&core, &restore_snapshot, &task_id, None, None);
+    restore_review["messageText"] = recoveries[0].source_provider_session_id.clone().into();
     let restored = execute(
         &client,
         envelope(
             "history-restore-command",
             &task_id,
-            Some(&snapshot(&client, &task_id).await),
+            Some(&restore_snapshot),
             serde_json::json!({
                 "kind": "restoreHistoryRecovery",
                 "recoveryId": recoveries[0].recovery_id,
+                "review": restore_review,
             }),
         ),
     )
     .await;
-    assert_eq!(restored.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        restored.status,
+        CommandReceiptStatus::Applied,
+        "{:?}",
+        restored.reason
+    );
     let restored_binding = core
         .task_identity
         .view(&task_id)
@@ -4150,6 +4424,13 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
         .current_binding
         .unwrap();
     assert_eq!(restored_binding.generation, after_binding.generation + 1);
+    let restored_context = core.doc_host.context_control(&task_id).unwrap();
+    assert_eq!(
+        restored_context.binding_generation,
+        Some(restored_binding.generation)
+    );
+    assert!(restored_context.pending_handoff.is_none());
+    assert!(restored_context.last_handoff.is_none());
     let recoveries_after: Vec<HistoryRecoveryView> = client
         .call_as(
             methods::LIST_HISTORY_RECOVERIES,
@@ -4172,8 +4453,9 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     ));
     assert_eq!(calls[1].source_session_id, before_binding.provider_task_id);
     assert!(matches!(
-        calls[1].boundary,
-        zeron_proto::ProviderForkBoundary::Tip
+        &calls[1].boundary,
+        zeron_proto::ProviderForkBoundary::ThroughCheckpoint { checkpoint_id }
+            if checkpoint_id == "provider-message-1"
     ));
     drop(calls);
     core.shutdown().await;

@@ -159,6 +159,8 @@ impl CodexNativeClient {
         &self,
         request: ProviderForkRequest,
     ) -> Result<ProviderForkResult, HarnessError> {
+        let source_turns = self.thread_turns(&request.source_session_id).await?;
+        let expected_source = codex_fork_prefix(&source_turns, &request.boundary)?;
         let params = fork_params(&request);
         let response = self.call("thread/fork", Value::Object(params)).await?;
         let thread = response.get("thread").unwrap_or(&response);
@@ -189,9 +191,27 @@ impl CodexNativeClient {
                 observed.id
             )));
         }
+        let fork_turns = self.thread_turns(&provider_session_id).await?;
+        let checkpoint_map = map_codex_fork_history(&expected_source, &fork_turns)?;
         Ok(ProviderForkResult {
             provider_session_id,
+            checkpoint_map,
         })
+    }
+
+    async fn thread_turns(&self, thread_id: &str) -> Result<Vec<Value>, HarnessError> {
+        let value = self
+            .call(
+                "thread/read",
+                json!({"threadId": thread_id, "includeTurns": true}),
+            )
+            .await?;
+        let thread = value.get("thread").unwrap_or(&value);
+        thread
+            .get("turns")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| HarnessError::Protocol("thread/read returned no turn history".into()))
     }
 
     /// Start asynchronous native compaction and wait for the provider's
@@ -391,6 +411,100 @@ fn fork_params(request: &ProviderForkRequest) -> serde_json::Map<String, Value> 
         }
     }
     params
+}
+
+fn codex_turn_id(turn: &Value) -> Option<&str> {
+    turn.get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn codex_fork_prefix(
+    turns: &[Value],
+    boundary: &ProviderForkBoundary,
+) -> Result<Vec<Value>, HarnessError> {
+    for turn in turns {
+        codex_turn_id(turn).ok_or_else(|| {
+            HarnessError::Protocol("Codex source history contains a turn without an id".into())
+        })?;
+    }
+    match boundary {
+        ProviderForkBoundary::Tip => Ok(turns.to_vec()),
+        ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => {
+            let position = turns
+                .iter()
+                .position(|turn| codex_turn_id(turn) == Some(checkpoint_id.as_str()))
+                .ok_or_else(|| {
+                    HarnessError::Protocol(format!(
+                        "Codex checkpoint {checkpoint_id} is not in source thread"
+                    ))
+                })?;
+            Ok(turns[..position].to_vec())
+        }
+        ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+            let position = turns
+                .iter()
+                .position(|turn| codex_turn_id(turn) == Some(checkpoint_id.as_str()))
+                .ok_or_else(|| {
+                    HarnessError::Protocol(format!(
+                        "Codex checkpoint {checkpoint_id} is not in source thread"
+                    ))
+                })?;
+            Ok(turns[..=position].to_vec())
+        }
+    }
+}
+
+fn codex_history_signature(value: &Value) -> Value {
+    const VOLATILE: &[&str] = &[
+        "id",
+        "threadId",
+        "turnId",
+        "createdAt",
+        "updatedAt",
+        "startedAt",
+        "completedAt",
+    ];
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .filter(|(key, _)| !VOLATILE.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), codex_history_signature(value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(codex_history_signature).collect()),
+        other => other.clone(),
+    }
+}
+
+fn map_codex_fork_history(
+    source: &[Value],
+    fork: &[Value],
+) -> Result<std::collections::BTreeMap<String, String>, HarnessError> {
+    if source.len() != fork.len() {
+        return Err(HarnessError::Protocol(format!(
+            "Codex fork history length mismatch: expected {}, observed {}",
+            source.len(),
+            fork.len()
+        )));
+    }
+    let mut checkpoints = std::collections::BTreeMap::new();
+    for (source, fork) in source.iter().zip(fork) {
+        let source_id = codex_turn_id(source).ok_or_else(|| {
+            HarnessError::Protocol("Codex source history contains a turn without an id".into())
+        })?;
+        let fork_id = codex_turn_id(fork).ok_or_else(|| {
+            HarnessError::Protocol("Codex fork history contains a turn without an id".into())
+        })?;
+        if codex_history_signature(source) != codex_history_signature(fork) {
+            return Err(HarnessError::Protocol(format!(
+                "Codex fork history diverged at source turn {source_id}"
+            )));
+        }
+        checkpoints.insert(source_id.to_owned(), fork_id.to_owned());
+    }
+    Ok(checkpoints)
 }
 
 fn validate_compaction_resume(thread_id: &str, response: &Value) -> Result<(), HarnessError> {
@@ -659,5 +773,28 @@ mod tests {
             Some("turn-1")
         );
         assert!(!through.contains_key("beforeTurnId"));
+
+        let source = vec![
+            json!({"id":"turn-1","status":{"type":"completed"},"items":[{"id":"item-1","type":"agentMessage","text":"one"}]}),
+            json!({"id":"turn-2","status":{"type":"completed"},"items":[{"id":"item-2","type":"agentMessage","text":"two"}]}),
+        ];
+        let prefix = codex_fork_prefix(
+            &source,
+            &ProviderForkBoundary::ThroughCheckpoint {
+                checkpoint_id: "turn-1".into(),
+            },
+        )
+        .unwrap();
+        let fork = vec![
+            json!({"id":"fork-turn-1","status":{"type":"completed"},"items":[{"id":"fork-item-1","type":"agentMessage","text":"one"}]}),
+        ];
+        assert_eq!(
+            map_codex_fork_history(&prefix, &fork)
+                .unwrap()
+                .get("turn-1")
+                .map(String::as_str),
+            Some("fork-turn-1")
+        );
+        assert!(map_codex_fork_history(&prefix, &source).is_err());
     }
 }

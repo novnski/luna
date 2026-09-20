@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionDoc, SessionMessageEntry};
 use zeron_proto::{
     ConversationForkBoundaryKind, HarnessId, HistoryRecoveryView, ProviderForkBoundary,
-    ProviderForkCapability,
+    ProviderForkCapability, ProviderForkResult,
 };
 use zeron_sync::DocsStore;
 
@@ -62,6 +62,37 @@ pub struct HistoryPlan {
     pub provider_boundary: ProviderForkBoundary,
     pub selected_text: Option<String>,
     pub cutoff_message_id: Option<String>,
+}
+
+impl HistoryPlan {
+    pub fn remapped_checkpoints(
+        &self,
+        result: &ProviderForkResult,
+    ) -> Result<HashMap<String, String>, EngineError> {
+        self.checkpoints
+            .iter()
+            .map(|(message_id, source_checkpoint)| {
+                result
+                    .checkpoint_map
+                    .get(source_checkpoint)
+                    .cloned()
+                    .map(|fork_checkpoint| (message_id.clone(), fork_checkpoint))
+                    .ok_or_else(|| {
+                        EngineError::Other(format!(
+                            "provider fork did not verify a checkpoint mapping for {source_checkpoint}"
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    pub fn tip_checkpoint(&self) -> Option<&str> {
+        self.entries.iter().rev().find_map(|entry| {
+            (entry.role == MessageRole::Assistant)
+                .then(|| self.checkpoints.get(&entry.id).map(String::as_str))
+                .flatten()
+        })
+    }
 }
 
 fn visible_text(entry: &SessionMessageEntry) -> String {

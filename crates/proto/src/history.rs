@@ -4,6 +4,7 @@
 //! carry no filesystem checkpoint or worktree semantics.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +38,10 @@ pub struct ProviderForkRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderForkResult {
     pub provider_session_id: String,
+    /// Verified provider checkpoint identities in the fork, keyed by the
+    /// corresponding source checkpoint. Empty only when the verified fork
+    /// contains no completed provider checkpoint.
+    pub checkpoint_map: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +60,9 @@ pub struct HistoryRecoveryView {
     pub source_binding_id: String,
     pub source_provider_session_id: String,
     pub cutoff_message_id: String,
+    /// Exact completed provider checkpoint at the saved snapshot's tip.
+    #[serde(default)]
+    pub source_tip_checkpoint_id: String,
     pub created_at_ms: i64,
     pub summary: String,
 }

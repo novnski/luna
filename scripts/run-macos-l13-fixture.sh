@@ -16,11 +16,39 @@ REFERENCE_ICNS="${LUNA_L13_REFERENCE_ICNS:-$ROOT/target/luna-l11-fixture/LUNA L1
 PID_FILE=""
 LOG_FILE=""
 ROOT_MARKER=""
+STAGE_ROOT=""
+BACKUP_ROOT=""
+REPLACEMENT_PENDING=false
+HAD_PREVIOUS_APP=false
 
 fail() {
   print -u2 -- "L13 fixture: $1"
   exit 1
 }
+
+remove_generated_tree() {
+  local path="$1"
+  if [[ -n "$path" && "$path" == "$OUT/"* && -d "$path" ]]; then
+    /bin/rm -rf -- "$path"
+  fi
+}
+
+cleanup() {
+  local command_exit=$?
+  if [[ -n "$BACKUP_ROOT" && -e "$BACKUP_ROOT/LUNA L13 QA.app" ]]; then
+    if [[ -e "$APP" ]]; then
+      remove_generated_tree "$APP"
+    fi
+    /bin/mv -- "$BACKUP_ROOT/LUNA L13 QA.app" "$APP"
+  elif $REPLACEMENT_PENDING && ! $HAD_PREVIOUS_APP && [[ -e "$APP" ]]; then
+    remove_generated_tree "$APP"
+  fi
+  remove_generated_tree "$STAGE_ROOT"
+  remove_generated_tree "$BACKUP_ROOT"
+  trap - EXIT
+  exit "$command_exit"
+}
+trap cleanup EXIT
 
 [[ -n "$REQUESTED_PROFILE" ]] || fail "usage: scripts/run-macos-l13-fixture.sh /tmp/luna-l13-<fresh-root> [build|run|stop|status]"
 [[ "$REQUESTED_PROFILE" == /* ]] || fail "synthetic root must be absolute"
@@ -73,6 +101,17 @@ exact_pid() {
   return 1
 }
 
+refuse_any_running_bundle() {
+  local candidate_pid candidate_command process_rows
+  process_rows="$(/bin/ps -axo pid=,command=)" || fail "cannot inventory processes safely"
+  while read -r candidate_pid candidate_command; do
+    [[ -n "$candidate_pid" ]] || continue
+    case "$candidate_command" in
+      "$EXECUTABLE"|"$EXECUTABLE "*) fail "LUNA L13 QA is already running as pid $candidate_pid" ;;
+    esac
+  done <<<"$process_rows"
+}
+
 validate_pid() {
   [[ "$1" == <-> ]] || return 1
   /bin/kill -0 "$1" 2>/dev/null || return 1
@@ -80,18 +119,16 @@ validate_pid() {
 }
 
 build_bundle() {
-  local stage contents
-  if exact_pid >/dev/null; then
-    fail "refusing to replace a running L13 fixture"
-  fi
+  local staged_app contents
+  refuse_any_running_bundle
   cd "$ROOT"
   [[ -s "$REFERENCE_ICNS" ]] || fail "validated LUNA icon ancestor is unavailable at $REFERENCE_ICNS"
   /usr/bin/file "$REFERENCE_ICNS" | /usr/bin/grep -Fq "Mac OS X icon" || fail "reference icon is not an icns container"
   cargo build --locked -p zeron-ui --example history-operations-fixture --features appshots-fixture
   /bin/mkdir -p "$OUT"
-  stage="$(/usr/bin/mktemp -d "$OUT/.luna-l13-stage.XXXXXX")"
-  trap '/bin/rm -rf -- "$stage"' EXIT
-  contents="$stage/LUNA L13 QA.app/Contents"
+  STAGE_ROOT="$(/usr/bin/mktemp -d "$OUT/.luna-l13-stage.XXXXXX")"
+  staged_app="$STAGE_ROOT/LUNA L13 QA.app"
+  contents="$staged_app/Contents"
   /bin/mkdir -p "$contents/MacOS" "$contents/Resources"
   /usr/bin/install -m 755 "$BUILD_EXECUTABLE" "$contents/MacOS/history-operations-fixture"
   /usr/bin/install -m 644 "$ROOT/dist/macos/Info-dev.plist" "$contents/Info.plist"
@@ -104,20 +141,26 @@ build_bundle() {
   /usr/bin/plutil -replace CFBundleVersion -string "1" "$contents/Info.plist"
   /usr/bin/plutil -remove CFBundleURLTypes "$contents/Info.plist" 2>/dev/null || true
   /usr/bin/plutil -remove LSEnvironment "$contents/Info.plist" 2>/dev/null || true
-  /usr/bin/codesign --force --sign - --identifier "$BUNDLE_ID" "$stage/LUNA L13 QA.app"
-  validate_bundle "$stage/LUNA L13 QA.app"
+  /usr/bin/cmp -s "$BUILD_EXECUTABLE" "$contents/MacOS/history-operations-fixture" || fail "staged executable differs from Cargo output"
+  /usr/bin/codesign --force --sign - --identifier "$BUNDLE_ID" "$staged_app"
+  validate_bundle "$staged_app"
+  BACKUP_ROOT="$(/usr/bin/mktemp -d "$OUT/.luna-l13-backup.XXXXXX")"
   if [[ -e "$APP" ]]; then
-    /bin/mv -- "$APP" "$OUT/LUNA L13 QA.previous.app"
+    /bin/mv -- "$APP" "$BACKUP_ROOT/LUNA L13 QA.app" || fail "could not preserve previous bundle"
+    HAD_PREVIOUS_APP=true
   fi
-  /bin/mv -- "$stage/LUNA L13 QA.app" "$APP"
-  /bin/rm -rf -- "$OUT/LUNA L13 QA.previous.app"
+  REPLACEMENT_PENDING=true
+  /bin/mv -- "$staged_app" "$APP"
   validate_bundle "$APP"
-  trap - EXIT
-  /bin/rm -rf -- "$stage"
+  REPLACEMENT_PENDING=false
+  remove_generated_tree "$BACKUP_ROOT"
+  BACKUP_ROOT=""
+  remove_generated_tree "$STAGE_ROOT"
+  STAGE_ROOT=""
   print -- "bundle=$APP"
   print -- "identifier=$BUNDLE_ID"
   print -- "executable_sha256=$(/usr/bin/shasum -a 256 "$EXECUTABLE" | /usr/bin/awk '{print $1}')"
-  print -- "safety=synthetic in-memory provider/auth; no live provider, account, Keychain, network store, or repository"
+  print -- "safety=synthetic root-scoped provider state and in-memory auth; no live provider, account, Keychain, network service, or repository"
 }
 
 case "$ACTION" in
@@ -126,6 +169,7 @@ case "$ACTION" in
     ;;
   run)
     validate_bundle "$APP"
+    refuse_any_running_bundle
     if [[ -f "$PID_FILE" ]]; then
       fixture_pid="$(<"$PID_FILE")"
       validate_pid "$fixture_pid" && fail "already running as pid $fixture_pid"

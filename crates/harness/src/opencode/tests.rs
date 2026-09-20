@@ -1,18 +1,190 @@
 use super::*;
 
+async fn fork_wire(
+    fork_messages: Value,
+) -> (
+    String,
+    Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = requests.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let recorded = recorded.clone();
+            let fork_messages = fork_messages.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let header_end = loop {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    if count == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                let path = header
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .to_owned();
+                let length = header
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    if count == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                let body = serde_json::from_slice(&request[header_end..header_end + length])
+                    .unwrap_or(Value::Null);
+                recorded.lock().unwrap().push((path.clone(), body));
+                let source = json!([
+                    {"info":{"id":"user-1","role":"user"},"parts":[{"id":"p1","type":"text","text":"one"}]},
+                    {"info":{"id":"assistant-1","role":"assistant"},"parts":[{"id":"p2","type":"text","text":"answer"}]},
+                    {"info":{"id":"user-2","role":"user"},"parts":[{"id":"p3","type":"text","text":"later"}]}
+                ]);
+                let response = match path.as_str() {
+                    "/api/health" => json!({"healthy":true}),
+                    "/global/health" => json!({"healthy":true,"version":"1.18.31"}),
+                    "/session/source/message" => source,
+                    "/session/source/fork" => json!({"id":"forked"}),
+                    "/session/forked" => json!({"id":"forked"}),
+                    "/session/forked/message" => fork_messages,
+                    _ => json!({}),
+                };
+                let encoded = response.to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{encoded}",
+                            encoded.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            });
+        }
+    });
+    (base, requests, server)
+}
+
+#[tokio::test]
+async fn native_fork_adapter_remaps_regenerated_ids_and_rejects_leakage() {
+    let good = json!([
+        {"info":{"id":"fork-user-1","role":"user"},"parts":[{"id":"fp1","type":"text","text":"one"}]},
+        {"info":{"id":"fork-assistant-1","role":"assistant"},"parts":[{"id":"fp2","type":"text","text":"answer"}]}
+    ]);
+    let (base, requests, server_task) = fork_wire(good).await;
+    let result = Server::attached(base)
+        .fork_session(
+            "source",
+            None,
+            &ProviderForkBoundary::ThroughCheckpoint {
+                checkpoint_id: "assistant-1".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.provider_session_id, "forked");
+    assert_eq!(
+        result.checkpoint_map.get("assistant-1").map(String::as_str),
+        Some("fork-assistant-1")
+    );
+    assert!(requests.lock().unwrap().iter().any(|(path, body)| {
+        path == "/session/source/fork" && body == &json!({"messageID":"user-2"})
+    }));
+    server_task.abort();
+
+    let leaked = json!([
+        {"info":{"id":"fork-user-1","role":"user"},"parts":[{"id":"fp1","type":"text","text":"one"}]},
+        {"info":{"id":"fork-assistant-1","role":"assistant"},"parts":[{"id":"fp2","type":"text","text":"answer"}]},
+        {"info":{"id":"fork-user-2","role":"user"},"parts":[{"id":"fp3","type":"text","text":"later"}]}
+    ]);
+    let (base, _, server_task) = fork_wire(leaked).await;
+    let error = Server::attached(base)
+        .fork_session(
+            "source",
+            None,
+            &ProviderForkBoundary::ThroughCheckpoint {
+                checkpoint_id: "assistant-1".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("history length mismatch"));
+    server_task.abort();
+}
+
 #[test]
 fn fork_cutoff_includes_checkpoint_by_excluding_the_next_message() {
     let messages = vec![
-        json!({"info":{"id":"user-1"}}),
-        json!({"info":{"id":"assistant-1"}}),
-        json!({"info":{"id":"user-2"}}),
+        json!({"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"one"}]}),
+        json!({"info":{"id":"assistant-1","role":"assistant"},"parts":[{"type":"text","text":"answer"}]}),
+        json!({"info":{"id":"user-2","role":"user"},"parts":[{"type":"text","text":"two"}]}),
     ];
+    let (prefix, cutoff) = opencode_fork_plan(
+        &messages,
+        &ProviderForkBoundary::ThroughCheckpoint {
+            checkpoint_id: "assistant-1".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(prefix.len(), 2);
+    assert_eq!(cutoff.as_deref(), Some("user-2"));
     assert_eq!(
-        opencode_fork_cutoff(&messages, "assistant-1").unwrap(),
-        Some("user-2".into())
+        opencode_fork_plan(
+            &messages,
+            &ProviderForkBoundary::ThroughCheckpoint {
+                checkpoint_id: "user-2".into()
+            }
+        )
+        .unwrap()
+        .1,
+        None
     );
-    assert_eq!(opencode_fork_cutoff(&messages, "user-2").unwrap(), None);
-    assert!(opencode_fork_cutoff(&messages, "missing").is_err());
+    assert!(
+        opencode_fork_plan(
+            &messages,
+            &ProviderForkBoundary::ThroughCheckpoint {
+                checkpoint_id: "missing".into()
+            }
+        )
+        .is_err()
+    );
+
+    let fork = vec![
+        json!({"info":{"id":"fork-user","role":"user"},"parts":[{"id":"part-a","type":"text","text":"one"}]}),
+        json!({"info":{"id":"fork-assistant","role":"assistant"},"parts":[{"id":"part-b","type":"text","text":"answer"}]}),
+    ];
+    let map = map_opencode_fork_history(&prefix, &fork).unwrap();
+    assert_eq!(
+        map.get("assistant-1").map(String::as_str),
+        Some("fork-assistant")
+    );
+    assert!(map_opencode_fork_history(&prefix, &messages).is_err());
+
+    let malformed = vec![messages[0].clone(), json!({"info":{"role":"assistant"}})];
+    assert!(opencode_fork_plan(&malformed, &ProviderForkBoundary::Tip,).is_err());
 }
 
 #[test]

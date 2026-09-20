@@ -204,6 +204,21 @@ struct TaskCommandParams {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryReviewToken {
+    task_revision: u64,
+    binding_generation: u32,
+    provider_session_id: String,
+    #[serde(default)]
+    provider_account_id: Option<String>,
+    cwd: String,
+    #[serde(default)]
+    message_id: Option<String>,
+    #[serde(default)]
+    message_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum TaskCommandIntent {
     #[serde(rename_all = "camelCase")]
@@ -260,15 +275,20 @@ enum TaskCommandIntent {
         initial_prompt: Option<String>,
         #[serde(default)]
         config: Option<ChatConfig>,
+        #[serde(default)]
+        source_link: Option<String>,
+        review: HistoryReviewToken,
     },
     #[serde(rename_all = "camelCase")]
     EditEarlierMessage {
         message_id: String,
         text: String,
+        review: HistoryReviewToken,
     },
     #[serde(rename_all = "camelCase")]
     RestoreHistoryRecovery {
         recovery_id: String,
+        review: HistoryReviewToken,
     },
     Delete {},
     #[serde(rename_all = "camelCase")]
@@ -1744,11 +1764,7 @@ impl EngineRpc {
             )
             || matches!(
                 command.intent,
-                TaskCommandIntent::SendQueuedNow { .. }
-                    | TaskCommandIntent::SteerQueuedNow { .. }
-                    | TaskCommandIntent::ForkTask { .. }
-                    | TaskCommandIntent::EditEarlierMessage { .. }
-                    | TaskCommandIntent::RestoreHistoryRecovery { .. }
+                TaskCommandIntent::SendQueuedNow { .. } | TaskCommandIntent::SteerQueuedNow { .. }
             );
         let provider_correlation = match &command.intent {
             TaskCommandIntent::SendQueuedNow { message_id, .. }
@@ -1772,7 +1788,7 @@ impl EngineRpc {
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
-                if provider_effect {
+                if provider_effect || matches!(&error, TaskProjectionError::ProviderUnknown(_)) {
                     return self
                         .doc_host
                         .mark_task_command_unknown(
@@ -1797,6 +1813,9 @@ impl EngineRpc {
                     TaskProjectionError::Commit(error) => Err(RpcError::Failed(format!(
                         "task projection was rolled back before publication: {error}"
                     ))),
+                    TaskProjectionError::ProviderUnknown(_) => unreachable!(
+                        "provider-unknown errors are finalized before local error handling"
+                    ),
                 };
             }
         };
@@ -2071,6 +2090,16 @@ impl EngineRpc {
                 "send or remove queued messages before changing history".into(),
             ));
         }
+        if handle
+            .doc()
+            .read_commands()?
+            .iter()
+            .any(|command| command.status == SessionCommandStatus::Pending)
+        {
+            return Err(crate::EngineError::Other(
+                "wait for pending task commands to settle before changing history".into(),
+            ));
+        }
         let unresolved = handle.doc().read_entries()?.iter().any(|entry| {
             entry.parts.iter().any(|part| {
                 matches!(
@@ -2119,26 +2148,87 @@ impl EngineRpc {
         Ok((chat, binding))
     }
 
+    fn validate_history_review(
+        &self,
+        task_id: &str,
+        chat: &Chat,
+        binding: &zeron_proto::ExecutionBinding,
+        review: &HistoryReviewToken,
+    ) -> Result<(), crate::EngineError> {
+        let snapshot = self
+            .current_task_command_snapshot(task_id)
+            .map_err(|error| crate::EngineError::Other(error.to_string()))?;
+        if snapshot.task_revision != review.task_revision
+            || binding.generation != review.binding_generation
+            || binding.provider_task_id != review.provider_session_id
+            || chat.cwd.as_deref().unwrap_or(".") != review.cwd
+            || chat
+                .config
+                .as_ref()
+                .and_then(|config| config.provider_account_id.as_ref())
+                != review.provider_account_id.as_ref()
+        {
+            return Err(crate::EngineError::Other(
+                "history confirmation is stale; reopen it from the current task".into(),
+            ));
+        }
+        if let Some(message_id) = review.message_id.as_deref() {
+            let handle = self.doc_host.open(task_id)?;
+            let entry = handle
+                .doc()
+                .read_entries()?
+                .into_iter()
+                .find(|entry| entry.id == message_id)
+                .ok_or_else(|| {
+                    crate::EngineError::Other(
+                        "the reviewed history message no longer exists".into(),
+                    )
+                })?;
+            let text = entry
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    MessagePart::Text { text, .. } => Some(text.trim()),
+                    _ => None,
+                })
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if review.message_text.as_deref() != Some(text.as_str()) {
+                return Err(crate::EngineError::Other(
+                    "the reviewed history message changed; reopen the confirmation".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     async fn fork_provider_history(
         &self,
+        command_id: &str,
         chat: &Chat,
         binding: &zeron_proto::ExecutionBinding,
         plan: &HistoryPlan,
-    ) -> Result<String, crate::EngineError> {
+    ) -> Result<zeron_proto::ProviderForkResult, TaskProjectionError> {
         let config = chat.config.as_ref().ok_or_else(|| {
-            crate::EngineError::Other("task has no provider configuration".into())
+            TaskProjectionError::Mutation(crate::EngineError::Other(
+                "task has no provider configuration".into(),
+            ))
         })?;
         let cwd = chat.cwd.clone().unwrap_or_else(|| ".".into());
-        self.task_identity.validate_explicit_resume(
-            &chat.id,
-            binding.provider_id,
-            &cwd,
-            &binding.provider_task_id,
-        )?;
+        self.task_identity
+            .validate_explicit_resume(
+                &chat.id,
+                binding.provider_id,
+                &cwd,
+                &binding.provider_task_id,
+            )
+            .map_err(TaskProjectionError::Mutation)?;
         let (provider_home, force_file_auth) = if binding.provider_id == HarnessId::Codex {
             let execution = self
                 .agent_accounts
-                .resolve_execution(HarnessId::Codex, config.provider_account_id.as_deref())?;
+                .resolve_execution(HarnessId::Codex, config.provider_account_id.as_deref())
+                .map_err(TaskProjectionError::Mutation)?;
             (
                 execution
                     .codex_home
@@ -2148,11 +2238,14 @@ impl EngineRpc {
         } else {
             (None, false)
         };
-        let harness = self.registry.resolve(binding.provider_id)?;
+        let harness = self
+            .registry
+            .resolve(binding.provider_id)
+            .map_err(|error| TaskProjectionError::Mutation(error.into()))?;
         if harness.fork_capability() != capability_for(binding.provider_id) {
-            return Err(crate::EngineError::Other(
+            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
                 "provider fork capability changed; refresh before retrying".into(),
-            ));
+            )));
         }
         let result = tokio::time::timeout(
             Duration::from_secs(30),
@@ -2166,13 +2259,23 @@ impl EngineRpc {
             }),
         )
         .await
-        .map_err(|_| crate::EngineError::Other("provider fork completion is unknown".into()))??;
+        .map_err(|_| {
+            TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                "provider fork completion is unknown".into(),
+            ))
+        })?
+        .map_err(|error| TaskProjectionError::ProviderUnknown(error.into()))?;
         if result.provider_session_id == binding.provider_task_id {
-            return Err(crate::EngineError::Other(
-                "provider fork did not return an independent session".into(),
+            return Err(TaskProjectionError::ProviderUnknown(
+                crate::EngineError::Other(
+                    "provider fork did not return an independent session".into(),
+                ),
             ));
         }
-        Ok(result.provider_session_id)
+        self.doc_host
+            .set_task_command_correlation(command_id, &result.provider_session_id)
+            .map_err(|error| TaskProjectionError::ProviderUnknown(error.into()))?;
+        Ok(result)
     }
 
     fn history_marker(&self, id: String, text: String) -> SessionMessageEntry {
@@ -2983,7 +3086,25 @@ impl EngineRpc {
                 title,
                 initial_prompt,
                 config,
+                source_link,
+                review,
             } => {
+                if uuid::Uuid::parse_str(&new_task_id).is_err() {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "fork target must use a stable UUID task id".into(),
+                    )));
+                }
+                if self.task_identity.view(&new_task_id).is_some()
+                    || self
+                        .workspace
+                        .chat(&new_task_id)
+                        .map_err(TaskProjectionError::Mutation)?
+                        .is_some()
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "fork target task already exists".into(),
+                    )));
+                }
                 let before = self
                     .current_task_command_snapshot(task_id)
                     .map_err(|error| {
@@ -2991,6 +3112,8 @@ impl EngineRpc {
                     })?;
                 let (source, binding) = self
                     .ensure_history_operation_ready(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                self.validate_history_review(task_id, &source, &binding, &review)
                     .map_err(TaskProjectionError::Mutation)?;
                 let handle = self
                     .doc_host
@@ -3003,30 +3126,6 @@ impl EngineRpc {
                     message_id.as_deref(),
                 )
                 .map_err(TaskProjectionError::Mutation)?;
-                let provider_session_id = self
-                    .fork_provider_history(&source, &binding, &plan)
-                    .await
-                    .map_err(TaskProjectionError::Mutation)?;
-
-                let after = self
-                    .current_task_command_snapshot(task_id)
-                    .map_err(|error| {
-                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
-                    })?;
-                let (current_source, current_binding) = self
-                    .ensure_history_operation_ready(task_id)
-                    .map_err(TaskProjectionError::Mutation)?;
-                if before.task_revision != after.task_revision
-                    || before.task_sequence != after.task_sequence
-                    || binding.binding_id != current_binding.binding_id
-                    || source.cwd != current_source.cwd
-                    || source.space_id != current_source.space_id
-                {
-                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "source task changed while the provider fork was being prepared".into(),
-                    )));
-                }
-
                 let source_config = source.config.clone().ok_or_else(|| {
                     TaskProjectionError::Mutation(crate::EngineError::Other(
                         "source task has no provider configuration".into(),
@@ -3049,23 +3148,63 @@ impl EngineRpc {
                 target_config.permission_ceiling_source = source_config.permission_ceiling_source;
                 target_config.permission_degradation_reason =
                     source_config.permission_degradation_reason;
+                let source_link = source_link
+                    .filter(|link| {
+                        link.starts_with(&format!("luna://open/chat/{task_id}?workspace="))
+                    })
+                    .ok_or_else(|| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "fork lineage link is missing or invalid".into(),
+                        ))
+                    })?;
+
+                let provider_result = self
+                    .fork_provider_history(command_id, &source, &binding, &plan)
+                    .await?;
+                let provider_session_id = provider_result.provider_session_id.clone();
+                let remapped_checkpoints = plan
+                    .remapped_checkpoints(&provider_result)
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
+
+                let after = self
+                    .current_task_command_snapshot(task_id)
+                    .map_err(|error| {
+                        TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                            error.to_string(),
+                        ))
+                    })?;
+                let (current_source, current_binding) = self
+                    .ensure_history_operation_ready(task_id)
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
+                if before.task_revision != after.task_revision
+                    || before.task_sequence != after.task_sequence
+                    || binding.binding_id != current_binding.binding_id
+                    || source.cwd != current_source.cwd
+                    || source.space_id != current_source.space_id
+                {
+                    return Err(TaskProjectionError::ProviderUnknown(
+                        crate::EngineError::Other(
+                            "source task changed while the provider fork was being prepared".into(),
+                        ),
+                    ));
+                }
 
                 let target_doc = SessionDoc::init(&new_task_id)
                     .map_err(crate::EngineError::from)
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 target_doc
-                    .replace_conversation_entries(&plan.entries, &plan.checkpoints)
+                    .replace_conversation_entries(&plan.entries, &remapped_checkpoints)
                     .map_err(crate::EngineError::from)
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 target_doc
                     .push_message(&self.history_marker(
                         format!("fork-source:{command_id}"),
                         format!(
-                            "Forked from luna://task/{task_id}. This task has independent provider history and lifecycle ownership."
+                            "Forked from [{task_id}]({source_link}). This task has independent provider history and lifecycle ownership."
                         ),
                     ))
                     .map_err(crate::EngineError::from)
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 let prompt = initial_prompt
                     .map(|prompt| prompt.trim().to_string())
                     .filter(|prompt| !prompt.is_empty());
@@ -3077,19 +3216,19 @@ impl EngineRpc {
                             &target_config,
                             &provider_session_id,
                         )
-                        .map_err(TaskProjectionError::Mutation)?;
+                        .map_err(TaskProjectionError::ProviderUnknown)?;
                     self.queue_initial_history_prompt(
                         &target_doc,
                         &format!("fork-run:{command_id}"),
                         &uuid::Uuid::new_v4().to_string(),
                         request,
                     )
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 }
                 let target_snapshot = target_doc
                     .export_snapshot()
                     .map_err(crate::EngineError::from)
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 let target_title = title
                     .map(|title| title.trim().to_string())
                     .filter(|title| !title.is_empty())
@@ -3099,60 +3238,71 @@ impl EngineRpc {
                 let provider_for_identity = binding.provider_id;
                 let provider_for_identity_id = provider_session_id.clone();
                 let provider_for_registry_id = provider_for_identity_id.clone();
-                let receipt = self.task_identity.register_fork_task_with_command(
-                    task_id,
-                    &new_task_id,
-                    provider_for_identity,
-                    &provider_for_identity_id,
-                    |_, identity_snapshot| {
-                        let (_, receipt) = self.workspace.commit_context_boundary(
-                            command_id,
-                            before.binding_id.as_deref(),
-                            before.binding_generation,
-                            identity_snapshot,
-                            &[(new_task_id.as_str(), target_snapshot.as_slice())],
-                            &[],
-                            None,
-                            move |registry| {
-                                registry.upsert_chat(&Chat {
-                                    id: new_task_for_registry,
-                                    device_id: source_for_registry.device_id,
-                                    title: target_title,
-                                    archived: false,
-                                    pinned_order: None,
-                                    cwd: source_for_registry.cwd.clone(),
-                                    branch: source_for_registry.branch,
-                                    checkout_id: source_for_registry.checkout_id,
-                                    source_context: source_for_registry.source_context,
-                                    config: Some(target_config),
-                                    last_message_preview: Some(format!(
-                                        "Forked from {}",
-                                        source_for_registry
-                                            .title
-                                            .as_deref()
-                                            .unwrap_or("source task")
-                                    )),
-                                    last_message_at: source_for_registry.last_message_at,
-                                    created_at: chrono::Utc::now(),
-                                    harness_session_id: Some(provider_for_registry_id.clone()),
-                                    harness_session_cwd: source_for_registry.cwd,
-                                    space_id: source_for_registry.space_id,
-                                    last_seen_at: None,
-                                    manually_unread: false,
-                                    room_gen: source_for_registry.room_gen,
-                                })?;
-                                Ok(())
-                            },
-                        )?;
-                        Ok(receipt)
-                    },
-                )?;
+                let receipt = self
+                    .task_identity
+                    .register_fork_task_with_command(
+                        task_id,
+                        &new_task_id,
+                        provider_for_identity,
+                        &provider_for_identity_id,
+                        |_, identity_snapshot| {
+                            let (_, receipt) = self.workspace.commit_context_boundary(
+                                command_id,
+                                before.binding_id.as_deref(),
+                                before.binding_generation,
+                                identity_snapshot,
+                                &[(new_task_id.as_str(), target_snapshot.as_slice())],
+                                &[],
+                                None,
+                                move |registry| {
+                                    registry.upsert_chat(&Chat {
+                                        id: new_task_for_registry,
+                                        device_id: source_for_registry.device_id,
+                                        title: target_title,
+                                        archived: false,
+                                        pinned_order: None,
+                                        cwd: source_for_registry.cwd.clone(),
+                                        branch: source_for_registry.branch,
+                                        checkout_id: source_for_registry.checkout_id,
+                                        source_context: source_for_registry.source_context,
+                                        config: Some(target_config),
+                                        last_message_preview: Some(format!(
+                                            "Forked from {}",
+                                            source_for_registry
+                                                .title
+                                                .as_deref()
+                                                .unwrap_or("source task")
+                                        )),
+                                        last_message_at: source_for_registry.last_message_at,
+                                        created_at: chrono::Utc::now(),
+                                        harness_session_id: Some(provider_for_registry_id.clone()),
+                                        harness_session_cwd: source_for_registry.cwd,
+                                        space_id: source_for_registry.space_id,
+                                        last_seen_at: None,
+                                        manually_unread: false,
+                                        room_gen: source_for_registry.room_gen,
+                                    })?;
+                                    Ok(())
+                                },
+                            )?;
+                            Ok(receipt)
+                        },
+                    )
+                    .map_err(|error| {
+                        TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                            error.message().to_string(),
+                        ))
+                    })?;
                 if prompt.is_some() {
                     let _ = self.doc_host.open(&new_task_id);
                 }
                 Ok(Some(receipt))
             }
-            TaskCommandIntent::EditEarlierMessage { message_id, text } => {
+            TaskCommandIntent::EditEarlierMessage {
+                message_id,
+                text,
+                review,
+            } => {
                 let text = text.trim().to_string();
                 if text.is_empty() {
                     return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
@@ -3166,6 +3316,8 @@ impl EngineRpc {
                     })?;
                 let (source, binding) = self
                     .ensure_history_operation_ready(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                self.validate_history_review(task_id, &source, &binding, &review)
                     .map_err(TaskProjectionError::Mutation)?;
                 let handle = self
                     .doc_host
@@ -3183,30 +3335,57 @@ impl EngineRpc {
                     Some(&message_id),
                 )
                 .map_err(TaskProjectionError::Mutation)?;
+                let source_tip_plan = plan_history(
+                    handle.doc(),
+                    binding.provider_id,
+                    ConversationForkBoundaryKind::Tip,
+                    None,
+                )
+                .map_err(TaskProjectionError::Mutation)?;
+                let source_tip_checkpoint_id = source_tip_plan
+                    .tip_checkpoint()
+                    .ok_or_else(|| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "the pre-edit conversation has no exact completed provider tip".into(),
+                        ))
+                    })?
+                    .to_owned();
                 if plan.selected_text.as_deref() == Some(text.as_str()) {
                     return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
                         "edited message is unchanged".into(),
                     )));
                 }
-                let provider_session_id = self
-                    .fork_provider_history(&source, &binding, &plan)
-                    .await
-                    .map_err(TaskProjectionError::Mutation)?;
+                let config = source.config.clone().ok_or_else(|| {
+                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "task has no provider configuration".into(),
+                    ))
+                })?;
+                let provider_result = self
+                    .fork_provider_history(command_id, &source, &binding, &plan)
+                    .await?;
+                let provider_session_id = provider_result.provider_session_id.clone();
+                let remapped_checkpoints = plan
+                    .remapped_checkpoints(&provider_result)
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 let after = self
                     .current_task_command_snapshot(task_id)
                     .map_err(|error| {
-                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                        TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                            error.to_string(),
+                        ))
                     })?;
                 let (_, current_binding) = self
                     .ensure_history_operation_ready(task_id)
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 if before.task_revision != after.task_revision
                     || before.task_sequence != after.task_sequence
                     || binding.binding_id != current_binding.binding_id
                 {
-                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "task changed while the provider rewind was being prepared".into(),
-                    )));
+                    return Err(TaskProjectionError::ProviderUnknown(
+                        crate::EngineError::Other(
+                            "task changed while the provider rewind was being prepared".into(),
+                        ),
+                    ));
                 }
 
                 let recovery = prepare_recovery(
@@ -3217,24 +3396,20 @@ impl EngineRpc {
                         source_binding_id: binding.binding_id.clone(),
                         source_provider_session_id: binding.provider_task_id.clone(),
                         cutoff_message_id: message_id.clone(),
+                        source_tip_checkpoint_id,
                         created_at_ms: crate::now_ms(),
                         summary: "Conversation history before an earlier-message edit. Files and external effects were not rewound."
                             .into(),
                     },
                 )
-                .map_err(TaskProjectionError::Mutation)?;
-                let config = source.config.clone().ok_or_else(|| {
-                    TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "task has no provider configuration".into(),
-                    ))
-                })?;
+                .map_err(TaskProjectionError::ProviderUnknown)?;
                 let request = self
                     .inherited_run_request(task_id, &text, &config, &provider_session_id)
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 let cwd = source.cwd.clone().unwrap_or_else(|| ".".into());
                 self.sessions.retire_context_binding(task_id, &cwd);
                 let plan_entries = plan.entries;
-                let plan_checkpoints = plan.checkpoints;
+                let plan_checkpoints = remapped_checkpoints;
                 let marker = self.history_marker(
                     format!("history-edit:{command_id}"),
                     format!(
@@ -3269,6 +3444,13 @@ impl EngineRpc {
                                         &plan_checkpoints,
                                     )?;
                                     doc.push_message(&marker)?;
+                                    let mut context = ContextControlState::default();
+                                    context.binding_generation = Some(new_binding.generation);
+                                    context.notice = Some(
+                                        "Context controls reset for the forked provider binding."
+                                            .into(),
+                                    );
+                                    doc.set_context_control(&context)?;
                                     self.queue_initial_history_prompt(
                                         doc,
                                         &run_command_id,
@@ -3292,10 +3474,18 @@ impl EngineRpc {
                             )?;
                             Ok(receipt)
                         },
-                    )?;
+                    )
+                    .map_err(|error| {
+                        TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                            error.message().to_string(),
+                        ))
+                    })?;
                 Ok(Some(receipt))
             }
-            TaskCommandIntent::RestoreHistoryRecovery { recovery_id } => {
+            TaskCommandIntent::RestoreHistoryRecovery {
+                recovery_id,
+                review,
+            } => {
                 let before = self
                     .current_task_command_snapshot(task_id)
                     .map_err(|error| {
@@ -3304,9 +3494,19 @@ impl EngineRpc {
                 let (source, binding) = self
                     .ensure_history_operation_ready(task_id)
                     .map_err(TaskProjectionError::Mutation)?;
+                self.validate_history_review(task_id, &source, &binding, &review)
+                    .map_err(TaskProjectionError::Mutation)?;
                 let (recovery_view, recovery_snapshot) =
                     load_recovery(&self.store, task_id, &recovery_id)
                         .map_err(TaskProjectionError::Mutation)?;
+                if review.message_id.is_some()
+                    || review.message_text.as_deref()
+                        != Some(recovery_view.source_provider_session_id.as_str())
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "history recovery selection is stale; reopen the recovery dialog".into(),
+                    )));
+                }
                 let old_binding = self
                     .task_identity
                     .view(task_id)
@@ -3337,11 +3537,58 @@ impl EngineRpc {
                     None,
                 )
                 .map_err(TaskProjectionError::Mutation)?;
+                if recovery_view.source_tip_checkpoint_id.is_empty()
+                    || plan.tip_checkpoint()
+                        != Some(recovery_view.source_tip_checkpoint_id.as_str())
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "history recovery has no verified exact native tip checkpoint".into(),
+                    )));
+                }
                 let config = source.config.clone().ok_or_else(|| {
                     TaskProjectionError::Mutation(crate::EngineError::Other(
                         "task has no provider configuration".into(),
                     ))
                 })?;
+                let current_handle = self
+                    .doc_host
+                    .open(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let current_snapshot = current_handle
+                    .doc()
+                    .export_snapshot()
+                    .map_err(crate::EngineError::from)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let current_plan = plan_history(
+                    current_handle.doc(),
+                    binding.provider_id,
+                    ConversationForkBoundaryKind::Tip,
+                    None,
+                )
+                .map_err(TaskProjectionError::Mutation)?;
+                let current_tip_checkpoint_id = current_plan
+                    .tip_checkpoint()
+                    .ok_or_else(|| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "current conversation has no exact completed provider tip".into(),
+                        ))
+                    })?
+                    .to_owned();
+                let undo_recovery = prepare_recovery(
+                    &self.store,
+                    HistoryRecoveryView {
+                        recovery_id: format!("restore:{command_id}"),
+                        task_id: task_id.to_string(),
+                        source_binding_id: binding.binding_id.clone(),
+                        source_provider_session_id: binding.provider_task_id.clone(),
+                        cutoff_message_id: recovery_view.cutoff_message_id.clone(),
+                        source_tip_checkpoint_id: current_tip_checkpoint_id,
+                        created_at_ms: crate::now_ms(),
+                        summary: "Conversation history before restoring an earlier recovery. Files and external effects were not rewound."
+                            .into(),
+                    },
+                )
+                .map_err(TaskProjectionError::Mutation)?;
                 let (provider_home, force_file_auth) = if binding.provider_id == HarnessId::Codex {
                     let execution = self
                         .agent_accounts
@@ -3365,11 +3612,13 @@ impl EngineRpc {
                         "provider fork capability changed; refresh before retrying".into(),
                     )));
                 }
-                let provider_session_id = tokio::time::timeout(
+                let provider_result = tokio::time::timeout(
                     Duration::from_secs(30),
                     harness.fork_session(ProviderForkRequest {
                         source_session_id: old_binding.provider_task_id.clone(),
-                        boundary: plan.provider_boundary.clone(),
+                        boundary: zeron_proto::ProviderForkBoundary::ThroughCheckpoint {
+                            checkpoint_id: recovery_view.source_tip_checkpoint_id.clone(),
+                        },
                         cwd: source.cwd.clone().unwrap_or_else(|| ".".into()),
                         model: config.model.clone(),
                         provider_home,
@@ -3378,63 +3627,53 @@ impl EngineRpc {
                 )
                 .await
                 .map_err(|_| {
-                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                    TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
                         "provider recovery fork completion is unknown".into(),
                     ))
                 })?
                 .map_err(crate::EngineError::from)
-                .map_err(TaskProjectionError::Mutation)?
-                .provider_session_id;
+                .map_err(TaskProjectionError::ProviderUnknown)?;
+                let provider_session_id = provider_result.provider_session_id.clone();
                 if provider_session_id == old_binding.provider_task_id
                     || provider_session_id == binding.provider_task_id
                 {
-                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "provider recovery did not create an independent session".into(),
-                    )));
+                    return Err(TaskProjectionError::ProviderUnknown(
+                        crate::EngineError::Other(
+                            "provider recovery did not create an independent session".into(),
+                        ),
+                    ));
                 }
+                self.doc_host
+                    .set_task_command_correlation(command_id, &provider_session_id)
+                    .map_err(|error| TaskProjectionError::ProviderUnknown(error.into()))?;
+                let remapped_checkpoints = plan
+                    .remapped_checkpoints(&provider_result)
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
 
                 let after = self
                     .current_task_command_snapshot(task_id)
                     .map_err(|error| {
-                        TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
+                        TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                            error.to_string(),
+                        ))
                     })?;
                 let (_, current_binding) = self
                     .ensure_history_operation_ready(task_id)
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
                 if before.task_revision != after.task_revision
                     || before.task_sequence != after.task_sequence
                     || binding.binding_id != current_binding.binding_id
                 {
-                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "task changed while history recovery was being prepared".into(),
-                    )));
+                    return Err(TaskProjectionError::ProviderUnknown(
+                        crate::EngineError::Other(
+                            "task changed while history recovery was being prepared".into(),
+                        ),
+                    ));
                 }
-                let current_snapshot = self
-                    .doc_host
-                    .open(task_id)
-                    .map_err(TaskProjectionError::Mutation)?
-                    .doc()
-                    .export_snapshot()
-                    .map_err(crate::EngineError::from)
-                    .map_err(TaskProjectionError::Mutation)?;
-                let undo_recovery = prepare_recovery(
-                    &self.store,
-                    HistoryRecoveryView {
-                        recovery_id: format!("restore:{command_id}"),
-                        task_id: task_id.to_string(),
-                        source_binding_id: binding.binding_id.clone(),
-                        source_provider_session_id: binding.provider_task_id.clone(),
-                        cutoff_message_id: recovery_view.cutoff_message_id,
-                        created_at_ms: crate::now_ms(),
-                        summary: "Conversation history before restoring an earlier recovery. Files and external effects were not rewound."
-                            .into(),
-                    },
-                )
-                .map_err(TaskProjectionError::Mutation)?;
                 let cwd = source.cwd.clone().unwrap_or_else(|| ".".into());
                 self.sessions.retire_context_binding(task_id, &cwd);
                 let plan_entries = plan.entries;
-                let plan_checkpoints = plan.checkpoints;
+                let plan_checkpoints = remapped_checkpoints;
                 let marker = self.history_marker(
                     format!("history-restore:{command_id}"),
                     format!(
@@ -3473,6 +3712,13 @@ impl EngineRpc {
                                         &plan_checkpoints,
                                     )?;
                                     doc.push_message(&marker)?;
+                                    let mut context = ContextControlState::default();
+                                    context.binding_generation = Some(new_binding.generation);
+                                    context.notice = Some(
+                                        "Context controls reset for the restored provider binding."
+                                            .into(),
+                                    );
+                                    doc.set_context_control(&context)?;
                                     Ok(())
                                 },
                                 move |registry| {
@@ -3490,7 +3736,12 @@ impl EngineRpc {
                             )?;
                             Ok(receipt)
                         },
-                    )?;
+                    )
+                    .map_err(|error| {
+                        TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                            error.message().to_string(),
+                        ))
+                    })?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::Rename { title } => {

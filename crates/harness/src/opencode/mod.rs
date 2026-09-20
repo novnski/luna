@@ -784,14 +784,8 @@ impl Server {
         directory: Option<&str>,
         boundary: &ProviderForkBoundary,
     ) -> Result<ProviderForkResult, HarnessError> {
-        let message_id = match boundary {
-            ProviderForkBoundary::Tip => None,
-            ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => Some(checkpoint_id.clone()),
-            ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
-                let messages = self.session_messages(source_session_id, directory).await?;
-                opencode_fork_cutoff(&messages, checkpoint_id)?
-            }
-        };
+        let source_messages = self.session_messages(source_session_id, directory).await?;
+        let (expected_source, message_id) = opencode_fork_plan(&source_messages, boundary)?;
         let path = match self.protocol().await {
             Protocol::V1 => format!("/session/{source_session_id}/fork"),
             Protocol::V2 => format!("/api/session/{source_session_id}/fork"),
@@ -831,8 +825,13 @@ impl Server {
                 "forked opencode session was not readable after acknowledgement".into(),
             ));
         }
+        let fork_messages = self
+            .session_messages(&provider_session_id, directory)
+            .await?;
+        let checkpoint_map = map_opencode_fork_history(&expected_source, &fork_messages)?;
         Ok(ProviderForkResult {
             provider_session_id,
+            checkpoint_map,
         })
     }
 
@@ -935,31 +934,123 @@ impl Server {
     }
 }
 
-fn opencode_fork_cutoff(
+fn opencode_message_id(message: &Value) -> Option<&str> {
+    message
+        .get("info")
+        .unwrap_or(message)
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn opencode_fork_plan(
     messages: &[Value],
-    checkpoint_id: &str,
-) -> Result<Option<String>, HarnessError> {
-    let position = messages.iter().position(|message| {
-        message
-            .get("info")
-            .unwrap_or(message)
-            .get("id")
-            .and_then(Value::as_str)
-            == Some(checkpoint_id)
-    });
-    let Some(position) = position else {
+    boundary: &ProviderForkBoundary,
+) -> Result<(Vec<Value>, Option<String>), HarnessError> {
+    for message in messages {
+        opencode_message_id(message).ok_or_else(|| {
+            HarnessError::Protocol(
+                "opencode source history contains a message without an id".into(),
+            )
+        })?;
+    }
+    match boundary {
+        ProviderForkBoundary::Tip => Ok((messages.to_vec(), None)),
+        ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => {
+            let position = messages
+                .iter()
+                .position(|message| opencode_message_id(message) == Some(checkpoint_id.as_str()))
+                .ok_or_else(|| {
+                    HarnessError::Protocol(format!(
+                        "opencode checkpoint {checkpoint_id} is not in source session"
+                    ))
+                })?;
+            Ok((messages[..position].to_vec(), Some(checkpoint_id.clone())))
+        }
+        ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+            let position = messages
+                .iter()
+                .position(|message| opencode_message_id(message) == Some(checkpoint_id.as_str()))
+                .ok_or_else(|| {
+                    HarnessError::Protocol(format!(
+                        "opencode checkpoint {checkpoint_id} is not in source session"
+                    ))
+                })?;
+            let cutoff = match messages.get(position + 1) {
+                Some(next) => Some(
+                    opencode_message_id(next)
+                        .ok_or_else(|| {
+                            HarnessError::Protocol(
+                                "opencode history after the checkpoint has no id; refusing to widen the fork to tip"
+                                    .into(),
+                            )
+                        })?
+                        .to_owned(),
+                ),
+                None => None,
+            };
+            Ok((messages[..=position].to_vec(), cutoff))
+        }
+    }
+}
+
+fn provider_history_signature(value: &Value) -> Value {
+    const VOLATILE: &[&str] = &[
+        "id",
+        "sessionID",
+        "sessionId",
+        "messageID",
+        "messageId",
+        "parentID",
+        "parentId",
+        "time",
+        "createdAt",
+        "updatedAt",
+    ];
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .filter(|(key, _)| !VOLATILE.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), provider_history_signature(value)))
+                .collect(),
+        ),
+        Value::Array(values) => {
+            Value::Array(values.iter().map(provider_history_signature).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn map_opencode_fork_history(
+    source: &[Value],
+    fork: &[Value],
+) -> Result<std::collections::BTreeMap<String, String>, HarnessError> {
+    if source.len() != fork.len() {
         return Err(HarnessError::Protocol(format!(
-            "opencode checkpoint {checkpoint_id} is not in source session"
+            "opencode fork history length mismatch: expected {}, observed {}",
+            source.len(),
+            fork.len()
         )));
-    };
-    Ok(messages.get(position + 1).and_then(|message| {
-        message
-            .get("info")
-            .unwrap_or(message)
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    }))
+    }
+    let mut checkpoint_map = std::collections::BTreeMap::new();
+    for (source, fork) in source.iter().zip(fork) {
+        let source_id = opencode_message_id(source).ok_or_else(|| {
+            HarnessError::Protocol(
+                "opencode source history contains a message without an id".into(),
+            )
+        })?;
+        let fork_id = opencode_message_id(fork).ok_or_else(|| {
+            HarnessError::Protocol("opencode fork history contains a message without an id".into())
+        })?;
+        if provider_history_signature(source) != provider_history_signature(fork) {
+            return Err(HarnessError::Protocol(format!(
+                "opencode fork history diverged at source message {source_id}"
+            )));
+        }
+        checkpoint_map.insert(source_id.to_owned(), fork_id.to_owned());
+    }
+    Ok(checkpoint_map)
 }
 
 fn compact_http_request(
