@@ -7374,6 +7374,20 @@ impl Composer {
         self.pickers.read(cx).no_agents_available()
     }
 
+    fn context_send_block_reason(&self, cx: &App) -> Option<&'static str> {
+        match self.state.read(cx).context_control.compact.status {
+            zeron_proto::ContextOperationStatus::Running => {
+                Some("Context compaction is still running. Your draft was not changed or sent.")
+            }
+            zeron_proto::ContextOperationStatus::Unknown => Some(
+                "Context compaction completion is unresolved. Your draft was not changed or sent; clear context before sending again.",
+            ),
+            zeron_proto::ContextOperationStatus::Idle
+            | zeron_proto::ContextOperationStatus::Completed
+            | zeron_proto::ContextOperationStatus::Failed => None,
+        }
+    }
+
     fn button_mode(&self, cx: &App) -> SendButtonMode {
         if self.editing_queued.is_some() {
             return SendButtonMode::Send;
@@ -7474,6 +7488,12 @@ impl Composer {
         follow_up_behavior: Option<zeron_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
+        if let Some(reason) = self.context_send_block_reason(cx) {
+            self.failure = Some(reason.into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return;
+        }
         let queue = follow_up_behavior.is_some();
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.failure = Some("Engine not connected".into());
@@ -10484,6 +10504,48 @@ mod tests {
                 "Pending edits must still block submission"
             );
         });
+    }
+
+    #[gpui::test]
+    fn context_running_or_unknown_blocks_before_draft_capture(cx: &mut gpui::TestAppContext) {
+        for (status, expected) in [
+            (
+                zeron_proto::ContextOperationStatus::Running,
+                "Context compaction is still running. Your draft was not changed or sent.",
+            ),
+            (
+                zeron_proto::ContextOperationStatus::Unknown,
+                "Context compaction completion is unresolved. Your draft was not changed or sent; clear context before sending again.",
+            ),
+        ] {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.selected_chat = Some("context-task".into());
+                state.context_control.compact.status = status;
+                state
+            });
+            let composer = cx.new(|cx| Composer::new(state, cx));
+            composer.update(cx, |composer, cx| {
+                composer.current_key = "context-task".into();
+                composer.draft_revisions.insert("context-task".into(), 7);
+                composer
+                    .draft_saved_revisions
+                    .insert("context-task".into(), 7);
+                composer.input.update(cx, |input, cx| {
+                    input.set_text("preserve this restored rich draft", cx);
+                });
+                let revision = composer.draft_revisions["context-task"];
+                composer.on_submit(cx);
+                assert_eq!(
+                    composer.input.read(cx).text(),
+                    "preserve this restored rich draft"
+                );
+                assert_eq!(composer.draft_revisions["context-task"], revision);
+                assert_eq!(composer.failure.as_deref(), Some(expected));
+                assert_eq!(composer.failure_key.as_deref(), Some("context-task"));
+                assert!(!composer.sending);
+            });
+        }
     }
 
     /// Issue #406: Enter submits — it must never stop a run. Stop mode only

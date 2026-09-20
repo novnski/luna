@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{fs::OpenOptions, io::Write as _};
 
@@ -34,6 +35,7 @@ const TASK_B: &str = "l08-native-b";
 const L11_TASK_A: &str = "11111111-1111-4111-8111-111111111111";
 const L11_TASK_B: &str = "22222222-2222-4222-8222-222222222222";
 const L11_BOOTSTRAP_MARKER: &str = "l11-bootstrap-v2.complete";
+const L11_RICH_DRAFT_TEXT: &str = "L11 rich draft survives clear, restart, and provider handoff";
 const MEDIUM_REASONING: &[ReasoningLevel] = &[ReasoningLevel::Medium];
 const L11_REASONING: &[ReasoningLevel] = &[ReasoningLevel::Medium, ReasoningLevel::High];
 const PNG_B64: &str =
@@ -73,6 +75,14 @@ enum L11CompactOutcome {
 struct L11CompactCommand {
     sequence: u64,
     outcome: L11CompactOutcome,
+}
+
+struct L11CompactPollGuard(Arc<AtomicBool>);
+
+impl Drop for L11CompactPollGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -190,7 +200,7 @@ impl L11CompactControl {
         harness: HarnessId,
         request: &ContextCompactRequest,
     ) -> Result<(), HarnessError> {
-        let mut last_sequence = read_l11_compact_command(&self.command_path)
+        let last_sequence = read_l11_compact_command(&self.command_path)
             .map(|command| command.sequence)
             .unwrap_or_default();
         let trace =
@@ -205,58 +215,74 @@ impl L11CompactControl {
                 "model": request.model,
             }),
         );
-        let deadline = tokio::time::sleep(self.safety_deadline);
-        tokio::pin!(deadline);
-        let mut poll = tokio::time::interval(Duration::from_millis(100));
-        loop {
-            tokio::select! {
-                _ = &mut deadline => {
-                    trace.trace(
-                        &request.session_id,
-                        "compactUnknown",
-                        serde_json::json!({ "reason": "safetyDeadline" }),
-                    );
-                    return Err(HarnessError::Protocol(
-                        "synthetic L11 compact completion is unknown".into(),
-                    ));
-                }
-                _ = poll.tick() => {
-                    let Some(command) = read_l11_compact_command(&self.command_path) else {
-                        continue;
-                    };
-                    if command.sequence <= last_sequence {
-                        continue;
-                    }
-                    last_sequence = command.sequence;
-                    match command.outcome {
-                        L11CompactOutcome::Running => trace.trace(
-                            &request.session_id,
-                            "compactRunning",
-                            serde_json::json!({ "sequence": command.sequence }),
-                        ),
-                        L11CompactOutcome::Completed => {
-                            trace.trace(
-                                &request.session_id,
-                                "compactCompleted",
+        let running = Arc::new(AtomicBool::new(true));
+        let guard = L11CompactPollGuard(running.clone());
+        let command_path = self.command_path.clone();
+        let trace_path = self.trace_path.clone();
+        let session_id = request.session_id.clone();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("l11-compact-control".into())
+            .spawn(move || {
+                let trace = FixtureLifecycleControl::new(command_path.clone(), trace_path);
+                let mut last_sequence = last_sequence;
+                while running.load(Ordering::Acquire) {
+                    if let Some(command) = read_l11_compact_command(&command_path)
+                        && command.sequence > last_sequence
+                    {
+                        last_sequence = command.sequence;
+                        match command.outcome {
+                            L11CompactOutcome::Running => trace.trace(
+                                &session_id,
+                                "compactRunning",
                                 serde_json::json!({ "sequence": command.sequence }),
-                            );
-                            return Ok(());
-                        }
-                        L11CompactOutcome::Unknown => {
-                            trace.trace(
-                                &request.session_id,
-                                "compactUnknown",
-                                serde_json::json!({
-                                    "sequence": command.sequence,
-                                    "reason": "controlledUnknown",
-                                }),
-                            );
-                            return Err(HarnessError::Protocol(
-                                "synthetic L11 compact completion is unknown".into(),
-                            ));
+                            ),
+                            L11CompactOutcome::Completed => {
+                                trace.trace(
+                                    &session_id,
+                                    "compactCompleted",
+                                    serde_json::json!({ "sequence": command.sequence }),
+                                );
+                                let _ = result_tx.send(Ok(()));
+                                return;
+                            }
+                            L11CompactOutcome::Unknown => {
+                                trace.trace(
+                                    &session_id,
+                                    "compactUnknown",
+                                    serde_json::json!({
+                                        "sequence": command.sequence,
+                                        "reason": "controlledUnknown",
+                                    }),
+                                );
+                                let _ =
+                                    result_tx
+                                        .send(Err("synthetic L11 compact completion is unknown"
+                                            .to_string()));
+                                return;
+                            }
                         }
                     }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
+            })?;
+        let result = tokio::time::timeout(self.safety_deadline, result_rx).await;
+        drop(guard);
+        match result {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(HarnessError::Protocol(error)),
+            Ok(Err(_)) => Err(HarnessError::Protocol(
+                "synthetic L11 compact control stopped before readback".into(),
+            )),
+            Err(_) => {
+                trace.trace(
+                    &request.session_id,
+                    "compactUnknown",
+                    serde_json::json!({ "reason": "safetyDeadline" }),
+                );
+                Err(HarnessError::Protocol(
+                    "synthetic L11 compact completion is unknown".into(),
+                ))
             }
         }
     }
@@ -1059,6 +1085,7 @@ async fn seed_l11_context_controls_at(
     root: &Path,
     checkpoint: L11SeedCheckpoint,
 ) -> anyhow::Result<L11SeedOutcome> {
+    repair_l11_pristine_draft_metadata(core)?;
     let marker = root.join(L11_BOOTSTRAP_MARKER);
     if marker.is_file() {
         return Ok(L11SeedOutcome::AlreadyReady);
@@ -1133,11 +1160,7 @@ async fn seed_l11_context_controls_at(
 
     if draft_read.draft.is_none() {
         let png = base64::engine::general_purpose::STANDARD.decode(PNG_B64)?;
-        let mut rich_draft = draft(
-            L11_TASK_A,
-            1,
-            "L11 rich draft survives clear, restart, and provider handoff",
-        );
+        let mut rich_draft = draft(L11_TASK_A, 1, L11_RICH_DRAFT_TEXT);
         rich_draft.attachments.push(DraftBlob {
             attachment_id: "l11-native-draft-attachment".into(),
             name: "l11-queue.png".into(),
@@ -1147,8 +1170,6 @@ async fn seed_l11_context_controls_at(
             state: DraftBlobState::Saved,
             error: None,
         });
-        rich_draft.execution =
-            serde_json::to_value(l11_fixture_chat_config(HarnessId::Mock, "l11-mock-a"))?;
         let outcome = core
             .store
             .save_composer_draft(&core.device_id, &rich_draft)?;
@@ -1182,6 +1203,33 @@ async fn seed_l11_context_controls_at(
     std::fs::write(&temp, b"ready\n")?;
     std::fs::rename(temp, marker)?;
     Ok(L11SeedOutcome::Ready)
+}
+
+fn repair_l11_pristine_draft_metadata(core: &EngineCore) -> anyhow::Result<()> {
+    let Some(mut record) = core
+        .store
+        .read_composer_draft(&core.device_id, Some(L11_TASK_A), None)?
+        .draft
+    else {
+        return Ok(());
+    };
+    let legacy_execution =
+        serde_json::to_value(l11_fixture_chat_config(HarnessId::Mock, "l11-mock-a"))?;
+    if record.revision != 1
+        || record.text != L11_RICH_DRAFT_TEXT
+        || record.execution != legacy_execution
+    {
+        return Ok(());
+    }
+    record.revision = 2;
+    record.execution = serde_json::Value::Null;
+    record.updated_at_ms = chrono::Utc::now().timestamp_millis();
+    anyhow::ensure!(
+        core.store.save_composer_draft(&core.device_id, &record)?
+            == zeron_proto::ComposerDraftSaveOutcome::Saved,
+        "legacy L11 fixture draft metadata was not repaired"
+    );
+    Ok(())
 }
 
 async fn seed_l11_context_controls(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
@@ -1698,6 +1746,32 @@ mod tests {
         .unwrap();
     }
 
+    fn write_l11_compact_control_atomic(path: &Path, sequence: u64, outcome: &str) {
+        let temp = path.with_extension("json.tmp");
+        std::fs::write(
+            &temp,
+            serde_json::json!({ "sequence": sequence, "outcome": outcome }).to_string(),
+        )
+        .unwrap();
+        std::fs::rename(temp, path).unwrap();
+    }
+
+    async fn wait_for_trace(path: &Path, event: &str) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if std::fs::read_to_string(path)
+                    .ok()
+                    .is_some_and(|trace| trace.contains(event))
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("trace never recorded {event}"));
+    }
+
     #[test]
     fn fixture_startup_loads_saved_settings_and_fresh_roots_default() {
         let fresh = tempfile::tempdir().unwrap();
@@ -1787,6 +1861,14 @@ mod tests {
         let mut user_draft = read.draft.unwrap();
         assert!(user_draft.text.contains("L11 rich draft"));
         assert_eq!(user_draft.attachments.len(), 1);
+        assert_eq!(user_draft.execution, serde_json::Value::Null);
+        assert_eq!(
+            core.store
+                .save_composer_draft(&core.device_id, &user_draft)
+                .unwrap(),
+            zeron_proto::ComposerDraftSaveOutcome::Unchanged,
+            "the restored rich draft must pass the submit save gate at its existing revision"
+        );
         assert_eq!(
             core.task_identity
                 .view(L11_TASK_A)
@@ -1880,6 +1962,35 @@ mod tests {
                 .is_some()
         );
         reopened.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn l11_legacy_draft_metadata_repair_is_exact_and_once_only() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble_fixture_test_core(root.path());
+        let mut legacy = draft(L11_TASK_A, 1, L11_RICH_DRAFT_TEXT);
+        legacy.execution =
+            serde_json::to_value(l11_fixture_chat_config(HarnessId::Mock, "l11-mock-a")).unwrap();
+        assert_eq!(
+            core.store
+                .save_composer_draft(&core.device_id, &legacy)
+                .unwrap(),
+            zeron_proto::ComposerDraftSaveOutcome::Saved
+        );
+        repair_l11_pristine_draft_metadata(&core).unwrap();
+        let mut repaired = l11_draft(&core).draft.unwrap();
+        assert_eq!(repaired.revision, 2);
+        assert_eq!(repaired.execution, serde_json::Value::Null);
+
+        repaired.revision = 3;
+        repaired.text = "user-edited L11 draft".into();
+        repaired.execution = serde_json::json!({"user":"metadata"});
+        core.store
+            .save_composer_draft(&core.device_id, &repaired)
+            .unwrap();
+        repair_l11_pristine_draft_metadata(&core).unwrap();
+        assert_eq!(l11_draft(&core).draft.unwrap(), repaired);
+        core.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1991,6 +2102,77 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("completion is unknown"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn l11_ipc_compact_consumes_script_control_and_applies_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble_l11_fixture_test_core(root.path());
+        initialize_fixture_workspace(&core, root.path(), "context-controls").unwrap();
+        seed_l11_context_controls(&core, root.path()).await.unwrap();
+
+        let port = unused_port();
+        let ipc = zeron_engine::serve_ipc(port, core.rpc_service())
+            .await
+            .unwrap();
+        let client = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let snapshot: zeron_proto::TaskCommandRead = client
+            .call_as(
+                methods::GET_TASK_COMMAND_SNAPSHOT,
+                serde_json::json!({ "taskId": L11_TASK_A }),
+            )
+            .await
+            .unwrap();
+        let generation = snapshot.snapshot.binding_generation.unwrap();
+        let compact = tokio::spawn(async move {
+            client
+                .call_as::<zeron_proto::CommandReceipt>(
+                    methods::EXECUTE_TASK_COMMAND,
+                    serde_json::json!({
+                        "commandId":"l11-native-ipc-compact",
+                        "actorId":"l11-native-fixture-test",
+                        "clientId":"l11-native-fixture-test",
+                        "clientSessionId":"ipc",
+                        "taskId":L11_TASK_A,
+                        "expectedTaskRevision":snapshot.snapshot.task_revision,
+                        "expectedBindingGeneration":generation,
+                        "intent":{"kind":"compactContext"}
+                    }),
+                )
+                .await
+        });
+
+        let trace = root.path().join("l11-context-control-trace.jsonl");
+        let control = root.path().join("l11-compact-control.json");
+        wait_for_trace(&trace, "compactStarted").await;
+        write_l11_compact_control_atomic(&control, 1, "running");
+        wait_for_trace(&trace, "compactRunning").await;
+        write_l11_compact_control_atomic(&control, 2, "completed");
+        let receipt = tokio::time::timeout(Duration::from_secs(5), compact)
+            .await
+            .expect("compact RPC stayed bounded")
+            .expect("compact RPC task joined")
+            .expect("compact RPC returned a receipt");
+        assert_eq!(receipt.status, zeron_proto::CommandReceiptStatus::Applied);
+        assert_eq!(
+            core.doc_host
+                .context_control(L11_TASK_A)
+                .unwrap()
+                .compact
+                .status,
+            zeron_proto::ContextOperationStatus::Completed
+        );
+        wait_for_trace(&trace, "compactCompleted").await;
+        assert_eq!(
+            std::fs::read_to_string(&control).unwrap(),
+            serde_json::json!({"sequence":2,"outcome":"completed"}).to_string()
+        );
+
+        ipc.abort();
+        let _ = ipc.await;
+        core.shutdown().await;
     }
 
     #[tokio::test]
