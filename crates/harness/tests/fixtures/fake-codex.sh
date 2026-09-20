@@ -109,7 +109,34 @@ if has "$line" '"method":"model/list"'; then
   exec sleep 30
 fi
 if has "$line" '"method":"thread/resume"'; then
-  if has "$line" '"threadId":"resume-with-child-v1"'; then
+  if has "$line" '"threadId":"compact-ok"'; then
+    printf '%s\n' 'resume' >> "$CODEX_HOME/compact-trace"
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"compact-ok\",\"status\":{\"type\":\"idle\"}}}}"
+    read -r compact_line || exit 1
+    has "$compact_line" '"method":"thread/compact/start"' || exit 1
+    has "$compact_line" '"threadId":"compact-ok"' || exit 1
+    printf '%s\n' 'compact' >> "$CODEX_HOME/compact-trace"
+    : > "$CODEX_HOME/compact-called"
+    emit "{\"id\":$(rid "$compact_line"),\"result\":{}}"
+    emit '{"method":"item/completed","params":{"threadId":"other-thread","item":{"id":"compact-other","type":"contextCompaction"}}}'
+    sleep 1
+    printf '%s\n' 'matching-completion' >> "$CODEX_HOME/compact-trace"
+    : > "$CODEX_HOME/compact-matching-completion"
+    emit '{"method":"item/completed","params":{"threadId":"compact-ok","item":{"id":"compact-1","type":"contextCompaction"}}}'
+    exec sleep 30
+  elif has "$line" '"threadId":"compact-load-fail"'; then
+    printf '%s\n' 'resume-rejected' >> "$CODEX_HOME/compact-trace"
+    emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32602,\"message\":\"bound thread could not be loaded\"}}"
+    exit 0
+  elif has "$line" '"threadId":"compact-owner-active"'; then
+    printf '%s\n' 'resume-active' >> "$CODEX_HOME/compact-trace"
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"compact-owner-active\",\"status\":{\"type\":\"active\",\"activeFlags\":[\"turn\"]}}}}"
+    exec sleep 30
+  elif has "$line" '"threadId":"compact-wrong-binding"'; then
+    printf '%s\n' 'resume-wrong-binding' >> "$CODEX_HOME/compact-trace"
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"different-thread\",\"status\":{\"type\":\"idle\"}}}}"
+    exec sleep 30
+  elif has "$line" '"threadId":"resume-with-child-v1"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"items\":[{\"type\":\"collabAgentToolCall\",\"id\":\"spawn-alpha\",\"tool\":\"spawnAgent\",\"status\":\"completed\",\"receiverThreadIds\":[\"child-alpha\"]}]}]}}}"
   elif has "$line" '"threadId":"resume-with-child-v2"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"items\":[{\"type\":\"subAgentActivity\",\"id\":\"spawn-alpha\",\"kind\":\"started\",\"agentThreadId\":\"child-alpha\",\"agentPath\":\"/root/alpha\"},{\"type\":\"subAgentActivity\",\"id\":\"subagent-completed-old\",\"kind\":\"completed\",\"agentThreadId\":\"child-alpha\",\"agentPath\":\"/root/alpha\"}]}]}}}"

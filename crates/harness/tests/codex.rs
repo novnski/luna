@@ -166,6 +166,48 @@ async fn native_metadata_client_uses_supported_methods_only() {
 }
 
 #[tokio::test]
+async fn native_compaction_resumes_bound_thread_before_start_and_waits_for_matching_completion() {
+    let home = tempfile::tempdir().unwrap();
+    let client = CodexNativeClient::new(home.path()).with_executable(fixture_path());
+    tokio::time::timeout(Duration::from_secs(5), client.compact_thread("compact-ok"))
+        .await
+        .expect("fixture compaction completed in time")
+        .expect("fixture compaction succeeded");
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("compact-trace")).unwrap(),
+        "resume\ncompact\nmatching-completion\n"
+    );
+    assert!(home.path().join("compact-called").is_file());
+    assert!(
+        home.path().join("compact-matching-completion").is_file(),
+        "the request ACK and another thread's completion must not finish compaction"
+    );
+}
+
+#[tokio::test]
+async fn native_compaction_load_owner_and_binding_failures_never_start_or_replay_compaction() {
+    for (thread_id, expected) in [
+        ("compact-load-fail", "could not be loaded"),
+        ("compact-owner-active", "active in another owner"),
+        ("compact-wrong-binding", "instead of bound thread"),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let client = CodexNativeClient::new(home.path()).with_executable(fixture_path());
+        let error = tokio::time::timeout(Duration::from_secs(5), client.compact_thread(thread_id))
+            .await
+            .expect("fixture failure returned in time")
+            .expect_err("unsafe compact must fail before dispatch");
+        assert!(error.to_string().contains(expected), "{thread_id}: {error}");
+        assert!(
+            !home.path().join("compact-called").exists(),
+            "{thread_id} must not dispatch or replay compact"
+        );
+        let trace = std::fs::read_to_string(home.path().join("compact-trace")).unwrap();
+        assert_eq!(trace.lines().count(), 1, "{thread_id}: {trace}");
+    }
+}
+
+#[tokio::test]
 #[ignore = "creates one clearly marked native Codex QA thread and one short GPT-5.6 Luna turn"]
 async fn live_l06_native_visibility_rename_archive_and_reopen() {
     let home = std::env::var_os("CODEX_HOME")

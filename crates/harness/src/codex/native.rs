@@ -142,6 +142,21 @@ impl CodexNativeClient {
     /// an acknowledgement and must not be presented as completion.
     pub async fn compact_thread(&self, thread_id: &str) -> Result<(), HarnessError> {
         let mut connection = self.connect().await?;
+        let resumed = connection
+            .client
+            .request("thread/resume", json!({"threadId": thread_id}))
+            .await;
+        let resumed = match resumed {
+            Ok(resumed) => resumed,
+            Err(error) => {
+                connection.close().await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = validate_compaction_resume(thread_id, &resumed) {
+            connection.close().await;
+            return Err(error);
+        }
         let started = connection
             .client
             .request("thread/compact/start", json!({"threadId": thread_id}))
@@ -278,6 +293,38 @@ impl CodexNativeClient {
             notifications: notification_rx,
         })
     }
+}
+
+fn validate_compaction_resume(thread_id: &str, response: &Value) -> Result<(), HarnessError> {
+    let thread = response.get("thread").unwrap_or(response);
+    let resumed_id = optional_string(thread, "id")
+        .ok_or_else(|| HarnessError::Protocol("thread/resume response missing thread.id".into()))?;
+    if resumed_id != thread_id {
+        return Err(HarnessError::Protocol(format!(
+            "thread/resume loaded {resumed_id} instead of bound thread {thread_id}"
+        )));
+    }
+    if let Some(status) = thread
+        .get("status")
+        .and_then(|status| status.get("type"))
+        .and_then(Value::as_str)
+    {
+        match status {
+            "active" => {
+                return Err(HarnessError::Protocol(
+                    "bound Codex thread is active in another owner; compaction was not started"
+                        .into(),
+                ));
+            }
+            "notLoaded" | "systemError" | "unknown" => {
+                return Err(HarnessError::Protocol(format!(
+                    "bound Codex thread did not load for compaction: {status}"
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
