@@ -13,6 +13,7 @@ pub mod capabilities {
         "message-queue-clean-attachment-text-v1";
     pub const MESSAGE_QUEUE_EDIT_LEASE_V1: &str = "message-queue-edit-lease-v1";
     pub const TASK_IDENTITY_V1: &str = "task-identity-v1";
+    pub const SESSION_HISTORY_SEARCH_V1: &str = "session-history-search-v1";
 
     pub const CURRENT: &[&str] = &[
         MESSAGE_QUEUE_V1,
@@ -21,6 +22,7 @@ pub mod capabilities {
         MESSAGE_QUEUE_CLEAN_ATTACHMENT_TEXT_V1,
         MESSAGE_QUEUE_EDIT_LEASE_V1,
         TASK_IDENTITY_V1,
+        SESSION_HISTORY_SEARCH_V1,
     ];
 
     pub fn current() -> Vec<String> {

@@ -56,9 +56,10 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use zeron_doc::{
     MessagePart, MessageRole, MessageStatus, RegistryDoc, SessionCommandEntry,
@@ -69,9 +70,10 @@ use zeron_proto::{
     CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead, ContextBoundary,
     ContextBoundaryKind, ContextControlState, ContextHandoff, ContextOperationStatus,
     ConversationForkBoundaryKind, DraftBlobState, EngineInfo, FollowUpBehavior, HarnessId,
-    HistoryCapabilityView, HistoryRecoveryView, ImportOwnership, PermissionMode,
-    ProviderForkCapability, ProviderForkRequest, TaskCommandSnapshot, TaskLineage, ToolCall,
-    WorkspaceScope,
+    HistoryCapabilityView, HistoryProjectPolicy, HistoryRebuildRequest, HistoryRebuildResult,
+    HistoryRecoveryView, HistorySearchRequest, ImportOwnership, PermissionMode,
+    ProviderForkCapability, ProviderForkRequest, TaskCommandEvent, TaskCommandSnapshot,
+    TaskLineage, ToolCall, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 use zeron_sync::DocsStore;
@@ -1002,6 +1004,13 @@ pub struct EngineRpc {
     updater: Option<zeron_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
+    activity_cancel: CancellationToken,
+}
+
+impl Drop for EngineRpc {
+    fn drop(&mut self) {
+        self.activity_cancel.cancel();
+    }
 }
 
 impl EngineRpc {
@@ -1027,7 +1036,7 @@ impl EngineRpc {
             workspace_scope,
             capabilities: zeron_proto::capabilities::current(),
         };
-        Self {
+        let rpc = Self {
             store,
             sessions,
             doc_host,
@@ -1047,7 +1056,94 @@ impl EngineRpc {
             updater: None,
             local_import: None,
             engine_info,
-        }
+            activity_cancel: CancellationToken::new(),
+        };
+        rpc.spawn_activity_bootstrap();
+        rpc
+    }
+
+    /// Migration/reopen ingestion plus metadata reconciliation. This runs
+    /// independently of search, so showing results never fetches sensitive
+    /// source payload on demand. Only tasks whose index-relevant workspace
+    /// metadata changed are reread; deleted tasks lose their derived rows.
+    fn spawn_activity_bootstrap(&self) {
+        let store = self.store.clone();
+        let doc_host = self.doc_host.clone();
+        let workspace = self.workspace.clone();
+        let identity = self.task_identity.clone();
+        let local_device_id = self.engine_info.device_id.clone();
+        let cancel = self.activity_cancel.clone();
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::debug!("session history bootstrap deferred: no Tokio runtime");
+            return;
+        };
+        runtime.spawn(async move {
+            let mut chats = workspace.watch_chats();
+            let mut indexed = HashMap::<String, String>::new();
+            let mut opening = true;
+            loop {
+                let current = chats.borrow_and_update().clone();
+                let current_ids = current
+                    .iter()
+                    .map(|chat| chat.id.clone())
+                    .collect::<HashSet<_>>();
+                let known_task_ids = if opening {
+                    opening = false;
+                    store.activity_task_ids().unwrap_or_else(|error| {
+                        tracing::warn!(%error, "session history could not inventory prior task rows");
+                        Vec::new()
+                    })
+                } else {
+                    indexed.keys().cloned().collect()
+                };
+                let deleted = known_task_ids
+                    .iter()
+                    .filter(|task_id| !current_ids.contains(*task_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for task_id in deleted {
+                    if let Err(error) = store.replace_activity_events(&task_id, &[]) {
+                        tracing::warn!(task = %task_id, %error, "session history could not remove deleted task rows");
+                    } else {
+                        indexed.remove(&task_id);
+                    }
+                }
+                for chat in current {
+                    let fingerprint = activity_metadata_fingerprint(&chat);
+                    if indexed.get(&chat.id) == Some(&fingerprint) {
+                        continue;
+                    }
+                    match doc_host.open(&chat.id) {
+                        Ok(handle) => match handle.doc().read_entries() {
+                            Ok(entries) => {
+                                if let Err(error) = index_activity_task(
+                                    &store,
+                                    &identity,
+                                    &local_device_id,
+                                    &chat,
+                                    entries,
+                                ) {
+                                    tracing::warn!(task = %chat.id, %error, "session history bootstrap skipped task");
+                                } else {
+                                    indexed.insert(chat.id.clone(), fingerprint);
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(task = %chat.id, %error, "session history bootstrap preserved prior index after source read failure");
+                            }
+                        },
+                        Err(error) => {
+                            tracing::warn!(task = %chat.id, %error, "session history bootstrap could not open task");
+                        }
+                    }
+                    tokio::task::yield_now().await;
+                }
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    changed = chats.changed() => if changed.is_err() { break },
+                }
+            }
+        });
     }
 
     pub fn with_previews(mut self, previews: zeron_preview::PreviewService) -> Self {
@@ -4789,6 +4885,8 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_TASK_COMMAND_RECEIPT
             | methods::GET_TASK_COMMAND_SNAPSHOT
             | methods::WATCH_TASK_COMMANDS
+            | methods::SEARCH_SESSION_HISTORY
+            | methods::REBUILD_SESSION_HISTORY
             | methods::WATCH_DOC_MESSAGES
             // The queue lives on the chat doc, and only its host may send from
             // it — same addressing as the command ledger next door.
@@ -5113,6 +5211,84 @@ impl RpcService for AuthRpc {
     }
 }
 
+fn activity_metadata_fingerprint(chat: &Chat) -> String {
+    serde_json::to_string(&(
+        &chat.device_id,
+        &chat.space_id,
+        &chat.cwd,
+        &chat.checkout_id,
+        &chat.source_context,
+        &chat.config,
+        &chat.harness_session_id,
+        &chat.last_message_at,
+    ))
+    .unwrap_or_else(|_| format!("{}:{}", chat.device_id, chat.id))
+}
+
+fn task_command_history(
+    store: &DocsStore,
+    task_id: &str,
+) -> Result<(Vec<TaskCommandEvent>, bool), zeron_sync::StoreError> {
+    const MAX_EVENTS: usize = 10_000;
+    let mut cursor = 0;
+    let mut events = Vec::new();
+    let mut truncated = false;
+    loop {
+        let page = store.read_task_commands(task_id, cursor, 100)?;
+        if page.reload_required {
+            break;
+        }
+        events.extend(page.events);
+        if events.len() >= MAX_EVENTS {
+            truncated = page.has_more;
+            break;
+        }
+        if !page.has_more {
+            break;
+        }
+        let Some(next) = page.next_task_sequence else {
+            break;
+        };
+        cursor = next;
+    }
+    events.truncate(MAX_EVENTS);
+    Ok((events, truncated))
+}
+
+fn index_activity_task(
+    store: &DocsStore,
+    identity: &crate::TaskIdentityService,
+    local_device_id: &str,
+    chat: &Chat,
+    entries: Vec<SessionMessageEntry>,
+) -> Result<usize, String> {
+    let _activity_guard = store.activity_index_guard();
+    let policy = chat
+        .space_id
+        .as_deref()
+        .map(|project_id| store.activity_project_policy(project_id))
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .flatten();
+    let (receipts, receipts_truncated) =
+        task_command_history(store, &chat.id).map_err(|error| error.to_string())?;
+    let task_identity = identity.view(&chat.id);
+    let events = crate::activity_history::build_activity_envelopes(
+        local_device_id,
+        chat,
+        task_identity.as_ref(),
+        &entries,
+        &receipts,
+        receipts_truncated,
+        policy.as_ref(),
+    );
+    let count = events.len();
+    store
+        .replace_activity_events(&chat.id, &events)
+        .map_err(|error| error.to_string())?;
+    Ok(count)
+}
+
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
@@ -5144,6 +5320,142 @@ impl RpcService for EngineRpc {
         match method {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
+            methods::SEARCH_SESSION_HISTORY => {
+                let request: HistorySearchRequest = parse_params(params)?;
+                let page = self
+                    .store
+                    .search_activity_events(&request)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&page)
+            }
+            methods::REBUILD_SESSION_HISTORY => {
+                let request: HistoryRebuildRequest = parse_params(params)?;
+                let requested = request.task_ids.into_iter().collect::<HashSet<_>>();
+                let chats = self
+                    .workspace
+                    .read_chats()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?
+                    .into_iter()
+                    .filter(|chat| requested.is_empty() || requested.contains(&chat.id))
+                    .collect::<Vec<_>>();
+                let _activity_guard = self.store.activity_index_guard();
+                let mut rebuilt = Vec::with_capacity(chats.len());
+                for chat in &chats {
+                    let handle = self
+                        .doc_host
+                        .open(&chat.id)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    let entries = handle
+                        .doc()
+                        .read_entries()
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    let policy = chat
+                        .space_id
+                        .as_deref()
+                        .map(|project_id| self.store.activity_project_policy(project_id))
+                        .transpose()
+                        .map_err(|error| RpcError::Failed(error.to_string()))?
+                        .flatten();
+                    let (receipts, receipts_truncated) =
+                        task_command_history(&self.store, &chat.id)
+                            .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    let identity = self.task_identity.view(&chat.id);
+                    let events = crate::activity_history::build_activity_envelopes(
+                        &self.engine_info.device_id,
+                        chat,
+                        identity.as_ref(),
+                        &entries,
+                        &receipts,
+                        receipts_truncated,
+                        policy.as_ref(),
+                    );
+                    rebuilt.push((chat.id.clone(), events));
+                }
+                let indexed_events = rebuilt.iter().map(|(_, events)| events.len() as u64).sum();
+                if requested.is_empty() {
+                    self.store
+                        .rebuild_activity_events(&rebuilt)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                } else {
+                    for (task_id, events) in &rebuilt {
+                        self.store
+                            .replace_activity_events(task_id, events)
+                            .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    }
+                }
+                RpcReply::value(&HistoryRebuildResult {
+                    indexed_events,
+                    indexed_tasks: rebuilt.len() as u64,
+                    completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                })
+            }
+            methods::GET_SESSION_HISTORY_POLICY => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    project_id: String,
+                }
+                let p: P = parse_params(params)?;
+                let policy = self
+                    .store
+                    .activity_project_policy(&p.project_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?
+                    .unwrap_or(HistoryProjectPolicy {
+                        project_id: p.project_id,
+                        excluded_path_prefixes: Vec::new(),
+                        excluded_terms: Vec::new(),
+                        index_terminal_output: false,
+                        index_browser_fields: false,
+                        index_accessibility_text: false,
+                        index_screenshot_text: false,
+                    });
+                RpcReply::value(&policy)
+            }
+            methods::SET_SESSION_HISTORY_POLICY => {
+                let policy: HistoryProjectPolicy = parse_params(params)?;
+                if policy.project_id.trim().is_empty() {
+                    return Err(RpcError::Failed("projectId is required".into()));
+                }
+                if policy.index_terminal_output
+                    || policy.index_browser_fields
+                    || policy.index_accessibility_text
+                    || policy.index_screenshot_text
+                {
+                    return Err(RpcError::Failed(
+                        "Sensitive terminal, browser-field, Accessibility, and screenshot text indexing is unsupported."
+                            .into(),
+                    ));
+                }
+                self.store
+                    .save_activity_project_policy(&policy)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                // Reconcile affected tasks immediately so old derived rows do
+                // not survive a stricter disclosure policy.
+                for chat in self
+                    .workspace
+                    .read_chats()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?
+                    .into_iter()
+                    .filter(|chat| chat.space_id.as_deref() == Some(policy.project_id.as_str()))
+                {
+                    let handle = self
+                        .doc_host
+                        .open(&chat.id)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    index_activity_task(
+                        &self.store,
+                        &self.task_identity,
+                        &self.engine_info.device_id,
+                        &chat,
+                        handle
+                            .doc()
+                            .read_entries()
+                            .map_err(|error| RpcError::Failed(error.to_string()))?,
+                    )
+                    .map_err(RpcError::Failed)?;
+                }
+                RpcReply::value(&policy)
+            }
             methods::GET_TASK_IDENTITY => {
                 let p: TaskIdentityParams = parse_params(params)?;
                 RpcReply::value(&self.task_identity.view(&p.task_id))

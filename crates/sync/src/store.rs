@@ -9,9 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use zeron_proto::{
-    CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, ComposerDraft,
-    ComposerDraftRead, ComposerDraftSaveOutcome, DraftSubmission, DraftSubmissionState,
-    TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
+    ActivityEnvelope, CommandReasonCode, CommandReceipt, CommandReceiptReason,
+    CommandReceiptStatus, ComposerDraft, ComposerDraftRead, ComposerDraftSaveOutcome,
+    DraftSubmission, DraftSubmissionState, HistoryCursor, HistoryProjectPolicy, HistorySearchPage,
+    HistorySearchRequest, HistorySearchScope, TaskCommandEvent, TaskCommandRead,
+    TaskCommandSnapshot,
 };
 
 /// Errors surfaced by [`DocsStore`].
@@ -148,6 +150,34 @@ const MIGRATIONS: &[&str] = &[
         record_json BLOB NOT NULL,
         updated_at INTEGER NOT NULL
      ) STRICT;",
+    // v7 — L14 local derived session-history index. The canonical payload
+    // remains in the transcript/receipt stores; rows here contain only the
+    // minimized redacted envelope and can be replaced transactionally.
+    "CREATE TABLE activity_events (
+        event_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        project_id TEXT,
+        device_id TEXT NOT NULL,
+        harness TEXT,
+        model TEXT,
+        outcome TEXT NOT NULL,
+        tool TEXT,
+        app TEXT,
+        timestamp_ms INTEGER NOT NULL,
+        sequence INTEGER NOT NULL,
+        search_text TEXT NOT NULL,
+        envelope_json BLOB NOT NULL
+     ) STRICT;
+     CREATE INDEX activity_events_order
+       ON activity_events(timestamp_ms DESC, sequence DESC, event_id DESC);
+     CREATE INDEX activity_events_project_order
+       ON activity_events(project_id, timestamp_ms DESC, sequence DESC, event_id DESC);
+     CREATE INDEX activity_events_task ON activity_events(task_id);
+     CREATE TABLE activity_project_policies (
+        project_id TEXT PRIMARY KEY,
+        policy_json BLOB NOT NULL,
+        updated_at INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +223,7 @@ pub struct TaskRecoveryTransition {
 /// that gives command execution mark-BEFORE-execute idempotence.
 pub struct DocsStore {
     conn: Mutex<Connection>,
+    activity_gate: Mutex<()>,
     failed_publications: Mutex<HashSet<String>>,
 }
 
@@ -208,7 +239,235 @@ impl DocsStore {
         migrate(&mut conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            activity_gate: Mutex::new(()),
             failed_publications: Mutex::new(HashSet::new()),
+        })
+    }
+
+    /// Serialize policy reads with derived-row replacement. Callers rebuilding
+    /// envelopes hold this across policy read + source normalization + commit,
+    /// preventing an older policy snapshot from racing a stricter policy save.
+    pub fn activity_index_guard(&self) -> MutexGuard<'_, ()> {
+        self.activity_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Atomically replace one task's derived rows. Duplicate delivery is
+    /// harmless because stable event ids are primary keys and the transaction
+    /// never exposes a half-rebuilt task.
+    pub fn replace_activity_events(
+        &self,
+        task_id: &str,
+        events: &[ActivityEnvelope],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM activity_events WHERE task_id=?1",
+            params![task_id],
+        )?;
+        for event in events {
+            insert_activity_event(&tx, event)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn activity_task_ids(&self) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT DISTINCT task_id FROM activity_events")?;
+        Ok(stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Replace the complete derived index in one durable transaction. Raw
+    /// transcripts, receipts, task state, drafts, and files are not touched.
+    pub fn rebuild_activity_events(
+        &self,
+        tasks: &[(String, Vec<ActivityEnvelope>)],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM activity_events", [])?;
+        for (_task_id, events) in tasks {
+            for event in events {
+                insert_activity_event(&tx, event)?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn activity_project_policy(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<HistoryProjectPolicy>, StoreError> {
+        let bytes: Option<Vec<u8>> = self
+            .conn()
+            .query_row(
+                "SELECT policy_json FROM activity_project_policies WHERE project_id=?1",
+                params![project_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        bytes
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()
+            .map_err(StoreError::from)
+    }
+
+    pub fn save_activity_project_policy(
+        &self,
+        policy: &HistoryProjectPolicy,
+    ) -> Result<(), StoreError> {
+        let _activity_guard = self.activity_index_guard();
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO activity_project_policies(project_id,policy_json,updated_at)
+             VALUES (?1,?2,?3)
+             ON CONFLICT(project_id) DO UPDATE SET
+               policy_json=excluded.policy_json,updated_at=excluded.updated_at",
+            params![policy.project_id, serde_json::to_vec(policy)?, now_ms()],
+        )?;
+        // Fail closed: a stricter policy must never leave earlier derived rows
+        // searchable while source reconciliation is pending or fails.
+        tx.execute(
+            "DELETE FROM activity_events WHERE project_id=?1",
+            params![policy.project_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Bounded scan with deterministic keyset paging. Scalar filters are
+    /// applied to decoded minimized envelopes; raw payloads are never fetched.
+    pub fn search_activity_events(
+        &self,
+        request: &HistorySearchRequest,
+    ) -> Result<HistorySearchPage, StoreError> {
+        let limit = request.limit.clamp(1, 100) as usize;
+        let scan_limit = (limit.saturating_mul(40)).clamp(100, 2_000) as i64;
+        let needle = request.query.trim().to_lowercase();
+        let conn = self.conn();
+        let mut sql = String::from("SELECT envelope_json FROM activity_events WHERE 1=1");
+        let mut values = Vec::<rusqlite::types::Value>::new();
+        if request.scope == HistorySearchScope::SelectedProject {
+            if let Some(project_id) = request.project_id.as_ref() {
+                sql.push_str(" AND project_id=?");
+                values.push(project_id.clone().into());
+            } else {
+                sql.push_str(" AND project_id IS NULL");
+            }
+        }
+        if !needle.is_empty() {
+            sql.push_str(" AND instr(search_text,?)>0");
+            values.push(needle.clone().into());
+        }
+        if let Some(cursor) = request.cursor.as_ref() {
+            sql.push_str(
+                " AND (timestamp_ms<? OR (timestamp_ms=? AND sequence<?)
+                  OR (timestamp_ms=? AND sequence=? AND event_id<?))",
+            );
+            values.push(cursor.timestamp_ms.into());
+            values.push(cursor.timestamp_ms.into());
+            values.push((cursor.sequence as i64).into());
+            values.push(cursor.timestamp_ms.into());
+            values.push((cursor.sequence as i64).into());
+            values.push(cursor.event_id.clone().into());
+        }
+        let filters = &request.filters;
+        if let Some(after) = filters.after_ms {
+            sql.push_str(" AND timestamp_ms>=?");
+            values.push(after.into());
+        }
+        if let Some(before) = filters.before_ms {
+            sql.push_str(" AND timestamp_ms<=?");
+            values.push(before.into());
+        }
+        append_text_in(
+            &mut sql,
+            &mut values,
+            "device_id",
+            filters.device_ids.iter().cloned(),
+        );
+        append_text_in(
+            &mut sql,
+            &mut values,
+            "harness",
+            filters
+                .harnesses
+                .iter()
+                .filter_map(|value| serde_json::to_string(value).ok()),
+        );
+        append_lower_text_in(
+            &mut sql,
+            &mut values,
+            "model",
+            filters.models.iter().map(|value| value.to_lowercase()),
+        );
+        append_text_in(
+            &mut sql,
+            &mut values,
+            "outcome",
+            filters
+                .outcomes
+                .iter()
+                .filter_map(|value| serde_json::to_string(value).ok()),
+        );
+        append_lower_text_in(
+            &mut sql,
+            &mut values,
+            "tool",
+            filters.tools.iter().map(|value| value.to_lowercase()),
+        );
+        append_lower_text_in(
+            &mut sql,
+            &mut values,
+            "app",
+            filters.apps.iter().map(|value| value.to_lowercase()),
+        );
+        sql.push_str(" ORDER BY timestamp_ms DESC,sequence DESC,event_id DESC LIMIT ?");
+        values.push(scan_limit.into());
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut events = Vec::with_capacity(limit.saturating_add(1));
+        for bytes in rows {
+            let event: ActivityEnvelope = serde_json::from_slice(&bytes)?;
+            if !activity_matches(request, &needle, &event) {
+                continue;
+            }
+            events.push(event);
+            if events.len() > limit {
+                break;
+            }
+        }
+        let has_more = events.len() > limit;
+        events.truncate(limit);
+        let next_cursor = has_more.then(|| {
+            let last = events.last().expect("a paged result has a last row");
+            HistoryCursor {
+                timestamp_ms: last.timestamp_ms,
+                sequence: last.sequence,
+                event_id: last.event_id.clone(),
+            }
+        });
+        let indexed_through_ms = conn.query_row(
+            "SELECT COALESCE(MAX(timestamp_ms),0) FROM activity_events",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(HistorySearchPage {
+            events,
+            next_cursor,
+            indexed_through_ms,
+            heuristic_redaction: true,
         })
     }
 
@@ -1851,6 +2110,181 @@ fn commit_task_command_tx(
     Ok(receipt)
 }
 
+fn append_text_in(
+    sql: &mut String,
+    values: &mut Vec<rusqlite::types::Value>,
+    column: &str,
+    items: impl IntoIterator<Item = String>,
+) {
+    let items = items.into_iter().collect::<Vec<_>>();
+    if items.is_empty() {
+        return;
+    }
+    sql.push_str(" AND ");
+    sql.push_str(column);
+    sql.push_str(" IN (");
+    sql.push_str(
+        &std::iter::repeat_n("?", items.len())
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    sql.push(')');
+    values.extend(items.into_iter().map(rusqlite::types::Value::from));
+}
+
+fn append_lower_text_in(
+    sql: &mut String,
+    values: &mut Vec<rusqlite::types::Value>,
+    column: &str,
+    items: impl IntoIterator<Item = String>,
+) {
+    let items = items.into_iter().collect::<Vec<_>>();
+    if items.is_empty() {
+        return;
+    }
+    sql.push_str(" AND LOWER(");
+    sql.push_str(column);
+    sql.push_str(") IN (");
+    sql.push_str(
+        &std::iter::repeat_n("?", items.len())
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    sql.push(')');
+    values.extend(items.into_iter().map(rusqlite::types::Value::from));
+}
+
+fn insert_activity_event(
+    tx: &rusqlite::Transaction<'_>,
+    event: &ActivityEnvelope,
+) -> Result<(), StoreError> {
+    let search_text = [
+        Some(event.summary.as_str()),
+        event.tool.as_deref(),
+        event.app.as_deref(),
+        event.file.as_deref(),
+        event.command.as_deref(),
+        event.model.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n")
+    .to_lowercase();
+    tx.execute(
+        "INSERT INTO activity_events(
+           event_id,task_id,project_id,device_id,harness,model,outcome,tool,app,
+           timestamp_ms,sequence,search_text,envelope_json
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        params![
+            event.event_id,
+            event.task_id,
+            event.project_id,
+            event.device_id,
+            event
+                .harness
+                .map(|value| serde_json::to_string(&value))
+                .transpose()?,
+            event.model,
+            serde_json::to_string(&event.outcome)?,
+            event.tool,
+            event.app,
+            event.timestamp_ms,
+            event.sequence as i64,
+            search_text,
+            serde_json::to_vec(event)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn activity_matches(
+    request: &HistorySearchRequest,
+    needle: &str,
+    event: &ActivityEnvelope,
+) -> bool {
+    if request.scope == HistorySearchScope::SelectedProject
+        && request.project_id.as_deref() != event.project_id.as_deref()
+    {
+        return false;
+    }
+    if let Some(cursor) = &request.cursor
+        && (event.timestamp_ms, event.sequence, event.event_id.as_str())
+            >= (
+                cursor.timestamp_ms,
+                cursor.sequence,
+                cursor.event_id.as_str(),
+            )
+    {
+        return false;
+    }
+    let filters = &request.filters;
+    if !filters.device_ids.is_empty() && !filters.device_ids.contains(&event.device_id) {
+        return false;
+    }
+    if !filters.harnesses.is_empty()
+        && !event
+            .harness
+            .is_some_and(|harness| filters.harnesses.contains(&harness))
+    {
+        return false;
+    }
+    if !filters.models.is_empty()
+        && !event
+            .model
+            .as_ref()
+            .is_some_and(|model| filters.models.contains(model))
+    {
+        return false;
+    }
+    if !filters.outcomes.is_empty() && !filters.outcomes.contains(&event.outcome) {
+        return false;
+    }
+    if !filters.tools.is_empty()
+        && !event.tool.as_ref().is_some_and(|tool| {
+            filters
+                .tools
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(tool))
+        })
+    {
+        return false;
+    }
+    if !filters.apps.is_empty()
+        && !event.app.as_ref().is_some_and(|app| {
+            filters
+                .apps
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(app))
+        })
+    {
+        return false;
+    }
+    if filters
+        .after_ms
+        .is_some_and(|after| event.timestamp_ms < after)
+        || filters
+            .before_ms
+            .is_some_and(|before| event.timestamp_ms > before)
+    {
+        return false;
+    }
+    if needle.is_empty() {
+        return true;
+    }
+    [
+        Some(event.summary.as_str()),
+        event.tool.as_deref(),
+        event.app.as_deref(),
+        event.file.as_deref(),
+        event.command.as_deref(),
+        event.model.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_lowercase().contains(needle))
+}
+
 fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1889,6 +2323,61 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeron_proto::{
+        ACTIVITY_ENVELOPE_VERSION, ActivityKind, ActivityRedaction, ActivitySourceRef,
+        HistorySearchFilters,
+    };
+
+    fn activity(
+        event_id: &str,
+        task_id: &str,
+        project_id: &str,
+        timestamp_ms: i64,
+    ) -> ActivityEnvelope {
+        ActivityEnvelope {
+            schema_version: ACTIVITY_ENVELOPE_VERSION,
+            event_id: event_id.into(),
+            environment_id: "synthetic-environment".into(),
+            device_id: "synthetic-machine".into(),
+            task_id: task_id.into(),
+            turn_id: format!("turn-{task_id}"),
+            sequence: 1,
+            timestamp_ms,
+            kind: ActivityKind::Prompt,
+            outcome: zeron_proto::ActivityOutcome::Succeeded,
+            harness: None,
+            provider: None,
+            model: Some("fixture-model".into()),
+            reasoning: None,
+            project_id: Some(project_id.into()),
+            workspace_id: Some("synthetic-workspace".into()),
+            tool: None,
+            app: None,
+            file: None,
+            command: None,
+            summary: format!("searchable {event_id}"),
+            redaction: ActivityRedaction::None,
+            source: ActivitySourceRef {
+                task_id: task_id.into(),
+                message_id: format!("message-{event_id}"),
+                part_id: Some("text".into()),
+                available_here: true,
+                unavailable_reason: None,
+            },
+        }
+    }
+
+    fn activity_request(project_id: &str) -> HistorySearchRequest {
+        HistorySearchRequest {
+            query: "searchable".into(),
+            scope: HistorySearchScope::SelectedProject,
+            project_id: Some(project_id.into()),
+            filters: HistorySearchFilters::default(),
+            cursor: None,
+            limit: 50,
+            target_device_id: None,
+        }
+    }
 
     #[test]
     fn snapshot_roundtrip_and_overwrite() {
@@ -1911,6 +2400,113 @@ mod tests {
         assert_eq!(
             store.load_snapshot("chat-1").unwrap().as_deref(),
             Some(&b"v2-longer-bytes"[..])
+        );
+    }
+
+    #[test]
+    fn activity_index_reopens_deduplicates_pages_and_rolls_back_failed_rebuild() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        store
+            .replace_activity_events(
+                "task-a",
+                &[
+                    activity("a-new", "task-a", "project-a", 20),
+                    activity("a-old", "task-a", "project-a", 10),
+                ],
+            )
+            .unwrap();
+        // Duplicate delivery is a deterministic replacement, not a duplicate.
+        store
+            .replace_activity_events(
+                "task-a",
+                &[
+                    activity("a-new", "task-a", "project-a", 20),
+                    activity("a-old", "task-a", "project-a", 10),
+                ],
+            )
+            .unwrap();
+        let mut first = activity_request("project-a");
+        first.limit = 1;
+        let page = store.search_activity_events(&first).unwrap();
+        assert_eq!(page.events[0].event_id, "a-new");
+        assert!(page.next_cursor.is_some());
+        first.cursor = page.next_cursor;
+        assert_eq!(
+            store.search_activity_events(&first).unwrap().events[0].event_id,
+            "a-old"
+        );
+        drop(store);
+
+        let store = DocsStore::open(dir.path()).unwrap();
+        assert_eq!(
+            store
+                .search_activity_events(&activity_request("project-a"))
+                .unwrap()
+                .events
+                .len(),
+            2,
+            "migration/reopen preserves the derived index"
+        );
+        let duplicate = activity("collision", "task-a", "project-a", 30);
+        let failed = store.rebuild_activity_events(&[
+            ("task-a".into(), vec![duplicate.clone()]),
+            ("task-b".into(), vec![duplicate]),
+        ]);
+        assert!(failed.is_err(), "duplicate event ids abort the rebuild");
+        assert_eq!(
+            store
+                .search_activity_events(&activity_request("project-a"))
+                .unwrap()
+                .events
+                .len(),
+            2,
+            "a failed rebuild rolls back without losing prior rows"
+        );
+        store
+            .save_activity_project_policy(&HistoryProjectPolicy {
+                project_id: "project-a".into(),
+                excluded_path_prefixes: Vec::new(),
+                excluded_terms: vec!["searchable".into()],
+                index_terminal_output: false,
+                index_browser_fields: false,
+                index_accessibility_text: false,
+                index_screenshot_text: false,
+            })
+            .unwrap();
+        assert!(
+            store
+                .search_activity_events(&activity_request("project-a"))
+                .unwrap()
+                .events
+                .is_empty(),
+            "a stricter policy atomically hides earlier derived rows before reconciliation"
+        );
+    }
+
+    #[test]
+    fn activity_index_serializes_concurrent_task_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(DocsStore::open(dir.path()).unwrap());
+        let mut workers = Vec::new();
+        for index in 0..8 {
+            let store = store.clone();
+            workers.push(std::thread::spawn(move || {
+                let task = format!("task-{index}");
+                let event = activity(&format!("event-{index}"), &task, "project", index);
+                store.replace_activity_events(&task, &[event]).unwrap();
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(
+            store
+                .search_activity_events(&activity_request("project"))
+                .unwrap()
+                .events
+                .len(),
+            8
         );
     }
 

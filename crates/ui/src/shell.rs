@@ -25,8 +25,9 @@ use gpui::{
 use gpui_tokio::Tokio;
 use zeron_engine::InstanceLock;
 use zeron_proto::{
-    AuthState, ChatConfig, ConversationForkBoundaryKind, HarnessId, HistoryRecoveryView,
-    PermissionMode, TaskCommandSnapshot, WorkspaceScope,
+    ActivityEnvelope, ActivityOutcome, AuthState, ChatConfig, ConversationForkBoundaryKind,
+    HarnessId, HistoryRecoveryView, HistorySearchFilters, HistorySearchPage, HistorySearchRequest,
+    HistorySearchScope, PermissionMode, TaskCommandSnapshot, WorkspaceScope,
 };
 use zeron_rpc::methods;
 
@@ -1073,6 +1074,119 @@ fn history_engine_generation_changed(observed: &mut u64, current: u64) -> bool {
     true
 }
 
+fn history_search_response_is_live(
+    requested_generation: u64,
+    current_generation: u64,
+    requested_engine_generation: u64,
+    current_engine_generation: u64,
+) -> bool {
+    requested_generation == current_generation
+        && requested_engine_generation == current_engine_generation
+}
+
+fn history_search_request(
+    query: &str,
+    global: bool,
+    selected_project: Option<String>,
+    spaces: &[zeron_proto::Space],
+    devices: &[zeron_proto::Device],
+) -> HistorySearchRequest {
+    let mut text = Vec::new();
+    let mut filters = HistorySearchFilters::default();
+    let mut project_id = selected_project;
+    let mut explicit_project = false;
+    for token in query.split_whitespace() {
+        let Some((prefix, value)) = token.split_once(':') else {
+            text.push(token);
+            continue;
+        };
+        if value.is_empty() {
+            text.push(token);
+            continue;
+        }
+        match prefix.to_ascii_lowercase().as_str() {
+            "machine" | "device" => {
+                let resolved = devices
+                    .iter()
+                    .find(|device| {
+                        device.id.eq_ignore_ascii_case(value)
+                            || device.name.eq_ignore_ascii_case(value)
+                    })
+                    .map(|device| device.id.clone())
+                    .unwrap_or_else(|| value.to_string());
+                filters.device_ids.push(resolved);
+            }
+            "project" => {
+                project_id = spaces
+                    .iter()
+                    .find(|space| {
+                        space.id.eq_ignore_ascii_case(value)
+                            || space.display_name().eq_ignore_ascii_case(value)
+                    })
+                    .map(|space| space.id.clone())
+                    .or_else(|| Some(value.to_string()));
+                explicit_project = true;
+            }
+            "harness" => {
+                let value = value.to_ascii_lowercase();
+                if let Ok(harness) =
+                    serde_json::from_value::<HarnessId>(serde_json::Value::String(value))
+                {
+                    filters.harnesses.push(harness);
+                }
+            }
+            "model" => filters.models.push(value.to_string()),
+            "status" | "outcome" => {
+                let outcome = match value.to_ascii_lowercase().as_str() {
+                    "pending" | "running" => Some(ActivityOutcome::Pending),
+                    "done" | "success" | "succeeded" | "complete" => {
+                        Some(ActivityOutcome::Succeeded)
+                    }
+                    "failed" | "error" => Some(ActivityOutcome::Failed),
+                    "interrupted" | "cancelled" | "canceled" => Some(ActivityOutcome::Interrupted),
+                    "unknown" => Some(ActivityOutcome::Unknown),
+                    _ => None,
+                };
+                if let Some(outcome) = outcome {
+                    filters.outcomes.push(outcome);
+                }
+            }
+            "tool" => filters.tools.push(value.to_string()),
+            "app" => filters.apps.push(value.to_string()),
+            "after" => {
+                filters.after_ms = parse_history_date(value, false);
+            }
+            "before" => {
+                filters.before_ms = parse_history_date(value, true);
+            }
+            _ => text.push(token),
+        }
+    }
+    HistorySearchRequest {
+        query: text.join(" "),
+        scope: if global && !explicit_project {
+            HistorySearchScope::Global
+        } else {
+            HistorySearchScope::SelectedProject
+        },
+        project_id,
+        filters,
+        cursor: None,
+        limit: 50,
+        target_device_id: None,
+    }
+}
+
+fn parse_history_date(value: &str, end_of_day: bool) -> Option<i64> {
+    let date = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+    let time = if end_of_day {
+        date.and_hms_milli_opt(23, 59, 59, 999)?
+    } else {
+        date.and_hms_opt(0, 0, 0)?
+    };
+    Some(time.and_utc().timestamp_millis())
+}
+
 fn history_review_profile_unchanged(
     reviewed_session: &Option<String>,
     reviewed_cwd: &Option<String>,
@@ -1590,6 +1704,15 @@ pub struct Shell {
     chat_status_hover: Option<String>,
     /// Scroll position of the sidebar lists region (drives its edge fades).
     sidebar_scroll: gpui::ScrollHandle,
+    /// L14 session-history query state. Results are derived/index-only rows;
+    /// opening one navigates back to the authoritative transcript.
+    history_search_input: Entity<ComposerInput>,
+    history_search_global: bool,
+    history_search_results: Vec<ActivityEnvelope>,
+    history_search_loading: bool,
+    history_search_error: Option<SharedString>,
+    history_search_generation: u64,
+    history_search_task: Option<Task<()>>,
     /// `settings.last_space_id` applied once after the first spaces frame.
     space_boot_applied: bool,
     /// Last seen session status per chat — the chime trigger compares against
@@ -1730,6 +1853,7 @@ pub struct Shell {
     _ticker: Task<()>,
     _state_observation: Subscription,
     _composer_events: Subscription,
+    _history_search_events: Subscription,
     /// The primary transcript's spawn-chip events (subagent tabs).
     _transcript_events: Subscription,
     _transcript_invalidation: Subscription,
@@ -1744,6 +1868,19 @@ impl Shell {
         let transcript = cx.new(|cx| Transcript::new(state.clone(), cx));
         transcript.update(cx, |transcript, _| transcript.retain_for_route_exit());
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        let history_search_input = cx.new(|cx| {
+            ComposerInput::with_context(
+                "Search history · tool: app: model: status: after:",
+                "HistorySearch",
+                cx,
+            )
+        });
+        let history_search_events =
+            cx.subscribe(&history_search_input, |this: &mut Shell, _, event, cx| {
+                if matches!(event, ComposerInputEvent::Edited) {
+                    this.begin_session_history_search(cx);
+                }
+            });
         let links = Self::session_links(None, cx);
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
@@ -1957,6 +2094,13 @@ impl Shell {
             sidebar_view_trigger_focus: cx.focus_handle().tab_stop(true),
             chat_status_hover: None,
             sidebar_scroll: gpui::ScrollHandle::new(),
+            history_search_input,
+            history_search_global: false,
+            history_search_results: Vec::new(),
+            history_search_loading: false,
+            history_search_error: None,
+            history_search_generation: 0,
+            history_search_task: None,
             space_boot_applied: false,
             sound_prev: std::collections::HashMap::new(),
             connectivity_notifications: Default::default(),
@@ -2023,6 +2167,7 @@ impl Shell {
             _ticker: ticker,
             _state_observation: observation,
             _composer_events: composer_events,
+            _history_search_events: history_search_events,
             _transcript_events: transcript_events,
             _transcript_invalidation: transcript_invalidation,
         }
@@ -2088,6 +2233,11 @@ impl Shell {
         if history_engine_generation_changed(&mut self.history_engine_generation, engine_generation)
         {
             self.cancel_history_flow(cx);
+            self.history_search_generation = self.history_search_generation.wrapping_add(1);
+            self.history_search_task = None;
+            self.history_search_results.clear();
+            self.history_search_loading = false;
+            self.history_search_error = None;
         }
         if let Some(notice) = state.update(cx, |state, _| state.take_deep_link_notice()) {
             self.sidebar_notice = Some(notice.into());
@@ -6846,6 +6996,288 @@ impl Shell {
         )
     }
 
+    fn begin_session_history_search(&mut self, cx: &mut Context<Self>) {
+        self.history_search_generation = self.history_search_generation.wrapping_add(1);
+        let generation = self.history_search_generation;
+        self.history_search_task = None;
+        self.history_search_error = None;
+        let query = self.history_search_input.read(cx).text().trim().to_string();
+        if query.is_empty() {
+            self.history_search_results.clear();
+            self.history_search_loading = false;
+            cx.notify();
+            return;
+        }
+        let (handle, engine_generation, selected_project, spaces, devices) = {
+            let state = self.state.read(cx);
+            (
+                state.engine().cloned(),
+                state.engine_generation(),
+                state.selected_space.clone(),
+                state.spaces.clone(),
+                state.devices.clone(),
+            )
+        };
+        let Some(handle) = handle else {
+            self.history_search_loading = false;
+            self.history_search_error =
+                Some("History search is unavailable while reconnecting".into());
+            cx.notify();
+            return;
+        };
+        let request = history_search_request(
+            &query,
+            self.history_search_global,
+            selected_project,
+            &spaces,
+            &devices,
+        );
+        self.history_search_loading = true;
+        self.history_search_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let outcome = handle
+                .client()
+                .call(
+                    methods::SEARCH_SESSION_HISTORY,
+                    serde_json::to_value(&request).unwrap_or_default(),
+                )
+                .await
+                .and_then(|value| {
+                    serde_json::from_value::<HistorySearchPage>(value)
+                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                });
+            this.update(cx, |shell, cx| {
+                if !history_search_response_is_live(
+                    generation,
+                    shell.history_search_generation,
+                    engine_generation,
+                    shell.state.read(cx).engine_generation(),
+                ) {
+                    return;
+                }
+                shell.history_search_loading = false;
+                match outcome {
+                    Ok(page) => {
+                        shell.history_search_results = page.events;
+                        shell.history_search_error = None;
+                    }
+                    Err(error) => {
+                        shell.history_search_results.clear();
+                        shell.history_search_error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn render_session_history_search(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input = self.history_search_input.clone();
+        let global = self.history_search_global;
+        let scope_label = if global { "All" } else { "Project" };
+        let status = if self.history_search_loading {
+            Some(SharedString::from("Searching…"))
+        } else {
+            self.history_search_error.clone()
+        };
+        div()
+            .flex_none()
+            .px(px(Theme::SPACE_SM))
+            .pb(px(4.0))
+            .flex()
+            .flex_col()
+            .gap(px(3.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(div().flex_1().min_w_0().child(popover::search_input_frame(
+                        theme,
+                        input.into_any_element(),
+                    )))
+                    .child(
+                        div()
+                            .id("history-search-scope")
+                            .h(px(28.0))
+                            .px(px(7.0))
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .border_1()
+                            .border_color(theme.border.opacity(0.7))
+                            .flex()
+                            .items_center()
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(if global { theme.accent } else { theme.text_muted })
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.glass_hover()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.history_search_global = !this.history_search_global;
+                                this.begin_session_history_search(cx);
+                            }))
+                            .child(SharedString::from(scope_label)),
+                    ),
+            )
+            .child(
+                div()
+                    .px(px(4.0))
+                    .text_size(crate::typography::ui_rems(9.5))
+                    .text_color(theme.text_faint)
+                    .child(SharedString::from(
+                        "Filters: machine: project: harness: model: status: tool: app: after: before:",
+                    )),
+            )
+            .when_some(status, |element, status| {
+                element.child(
+                    div()
+                        .px(px(4.0))
+                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_color(if self.history_search_error.is_some() {
+                            theme.danger
+                        } else {
+                            theme.text_faint
+                        })
+                        .child(status),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_session_history_results(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.history_search_loading && self.history_search_results.is_empty() {
+            return div()
+                .px(px(Theme::SPACE_SM))
+                .py(px(8.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text_faint)
+                .child("Searching session history…")
+                .into_any_element();
+        }
+        if self.history_search_results.is_empty() {
+            return div()
+                .px(px(Theme::SPACE_SM))
+                .py(px(8.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text_faint)
+                .child("No matching recorded activity")
+                .into_any_element();
+        }
+        let space_names = self
+            .state
+            .read(cx)
+            .spaces
+            .iter()
+            .map(|space| (space.id.clone(), space.display_name().to_string()))
+            .collect::<std::collections::HashMap<_, _>>();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .children(
+                self.history_search_results
+                    .clone()
+                    .into_iter()
+                    .map(|event| {
+                        let project = event
+                            .project_id
+                            .as_ref()
+                            .and_then(|id| space_names.get(id))
+                            .cloned()
+                            .unwrap_or_else(|| "Personal".into());
+                        let outcome = match event.outcome {
+                            ActivityOutcome::Pending => "Pending",
+                            ActivityOutcome::Succeeded => "Done",
+                            ActivityOutcome::Failed => "Failed",
+                            ActivityOutcome::Interrupted => "Interrupted",
+                            ActivityOutcome::Unknown => "Unknown",
+                        };
+                        let metadata = format!(
+                            "{} · {}{}",
+                            project,
+                            event.model.as_deref().unwrap_or("Unknown model"),
+                            if event.source.available_here {
+                                format!(" · {outcome}")
+                            } else {
+                                " · Other device".into()
+                            }
+                        );
+                        let event_id = event.event_id.clone();
+                        let summary = event.summary.clone();
+                        let open_event = event.clone();
+                        div()
+                            .id(SharedString::from(format!("history-result-{event_id}")))
+                            .px(px(Theme::SPACE_SM))
+                            .py(px(6.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.glass_hover()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_session_history_result(open_event.clone(), cx)
+                            }))
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .text_color(theme.text)
+                                    .child(SharedString::from(summary)),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(2.0))
+                                    .text_size(crate::typography::ui_rems(9.5))
+                                    .text_color(theme.text_faint)
+                                    .child(SharedString::from(metadata)),
+                            )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn open_session_history_result(&mut self, event: ActivityEnvelope, cx: &mut Context<Self>) {
+        if !event.source.available_here {
+            self.sidebar_notice = Some(
+                event
+                    .source
+                    .unavailable_reason
+                    .unwrap_or_else(|| "This result belongs to another environment.".into())
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        if !self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .any(|chat| chat.id == event.task_id)
+        {
+            self.sidebar_notice = Some("The owning task is no longer available.".into());
+            cx.notify();
+            return;
+        }
+        self.transcript.update(cx, |transcript, cx| {
+            transcript.navigate_to_message(
+                event.task_id.clone(),
+                event.source.message_id.clone(),
+                cx,
+            )
+        });
+        self.open_chat(event.task_id, cx);
+    }
+
     fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let (user, workspace_scope) = {
             let state = self.state.read(cx);
@@ -6955,6 +7387,7 @@ impl Shell {
         // The space filter lives ABOVE the scroll region (fixed) so its
         // dropdown can float without being clipped by the list's overflow.
         let filter_row = self.render_spaces_filter(theme, cx);
+        let history_search = self.render_session_history_search(theme, cx);
 
         // The (filtered) Sessions list scrolls inside an EdgeFade scope —
         // a true per-glyph gradient at active overflow edges. Glass-safe
@@ -6965,6 +7398,8 @@ impl Shell {
         // rode the previous frame's offset, so the last frame of a content
         // shrink (row archived while scrolled) left a phantom fade stuck
         // over an unscrollable list (user report).
+        let searching = !self.history_search_input.read(cx).is_empty();
+        let search_results = searching.then(|| self.render_session_history_results(theme, cx));
         let sidebar_lists = crate::edge_fade::edge_faded(
             SIDEBAR_GLASS_FADE_BAND,
             true,
@@ -6981,7 +7416,9 @@ impl Shell {
                     // No "Sessions" header (user request) — the list
                     // is the whole column; a little air stands in.
                     .pt(px(4.0))
-                    .child(if !list_items.is_empty() {
+                    .child(if let Some(results) = search_results {
+                        results
+                    } else if !list_items.is_empty() {
                         div()
                             .flex()
                             .flex_col()
@@ -7010,6 +7447,7 @@ impl Shell {
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
             .child(filter_row)
+            .child(history_search)
             .child(sidebar_lists)
             // Global connection pill (durable-by-design UI truth): appears
             // whenever the edge posture is degraded; hidden while healthy —
@@ -11671,6 +12109,50 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_search_parses_all_supported_filters_and_requires_current_profile() {
+        let spaces = vec![zeron_proto::Space {
+            id: "project-id".into(),
+            device_id: "device-id".into(),
+            path: "/synthetic/project".into(),
+            name: Some("Project".into()),
+            git_detected: false,
+            git_checked_at: None,
+            checkout_id: None,
+            created_at: chrono::DateTime::UNIX_EPOCH,
+        }];
+        let devices = vec![zeron_proto::Device {
+            id: "device-id".into(),
+            name: "Machine".into(),
+            platform: "synthetic".into(),
+            last_seen_at: None,
+            created_at: None,
+            version: None,
+            capabilities: Vec::new(),
+        }];
+        let request = history_search_request(
+            "needle machine:Machine project:Project harness:codex model:gpt status:failed tool:exec app:browser after:2026-01-02 before:2026-01-03",
+            true,
+            None,
+            &spaces,
+            &devices,
+        );
+        assert_eq!(request.scope, HistorySearchScope::SelectedProject);
+        assert_eq!(request.project_id.as_deref(), Some("project-id"));
+        assert_eq!(request.query, "needle");
+        assert_eq!(request.filters.device_ids, ["device-id"]);
+        assert_eq!(request.filters.harnesses, [HarnessId::Codex]);
+        assert_eq!(request.filters.models, ["gpt"]);
+        assert_eq!(request.filters.outcomes, [ActivityOutcome::Failed]);
+        assert_eq!(request.filters.tools, ["exec"]);
+        assert_eq!(request.filters.apps, ["browser"]);
+        assert!(request.filters.after_ms.is_some());
+        assert!(request.filters.before_ms.is_some());
+        assert!(history_search_response_is_live(4, 4, 8, 8));
+        assert!(!history_search_response_is_live(4, 5, 8, 8));
+        assert!(!history_search_response_is_live(4, 4, 8, 9));
+    }
 
     fn history_chat(
         session: &str,

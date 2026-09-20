@@ -113,6 +113,13 @@ pub mod methods {
     pub const ENGINE_READY: &str = "EngineReady";
     /// Durable LUNA task identity and all preserved execution-binding generations.
     pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
+    /// Bounded search over the local derived session-activity index.
+    pub const SEARCH_SESSION_HISTORY: &str = "SearchSessionHistory";
+    /// Rebuild the local derived index from authoritative task records.
+    pub const REBUILD_SESSION_HISTORY: &str = "RebuildSessionHistory";
+    /// Read/write project-local indexing exclusions and sensitive-surface policy.
+    pub const GET_SESSION_HISTORY_POLICY: &str = "GetSessionHistoryPolicy";
+    pub const SET_SESSION_HISTORY_POLICY: &str = "SetSessionHistoryPolicy";
     /// Read the current provider-native history fork capability for one task.
     pub const GET_HISTORY_CAPABILITY: &str = "GetHistoryCapability";
     /// Read durable pre-edit recovery snapshots available for one task.

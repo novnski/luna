@@ -2775,6 +2775,9 @@ pub struct Transcript {
     /// Entry whose hover action is showing transient copied-check feedback.
     copied_message: Option<SharedString>,
     copied_message_clear: Option<Task<()>>,
+    /// Exact L14 search result target. It survives a task switch until the
+    /// authoritative replay materializes the owning message row.
+    history_target: Option<(String, String, u64)>,
     /// Transcript attachment being viewed full-size (click a user thumbnail).
     attachment_preview: Option<crate::attachments::PreviewImage>,
     /// Focused while the lightbox is open so Escape reaches it.
@@ -2991,6 +2994,7 @@ impl Transcript {
             code_fences: HashMap::new(),
             copied_message: None,
             copied_message_clear: None,
+            history_target: None,
             attachment_preview: None,
             attachment_preview_focus: cx.focus_handle(),
             attachment_preview_return_focus: None,
@@ -3151,6 +3155,48 @@ impl Transcript {
         self.cancel_user_hold();
         self.user_collapse_scroll = None;
         self.stop_automatic_scrolling();
+    }
+
+    pub(crate) fn navigate_to_message(
+        &mut self,
+        chat_id: String,
+        message_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let engine_generation = self.state.read(cx).engine_generation();
+        self.history_target = Some((chat_id, message_id, engine_generation));
+        self.apply_history_target(cx);
+    }
+
+    fn apply_history_target(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((chat_id, message_id, engine_generation)) = self.history_target.as_ref() else {
+            return false;
+        };
+        if *engine_generation != self.state.read(cx).engine_generation() {
+            self.history_target = None;
+            return false;
+        }
+        if self.chat_id.as_deref() != Some(chat_id.as_str()) {
+            return false;
+        }
+        let Some(item_ix) = self
+            .rows
+            .iter()
+            .position(|row| row.entry_id.as_ref() == message_id)
+        else {
+            return false;
+        };
+        self.history_target = None;
+        self.begin_scroll_navigation();
+        self.pinned = false;
+        self.list.scroll_to(ListOffset {
+            item_ix,
+            offset_in_item: px(0.0),
+        });
+        self.last_scroll_distance = self.distance_from_bottom();
+        self.show_jump_button = self.last_scroll_distance > SCROLL_BUTTON_THRESHOLD_PX;
+        cx.notify();
+        true
     }
 
     fn stop_automatic_scrolling(&mut self) {
@@ -4382,6 +4428,7 @@ impl Transcript {
                     cx.notify();
                 }
                 self.promote_materialized_queued_turn(attached, cx);
+                self.apply_history_target(cx);
                 return;
             }
             Some((old_range, count)) => {
@@ -4466,6 +4513,7 @@ impl Transcript {
                 self.spring_kick = true;
             }
         }
+        self.apply_history_target(cx);
         cx.notify();
     }
 
