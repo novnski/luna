@@ -26,6 +26,8 @@ const TASK_ID: &str = "13131313-1313-4131-8131-131313131313";
 const UNSUPPORTED_TASK_ID: &str = "13131313-1313-4131-8131-131313131314";
 const AUTO_CEILING_TASK_ID: &str = "13131313-1313-4131-8131-131313131315";
 const LEGACY_ASK_TASK_ID: &str = "13131313-1313-4131-8131-131313131316";
+const UNSUPPORTED_USER_MESSAGE_ID: &str = "l13-unsupported-visible-user";
+const UNSUPPORTED_ASSISTANT_MESSAGE_ID: &str = "l13-unsupported-visible-assistant";
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 struct FixtureProviderState {
@@ -364,6 +366,77 @@ async fn seed_history_task(
     Ok(())
 }
 
+fn seed_unsupported_visible_history(core: &EngineCore) -> anyhow::Result<bool> {
+    let handle = core.doc_host.open(UNSUPPORTED_TASK_ID)?;
+    if !handle.doc().read_entries()?.is_empty() {
+        return Ok(false);
+    }
+    let entries = [
+        zeron_doc::SessionMessageEntry {
+            id: UNSUPPORTED_USER_MESSAGE_ID.into(),
+            role: zeron_doc::MessageRole::User,
+            parts: vec![zeron_doc::MessagePart::Text {
+                id: "text".into(),
+                text: "Prepare a safe synthetic context handoff for a new task draft.".into(),
+            }],
+            created_at: 1,
+            device_id: core.device_id.clone(),
+            status: Some(zeron_doc::MessageStatus::Complete),
+            continuation_of: None,
+        },
+        zeron_doc::SessionMessageEntry {
+            id: UNSUPPORTED_ASSISTANT_MESSAGE_ID.into(),
+            role: zeron_doc::MessageRole::Assistant,
+            parts: vec![zeron_doc::MessagePart::Text {
+                id: "text".into(),
+                text: "This completed synthetic conversation is visible context only. Review the opt-in draft before sending it.".into(),
+            }],
+            created_at: 2,
+            device_id: core.device_id.clone(),
+            status: Some(zeron_doc::MessageStatus::Complete),
+            continuation_of: None,
+        },
+    ];
+    handle
+        .doc()
+        .replace_conversation_entries(&entries, &std::collections::HashMap::new())?;
+    core.doc_host.flush_all();
+    Ok(true)
+}
+
+async fn seed_unsupported_task(
+    client: &RpcClient,
+    core: &EngineCore,
+    root: &Path,
+) -> anyhow::Result<()> {
+    if core.workspace.chat(UNSUPPORTED_TASK_ID)?.is_none() {
+        let unsupported = execute(
+            client,
+            UNSUPPORTED_TASK_ID,
+            "l13-create-unsupported",
+            serde_json::json!({
+                "kind": "createChat",
+                "deviceId": core.device_id,
+                "cwd": root,
+                "config": chat_config(
+                    HarnessId::ClaudeCode,
+                    PermissionMode::Ask,
+                    PermissionMode::Ask,
+                ),
+            }),
+        )
+        .await?;
+        anyhow::ensure!(unsupported.status == CommandReceiptStatus::Applied);
+        core.workspace
+            .rename_chat(UNSUPPORTED_TASK_ID, "L13 unsupported-provider fallback QA")?;
+    }
+    // Directly seed only a truly empty fixture document. This backfills the
+    // previously audited root without invoking or registering Claude, while
+    // preserving any existing task history byte-for-byte.
+    seed_unsupported_visible_history(core)?;
+    Ok(())
+}
+
 async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     let client = zeron_rpc::memory_client(core.rpc_service());
     seed_history_task(
@@ -405,27 +478,7 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
         &["Exercise a legacy Ask fork without making Ask selectable."],
     )
     .await?;
-    if core.workspace.chat(UNSUPPORTED_TASK_ID)?.is_none() {
-        let unsupported = execute(
-            &client,
-            UNSUPPORTED_TASK_ID,
-            "l13-create-unsupported",
-            serde_json::json!({
-                "kind": "createChat",
-                "deviceId": core.device_id,
-                "cwd": root,
-                "config": chat_config(
-                    HarnessId::ClaudeCode,
-                    PermissionMode::Ask,
-                    PermissionMode::Ask,
-                ),
-            }),
-        )
-        .await?;
-        anyhow::ensure!(unsupported.status == CommandReceiptStatus::Applied);
-        core.workspace
-            .rename_chat(UNSUPPORTED_TASK_ID, "L13 unsupported-provider fallback QA")?;
-    }
+    seed_unsupported_task(&client, core, root).await?;
     Ok(())
 }
 
@@ -572,6 +625,152 @@ mod tests {
                 .independent_in_memory_handle_for_tests()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn unsupported_task_backfills_visible_handoff_without_provider_invocation() {
+        let root = tempfile::tempdir().unwrap();
+        let assemble = || {
+            let accounts = account_config(root.path());
+            accounts.disable_claude_keychain_fallback().unwrap();
+            let core =
+                EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                    EngineProfile::development(
+                        &root.path().join("engine"),
+                        "l13-test-org",
+                        "l13-test-user",
+                    ),
+                    Arc::new(fixture_registry(root.path()).unwrap()),
+                    HarnessId::Codex,
+                    None,
+                    accounts,
+                )
+                .unwrap();
+            core.set_auth(Auth::new(auth_config(root.path())));
+            core
+        };
+
+        let core = assemble();
+        let client = zeron_rpc::memory_client(core.rpc_service());
+        let created = execute(
+            &client,
+            UNSUPPORTED_TASK_ID,
+            "l13-create-unsupported",
+            serde_json::json!({
+                "kind": "createChat",
+                "deviceId": core.device_id,
+                "cwd": root.path(),
+                "config": chat_config(
+                    HarnessId::ClaudeCode,
+                    PermissionMode::Ask,
+                    PermissionMode::Ask,
+                ),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.status, CommandReceiptStatus::Applied);
+        core.workspace
+            .rename_chat(UNSUPPORTED_TASK_ID, "L13 unsupported-provider fallback QA")
+            .unwrap();
+        assert!(
+            core.doc_host
+                .open(UNSUPPORTED_TASK_ID)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap()
+                .is_empty(),
+            "the audited pre-correction fixture root had an empty unsupported task"
+        );
+
+        seed_unsupported_task(&client, &core, root.path())
+            .await
+            .unwrap();
+        let entries = core
+            .doc_host
+            .open(UNSUPPORTED_TASK_ID)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].role, zeron_doc::MessageRole::User);
+        assert_eq!(entries[1].role, zeron_doc::MessageRole::Assistant);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.status == Some(zeron_doc::MessageStatus::Complete))
+        );
+        let handoff = zeron_proto::ContextHandoff {
+            kind: zeron_proto::ContextHandoffKind::RecentVisibleHistory,
+            text: entries
+                .iter()
+                .flat_map(|entry| entry.parts.iter())
+                .filter_map(|part| match part {
+                    zeron_doc::MessagePart::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            message_ids: entries.iter().map(|entry| entry.id.clone()).collect(),
+        };
+        assert!(!handoff.text.is_empty());
+        assert_eq!(
+            handoff.message_ids,
+            [
+                UNSUPPORTED_USER_MESSAGE_ID.to_string(),
+                UNSUPPORTED_ASSISTANT_MESSAGE_ID.to_string(),
+            ]
+        );
+        let unsupported = core.workspace.chat(UNSUPPORTED_TASK_ID).unwrap().unwrap();
+        assert_eq!(
+            unsupported.config.unwrap().harness,
+            HarnessId::ClaudeCode,
+            "the fallback must remain explicitly unsupported for native history"
+        );
+        assert!(core.registry.resolve(HarnessId::ClaudeCode).is_err());
+        assert!(
+            !root.path().join("provider-state/history.json").exists(),
+            "seeding visible fallback context must not invoke the registered synthetic provider"
+        );
+
+        seed_unsupported_task(&client, &core, root.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            core.doc_host
+                .open(UNSUPPORTED_TASK_ID)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap(),
+            entries,
+            "same-process reseeding must preserve existing history"
+        );
+        drop(client);
+        core.shutdown().await;
+        drop(core);
+
+        let reopened = assemble();
+        let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
+        seed_unsupported_task(&reopened_client, &reopened, root.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .doc_host
+                .open(UNSUPPORTED_TASK_ID)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap(),
+            entries,
+            "restart reseeding must preserve the already-backfilled history"
+        );
+        assert!(reopened.registry.resolve(HarnessId::ClaudeCode).is_err());
+        assert!(!root.path().join("provider-state/history.json").exists());
+        reopened.shutdown().await;
     }
 
     #[tokio::test]
