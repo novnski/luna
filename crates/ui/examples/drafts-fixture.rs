@@ -234,7 +234,11 @@ impl Harness for L09FixtureHarness {
                     "prompt": request.prompt.clone(),
                     "attachments": request.attachments.clone(),
                     "resume": request.resume.clone(),
+                    "harness": request.harness,
                     "model": request.model.clone(),
+                    "modelOptions": request.model_options.clone(),
+                    "cwd": request.cwd.clone(),
+                    "sandbox": request.sandbox,
                     "permissionMode": request.permission_mode,
                 }),
             );
@@ -648,7 +652,7 @@ async fn seed_queue(core: &EngineCore) -> anyhow::Result<()> {
 
 async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     let client = zeron_rpc::memory_client(core.rpc_service());
-    let project = root.join("fixture-project");
+    let project = turn_recovery_project(root);
     std::fs::create_dir_all(&project)?;
     core.doc_host.open(TASK_A)?;
     client
@@ -673,6 +677,8 @@ async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()
     let attachment = committed["path"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("fixture upload returned no path"))?;
+    let request = turn_recovery_request(&project, attachment);
+    ensure_turn_recovery_request_matches_chat(core, &request)?;
     let receipt: zeron_proto::CommandReceipt = client
         .call_as(
             methods::EXECUTE_TASK_COMMAND,
@@ -682,32 +688,15 @@ async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()
                 "clientId":"l10-native-fixture",
                 "clientSessionId":"isolated",
                 "taskId":TASK_A,
-                "intent": {
-                    "kind":"session",
-                    "command": {
-                        "kind":"run",
-                        "messageId":"l10-native-original-message",
-                        "request": {
-                            "prompt":"L10 frozen request with one attachment",
-                            "harness":"mock",
-                            "providerAccountId":null,
-                            "model":"mock-1",
-                            "reasoning":null,
-                            "modelOptions":{},
-                            "cwd":project.to_string_lossy(),
-                            "sandbox":"workspace-write",
-                            "autoApprove":false,
-                            "permissionMode":"ask",
-                            "parentPermissionCeiling":null,
-                            "environmentPermissionCeiling":null,
-                            "permissionPolicy":null,
-                            "attachments":[attachment],
-                            "resume":null,
-                            "worktree":null
-                        }
-                    },
-                    "transfers":[]
-                }
+                    "intent": {
+                        "kind":"session",
+                        "command": {
+                            "kind":"run",
+                            "messageId":"l10-native-original-message",
+                            "request": request
+                        },
+                        "transfers":[]
+                    }
             }),
         )
         .await?;
@@ -719,6 +708,160 @@ async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()
         "fixture recovery request was not accepted"
     );
     Ok(())
+}
+
+fn fixture_chat_config() -> ChatConfig {
+    ChatConfig {
+        harness: HarnessId::Mock,
+        provider_account_id: None,
+        model: Some("mock-1".into()),
+        reasoning: None,
+        model_options: Default::default(),
+        sandbox: SandboxLevel::WorkspaceWrite,
+        permission_mode: PermissionMode::Ask,
+        effective_permission_mode: PermissionMode::Ask,
+        permission_ceiling_source: None,
+        permission_degradation_reason: None,
+        permission_audit: Vec::new(),
+    }
+}
+
+fn turn_recovery_project(root: &Path) -> PathBuf {
+    root.join("fixture-project")
+}
+
+fn turn_recovery_request(project: &Path, attachment: &str) -> RunRequest {
+    RunRequest {
+        prompt: "L10 frozen request with one attachment".into(),
+        harness: Some(HarnessId::Mock),
+        provider_account_id: None,
+        model: Some("mock-1".into()),
+        reasoning: None,
+        model_options: Default::default(),
+        cwd: project.to_string_lossy().into_owned(),
+        sandbox: SandboxLevel::WorkspaceWrite,
+        auto_approve: false,
+        permission_mode: PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        attachments: vec![attachment.into()],
+        resume: None,
+        worktree: None,
+    }
+}
+
+fn ensure_turn_recovery_request_matches_chat(
+    core: &EngineCore,
+    request: &RunRequest,
+) -> anyhow::Result<()> {
+    let chat = core
+        .workspace
+        .chat(TASK_A)?
+        .ok_or_else(|| anyhow::anyhow!("fixture task is missing"))?;
+    let config = chat
+        .config
+        .ok_or_else(|| anyhow::anyhow!("fixture task configuration is missing"))?;
+    anyhow::ensure!(
+        chat.cwd.as_deref() == Some(request.cwd.as_str()),
+        "fixture task cwd does not match the frozen request"
+    );
+    anyhow::ensure!(
+        Some(config.harness) == request.harness,
+        "fixture harness does not match the frozen request"
+    );
+    anyhow::ensure!(
+        config.provider_account_id == request.provider_account_id,
+        "fixture account does not match the frozen request"
+    );
+    anyhow::ensure!(
+        config.model == request.model,
+        "fixture model does not match the frozen request"
+    );
+    anyhow::ensure!(
+        config.reasoning == request.reasoning,
+        "fixture reasoning does not match the frozen request"
+    );
+    anyhow::ensure!(
+        config.model_options == request.model_options,
+        "fixture model options do not match the frozen request"
+    );
+    anyhow::ensure!(
+        config.sandbox == request.sandbox,
+        "fixture sandbox does not match the frozen request"
+    );
+    anyhow::ensure!(
+        config.permission_mode == request.permission_mode,
+        "fixture permission mode does not match the frozen request"
+    );
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FixtureStartup {
+    seed_turn_recovery: bool,
+    stage_draft_evidence: bool,
+}
+
+fn initialize_fixture_workspace(
+    core: &EngineCore,
+    root: &Path,
+    mode: &str,
+) -> anyhow::Result<FixtureStartup> {
+    let existing = core.workspace.read_chats()?;
+    let task_a_exists = existing.iter().any(|chat| chat.id == TASK_A);
+    let task_b_exists = existing.iter().any(|chat| chat.id == TASK_B);
+    let turn_recovery = mode == "turn-recovery";
+    let project = turn_recovery_project(root);
+    if turn_recovery {
+        std::fs::create_dir_all(&project)?;
+    }
+
+    if !task_a_exists {
+        core.workspace.create_chat(
+            TASK_A,
+            None,
+            Some(&core.device_id),
+            Some(fixture_chat_config()),
+            turn_recovery.then(|| project.to_string_lossy().into_owned()),
+        )?;
+        let title = match mode {
+            "queue" => "L09 Durable Queue",
+            "turn-recovery" => "L10 Failure Recovery",
+            _ => "L08 Draft A",
+        };
+        core.workspace.rename_chat(TASK_A, title)?;
+    }
+    if !task_b_exists {
+        core.workspace
+            .create_chat(TASK_B, None, Some(&core.device_id), None, None)?;
+        core.workspace.rename_chat(TASK_B, "L08 Draft B")?;
+    }
+
+    let first_turn_recovery_start = turn_recovery && !task_a_exists;
+    Ok(FixtureStartup {
+        seed_turn_recovery: first_turn_recovery_start,
+        stage_draft_evidence: matches!(mode, "seed" | "queue") || first_turn_recovery_start,
+    })
+}
+
+fn trace_turn_recovery_workspace(core: &EngineCore, root: &Path, first_run: bool) {
+    let Ok(Some(chat)) = core.workspace.chat(TASK_A) else {
+        return;
+    };
+    FixtureLifecycleControl::new(
+        root.join("l10-fixture-control.json"),
+        root.join("l10-fixture-control-trace.jsonl"),
+    )
+    .trace(
+        "fixture-startup",
+        "workspaceInitialized",
+        serde_json::json!({
+            "firstRun": first_run,
+            "taskCwd": chat.cwd,
+            "taskConfig": chat.config,
+        }),
+    );
 }
 
 fn main() -> anyhow::Result<()> {
@@ -778,38 +921,16 @@ fn main() -> anyhow::Result<()> {
     auth_config.dev_user_id = "l09-fixture-user".into();
     auth_config.use_in_memory_credentials_for_tests();
     core.set_auth(Auth::new(auth_config));
-    let existing = core.workspace.read_chats()?;
-    for (id, title) in [(TASK_A, "L08 Draft A"), (TASK_B, "L08 Draft B")] {
-        if !existing.iter().any(|chat| chat.id == id) {
-            core.workspace
-                .create_chat(id, None, Some(&core.device_id), None, None)?;
-            core.workspace.rename_chat(id, title)?;
-        }
-    }
-    core.workspace.set_chat_config(
-        TASK_A,
-        &ChatConfig {
-            harness: HarnessId::Mock,
-            provider_account_id: None,
-            model: Some("mock-1".into()),
-            reasoning: None,
-            model_options: Default::default(),
-            sandbox: SandboxLevel::WorkspaceWrite,
-            permission_mode: PermissionMode::Ask,
-            effective_permission_mode: PermissionMode::Ask,
-            permission_ceiling_source: None,
-            permission_degradation_reason: None,
-            permission_audit: Vec::new(),
-        },
-    )?;
+    let startup = initialize_fixture_workspace(&core, &root, &mode)?;
     if mode == "recovery" {
         runtime.block_on(seed_recovery(&core))?;
     } else if mode == "queue" {
-        core.workspace.rename_chat(TASK_A, "L09 Durable Queue")?;
         runtime.block_on(seed_queue(&core))?;
     } else if mode == "turn-recovery" {
-        core.workspace.rename_chat(TASK_A, "L10 Failure Recovery")?;
-        runtime.block_on(seed_turn_recovery(&core, &root))?;
+        trace_turn_recovery_workspace(&core, &root, startup.seed_turn_recovery);
+        if startup.seed_turn_recovery {
+            runtime.block_on(seed_turn_recovery(&core, &root))?;
+        }
     }
 
     let ipc_port = unused_port();
@@ -826,7 +947,7 @@ fn main() -> anyhow::Result<()> {
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
     let chats = core.workspace.read_chats()?;
     let device = core.device_id.clone();
-    let seed = matches!(mode.as_str(), "seed" | "queue" | "turn-recovery");
+    let seed = startup.stage_draft_evidence;
 
     gpui_platform::application()
         .with_assets(icons::Assets)
@@ -926,6 +1047,17 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    fn assemble_fixture_test_core(root: &Path) -> EngineCore {
+        EngineCore::assemble_with_profile_and_agent_accounts_config(
+            EngineProfile::development(&root.join("engine"), "fixture-org", "fixture-user"),
+            Arc::new(HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+            account_config(root),
+        )
+        .unwrap()
+    }
+
     fn write_control(path: &Path, sequence: u64, action: &str) {
         std::fs::write(
             path,
@@ -954,6 +1086,63 @@ mod tests {
             settings::UiSettings::load(persisted.path()).follow_up_behavior,
             zeron_proto::FollowUpBehavior::Steer
         );
+    }
+
+    #[tokio::test]
+    async fn turn_recovery_initialization_matches_request_and_is_restart_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let core = assemble_fixture_test_core(root.path());
+        let first = initialize_fixture_workspace(&core, root.path(), "turn-recovery").unwrap();
+        assert!(first.seed_turn_recovery);
+        assert!(first.stage_draft_evidence);
+
+        let request = turn_recovery_request(
+            &turn_recovery_project(root.path()),
+            "/synthetic/stable-frozen.png",
+        );
+        ensure_turn_recovery_request_matches_chat(&core, &request).unwrap();
+        let original_chat = core.workspace.chat(TASK_A).unwrap().unwrap();
+        assert_eq!(
+            original_chat.cwd.as_deref(),
+            Some(
+                turn_recovery_project(root.path())
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        let mut runtime_config = original_chat.config.clone().unwrap();
+        runtime_config
+            .permission_audit
+            .push(zeron_proto::PermissionAuditEntry {
+                actor: "engine:fixture".into(),
+                machine: "fixture-host".into(),
+                requested_mode: PermissionMode::Ask,
+                effective_mode: PermissionMode::Ask,
+                previous_mode: Some(PermissionMode::Ask),
+                provider_mapping: "mock Ask".into(),
+                ceiling_source: None,
+                reason: None,
+                timestamp_ms: 1,
+            });
+        core.workspace
+            .set_chat_config(TASK_A, &runtime_config)
+            .unwrap();
+        let persisted_chat = core.workspace.chat(TASK_A).unwrap().unwrap();
+
+        core.shutdown().await;
+        drop(core);
+
+        let reopened = assemble_fixture_test_core(root.path());
+        let restart =
+            initialize_fixture_workspace(&reopened, root.path(), "turn-recovery").unwrap();
+        assert!(!restart.seed_turn_recovery);
+        assert!(!restart.stage_draft_evidence);
+        assert_eq!(
+            reopened.workspace.chat(TASK_A).unwrap().unwrap(),
+            persisted_chat,
+            "reopen must not rewrite the task cwd, config, title, or durable session metadata"
+        );
+        reopened.shutdown().await;
     }
 
     #[test]
