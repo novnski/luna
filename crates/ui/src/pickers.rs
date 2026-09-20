@@ -137,6 +137,15 @@ fn recent_visible_handoff(entries: &[zeron_doc::SessionMessageEntry]) -> Option<
     })
 }
 
+fn provider_switch_handoff_payload(
+    include_recent_visible: bool,
+    entries: &[zeron_doc::SessionMessageEntry],
+) -> Option<ContextHandoff> {
+    include_recent_visible
+        .then(|| recent_visible_handoff(entries))
+        .flatten()
+}
+
 // ---------------------------------------------------------------------------
 // Catalog invalidation (Settings → Agents toggles)
 // ---------------------------------------------------------------------------
@@ -1349,6 +1358,10 @@ impl Pickers {
 
     /// Outside clicks and navigation keep focus at the clicked destination.
     fn dismiss(&mut self, cx: &mut Context<Self>) {
+        // Both confirmations are scoped to one visible decision. Reopening
+        // must require a fresh destructive confirmation / history opt-in.
+        self.clear_context_confirmation = false;
+        self.provider_switch_handoff = false;
         self.cancel_setting_hover();
         self.setting_menu = None;
         self.setting_bounds = None;
@@ -1937,10 +1950,7 @@ impl Pickers {
     fn pick_harness(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
         if self.harness_locked(cx) {
             if self.effective_harness(cx) != Some(harness) {
-                self.provider_switch_target = Some(harness);
-                self.provider_switch_handoff = false;
-                self.clear_context_confirmation = false;
-                self.context_error = None;
+                self.begin_provider_switch_confirmation(harness);
                 self.ensure_models(harness, false, cx);
                 cx.notify();
             }
@@ -1965,6 +1975,22 @@ impl Pickers {
         // Re-anchor the keyboard highlight onto the new harness's selected row.
         self.active = self.selected_model_index(cx);
         cx.notify();
+    }
+
+    fn begin_provider_switch_confirmation(&mut self, target: HarnessId) {
+        self.provider_switch_target = Some(target);
+        self.provider_switch_handoff = false;
+        self.clear_context_confirmation = false;
+        self.context_error = None;
+    }
+
+    fn cancel_provider_switch_confirmation(&mut self) {
+        self.provider_switch_target = None;
+        self.provider_switch_handoff = false;
+    }
+
+    fn toggle_provider_switch_handoff(&mut self) {
+        self.provider_switch_handoff = !self.provider_switch_handoff;
     }
 
     fn pick_provider_account(&mut self, account_id: String, cx: &mut Context<Self>) {
@@ -2121,10 +2147,10 @@ impl Pickers {
             .as_ref()
             .and_then(|model| model.reasoning_levels.first().copied());
         config.model_options.clear();
-        let handoff = self
-            .provider_switch_handoff
-            .then(|| recent_visible_handoff(&self.state.read(cx).transcript))
-            .flatten();
+        let handoff = provider_switch_handoff_payload(
+            self.provider_switch_handoff,
+            &self.state.read(cx).transcript,
+        );
         let previous = self
             .state
             .read(cx)
@@ -4464,15 +4490,33 @@ impl Pickers {
                         .items_center()
                         .gap(px(8.0))
                         .cursor_pointer()
+                        .role(gpui::Role::Switch)
+                        .aria_label("Include up to 8 recent visible messages")
+                        .aria_toggled(if handoff {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
                         .hover(|style| style.bg(crate::theme::ink(0.05)))
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.provider_switch_handoff = !this.provider_switch_handoff;
+                            this.toggle_provider_switch_handoff();
                             cx.notify();
                         }))
                         .child(
-                            crate::icons::icon(crate::icons::CHECK)
-                            .size(px(13.0))
-                            .text_color(if handoff { theme.accent } else { theme.text_faint }),
+                            div()
+                                .w(px(13.0))
+                                .h(px(13.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(handoff, |slot| {
+                                    slot.child(
+                                        crate::icons::icon(crate::icons::CHECK)
+                                            .size(px(13.0))
+                                            .text_color(theme.accent),
+                                    )
+                                }),
                         )
                         .child("Include up to 8 recent visible messages"),
                 )
@@ -4501,8 +4545,7 @@ impl Pickers {
                                 .cursor_pointer()
                                 .hover(|style| style.bg(crate::theme::ink(0.06)))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.provider_switch_target = None;
-                                    this.provider_switch_handoff = false;
+                                    this.cancel_provider_switch_confirmation();
                                     cx.notify();
                                 }))
                                 .child("Cancel"),
@@ -6130,7 +6173,11 @@ mod tests {
             });
         }
 
-        let handoff = recent_visible_handoff(&entries).unwrap();
+        assert!(
+            provider_switch_handoff_payload(false, &entries).is_none(),
+            "a fresh confirmation must not include any prior messages"
+        );
+        let handoff = provider_switch_handoff_payload(true, &entries).unwrap();
         assert_eq!(handoff.kind, ContextHandoffKind::RecentVisibleHistory);
         assert_eq!(
             handoff.message_ids.len(),
@@ -6148,6 +6195,49 @@ mod tests {
         assert!(!handoff.text.contains("hidden reasoning"));
         assert!(handoff.text.contains("visible message 9"));
         assert!(handoff.text.len() <= zeron_proto::MAX_CONTEXT_HANDOFF_BYTES);
+    }
+
+    #[gpui::test]
+    fn provider_handoff_and_clear_confirmations_reset_at_lifecycle_boundaries(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| AppState::new());
+        let pickers = cx.new(|cx| Pickers::new(state, cx));
+        pickers.update(cx, |pickers, cx| {
+            pickers.begin_provider_switch_confirmation(HarnessId::Opencode);
+            assert_eq!(pickers.provider_switch_target, Some(HarnessId::Opencode));
+            assert!(!pickers.provider_switch_handoff);
+
+            pickers.toggle_provider_switch_handoff();
+            assert!(pickers.provider_switch_handoff);
+
+            pickers.open.open(PickerKind::HarnessModel);
+            pickers.dismiss(cx);
+            assert!(
+                !pickers.provider_switch_handoff,
+                "dismissal must discard the transient history opt-in"
+            );
+
+            pickers.toggle_provider_switch_handoff();
+            pickers.cancel_provider_switch_confirmation();
+            assert!(pickers.provider_switch_target.is_none());
+            assert!(!pickers.provider_switch_handoff);
+
+            pickers.begin_provider_switch_confirmation(HarnessId::Codex);
+            assert_eq!(pickers.provider_switch_target, Some(HarnessId::Codex));
+            assert!(
+                !pickers.provider_switch_handoff,
+                "reopening for a new target must require a fresh opt-in"
+            );
+
+            pickers.clear_context_confirmation = true;
+            pickers.open.open(PickerKind::HarnessModel);
+            pickers.dismiss(cx);
+            assert!(
+                !pickers.clear_context_confirmation,
+                "dismissed Clear confirmation must reopen unarmed"
+            );
+        });
     }
 
     #[test]
