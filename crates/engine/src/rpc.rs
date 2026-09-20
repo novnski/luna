@@ -1931,7 +1931,30 @@ impl EngineRpc {
 
         let cwd = chat.cwd.unwrap_or_else(|| ".".into());
         let result = match config.harness {
-            HarnessId::Codex => self.task_identity.compact_task(task_id).await,
+            HarnessId::Codex => {
+                let execution = self
+                    .agent_accounts
+                    .resolve_execution(HarnessId::Codex, config.provider_account_id.as_deref());
+                match execution {
+                    Ok(execution) => match execution.codex_home {
+                        Some(codex_home) => {
+                            self.task_identity
+                                .compact_task(
+                                    task_id,
+                                    &codex_home,
+                                    execution.codex_file_auth,
+                                    &cwd,
+                                    config.model.as_deref(),
+                                )
+                                .await
+                        }
+                        None => Err(crate::EngineError::Other(
+                            "Codex account did not resolve an execution home".into(),
+                        )),
+                    },
+                    Err(error) => Err(error),
+                }
+            }
             harness => tokio::time::timeout(
                 Duration::from_secs(30),
                 self.sessions

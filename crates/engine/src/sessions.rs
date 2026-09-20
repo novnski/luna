@@ -34,7 +34,8 @@ use zeron_harness::{
     CancellationToken, Harness, HarnessError, RunControls, SteerAcceptance, SteerMessage,
 };
 use zeron_proto::{
-    AgentEvent, ChatConfig, CommandReceiptStatus, DoneStatus, HarnessId, PermissionAuditEntry,
+    AgentEvent, ChatConfig, CommandReceiptStatus, CompactMechanism, CompactOperation,
+    ContextControlState, ContextOperationStatus, DoneStatus, HarnessId, PermissionAuditEntry,
     PermissionMode, PermissionPolicy, RecoveryAcceptance, RecoveryFailure, RecoveryStatus,
     RunRequest, Session, SessionStatus, TaskRecovery, UserInputAnswer, UserInputQuestion,
 };
@@ -3077,6 +3078,62 @@ fn latest_user_message_id(handle: &ChatDocHandle) -> Result<Option<String>, Engi
         .map(|entry| entry.id))
 }
 
+fn reduce_provider_context_compaction(
+    current: &ContextControlState,
+    bound_thread_id: &str,
+    binding_generation: u32,
+    operation_id: &str,
+    status: ContextOperationStatus,
+    event_thread_id: &str,
+) -> Option<(ContextControlState, bool)> {
+    if bound_thread_id != event_thread_id || operation_id.is_empty() {
+        return None;
+    }
+    let now = now_ms();
+    let mut next = current.clone();
+    match status {
+        ContextOperationStatus::Running => {
+            if current.compact.blocks_new_turn() {
+                return None;
+            }
+            next.binding_generation = Some(binding_generation);
+            next.compact = CompactOperation {
+                operation_id: Some(operation_id.to_string()),
+                status,
+                mechanism: Some(CompactMechanism::NativeOperation),
+                binding_generation: Some(binding_generation),
+                started_at_ms: Some(now),
+                finished_at_ms: None,
+                detail: Some(
+                    "Codex reported provider-owned context compaction in progress. The provider may compact traditionally or start a new context window without exposing a summary."
+                        .into(),
+                ),
+            };
+            next.notice = None;
+            Some((next, false))
+        }
+        ContextOperationStatus::Completed | ContextOperationStatus::Unknown => {
+            if current.compact.status != ContextOperationStatus::Running
+                || current.compact.operation_id.as_deref() != Some(operation_id)
+                || current.compact.binding_generation != Some(binding_generation)
+            {
+                return None;
+            }
+            next.compact.status = status;
+            next.compact.finished_at_ms = Some(now);
+            next.compact.detail = Some(if status == ContextOperationStatus::Completed {
+                "Codex reported that provider-owned context compaction completed. No readable summary was exposed to LUNA."
+                    .into()
+            } else {
+                "Codex context compaction ended without a correlated completion. LUNA will not replay it."
+                    .into()
+            });
+            Some((next, status == ContextOperationStatus::Completed))
+        }
+        ContextOperationStatus::Idle | ContextOperationStatus::Failed => None,
+    }
+}
+
 fn frozen_run_for_message(
     handle: &ChatDocHandle,
     message_id: &str,
@@ -3664,6 +3721,61 @@ async fn drive_run(
         if let AgentEvent::ContextUsage { tokens, window } = &event {
             if let Err(err) = doc_ref.update_context_usage(*tokens, *window) {
                 tracing::warn!(%chat_id, error = %err, "context usage write failed");
+            }
+            continue;
+        }
+        if let AgentEvent::ContextCompaction {
+            operation_id,
+            status,
+            thread_id,
+            turn_id,
+        } = &event
+        {
+            if harness_id != HarnessId::Codex {
+                tracing::warn!(chat = %chat_id, harness = ?harness_id, "ignoring context compaction from unsupported harness");
+                continue;
+            }
+            let binding = inner
+                .task_identity
+                .get()
+                .and_then(|identity| identity.view(&chat_id))
+                .and_then(|view| view.current_binding);
+            let Some(binding) = binding.filter(|binding| {
+                binding.provider_id == HarnessId::Codex
+                    && !binding.provider_task_id.is_empty()
+                    && binding.provider_task_id == *thread_id
+            }) else {
+                tracing::warn!(chat = %chat_id, %thread_id, %turn_id, "ignoring stale Codex context compaction binding");
+                continue;
+            };
+            let Some(host) = inner.doc_host() else {
+                continue;
+            };
+            let current = match host.context_control(&chat_id) {
+                Ok(current) => current,
+                Err(error) => {
+                    tracing::warn!(chat = %chat_id, %error, "context compaction state read failed");
+                    continue;
+                }
+            };
+            let Some((next, clear_usage)) = reduce_provider_context_compaction(
+                &current,
+                &binding.provider_task_id,
+                binding.generation,
+                operation_id,
+                *status,
+                thread_id,
+            ) else {
+                tracing::debug!(chat = %chat_id, %operation_id, %turn_id, ?status, "ignoring duplicate or stale Codex context compaction event");
+                continue;
+            };
+            if let Err(error) = host.persist_provider_context_control(
+                &chat_id,
+                &format!("provider-context:{operation_id}:{status:?}"),
+                &next,
+                clear_usage,
+            ) {
+                tracing::warn!(chat = %chat_id, %operation_id, %error, "context compaction state write failed");
             }
             continue;
         }
@@ -4346,13 +4458,15 @@ async fn drive_run(
 mod tests {
     use super::{
         PendingInput, RunHandle, RuntimeConfig, SessionsEngine, approval_answer,
-        expire_pending_approval, lock, subagent_doc_id, take_pending_ordinary_input,
+        expire_pending_approval, lock, reduce_provider_context_compaction, subagent_doc_id,
+        take_pending_ordinary_input,
     };
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use zeron_proto::{
-        HarnessId, RecoveryAcceptance, RecoveryAction, RecoveryFailure, RecoveryStatus, RunRequest,
-        SandboxLevel, Session, SessionStatus, TaskRecovery,
+        ContextControlState, ContextOperationStatus, HarnessId, RecoveryAcceptance, RecoveryAction,
+        RecoveryFailure, RecoveryStatus, RunRequest, SandboxLevel, Session, SessionStatus,
+        TaskRecovery,
     };
     use zeron_sync::DocsStore;
 
@@ -4388,6 +4502,69 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn provider_context_compaction_is_bound_to_generation_and_operation() {
+        let current = ContextControlState::default();
+        assert!(
+            reduce_provider_context_compaction(
+                &current,
+                "thread-1",
+                4,
+                "auto-1",
+                ContextOperationStatus::Running,
+                "stale-thread",
+            )
+            .is_none()
+        );
+        let (running, clear_usage) = reduce_provider_context_compaction(
+            &current,
+            "thread-1",
+            4,
+            "auto-1",
+            ContextOperationStatus::Running,
+            "thread-1",
+        )
+        .unwrap();
+        assert!(!clear_usage);
+        assert_eq!(running.compact.status, ContextOperationStatus::Running);
+        assert_eq!(running.compact.binding_generation, Some(4));
+        assert!(
+            reduce_provider_context_compaction(
+                &running,
+                "thread-1",
+                4,
+                "stale-operation",
+                ContextOperationStatus::Completed,
+                "thread-1",
+            )
+            .is_none()
+        );
+        assert!(
+            reduce_provider_context_compaction(
+                &running,
+                "thread-1",
+                5,
+                "auto-1",
+                ContextOperationStatus::Completed,
+                "thread-1",
+            )
+            .is_none(),
+            "a completion from an earlier binding generation must not settle the new binding"
+        );
+        let (completed, clear_usage) = reduce_provider_context_compaction(
+            &running,
+            "thread-1",
+            4,
+            "auto-1",
+            ContextOperationStatus::Completed,
+            "thread-1",
+        )
+        .unwrap();
+        assert!(clear_usage);
+        assert_eq!(completed.compact.status, ContextOperationStatus::Completed);
+        assert!(completed.provider_summary.is_none());
     }
 
     #[tokio::test]

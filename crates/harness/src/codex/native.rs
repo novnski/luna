@@ -47,6 +47,7 @@ pub struct CodexThreadObservation {
 pub struct CodexNativeClient {
     codex_home: PathBuf,
     executable: Option<PathBuf>,
+    force_file_auth: bool,
 }
 
 impl CodexNativeClient {
@@ -54,6 +55,7 @@ impl CodexNativeClient {
         Self {
             codex_home: codex_home.into(),
             executable: None,
+            force_file_auth: false,
         }
     }
 
@@ -64,6 +66,18 @@ impl CodexNativeClient {
 
     pub fn codex_home(&self) -> &std::path::Path {
         &self.codex_home
+    }
+
+    pub fn for_execution_home(
+        &self,
+        codex_home: impl Into<PathBuf>,
+        force_file_auth: bool,
+    ) -> Self {
+        Self {
+            codex_home: codex_home.into(),
+            executable: self.executable.clone(),
+            force_file_auth,
+        }
     }
 
     pub async fn observe_thread(
@@ -140,11 +154,24 @@ impl CodexNativeClient {
     /// Start asynchronous native compaction and wait for the provider's
     /// context-compaction completion item. The request response alone is only
     /// an acknowledgement and must not be presented as completion.
-    pub async fn compact_thread(&self, thread_id: &str) -> Result<(), HarnessError> {
-        let mut connection = self.connect().await?;
+    pub async fn compact_thread(
+        &self,
+        thread_id: &str,
+        cwd: &str,
+        model: Option<&str>,
+    ) -> Result<(), HarnessError> {
+        let mut connection = self.connect(Some(cwd)).await?;
+        let mut resume = serde_json::Map::new();
+        resume.insert("threadId".into(), thread_id.into());
+        if !cwd.is_empty() {
+            resume.insert("cwd".into(), cwd.into());
+        }
+        if let Some(model) = model.filter(|model| !model.is_empty()) {
+            resume.insert("model".into(), model.into());
+        }
         let resumed = connection
             .client
-            .request("thread/resume", json!({"threadId": thread_id}))
+            .request("thread/resume", Value::Object(resume))
             .await;
         let resumed = match resumed {
             Ok(resumed) => resumed,
@@ -165,8 +192,9 @@ impl CodexNativeClient {
             connection.close().await;
             return Err(error);
         }
+        let mut tracker = NativeCompactTracker::default();
         while let Some((method, params)) = connection.notifications.recv().await {
-            match compact_notification(thread_id, &method, &params) {
+            match tracker.notification(thread_id, &method, &params) {
                 Some(CompactNotification::Completed) => {
                     connection.close().await;
                     return Ok(());
@@ -208,13 +236,13 @@ impl CodexNativeClient {
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, HarnessError> {
-        let mut connection = self.connect().await?;
+        let mut connection = self.connect(None).await?;
         let outcome = connection.client.request(method, params).await;
         connection.close().await;
         outcome
     }
 
-    async fn connect(&self) -> Result<NativeConnection, HarnessError> {
+    async fn connect(&self, cwd: Option<&str>) -> Result<NativeConnection, HarnessError> {
         let executable = match &self.executable {
             Some(path) => path.clone(),
             None => resolve_codex_executable().ok_or_else(|| {
@@ -222,8 +250,14 @@ impl CodexNativeClient {
             })?,
         };
         let mut command = Command::new(&executable);
+        if self.force_file_auth {
+            super::apply_file_auth_override(&mut command);
+        }
         command.arg("app-server");
         command.env("CODEX_HOME", &self.codex_home);
+        if let Some(cwd) = cwd.filter(|cwd| !cwd.is_empty()) {
+            command.current_dir(cwd);
+        }
         compose_child_path(&mut command, &executable);
         command
             .stdin(Stdio::piped())
@@ -333,33 +367,76 @@ enum CompactNotification {
     Failed(String),
 }
 
-fn compact_notification(
-    thread_id: &str,
-    method: &str,
-    params: &Value,
-) -> Option<CompactNotification> {
-    let event_thread = params
-        .get("threadId")
-        .or_else(|| params.pointer("/thread/id"))
-        .and_then(Value::as_str);
-    if event_thread != Some(thread_id) {
-        return None;
-    }
-    if method == "item/completed"
-        && params.pointer("/item/type").and_then(Value::as_str) == Some("contextCompaction")
-    {
-        return Some(CompactNotification::Completed);
-    }
-    if matches!(method, "turn/failed" | "turn/aborted") {
-        return Some(CompactNotification::Failed(
-            params
-                .pointer("/turn/error/message")
+#[derive(Default)]
+struct NativeCompactTracker {
+    active: Option<(String, String)>,
+}
+
+impl NativeCompactTracker {
+    fn notification(
+        &mut self,
+        thread_id: &str,
+        method: &str,
+        params: &Value,
+    ) -> Option<CompactNotification> {
+        let event_thread = params
+            .get("threadId")
+            .or_else(|| params.pointer("/thread/id"))
+            .and_then(Value::as_str);
+        if event_thread != Some(thread_id) {
+            return None;
+        }
+        let turn_id = params
+            .get("turnId")
+            .or_else(|| params.get("turn_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if matches!(method, "item/started" | "item/completed")
+            && matches!(
+                params.pointer("/item/type").and_then(Value::as_str),
+                Some("contextCompaction" | "context_compaction")
+            )
+        {
+            let item_id = params
+                .pointer("/item/id")
                 .and_then(Value::as_str)
-                .unwrap_or("Codex compaction did not complete")
-                .to_string(),
-        ));
+                .unwrap_or("");
+            if turn_id.is_empty() || item_id.is_empty() {
+                return None;
+            }
+            if method == "item/started" {
+                if self.active.is_none() {
+                    self.active = Some((turn_id.to_string(), item_id.to_string()));
+                }
+                return None;
+            }
+            if self
+                .active
+                .as_ref()
+                .is_some_and(|(turn, item)| turn == turn_id && item == item_id)
+            {
+                self.active = None;
+                return Some(CompactNotification::Completed);
+            }
+            return None;
+        }
+        if matches!(method, "turn/failed" | "turn/aborted")
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|(turn, _)| turn == turn_id)
+        {
+            self.active = None;
+            return Some(CompactNotification::Failed(
+                params
+                    .pointer("/turn/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Codex compaction did not complete")
+                    .to_string(),
+            ));
+        }
+        None
     }
-    None
 }
 
 struct NativeConnection {
@@ -405,53 +482,85 @@ mod tests {
 
     #[test]
     fn compact_completion_requires_matching_native_context_item() {
+        let mut tracker = NativeCompactTracker::default();
         assert_eq!(
-            compact_notification(
+            tracker.notification(
                 "thread-1",
-                "item/completed",
+                "item/started",
                 &json!({
                     "threadId": "thread-1",
-                    "item": { "type": "contextCompaction" }
+                    "turnId": "turn-1",
+                    "item": { "id": "compact-1", "type": "contextCompaction" }
                 }),
             ),
-            Some(CompactNotification::Completed)
+            None
         );
         assert_eq!(
-            compact_notification(
+            tracker.notification(
                 "thread-1",
                 "item/completed",
                 &json!({
                     "threadId": "thread-2",
-                    "item": { "type": "contextCompaction" }
+                    "turnId": "turn-1",
+                    "item": { "id": "compact-1", "type": "contextCompaction" }
                 }),
             ),
             None
         );
         assert_eq!(
-            compact_notification(
-                "thread-1",
-                "item/completed",
-                &json!({ "item": { "type": "contextCompaction" } }),
-            ),
-            None
-        );
-        assert_eq!(
-            compact_notification(
+            tracker.notification(
                 "thread-1",
                 "item/completed",
                 &json!({
                     "threadId": "thread-1",
-                    "item": { "type": "agentMessage" }
+                    "turnId": "turn-1",
+                    "item": { "id": "compact-stale", "type": "contextCompaction" }
                 }),
             ),
             None
         );
         assert_eq!(
-            compact_notification(
+            tracker.notification(
+                "thread-1",
+                "item/completed",
+                &json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": { "id": "compact-1", "type": "agentMessage" }
+                }),
+            ),
+            None
+        );
+        assert_eq!(
+            tracker.notification(
+                "thread-1",
+                "item/completed",
+                &json!({
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": { "id": "compact-1", "type": "contextCompaction" }
+                }),
+            ),
+            Some(CompactNotification::Completed)
+        );
+
+        let mut failed = NativeCompactTracker::default();
+        failed.notification(
+            "thread-1",
+            "item/started",
+            &json!({
+                "threadId": "thread-1",
+                "turnId": "turn-failed",
+                "item": { "id": "compact-failed", "type": "contextCompaction" }
+            }),
+        );
+        assert_eq!(
+            failed.notification(
                 "thread-1",
                 "turn/failed",
                 &json!({
                     "threadId": "thread-1",
+                    "turnId": "turn-failed",
                     "turn": { "error": { "message": "provider failed" } }
                 }),
             ),

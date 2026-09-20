@@ -3,8 +3,8 @@
 //! uses. Resurrected from the pre-ACP driver and modernized.
 //!
 //! VERSION PIN: the app-server API is EXPERIMENTAL (`capabilities.
-//! experimentalApi`); this driver is validated against codex-cli 0.153.4 —
-//! imageGeneration additionally follows the 0.154.0 schema (savedPath only).
+//! experimentalApi`); this driver is validated against codex-cli 0.154.0,
+//! including `contextCompaction` and imageGeneration's savedPath-only schema.
 //! Revalidate the method/notification surface when bumping past it.
 //!
 //! - `initialize` handshake (clientInfo + `capabilities.experimentalApi`) then
@@ -63,8 +63,9 @@ use crate::process::{Child, Command, Stdio};
 use crate::{Harness, HarnessError, RunControls, SteerAcceptance};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
 use normalize::{
-    ChildRoute, Phase, ReasoningStream, delta_text, item_id, item_type, notification_thread_id,
-    route_child_notification, turn_error_message, turn_id, usage_event,
+    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_turn_id,
+    item_type, notification_thread_id, route_child_notification, turn_error_message, turn_id,
+    usage_event,
 };
 
 /// Engine-only model-option keys. They are consumed by this adapter and never
@@ -117,7 +118,7 @@ fn named_command(exe: &std::path::Path, subcommand: &str, codex_home: &std::path
     cmd
 }
 
-fn apply_file_auth_override(cmd: &mut Command) {
+pub(super) fn apply_file_auth_override(cmd: &mut Command) {
     cmd.arg("-c").arg(CODEX_FILE_AUTH_CONFIG);
 }
 
@@ -793,6 +794,10 @@ impl TurnRouter {
         self.completed.iter().any(|c| c == id)
     }
 
+    fn knows(&self, id: &str) -> bool {
+        !id.is_empty() && (self.active.as_deref() == Some(id) || self.is_completed(id))
+    }
+
     fn note_started(&mut self, id: String) {
         if id.is_empty() || self.is_completed(&id) {
             return;
@@ -1122,6 +1127,7 @@ async fn run_session(session: Session) {
     // (item/completed only) still emits its text exactly once.
     let mut streamed_text: HashSet<String> = HashSet::new();
     let mut reasoning_streams: HashMap<String, ReasoningStream> = HashMap::new();
+    let mut context_compactions = ContextCompactionStream::default();
     // Token usage is held until the turn ends, emitted just before Done.
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
@@ -1169,7 +1175,16 @@ async fn run_session(session: Session) {
                     }
                 }
                 match method.as_str() {
-                    "turn/started" => router.note_started(turn_id(&params)),
+                    "turn/started" => {
+                        let id = turn_id(&params);
+                        if let Some(event) = context_compactions
+                            .unknown_before_turn(&thread_id, &id)
+                            && !send(&event_tx, event).await
+                        {
+                            break 'main;
+                        }
+                        router.note_started(id);
+                    }
 
                     "thread/name/updated"
                     | "thread/archived"
@@ -1214,6 +1229,20 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
+                        if matches!(item_type(item), "contextCompaction" | "context_compaction") {
+                            let item_turn = item_turn_id(&params);
+                            if let Some(event) = context_compactions.map_item(
+                                phase,
+                                &thread_id,
+                                router.knows(item_turn).then_some(item_turn),
+                                &params,
+                                item,
+                            ) && !send(&event_tx, event).await
+                            {
+                                break 'main;
+                            }
+                            continue;
+                        }
                         if matches!(item_type(item), "agentMessage" | "agent_message") {
                             if phase == Phase::Completed {
                                 // Fallback for non-streamed messages only.
@@ -1341,6 +1370,12 @@ async fn run_session(session: Session) {
 
                     "turn/failed" => {
                         let id = turn_id(&params);
+                        if let Some(event) = context_compactions
+                            .unknown_for_turn(&thread_id, &id)
+                            && !send(&event_tx, event).await
+                        {
+                            break 'main;
+                        }
                         router.note_completed(&id);
                         if let Some(usage) = pending_usage.take()
                             && !send(&event_tx, usage).await
@@ -1373,6 +1408,12 @@ async fn run_session(session: Session) {
 
                     "turn/aborted" => {
                         let id = turn_id(&params);
+                        if let Some(event) = context_compactions
+                            .unknown_for_turn(&thread_id, &id)
+                            && !send(&event_tx, event).await
+                        {
+                            break 'main;
+                        }
                         router.note_completed(&id);
                         done_current = true;
                         if interrupted {
@@ -1588,6 +1629,9 @@ async fn run_session(session: Session) {
     // Terminal bookkeeping: never end the stream without a Done unless the
     // consumer already hung up.
     if !event_tx.is_closed() {
+        if let Some(event) = context_compactions.take_unknown() {
+            let _ = event_tx.send(Ok(event)).await;
+        }
         if interrupted && !done_after_interrupt {
             let _ = event_tx
                 .send(Ok(AgentEvent::Done {

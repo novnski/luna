@@ -16,8 +16,8 @@ use zeron_harness::{
     SteerMessage,
 };
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, TodoItem,
-    ToolCall, UserInputAnswer, UserInputQuestion,
+    AgentEvent, ContextOperationStatus, DoneStatus, HarnessId, ReasoningLevel, RunRequest,
+    SandboxLevel, TodoItem, ToolCall, UserInputAnswer, UserInputQuestion,
 };
 
 fn fixture_path() -> PathBuf {
@@ -168,11 +168,22 @@ async fn native_metadata_client_uses_supported_methods_only() {
 #[tokio::test]
 async fn native_compaction_resumes_bound_thread_before_start_and_waits_for_matching_completion() {
     let home = tempfile::tempdir().unwrap();
-    let client = CodexNativeClient::new(home.path()).with_executable(fixture_path());
-    tokio::time::timeout(Duration::from_secs(5), client.compact_thread("compact-ok"))
-        .await
-        .expect("fixture compaction completed in time")
-        .expect("fixture compaction succeeded");
+    let cwd = tempfile::tempdir().unwrap();
+    let config = "[features.context_management]\nexperimental_mode = true\n";
+    std::fs::write(home.path().join("config.toml"), config).unwrap();
+    let base = CodexNativeClient::new(home.path()).with_executable(fixture_path());
+    let client = base.for_execution_home(home.path(), true);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        client.compact_thread(
+            "compact-ok",
+            cwd.path().to_str().unwrap(),
+            Some("gpt-5.6-sol"),
+        ),
+    )
+    .await
+    .expect("fixture compaction completed in time")
+    .expect("fixture compaction succeeded");
     assert_eq!(
         std::fs::read_to_string(home.path().join("compact-trace")).unwrap(),
         "resume\ncompact\nmatching-completion\n"
@@ -182,6 +193,21 @@ async fn native_compaction_resumes_bound_thread_before_start_and_waits_for_match
         home.path().join("compact-matching-completion").is_file(),
         "the request ACK and another thread's completion must not finish compaction"
     );
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("compact-config-observed")).unwrap(),
+        config
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("compact-cwd"))
+            .unwrap()
+            .trim(),
+        std::fs::canonicalize(cwd.path()).unwrap().to_str().unwrap()
+    );
+    let resume = std::fs::read_to_string(home.path().join("compact-resume-request")).unwrap();
+    assert!(resume.contains(&format!("\"cwd\":\"{}\"", cwd.path().display())));
+    assert!(resume.contains("\"model\":\"gpt-5.6-sol\""));
+    let argv = std::fs::read_to_string(home.path().join("compact-argv")).unwrap();
+    assert!(argv.contains("cli_auth_credentials_store=\"file\""));
 }
 
 #[tokio::test]
@@ -193,10 +219,13 @@ async fn native_compaction_load_owner_and_binding_failures_never_start_or_replay
     ] {
         let home = tempfile::tempdir().unwrap();
         let client = CodexNativeClient::new(home.path()).with_executable(fixture_path());
-        let error = tokio::time::timeout(Duration::from_secs(5), client.compact_thread(thread_id))
-            .await
-            .expect("fixture failure returned in time")
-            .expect_err("unsafe compact must fail before dispatch");
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.compact_thread(thread_id, "", None),
+        )
+        .await
+        .expect("fixture failure returned in time")
+        .expect_err("unsafe compact must fail before dispatch");
         assert!(error.to_string().contains(expected), "{thread_id}: {error}");
         assert!(
             !home.path().join("compact-called").exists(),
@@ -204,6 +233,143 @@ async fn native_compaction_load_owner_and_binding_failures_never_start_or_replay
         );
         let trace = std::fs::read_to_string(home.path().join("compact-trace")).unwrap();
         assert_eq!(trace.lines().count(), 1, "{thread_id}: {trace}");
+    }
+}
+
+#[tokio::test]
+async fn ordinary_start_and_resume_inherit_the_selected_codex_home_config() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let config = "[features.context_management]\nexperimental_mode = true\n";
+    std::fs::write(home.path().join("config.toml"), config).unwrap();
+
+    for (prompt, resume, prefix, force_file_auth) in [
+        (
+            "scenario:context-config-start",
+            None,
+            "ordinary-start",
+            false,
+        ),
+        (
+            "scenario:context-config-resume",
+            Some("context-resume"),
+            "ordinary-resume",
+            true,
+        ),
+    ] {
+        let (run_controls, _steer, _token) = controls("Yes");
+        let mut req = request(prompt);
+        req.cwd = cwd.path().to_string_lossy().into_owned();
+        req.resume = resume.map(str::to_owned);
+        req.model_options.insert(
+            zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+            home.path().to_string_lossy().into_owned().into(),
+        );
+        if force_file_auth {
+            req.model_options.insert(
+                zeron_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
+                true.into(),
+            );
+        }
+        let events = run_to_end(&harness(), req, run_controls).await;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            }
+        )));
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(format!("{prefix}-config-observed"))).unwrap(),
+            config
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(format!("{prefix}-cwd")))
+                .unwrap()
+                .trim(),
+            std::fs::canonicalize(cwd.path()).unwrap().to_str().unwrap()
+        );
+        let request =
+            std::fs::read_to_string(home.path().join(format!("{prefix}-request"))).unwrap();
+        assert!(request.contains("\"model\":\"gpt-5.6-sol\""));
+        assert!(request.contains(&format!("\"cwd\":\"{}\"", cwd.path().display())));
+        let argv = std::fs::read_to_string(home.path().join(format!("{prefix}-argv"))).unwrap();
+        assert_eq!(
+            argv.contains("cli_auth_credentials_store=\"file\""),
+            force_file_auth,
+            "{prefix}: {argv}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn automatic_context_compaction_is_correlated_and_never_completes_the_turn() {
+    let (run_controls, _steer, _token) = controls("Yes");
+    let events = run_to_end(
+        &harness(),
+        request("scenario:auto-context-complete"),
+        run_controls,
+    )
+    .await;
+    let lifecycle = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ContextCompaction {
+                operation_id,
+                status,
+                thread_id,
+                turn_id,
+            } => Some((operation_id, status, thread_id, turn_id)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(lifecycle.len(), 2, "{events:?}");
+    assert_eq!(lifecycle[0].1, &ContextOperationStatus::Running);
+    assert_eq!(lifecycle[1].1, &ContextOperationStatus::Completed);
+    assert_eq!(lifecycle[0].0, lifecycle[1].0);
+    assert_eq!(lifecycle[0].2.as_str(), "th-1");
+    assert_eq!(lifecycle[0].3.as_str(), "t-auto-context");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::Done { .. }))
+            .count(),
+        1,
+        "context compaction must not complete the enclosing turn"
+    );
+    assert!(events.contains(&AgentEvent::ContextUsage {
+        tokens: Some(0),
+        window: Some(100_000),
+    }));
+}
+
+#[tokio::test]
+async fn interrupted_or_disconnected_automatic_compaction_becomes_unknown_once() {
+    for (scenario, expected_done) in [
+        ("scenario:auto-context-interrupted", DoneStatus::Interrupted),
+        ("scenario:auto-context-disconnect", DoneStatus::Errored),
+    ] {
+        let (run_controls, _steer, _token) = controls("Yes");
+        let events = run_to_end(&harness(), request(scenario), run_controls).await;
+        let statuses = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::ContextCompaction { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec![
+                ContextOperationStatus::Running,
+                ContextOperationStatus::Unknown
+            ],
+            "{scenario}: {events:?}"
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done { status, .. } if *status == expected_done
+        )));
     }
 }
 

@@ -2948,7 +2948,9 @@ mod tests {
             serde_json::json!({"OPENAI_API_KEY": "synthetic-native-key"}).to_string(),
         )
         .unwrap();
-        std::fs::write(config.codex_home.join("config.toml"), "model = 'test'").unwrap();
+        let shared_config =
+            "model = 'test'\n[features.context_management]\nexperimental_mode = true\n";
+        std::fs::write(config.codex_home.join("config.toml"), shared_config).unwrap();
         std::fs::write(config.codex_home.join("models_cache.json"), "{}").unwrap();
 
         let account_id = "named-synthetic";
@@ -2969,6 +2971,11 @@ mod tests {
                 .unwrap()
                 .file_type()
                 .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(shadow.join("config.toml")).unwrap(),
+            shared_config,
+            "named-account execution must inherit non-private Codex configuration"
         );
         assert!(!shadow.join("models_cache.json").exists());
         assert!(!shadow.join("auth.json").exists());
@@ -3019,6 +3026,8 @@ mod tests {
             Some(config.codex_home.as_path())
         );
         assert_eq!(named.codex_home.as_deref(), Some(shadow.as_path()));
+        assert!(!native.codex_file_auth);
+        assert!(named.codex_file_auth);
         assert_ne!(native.auth_instance_id, named.auth_instance_id);
         let metadata = std::fs::read_to_string(config.state_file()).unwrap();
         assert!(!metadata.contains("synthetic-native-key"));

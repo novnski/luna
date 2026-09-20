@@ -583,6 +583,17 @@ pub enum AgentEvent {
         tokens: Option<u64>,
         window: Option<u64>,
     },
+    /// Provider-reported context compaction for the active root turn. This is
+    /// control-plane state, not transcript content or a turn-completion signal.
+    /// The operation id is derived from the provider thread/turn/item tuple so
+    /// stale completions cannot settle a newer rollover.
+    #[serde(rename_all = "camelCase")]
+    ContextCompaction {
+        operation_id: String,
+        status: crate::ContextOperationStatus,
+        thread_id: String,
+        turn_id: String,
+    },
     /// Kept as a harness passthrough (rate-limit probes); never persisted to docs.
     #[serde(rename_all = "camelCase")]
     Usage {

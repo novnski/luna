@@ -1769,11 +1769,22 @@ impl TaskIdentityService {
         self.commit_events_with_task_command(events, |snapshot| commit(&replacement, snapshot))
     }
 
-    pub async fn compact_task(&self, task_id: &str) -> Result<(), EngineError> {
+    pub async fn compact_task(
+        &self,
+        task_id: &str,
+        codex_home: &Path,
+        force_file_auth: bool,
+        cwd: &str,
+        model: Option<&str>,
+    ) -> Result<(), EngineError> {
         let binding = self.mutable_codex_binding(task_id)?;
+        let client = self
+            .inner
+            .codex
+            .for_execution_home(codex_home, force_file_auth);
         tokio::time::timeout(
             PROVIDER_TIMEOUT,
-            self.inner.codex.compact_thread(&binding.provider_task_id),
+            client.compact_thread(&binding.provider_task_id, cwd, model),
         )
         .await
         .map_err(|_| EngineError::Other("Codex compaction completion timed out".into()))?

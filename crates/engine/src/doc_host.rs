@@ -1004,6 +1004,29 @@ impl DocHost {
         Ok(())
     }
 
+    /// Persist a provider-reported context lifecycle without touching the
+    /// task-command receipt store. Automatic provider compaction is not a
+    /// user command and must never manufacture acknowledgement semantics.
+    pub fn persist_provider_context_control(
+        &self,
+        chat_id: &str,
+        event_id: &str,
+        state: &ContextControlState,
+        clear_usage: bool,
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        let state = state.clone();
+        self.persist_queue_projection(&handle, event_id, move |doc| {
+            doc.set_context_control(&state)?;
+            if clear_usage {
+                doc.clear_context_usage()?;
+            }
+            Ok(())
+        })?;
+        handle.publish_messages();
+        Ok(())
+    }
+
     /// Finish a compact command with its durable context snapshot and receipt
     /// in one transaction.
     #[allow(clippy::too_many_arguments)]
@@ -4552,6 +4575,9 @@ impl DocHost {
         // unnecessary while it waited simply finds nothing to do.
         let _drain = handle.drain_lock.lock().await;
         if handle.queue_paused.load(Ordering::Acquire) {
+            return;
+        }
+        if handle.doc.context_control().compact.blocks_new_turn() {
             return;
         }
         let Ok(Some(head)) = handle.doc.read_queue().map(|q| q.into_iter().next()) else {

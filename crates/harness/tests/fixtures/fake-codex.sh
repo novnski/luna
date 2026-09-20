@@ -111,6 +111,12 @@ fi
 if has "$line" '"method":"thread/resume"'; then
   if has "$line" '"threadId":"compact-ok"'; then
     printf '%s\n' 'resume' >> "$CODEX_HOME/compact-trace"
+    pwd > "$CODEX_HOME/compact-cwd"
+    printf '%s\n' "$line" > "$CODEX_HOME/compact-resume-request"
+    printf '%s\n' "$@" > "$CODEX_HOME/compact-argv"
+    if [ -f "$CODEX_HOME/config.toml" ]; then
+      cp "$CODEX_HOME/config.toml" "$CODEX_HOME/compact-config-observed"
+    fi
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"compact-ok\",\"status\":{\"type\":\"idle\"}}}}"
     read -r compact_line || exit 1
     has "$compact_line" '"method":"thread/compact/start"' || exit 1
@@ -118,11 +124,13 @@ if has "$line" '"method":"thread/resume"'; then
     printf '%s\n' 'compact' >> "$CODEX_HOME/compact-trace"
     : > "$CODEX_HOME/compact-called"
     emit "{\"id\":$(rid "$compact_line"),\"result\":{}}"
-    emit '{"method":"item/completed","params":{"threadId":"other-thread","item":{"id":"compact-other","type":"contextCompaction"}}}'
+    emit '{"method":"item/started","params":{"threadId":"compact-ok","turnId":"compact-turn","item":{"id":"compact-1","type":"contextCompaction"}}}'
+    emit '{"method":"item/completed","params":{"threadId":"other-thread","turnId":"compact-turn","item":{"id":"compact-1","type":"contextCompaction"}}}'
+    emit '{"method":"item/completed","params":{"threadId":"compact-ok","turnId":"compact-turn","item":{"id":"compact-stale","type":"contextCompaction"}}}'
     sleep 1
     printf '%s\n' 'matching-completion' >> "$CODEX_HOME/compact-trace"
     : > "$CODEX_HOME/compact-matching-completion"
-    emit '{"method":"item/completed","params":{"threadId":"compact-ok","item":{"id":"compact-1","type":"contextCompaction"}}}'
+    emit '{"method":"item/completed","params":{"threadId":"compact-ok","turnId":"compact-turn","item":{"id":"compact-1","type":"contextCompaction"}}}'
     exec sleep 30
   elif has "$line" '"threadId":"compact-load-fail"'; then
     printf '%s\n' 'resume-rejected' >> "$CODEX_HOME/compact-trace"
@@ -146,6 +154,8 @@ if has "$line" '"method":"thread/resume"'; then
     read -r line || exit 1
     has "$line" '"method":"thread/start"' || exit 1
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-fresh\"}}}"
+  elif has "$line" '"threadId":"context-resume"'; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"context-resume\"}}}"
   else
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\"}}}"
   fi
@@ -166,6 +176,51 @@ fi
 tid=$(rid "$turnline")
 
 case "$turnline" in
+
+*scenario:context-config-start*)
+  cp "$CODEX_HOME/config.toml" "$CODEX_HOME/ordinary-start-config-observed"
+  pwd > "$CODEX_HOME/ordinary-start-cwd"
+  printf '%s\n' "$thread_line" > "$CODEX_HOME/ordinary-start-request"
+  printf '%s\n' "$@" > "$CODEX_HOME/ordinary-start-argv"
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-context-config\"}}}"
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-context-config","status":"completed"}}}'
+  ;;
+
+*scenario:context-config-resume*)
+  cp "$CODEX_HOME/config.toml" "$CODEX_HOME/ordinary-resume-config-observed"
+  pwd > "$CODEX_HOME/ordinary-resume-cwd"
+  printf '%s\n' "$thread_line" > "$CODEX_HOME/ordinary-resume-request"
+  printf '%s\n' "$@" > "$CODEX_HOME/ordinary-resume-argv"
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-context-resume\"}}}"
+  emit '{"method":"turn/completed","params":{"threadId":"context-resume","turn":{"id":"t-context-resume","status":"completed"}}}'
+  ;;
+
+*scenario:auto-context-complete*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-auto-context\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-auto-context"}}}'
+  emit '{"method":"thread/tokenUsage/updated","params":{"threadId":"th-1","tokenUsage":{"last":{"totalTokens":95000},"modelContextWindow":100000}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-auto-context","status":"completed"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-auto-context","item":{"id":"compact-auto","type":"contextCompaction"}}}'
+  emit '{"method":"item/started","params":{"threadId":"child-auto","turnId":"child-turn","item":{"id":"compact-child","type":"contextCompaction"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"child-auto","turnId":"child-turn","item":{"id":"compact-child","type":"contextCompaction"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-auto-context","item":{"id":"compact-stale","type":"contextCompaction"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-auto-context","item":{"id":"compact-auto","type":"contextCompaction"}}}'
+  emit '{"method":"thread/tokenUsage/updated","params":{"threadId":"th-1","tokenUsage":{"last":{"totalTokens":0},"modelContextWindow":100000}}}'
+  ;;
+
+*scenario:auto-context-interrupted*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-auto-interrupted\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-auto-interrupted"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-auto-interrupted","item":{"id":"compact-interrupted","type":"contextCompaction"}}}'
+  emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t-auto-interrupted","status":"interrupted"}}}'
+  ;;
+
+*scenario:auto-context-disconnect*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-auto-disconnect\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-auto-disconnect"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-auto-disconnect","item":{"id":"compact-disconnect","type":"contextCompaction"}}}'
+  exit 0
+  ;;
 
 *scenario:native-title*)
   has "$thread_line" '"ephemeral":false' || { fail_turn "$tid" "ordinary thread must be durable"; exit 0; }

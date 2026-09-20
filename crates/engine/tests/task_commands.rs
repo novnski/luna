@@ -17,8 +17,8 @@ use zeron_proto::{
     AgentEvent, BindingOrigin, COMPOSER_DRAFT_VERSION, ChatConfig, CommandReasonCode,
     CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftRead, ContextControlState,
     ContextHandoff, ContextHandoffKind, ContextOperationStatus, DoneStatus, DraftContext,
-    DraftSubmissionState, HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest,
-    SandboxLevel, SteeringMode, TaskCommandRead,
+    DraftSubmissionState, FollowUpBehavior, HarnessId, Model, PermissionMode, ReasoningLevel,
+    RunRequest, SandboxLevel, SteeringMode, TaskCommandRead,
 };
 use zeron_rpc::{RpcClient, methods};
 
@@ -2368,15 +2368,86 @@ async fn compact_is_idempotent_and_restart_unknown_is_never_replayed() {
         .current_binding
         .unwrap()
         .generation;
-    let mut interrupted = ContextControlState::default();
-    interrupted.binding_generation = Some(binding_generation);
-    interrupted.compact.operation_id = Some("interrupted-compact".into());
-    interrupted.compact.status = ContextOperationStatus::Running;
-    interrupted.compact.binding_generation = Some(binding_generation);
-    interrupted.compact.started_at_ms = Some(1);
-    core.doc_host
-        .persist_context_control(&task_id, "interrupted-compact", &interrupted)
+    let mut automatic = ContextControlState::default();
+    automatic.binding_generation = Some(binding_generation);
+    automatic.compact.operation_id =
+        Some("codex-auto:synthetic-thread:synthetic-turn:compact-item".into());
+    automatic.compact.status = ContextOperationStatus::Running;
+    automatic.compact.binding_generation = Some(binding_generation);
+    automatic.compact.started_at_ms = Some(1);
+    let handle = core.doc_host.open(&task_id).unwrap();
+    handle
+        .doc()
+        .update_context_usage(Some(900), Some(1_000))
         .unwrap();
+    core.doc_host
+        .persist_provider_context_control(
+            &task_id,
+            "provider-context:automatic-running",
+            &automatic,
+            false,
+        )
+        .unwrap();
+    assert_eq!(handle.doc().context_usage().unwrap().tokens, Some(900));
+    let mut completed = automatic.clone();
+    completed.compact.status = ContextOperationStatus::Completed;
+    completed.compact.finished_at_ms = Some(2);
+    core.doc_host
+        .persist_provider_context_control(
+            &task_id,
+            "provider-context:automatic-completed",
+            &completed,
+            true,
+        )
+        .unwrap();
+    assert!(handle.doc().context_usage().is_none());
+    assert!(
+        core.doc_host
+            .task_command_receipt("provider-context:automatic-running")
+            .unwrap()
+            .is_none(),
+        "unsolicited provider lifecycle must not manufacture a manual command receipt"
+    );
+    assert!(
+        core.doc_host
+            .task_command_receipt("provider-context:automatic-completed")
+            .unwrap()
+            .is_none()
+    );
+    let mut interrupted = completed;
+    interrupted.compact.operation_id =
+        Some("codex-auto:synthetic-thread:next-turn:interrupted-item".into());
+    interrupted.compact.status = ContextOperationStatus::Running;
+    interrupted.compact.started_at_ms = Some(3);
+    interrupted.compact.finished_at_ms = None;
+    core.doc_host
+        .persist_provider_context_control(
+            &task_id,
+            "provider-context:automatic-interrupted",
+            &interrupted,
+            false,
+        )
+        .unwrap();
+    core.doc_host
+        .queue_message_with_id_and_execution(
+            &task_id,
+            "automatic-compact-queue",
+            "must remain held",
+            Vec::new(),
+            true,
+            FollowUpBehavior::Queue,
+            None,
+        )
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(matches!(
+        core.doc_host
+            .queued_message(&task_id, "automatic-compact-queue")
+            .unwrap()
+            .unwrap()
+            .status,
+        QueueMessageStatus::Held
+    ));
     core.doc_host.flush_all();
     core.shutdown().await;
     drop(client);
@@ -2414,6 +2485,16 @@ async fn compact_is_idempotent_and_restart_unknown_is_never_replayed() {
     let state = reopened.doc_host.context_control(&task_id).unwrap();
     assert_eq!(state.compact.status, ContextOperationStatus::Unknown);
     assert!(state.compact.detail.unwrap().contains("will not replay"));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(matches!(
+        reopened
+            .doc_host
+            .queued_message(&task_id, "automatic-compact-queue")
+            .unwrap()
+            .unwrap()
+            .status,
+        QueueMessageStatus::Held
+    ));
     reopened.shutdown().await;
 }
 

@@ -6,12 +6,132 @@
 //! types) are accepted, and unknown item types map to nothing.
 
 use serde_json::Value;
-use zeron_proto::{AgentEvent, DoneStatus, TodoItem, ToolCall};
+use zeron_proto::{AgentEvent, ContextOperationStatus, DoneStatus, TodoItem, ToolCall};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     Started,
     Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveContextCompaction {
+    operation_id: String,
+    thread_id: String,
+    turn_id: String,
+    item_id: String,
+}
+
+/// Correlates the canonical 0.154 `contextCompaction` item lifecycle. The
+/// app-server notification envelope owns thread/turn identity while the item
+/// owns the stable id; all three must match before completion is surfaced.
+#[derive(Default)]
+pub(crate) struct ContextCompactionStream {
+    active: Option<ActiveContextCompaction>,
+}
+
+impl ContextCompactionStream {
+    pub(crate) fn map_item(
+        &mut self,
+        phase: Phase,
+        root_thread_id: &str,
+        known_turn_id: Option<&str>,
+        params: &Value,
+        item: &Value,
+    ) -> Option<AgentEvent> {
+        if !matches!(item_type(item), "contextCompaction" | "context_compaction") {
+            return None;
+        }
+        let thread_id = notification_thread_id("item/started", params)?;
+        let turn_id = field(params, &["turnId", "turn_id"])
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let item_id = str_field(item, &["id"]);
+        if thread_id != root_thread_id
+            || turn_id.is_empty()
+            || item_id.is_empty()
+            || known_turn_id != Some(turn_id)
+        {
+            return None;
+        }
+        let operation_id = format!("codex-auto:{thread_id}:{turn_id}:{item_id}");
+        match phase {
+            Phase::Started => {
+                if self.active.as_ref().is_some_and(|active| {
+                    active.thread_id == thread_id
+                        && active.turn_id == turn_id
+                        && active.item_id == item_id
+                }) {
+                    return None;
+                }
+                if self.active.is_some() {
+                    return None;
+                }
+                self.active = Some(ActiveContextCompaction {
+                    operation_id: operation_id.clone(),
+                    thread_id: thread_id.clone(),
+                    turn_id: turn_id.to_string(),
+                    item_id,
+                });
+                Some(AgentEvent::ContextCompaction {
+                    operation_id,
+                    status: ContextOperationStatus::Running,
+                    thread_id,
+                    turn_id: turn_id.to_string(),
+                })
+            }
+            Phase::Completed => {
+                let active = self.active.as_ref()?;
+                if active.thread_id != thread_id
+                    || active.turn_id != turn_id
+                    || active.item_id != item_id
+                {
+                    return None;
+                }
+                let active = self.active.take().unwrap();
+                Some(AgentEvent::ContextCompaction {
+                    operation_id: active.operation_id,
+                    status: ContextOperationStatus::Completed,
+                    thread_id: active.thread_id,
+                    turn_id: active.turn_id,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn unknown_for_turn(
+        &mut self,
+        root_thread_id: &str,
+        turn_id: &str,
+    ) -> Option<AgentEvent> {
+        let active = self.active.as_ref()?;
+        if active.thread_id != root_thread_id || active.turn_id != turn_id {
+            return None;
+        }
+        self.take_unknown()
+    }
+
+    pub(crate) fn unknown_before_turn(
+        &mut self,
+        root_thread_id: &str,
+        next_turn_id: &str,
+    ) -> Option<AgentEvent> {
+        let active = self.active.as_ref()?;
+        if active.thread_id != root_thread_id || active.turn_id == next_turn_id {
+            return None;
+        }
+        self.take_unknown()
+    }
+
+    pub(crate) fn take_unknown(&mut self) -> Option<AgentEvent> {
+        let active = self.active.take()?;
+        Some(AgentEvent::ContextCompaction {
+            operation_id: active.operation_id,
+            status: ContextOperationStatus::Unknown,
+            thread_id: active.thread_id,
+            turn_id: active.turn_id,
+        })
+    }
 }
 
 fn field<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a Value> {
@@ -107,6 +227,12 @@ pub(crate) fn turn_id(params: &Value) -> String {
         .get("turn")
         .map(|t| str_field(t, &["id"]))
         .unwrap_or_default()
+}
+
+pub(crate) fn item_turn_id(params: &Value) -> &str {
+    field(params, &["turnId", "turn_id"])
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 /// `params.turn.error.message` (turn/completed carries an optional error;
@@ -1045,6 +1171,125 @@ mod context_tests {
             context_usage_event(&json!({"tokenUsage": {"total": {"totalTokens": 100}}})),
             None
         );
+    }
+
+    #[test]
+    fn context_compaction_requires_root_thread_turn_and_item_correlation() {
+        let mut stream = ContextCompactionStream::default();
+        let started = json!({
+            "threadId": "root-thread",
+            "turnId": "turn-1",
+            "item": {"id": "compact-1", "type": "contextCompaction"}
+        });
+        let item = &started["item"];
+        assert!(
+            stream
+                .map_item(
+                    Phase::Started,
+                    "root-thread",
+                    Some("other-turn"),
+                    &started,
+                    item,
+                )
+                .is_none()
+        );
+        let running = stream
+            .map_item(
+                Phase::Started,
+                "root-thread",
+                Some("turn-1"),
+                &started,
+                item,
+            )
+            .unwrap();
+        assert!(matches!(
+            running,
+            AgentEvent::ContextCompaction {
+                status: ContextOperationStatus::Running,
+                ref operation_id,
+                ref thread_id,
+                ref turn_id,
+            } if operation_id == "codex-auto:root-thread:turn-1:compact-1"
+                && thread_id == "root-thread"
+                && turn_id == "turn-1"
+        ));
+
+        let stale = json!({
+            "threadId": "root-thread",
+            "turnId": "turn-1",
+            "item": {"id": "compact-stale", "type": "contextCompaction"}
+        });
+        assert!(
+            stream
+                .map_item(
+                    Phase::Completed,
+                    "root-thread",
+                    Some("turn-1"),
+                    &stale,
+                    &stale["item"],
+                )
+                .is_none()
+        );
+        let child = json!({
+            "threadId": "child-thread",
+            "turnId": "turn-1",
+            "item": {"id": "compact-1", "type": "contextCompaction"}
+        });
+        assert!(
+            stream
+                .map_item(
+                    Phase::Completed,
+                    "root-thread",
+                    Some("turn-1"),
+                    &child,
+                    &child["item"],
+                )
+                .is_none()
+        );
+        let completed = stream
+            .map_item(
+                Phase::Completed,
+                "root-thread",
+                Some("turn-1"),
+                &started,
+                item,
+            )
+            .unwrap();
+        assert!(matches!(
+            completed,
+            AgentEvent::ContextCompaction {
+                status: ContextOperationStatus::Completed,
+                ..
+            }
+        ));
+        assert!(stream.take_unknown().is_none());
+    }
+
+    #[test]
+    fn interrupted_context_compaction_becomes_unknown_once() {
+        let mut stream = ContextCompactionStream::default();
+        let started = json!({
+            "threadId": "root-thread",
+            "turnId": "turn-1",
+            "item": {"id": "compact-1", "type": "contextCompaction"}
+        });
+        stream
+            .map_item(
+                Phase::Started,
+                "root-thread",
+                Some("turn-1"),
+                &started,
+                &started["item"],
+            )
+            .unwrap();
+        assert!(matches!(
+            stream.unknown_for_turn("root-thread", "turn-1"),
+            Some(AgentEvent::ContextCompaction {
+                status: ContextOperationStatus::Unknown,
+                ..
+            })
+        ));
+        assert!(stream.unknown_for_turn("root-thread", "turn-1").is_none());
     }
 }
 
