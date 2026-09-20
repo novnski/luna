@@ -1,8 +1,9 @@
 //! Hermetic L13 native-history QA fixture.
 //!
 //! One synthetic Codex-shaped provider backs a completed two-turn task. Native
-//! forks return independent ids in a root-scoped synthetic state file; no provider executable, login,
-//! Keychain, network service, or real repository is consulted.
+//! forks return independent ids in a root-scoped synthetic state file. A root-written fake metadata
+//! app-server backs archive readback; no installed provider executable, login, Keychain, network
+//! service, or real repository is consulted.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,16 @@ const UNSUPPORTED_ASSISTANT_MESSAGE_ID: &str = "l13-unsupported-visible-assistan
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 struct FixtureProviderState {
     sessions: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    metadata: BTreeMap<String, FixtureProviderMetadata>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureProviderMetadata {
+    name: String,
+    cwd: String,
+    archived: bool,
 }
 
 struct FixtureHistoryHarness {
@@ -68,6 +79,42 @@ impl FixtureHistoryHarness {
         std::fs::rename(temporary, &self.state_path)?;
         Ok(())
     }
+
+    fn refresh(&self, state: &mut FixtureProviderState) -> Result<(), HarnessError> {
+        if self.state_path.exists() {
+            *state = serde_json::from_slice(&std::fs::read(&self.state_path)?)
+                .map_err(|error| HarnessError::Protocol(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn sync_task_metadata(&self, core: &EngineCore, task_id: &str) -> anyhow::Result<()> {
+        let Some(chat) = core.workspace.chat(task_id)? else {
+            return Ok(());
+        };
+        let Some(binding) = core
+            .task_identity
+            .view(task_id)
+            .and_then(|view| view.current_binding)
+        else {
+            return Ok(());
+        };
+        if binding.provider_id != HarnessId::Codex || binding.provider_task_id.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state)?;
+        state.metadata.insert(
+            binding.provider_task_id,
+            FixtureProviderMetadata {
+                name: format!("[LUNA] {}", chat.title.as_deref().unwrap_or("New task")),
+                cwd: chat.cwd.unwrap_or_else(|| ".".into()),
+                archived: chat.archived,
+            },
+        );
+        self.persist(&state)?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -101,6 +148,7 @@ impl Harness for FixtureHistoryHarness {
         request: ProviderForkRequest,
     ) -> Result<ProviderForkResult, HarnessError> {
         let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state)?;
         let source = state
             .sessions
             .get(&request.source_session_id)
@@ -138,6 +186,24 @@ impl Harness for FixtureHistoryHarness {
         state
             .sessions
             .insert(provider_session_id.clone(), checkpoints);
+        let source_metadata = state
+            .metadata
+            .get(&request.source_session_id)
+            .cloned()
+            .ok_or_else(|| {
+                HarnessError::Protocol(format!(
+                    "fixture source metadata is missing for {}",
+                    request.source_session_id
+                ))
+            })?;
+        state.metadata.insert(
+            provider_session_id.clone(),
+            FixtureProviderMetadata {
+                cwd: request.cwd,
+                archived: false,
+                ..source_metadata
+            },
+        );
         self.persist(&state)?;
         Ok(ProviderForkResult {
             provider_session_id,
@@ -161,9 +227,18 @@ impl Harness for FixtureHistoryHarness {
         let checkpoint_id = format!("l13-checkpoint-{}", uuid::Uuid::new_v4());
         let response_number = {
             let mut state = self.state.lock().unwrap();
+            self.refresh(&mut state)?;
             let checkpoints = state.sessions.entry(session_id.clone()).or_default();
             checkpoints.push(checkpoint_id.clone());
             let response_number = checkpoints.len();
+            state
+                .metadata
+                .entry(session_id.clone())
+                .or_insert_with(|| FixtureProviderMetadata {
+                    name: "[LUNA] New task".into(),
+                    cwd: request.cwd.clone(),
+                    archived: false,
+                });
             self.persist(&state)?;
             response_number
         };
@@ -232,10 +307,13 @@ fn chat_config(
     }
 }
 
-fn fixture_registry(root: &Path) -> anyhow::Result<HarnessRegistry> {
+fn fixture_registry_with_history(
+    root: &Path,
+) -> anyhow::Result<(HarnessRegistry, Arc<FixtureHistoryHarness>)> {
     let registry = HarnessRegistry::new();
-    registry.register(Arc::new(FixtureHistoryHarness::open(root)?));
-    Ok(registry)
+    let history = Arc::new(FixtureHistoryHarness::open(root)?);
+    registry.register(history.clone());
+    Ok((registry, history))
 }
 
 fn run_request(root: &Path, prompt: &str, permission_mode: PermissionMode) -> RunRequest {
@@ -257,6 +335,125 @@ fn run_request(root: &Path, prompt: &str, permission_mode: PermissionMode) -> Ru
         attachments: Vec::new(),
         worktree: None,
     }
+}
+
+const FAKE_CODEX_METADATA_SERVER: &str = r#"#!/usr/bin/python3
+import json
+import os
+import pathlib
+import sys
+
+root = pathlib.Path(os.environ["CODEX_HOME"]).parent
+state_path = root / "provider-state" / "history.json"
+trace_path = root / "provider-state" / "metadata-calls.jsonl"
+
+def emit(payload):
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+def load_state():
+    if state_path.exists():
+        with state_path.open("r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    else:
+        state = {}
+    state.setdefault("sessions", {})
+    state.setdefault("metadata", {})
+    return state
+
+def save_state(state):
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = state_path.with_suffix(".metadata.tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary, state_path)
+
+def trace(method, params):
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    with trace_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"method": method, "params": params}, sort_keys=True) + "\n")
+
+initialize = json.loads(sys.stdin.readline())
+emit({"id": initialize["id"], "result": {"userAgent": "l13-fake-metadata"}})
+json.loads(sys.stdin.readline())
+request = json.loads(sys.stdin.readline())
+request_id = request["id"]
+method = request["method"]
+params = request.get("params") or {}
+trace(method, params)
+state = load_state()
+metadata = state["metadata"]
+
+if method == "thread/read":
+    thread_id = params.get("threadId", "")
+    record = metadata.get(thread_id)
+    if record is None:
+        emit({"id": request_id, "error": {"code": -32602, "message": "thread not found"}})
+    else:
+        emit({"id": request_id, "result": {"thread": {
+            "id": thread_id,
+            "name": record["name"],
+            "cwd": record["cwd"],
+            "status": {"type": "idle"},
+            "archived": record["archived"],
+            "updatedAt": 1770000000,
+            "cliVersion": "0.154.0",
+            "projectId": None,
+            "ephemeral": False
+        }}})
+elif method == "thread/list":
+    archived = bool(params.get("archived", False))
+    search = params.get("searchTerm", "")
+    data = [
+        {"id": thread_id, "name": record["name"]}
+        for thread_id, record in metadata.items()
+        if bool(record["archived"]) == archived and (not search or search in record["name"])
+    ]
+    emit({"id": request_id, "result": {"data": data, "nextCursor": None}})
+elif method in ("thread/archive", "thread/unarchive"):
+    thread_id = params.get("threadId", "")
+    record = metadata.get(thread_id)
+    if record is None:
+        emit({"id": request_id, "error": {"code": -32602, "message": "thread not found"}})
+    else:
+        record["archived"] = method == "thread/archive"
+        save_state(state)
+        emit({"id": request_id, "result": {}})
+elif method == "thread/name/set":
+    thread_id = params.get("threadId", "")
+    record = metadata.get(thread_id)
+    if record is None:
+        emit({"id": request_id, "error": {"code": -32602, "message": "thread not found"}})
+    else:
+        record["name"] = params.get("name", "")
+        save_state(state)
+        emit({"id": request_id, "result": {}})
+else:
+    emit({"id": request_id, "error": {"code": -32601, "message": "unsupported fixture metadata method"}})
+"#;
+
+#[cfg(unix)]
+fn fixture_metadata_client(
+    root: &Path,
+) -> anyhow::Result<zeron_harness::codex::native::CodexNativeClient> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let executable = root.join("provider-state/fake-codex-metadata.py");
+    std::fs::create_dir_all(executable.parent().unwrap())?;
+    std::fs::write(&executable, FAKE_CODEX_METADATA_SERVER)?;
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+    Ok(
+        zeron_harness::codex::native::CodexNativeClient::new(root.join("synthetic-codex"))
+            .with_executable(executable),
+    )
+}
+
+#[cfg(not(unix))]
+fn fixture_metadata_client(
+    _root: &Path,
+) -> anyhow::Result<zeron_harness::codex::native::CodexNativeClient> {
+    anyhow::bail!("the L13 native fixture requires a Unix synthetic metadata executable")
 }
 
 async fn execute(
@@ -316,6 +513,7 @@ async fn wait_applied(client: &RpcClient, command_id: &str) -> anyhow::Result<()
 async fn seed_history_task(
     client: &RpcClient,
     core: &EngineCore,
+    history: &FixtureHistoryHarness,
     root: &Path,
     task_id: &str,
     command_prefix: &str,
@@ -324,45 +522,45 @@ async fn seed_history_task(
     effective_permission_mode: PermissionMode,
     prompts: &[&str],
 ) -> anyhow::Result<()> {
-    if core.workspace.chat(task_id)?.is_some() {
-        return Ok(());
-    }
-    let created = execute(
-        client,
-        task_id,
-        &format!("{command_prefix}-create"),
-        serde_json::json!({
-            "kind": "createChat",
-            "deviceId": core.device_id,
-            "cwd": root,
-            "config": chat_config(
-                HarnessId::Codex,
-                permission_mode,
-                effective_permission_mode,
-            ),
-        }),
-    )
-    .await?;
-    anyhow::ensure!(created.status == CommandReceiptStatus::Applied);
-    core.workspace.rename_chat(task_id, title)?;
-    for (index, prompt) in prompts.iter().enumerate() {
-        let command_id = format!("{command_prefix}-turn-{index}");
-        execute(
+    if core.workspace.chat(task_id)?.is_none() {
+        let created = execute(
             client,
             task_id,
-            &command_id,
+            &format!("{command_prefix}-create"),
             serde_json::json!({
-                "kind": "session",
-                "command": {
-                    "kind": "run",
-                    "request": run_request(root, prompt, effective_permission_mode),
-                    "messageId": format!("{command_prefix}-user-{index}"),
-                }
+                "kind": "createChat",
+                "deviceId": core.device_id,
+                "cwd": root,
+                "config": chat_config(
+                    HarnessId::Codex,
+                    permission_mode,
+                    effective_permission_mode,
+                ),
             }),
         )
         .await?;
-        wait_applied(client, &command_id).await?;
+        anyhow::ensure!(created.status == CommandReceiptStatus::Applied);
+        core.workspace.rename_chat(task_id, title)?;
+        for (index, prompt) in prompts.iter().enumerate() {
+            let command_id = format!("{command_prefix}-turn-{index}");
+            execute(
+                client,
+                task_id,
+                &command_id,
+                serde_json::json!({
+                    "kind": "session",
+                    "command": {
+                        "kind": "run",
+                        "request": run_request(root, prompt, effective_permission_mode),
+                        "messageId": format!("{command_prefix}-user-{index}"),
+                    }
+                }),
+            )
+            .await?;
+            wait_applied(client, &command_id).await?;
+        }
     }
+    history.sync_task_metadata(core, task_id)?;
     Ok(())
 }
 
@@ -437,11 +635,16 @@ async fn seed_unsupported_task(
     Ok(())
 }
 
-async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+async fn seed(
+    core: &EngineCore,
+    history: &FixtureHistoryHarness,
+    root: &Path,
+) -> anyhow::Result<()> {
     let client = zeron_rpc::memory_client(core.rpc_service());
     seed_history_task(
         &client,
         core,
+        history,
         root,
         TASK_ID,
         "l13-full",
@@ -457,6 +660,7 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     seed_history_task(
         &client,
         core,
+        history,
         root,
         AUTO_CEILING_TASK_ID,
         "l13-auto-ceiling",
@@ -469,6 +673,7 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     seed_history_task(
         &client,
         core,
+        history,
         root,
         LEGACY_ASK_TASK_ID,
         "l13-legacy-ask",
@@ -503,21 +708,23 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let accounts = account_config(&root);
     accounts.disable_claude_keychain_fallback()?;
-    let registry = fixture_registry(&root)?;
+    let (registry, history) = fixture_registry_with_history(&root)?;
+    let metadata = fixture_metadata_client(&root)?;
     let core = runtime.block_on(async {
-        EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineCore::assemble_with_profile_and_injected_codex_metadata_client(
             EngineProfile::development(&engine_data, "l13-fixture-org", "l13-fixture-user"),
             Arc::new(registry),
             HarnessId::Codex,
             None,
             accounts,
+            metadata,
         )
     })?;
     core.set_auth(Auth::new(auth_config(&root)));
-    runtime.block_on(seed(&core, &root))?;
+    runtime.block_on(seed(&core, &history, &root))?;
     std::fs::write(
         root.join("SAFETY.txt"),
-        "L13 synthetic history fixture. In-memory credentials and root-scoped synthetic provider state only; no live provider, account, Keychain, network service, or repository access.\n",
+        "L13 synthetic history fixture. In-memory credentials, root-scoped synthetic provider state, and a root-written fake metadata app-server only; no installed/live provider, account, Keychain, network service, or repository access.\n",
     )?;
 
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
@@ -614,6 +821,23 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    fn assemble_with_metadata(root: &Path) -> (EngineCore, Arc<FixtureHistoryHarness>) {
+        let accounts = account_config(root);
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let (registry, history) = fixture_registry_with_history(root).unwrap();
+        let core = EngineCore::assemble_with_profile_and_injected_codex_metadata_client(
+            EngineProfile::development(&root.join("engine"), "l13-test-org", "l13-test-user"),
+            Arc::new(registry),
+            HarnessId::Codex,
+            None,
+            accounts,
+            fixture_metadata_client(root).unwrap(),
+        )
+        .unwrap();
+        core.set_auth(Auth::new(auth_config(root)));
+        (core, history)
+    }
+
     #[test]
     fn fixture_auth_is_in_memory_only() {
         let root = tempfile::tempdir().unwrap();
@@ -640,7 +864,7 @@ mod tests {
                         "l13-test-org",
                         "l13-test-user",
                     ),
-                    Arc::new(fixture_registry(root.path()).unwrap()),
+                    Arc::new(fixture_registry_with_history(root.path()).unwrap().0),
                     HarnessId::Codex,
                     None,
                     accounts,
@@ -776,23 +1000,8 @@ mod tests {
     #[tokio::test]
     async fn fixture_seed_uses_only_synthetic_completed_history() {
         let root = tempfile::tempdir().unwrap();
-        let accounts = account_config(root.path());
-        accounts.disable_claude_keychain_fallback().unwrap();
-        let core =
-            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
-                EngineProfile::development(
-                    &root.path().join("engine"),
-                    "l13-test-org",
-                    "l13-test-user",
-                ),
-                Arc::new(fixture_registry(root.path()).unwrap()),
-                HarnessId::Codex,
-                None,
-                accounts,
-            )
-            .unwrap();
-        core.set_auth(Auth::new(auth_config(root.path())));
-        seed(&core, root.path()).await.unwrap();
+        let (core, history) = assemble_with_metadata(root.path());
+        seed(&core, &history, root.path()).await.unwrap();
 
         let handle = core.doc_host.open(TASK_ID).unwrap();
         let entries = handle.doc().read_entries().unwrap();
@@ -850,6 +1059,256 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn archive_round_trip_preserves_independent_child_and_fake_metadata_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let (core, history) = assemble_with_metadata(root.path());
+        seed(&core, &history, root.path()).await.unwrap();
+        let client = zeron_rpc::memory_client(core.rpc_service());
+        let source_chat = core.workspace.chat(TASK_ID).unwrap().unwrap();
+        let source_binding = core
+            .task_identity
+            .view(TASK_ID)
+            .unwrap()
+            .current_binding
+            .unwrap();
+        let source_snapshot: zeron_proto::TaskCommandRead = client
+            .call_as(
+                methods::GET_TASK_COMMAND_SNAPSHOT,
+                serde_json::json!({ "taskId": TASK_ID }),
+            )
+            .await
+            .unwrap();
+        let child_id = uuid::Uuid::new_v4().to_string();
+        let review = serde_json::json!({
+            "taskRevision": source_snapshot.snapshot.task_revision,
+            "bindingGeneration": source_snapshot.snapshot.binding_generation.unwrap(),
+            "providerSessionId": source_binding.provider_task_id.clone(),
+            "providerAccountId": source_chat.config.as_ref().and_then(|config| config.provider_account_id.clone()),
+            "cwd": source_chat.cwd.clone().unwrap(),
+            "messageId": null,
+            "messageText": null,
+        });
+        let forked = execute(
+            &client,
+            TASK_ID,
+            "l13-metadata-child-fork",
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": child_id.clone(),
+                "boundary": "tip",
+                "title": source_chat.title,
+                "config": source_chat.config,
+                "sourceLink": format!("luna://open/chat/{TASK_ID}?workspace=fixture"),
+                "review": review,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(forked.status, CommandReceiptStatus::Applied, "{forked:?}");
+        let child_binding = core
+            .task_identity
+            .view(&child_id)
+            .unwrap()
+            .current_binding
+            .unwrap();
+        assert_ne!(
+            source_binding.provider_task_id,
+            child_binding.provider_task_id
+        );
+
+        let archived = execute(
+            &client,
+            TASK_ID,
+            "l13-metadata-archive",
+            serde_json::json!({ "kind": "setArchived", "archived": true }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(archived.status, CommandReceiptStatus::Applied);
+        assert!(core.workspace.chat(TASK_ID).unwrap().unwrap().archived);
+        assert!(!core.workspace.chat(&child_id).unwrap().unwrap().archived);
+
+        let child_run = execute(
+            &client,
+            &child_id,
+            "l13-metadata-child-run",
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": run_request(
+                        root.path(),
+                        "Continue the independent child while its source is archived.",
+                        PermissionMode::Full,
+                    ),
+                    "messageId": "l13-metadata-child-user",
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            child_run.status,
+            CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+        ));
+        wait_applied(&client, "l13-metadata-child-run")
+            .await
+            .unwrap();
+        let child_entries = core
+            .doc_host
+            .open(&child_id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap();
+        assert!(child_entries.iter().any(|entry| {
+            entry.parts.iter().any(|part| {
+                matches!(part, zeron_doc::MessagePart::Text { text, .. }
+                    if text == "Continue the independent child while its source is archived.")
+            })
+        }));
+        assert!(
+            !core
+                .doc_host
+                .open(TASK_ID)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.id == "l13-metadata-child-user")
+        );
+
+        let unarchived = execute(
+            &client,
+            TASK_ID,
+            "l13-metadata-unarchive",
+            serde_json::json!({ "kind": "setArchived", "archived": false }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unarchived.status, CommandReceiptStatus::Applied);
+        assert!(!core.workspace.chat(TASK_ID).unwrap().unwrap().archived);
+        let before_restart: FixtureProviderState = serde_json::from_slice(
+            &std::fs::read(root.path().join("provider-state/history.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(!before_restart.metadata[&source_binding.provider_task_id].archived);
+        assert!(!before_restart.metadata[&child_binding.provider_task_id].archived);
+
+        drop(client);
+        core.shutdown().await;
+        drop(core);
+        drop(history);
+
+        let (reopened, reopened_history) = assemble_with_metadata(root.path());
+        seed(&reopened, &reopened_history, root.path())
+            .await
+            .unwrap();
+        assert!(!reopened.workspace.chat(TASK_ID).unwrap().unwrap().archived);
+        assert!(
+            !reopened
+                .workspace
+                .chat(&child_id)
+                .unwrap()
+                .unwrap()
+                .archived
+        );
+        assert_eq!(
+            reopened
+                .task_identity
+                .view(&child_id)
+                .unwrap()
+                .current_binding
+                .unwrap()
+                .provider_task_id,
+            child_binding.provider_task_id
+        );
+        assert!(
+            reopened
+                .doc_host
+                .open(&child_id)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.id == "l13-metadata-child-user")
+        );
+
+        let injected = fixture_metadata_client(root.path()).unwrap();
+        assert!(
+            injected
+                .observe_thread("missing-fixture-thread")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            injected
+                .set_archived("missing-fixture-thread", true)
+                .await
+                .is_err()
+        );
+        let after_missing: FixtureProviderState = serde_json::from_slice(
+            &std::fs::read(root.path().join("provider-state/history.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after_missing.sessions, before_restart.sessions);
+        assert_eq!(
+            after_missing.metadata.keys().collect::<Vec<_>>(),
+            before_restart.metadata.keys().collect::<Vec<_>>(),
+            "missing-id errors must not invent provider state or fall back elsewhere"
+        );
+        reopened.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn disabled_metadata_assembly_never_invokes_a_provider_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let accounts = account_config(root.path());
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let (registry, history) = fixture_registry_with_history(root.path()).unwrap();
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                EngineProfile::development(
+                    &root.path().join("engine"),
+                    "l13-test-org",
+                    "l13-test-user",
+                ),
+                Arc::new(registry),
+                HarnessId::Codex,
+                None,
+                accounts,
+            )
+            .unwrap();
+        core.set_auth(Auth::new(auth_config(root.path())));
+        seed(&core, &history, root.path()).await.unwrap();
+        let client = zeron_rpc::memory_client(core.rpc_service());
+        let receipt = execute(
+            &client,
+            TASK_ID,
+            "l13-disabled-metadata-archive",
+            serde_json::json!({ "kind": "setArchived", "archived": true }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(receipt.status, CommandReceiptStatus::Pending);
+        assert_eq!(
+            receipt.reason.unwrap().code,
+            zeron_proto::CommandReasonCode::ProviderAcceptanceUnknown
+        );
+        assert!(!core.workspace.chat(TASK_ID).unwrap().unwrap().archived);
+        assert!(
+            !root
+                .path()
+                .join("provider-state/metadata-calls.jsonl")
+                .exists()
+        );
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn fixture_provider_persists_collision_safe_boundary_forks() {
         let root = tempfile::tempdir().unwrap();
         let harness = FixtureHistoryHarness::open(root.path()).unwrap();
@@ -858,6 +1317,14 @@ mod tests {
             state.sessions.insert(
                 "source".into(),
                 vec!["checkpoint-a".into(), "checkpoint-b".into()],
+            );
+            state.metadata.insert(
+                "source".into(),
+                FixtureProviderMetadata {
+                    name: "[LUNA] Source".into(),
+                    cwd: root.path().to_string_lossy().into_owned(),
+                    archived: false,
+                },
             );
             harness.persist(&state).unwrap();
         }

@@ -119,6 +119,12 @@ pub(crate) fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+enum CodexMetadataAssembly {
+    Native,
+    Disabled,
+    Injected(zeron_harness::codex::native::CodexNativeClient),
+}
+
 #[derive(Clone)]
 pub struct EngineConfig {
     /// Data directory (default `~/.luna`, development builds use an isolated target path).
@@ -253,7 +259,7 @@ impl EngineCore {
             edge,
             lock,
             None,
-            true,
+            CodexMetadataAssembly::Native,
         )
     }
 
@@ -278,7 +284,7 @@ impl EngineCore {
             edge,
             lock,
             Some(agent_accounts_config),
-            true,
+            CodexMetadataAssembly::Native,
         )
     }
 
@@ -304,7 +310,33 @@ impl EngineCore {
             edge,
             lock,
             Some(agent_accounts_config),
-            false,
+            CodexMetadataAssembly::Disabled,
+        )
+    }
+
+    /// Hermetic fixture/test assembly with an explicit native-metadata client.
+    /// The caller owns the executable and provider home; no installed Codex
+    /// discovery or credential fallback is available through this seam.
+    #[doc(hidden)]
+    pub fn assemble_with_profile_and_injected_codex_metadata_client(
+        profile: EngineProfile,
+        registry: Arc<HarnessRegistry>,
+        default_harness: HarnessId,
+        edge: Option<EdgeConfig>,
+        agent_accounts_config: AgentAccountsConfig,
+        codex: zeron_harness::codex::native::CodexNativeClient,
+    ) -> Result<Self, EngineError> {
+        let data_dir = profile.device_root();
+        std::fs::create_dir_all(data_dir)?;
+        let lock = InstanceLock::acquire(data_dir)?;
+        Self::assemble_with_profile_locked_and_accounts(
+            profile,
+            registry,
+            default_harness,
+            edge,
+            lock,
+            Some(agent_accounts_config),
+            CodexMetadataAssembly::Injected(codex),
         )
     }
 
@@ -315,7 +347,7 @@ impl EngineCore {
         edge: Option<EdgeConfig>,
         lock: InstanceLock,
         agent_accounts_config: Option<AgentAccountsConfig>,
-        native_codex_metadata: bool,
+        codex_metadata: CodexMetadataAssembly,
     ) -> Result<Self, EngineError> {
         let data_dir = profile.device_root();
         std::fs::create_dir_all(data_dir)?;
@@ -351,20 +383,25 @@ impl EngineCore {
         )?;
         let agent_accounts_config =
             agent_accounts_config.unwrap_or_else(|| AgentAccountsConfig::detect(data_dir));
-        let task_identity = if native_codex_metadata {
-            TaskIdentityService::open(
+        let task_identity = match codex_metadata {
+            CodexMetadataAssembly::Native => TaskIdentityService::open(
                 store.clone(),
                 workspace.clone(),
                 &device_id,
                 agent_accounts_config.codex_home.clone(),
-            )?
-        } else {
-            TaskIdentityService::open_without_codex_metadata(
+            )?,
+            CodexMetadataAssembly::Disabled => TaskIdentityService::open_without_codex_metadata(
                 store.clone(),
                 workspace.clone(),
                 &device_id,
                 agent_accounts_config.codex_home.clone(),
-            )?
+            )?,
+            CodexMetadataAssembly::Injected(codex) => TaskIdentityService::open_with_codex_client(
+                store.clone(),
+                workspace.clone(),
+                &device_id,
+                codex,
+            )?,
         };
         doc_host.set_workspace(workspace.clone());
         doc_host.set_sessions(sessions.clone());
