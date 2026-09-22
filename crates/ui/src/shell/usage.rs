@@ -238,6 +238,144 @@ fn limit_card(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64, compact: b
         .into_any_element()
 }
 
+fn compact_limit_status(limit: &UsageLimitSnapshot, now_ms: i64) -> Option<&'static str> {
+    match limit.availability {
+        LimitAvailability::Ready if limit.checked_at_ms.is_none() => Some("Check time unknown"),
+        LimitAvailability::Ready
+            if limit
+                .checked_at_ms
+                .is_some_and(|checked| now_ms - checked >= 5 * 60_000) =>
+        {
+            Some("Stale · refresh to verify")
+        }
+        LimitAvailability::Ready => None,
+        LimitAvailability::ProbeFailed if limit.windows.is_empty() => {
+            Some("Refresh failed · quota unavailable")
+        }
+        LimitAvailability::ProbeFailed => Some("Refresh failed · last good values"),
+        LimitAvailability::Unsupported => Some("Quota unsupported"),
+        LimitAvailability::Unverified => Some("Quota unverified"),
+    }
+}
+
+fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> AnyElement {
+    let mark = match limit.provider {
+        UsageProvider::Codex => icons::OPENAI_MARK,
+        UsageProvider::Claude => icons::CLAUDE_MARK,
+    };
+    let heading = match limit.plan.as_deref().filter(|plan| !plan.trim().is_empty()) {
+        Some(plan) => format!("{} · {plan}", limit.provider.label()),
+        None => limit.provider.label().to_owned(),
+    };
+    let mut row = div()
+        .w_full()
+        .min_w_0()
+        .p(px(7.0))
+        .rounded(px(Theme::CONTROL_RADIUS))
+        .bg(theme.glass_hover().opacity(0.18))
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .child(
+            div()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(
+                    icon(mark)
+                        .size(px(13.0))
+                        .flex_none()
+                        .text_color(theme.text_muted),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(heading),
+                ),
+        );
+    if let Some(window) = limit.windows.first() {
+        let remaining = (100.0 - window.used_percent).clamp(0.0, 100.0);
+        let tone = if remaining <= 5.0 {
+            theme.danger
+        } else if remaining <= 20.0 {
+            theme.warning
+        } else {
+            theme.accent
+        };
+        row = row
+            .child(
+                div()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_color(theme.text_muted)
+                            .child(window.label.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_color(tone)
+                            .child(format!("{remaining:.0}% left")),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(3.0))
+                    .rounded(px(2.0))
+                    .bg(theme.border)
+                    .child(
+                        div()
+                            .h_full()
+                            .w(gpui::relative(remaining / 100.0))
+                            .rounded(px(2.0))
+                            .bg(tone),
+                    ),
+            );
+    } else {
+        row = row.child(
+            div()
+                .text_size(crate::typography::ui_rems(10.0))
+                .text_color(theme.text_muted)
+                .child("Quota unavailable"),
+        );
+    }
+    if let Some(status) = compact_limit_status(limit, now_ms) {
+        row = row.child(
+            div()
+                .w_full()
+                .min_w_0()
+                .truncate()
+                .text_size(crate::typography::ui_rems(10.0))
+                .text_color(
+                    if matches!(limit.availability, LimitAvailability::ProbeFailed)
+                        || status.starts_with("Stale")
+                    {
+                        theme.warning
+                    } else {
+                        theme.text_muted
+                    },
+                )
+                .child(status),
+        );
+    }
+    row.into_any_element()
+}
+
 impl Shell {
     pub(super) fn toggle_usage_card(&mut self, cx: &mut Context<Self>) {
         self.usage_card_open = !self.usage_card_open;
@@ -256,7 +394,12 @@ impl Shell {
         cx.notify();
     }
 
-    fn render_usage_provider_tabs(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn render_usage_provider_tabs(
+        &mut self,
+        theme: &Theme,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         div()
             .flex()
             .gap(px(5.0))
@@ -268,10 +411,15 @@ impl Shell {
                 ]
                 .into_iter()
                 .map(|(provider, label)| {
+                    let label = if compact && provider.is_none() {
+                        "All"
+                    } else {
+                        label
+                    };
                     div()
                         .id(SharedString::from(format!("usage-provider-{label}")))
-                        .px(px(8.0))
-                        .py(px(5.0))
+                        .px(px(if compact { 6.0 } else { 8.0 }))
+                        .py(px(if compact { 4.0 } else { 5.0 }))
                         .rounded(px(Theme::CONTROL_RADIUS))
                         .bg(if self.usage_provider_filter == provider {
                             theme.accent_wash
@@ -283,7 +431,11 @@ impl Shell {
                         } else {
                             theme.text_muted
                         })
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::ui_rems(if compact {
+                            10.0
+                        } else {
+                            11.0
+                        }))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.usage_provider_filter = provider;
@@ -443,12 +595,36 @@ impl Shell {
         self.refresh_usage(cx);
     }
 
+    fn compact_usage_environment_label(&self, cx: &Context<Self>) -> String {
+        let Some(id) = self.usage_environment_filter.as_deref() else {
+            return "All machines".into();
+        };
+        let state = self.state.read(cx);
+        if let Some(name) = state
+            .devices
+            .iter()
+            .find(|device| device.id == id)
+            .map(|device| device.name.trim())
+            .filter(|name| !name.is_empty() && uuid::Uuid::parse_str(name).is_err())
+        {
+            return name.to_owned();
+        }
+        if state
+            .engine()
+            .is_some_and(|engine| engine.engine_info().device_id == id)
+        {
+            "This machine".into()
+        } else {
+            "Selected machine".into()
+        }
+    }
+
     pub(super) fn render_usage_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let now_ms = Utc::now().timestamp_millis();
         let metric = self.settings.usage_metric.clone();
         let limits_view = metric == "limits";
-        let provider_tabs = self.render_usage_provider_tabs(&theme, cx);
+        let provider_tabs = self.render_usage_provider_tabs(&theme, false, cx);
         let snapshot = self.selected_usage_snapshot();
         let stale = snapshot
             .as_ref()
@@ -986,18 +1162,50 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let open = self.usage_card_open;
-        let provider_tabs = self.render_usage_provider_tabs(theme, cx);
-        let mut card = div()
+        let provider_tabs = self.render_usage_provider_tabs(theme, true, cx);
+        let environment_label = self.compact_usage_environment_label(cx);
+        let mut summaries = div()
+            .id("usage-card-summaries")
+            .min_w_0()
+            .max_h(px((self.viewport_height * 0.17).clamp(90.0, 145.0)))
+            .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(px(5.0));
+        let card = div()
+            .id("usage-sidebar-card")
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
             .mx(px(Theme::SPACE_SM))
             .mb(px(4.0))
-            .p(px(10.0))
+            .p(px(8.0))
+            .min_w_0()
             .rounded(px(Theme::CONTROL_RADIUS))
             .border_1()
             .border_color(theme.border)
             .bg(theme.glass_hover().opacity(0.5))
+            .child(
+                div()
+                    .id("usage-card-environment")
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .cursor_pointer()
+                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_color(theme.text_muted)
+                    .on_click(cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .child(format!("Machine: {environment_label}")),
+                    )
+                    .child(div().flex_none().child("Change")),
+            )
             .child(provider_tabs);
         if let Some(snapshot) = self.selected_usage_snapshot() {
             let now = Utc::now().timestamp_millis();
@@ -1006,11 +1214,11 @@ impl Shell {
                     .usage_provider_filter
                     .is_none_or(|provider| provider == limit.provider)
                 {
-                    card = card.child(limit_card(limit, theme, now, true));
+                    summaries = summaries.child(compact_limit_row(limit, theme, now));
                 }
             }
         } else {
-            card = card.child(
+            summaries = summaries.child(
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_muted)
@@ -1018,21 +1226,13 @@ impl Shell {
             );
         }
         let card = card
-            .child(
-                div()
-                    .id("usage-card-environment")
-                    .cursor_pointer()
-                    .text_size(crate::typography::ui_rems(10.0))
-                    .text_color(theme.text_muted)
-                    .on_click(cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)))
-                    .child(format!(
-                        "Machine: {} · change",
-                        self.usage_environment_filter.as_deref().unwrap_or("All")
-                    )),
-            )
+            .child(summaries)
             .when_some(self.usage_error.clone(), |el, error| {
                 el.child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
                         .text_size(crate::typography::ui_rems(10.0))
                         .text_color(theme.warning)
                         .child(error),
@@ -1112,7 +1312,8 @@ impl Shell {
 
 #[cfg(test)]
 mod tests {
-    use super::reset_label;
+    use super::{compact_limit_status, reset_label};
+    use zeron_proto::{LimitAvailability, UsageLimitSnapshot, UsageLimitWindow, UsageProvider};
 
     #[test]
     fn reset_countdown_does_not_claim_a_past_window_is_current() {
@@ -1121,6 +1322,47 @@ mod tests {
         assert_eq!(
             reset_label(Some(1), 1),
             "Reset time passed · refresh to verify"
+        );
+    }
+
+    #[test]
+    fn compact_quota_status_preserves_stale_and_last_good_truth() {
+        let mut limit = UsageLimitSnapshot {
+            provider: UsageProvider::Codex,
+            verified_account_id: Some("synthetic".into()),
+            account_label: None,
+            plan: None,
+            checked_at_ms: Some(0),
+            availability: LimitAvailability::Ready,
+            windows: vec![UsageLimitWindow {
+                id: "window".into(),
+                label: "Five hours".into(),
+                used_percent: 40.0,
+                resets_at_ms: None,
+                duration_minutes: Some(300),
+            }],
+            reset_credits: None,
+            detail: None,
+        };
+        assert_eq!(compact_limit_status(&limit, 60_000), None);
+        assert_eq!(
+            compact_limit_status(&limit, 6 * 60_000),
+            Some("Stale · refresh to verify")
+        );
+        limit.availability = LimitAvailability::ProbeFailed;
+        assert_eq!(
+            compact_limit_status(&limit, 6 * 60_000),
+            Some("Refresh failed · last good values")
+        );
+        limit.windows.clear();
+        assert_eq!(
+            compact_limit_status(&limit, 6 * 60_000),
+            Some("Refresh failed · quota unavailable")
+        );
+        limit.availability = LimitAvailability::Unsupported;
+        assert_eq!(
+            compact_limit_status(&limit, 6 * 60_000),
+            Some("Quota unsupported")
         );
     }
 }
