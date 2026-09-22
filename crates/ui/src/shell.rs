@@ -13343,6 +13343,7 @@ mod exit_regressions {
     use gpui::{AppContext, TestAppContext};
     use std::collections::HashMap;
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use zeron_proto::{ComposerDraft, ComposerDraftRead, ComposerDraftSaveOutcome, DraftContext};
     use zeron_rpc::{RpcError, RpcReply, RpcService};
@@ -13352,6 +13353,39 @@ mod exit_regressions {
 
     struct ShellDraftRpc {
         drafts: Mutex<HashMap<String, ComposerDraft>>,
+    }
+
+    struct UsageRefreshRpc {
+        reads: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl RpcService for UsageRefreshRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            _params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            if method != methods::GET_USAGE_SNAPSHOT {
+                return Err(RpcError::UnknownMethod(method.into()));
+            }
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            RpcReply::value(&serde_json::json!({
+                "summary": {
+                    "contractVersion": zeron_proto::USAGE_CONTRACT_VERSION,
+                    "readAtMs": 1,
+                    "timeZone": "UTC",
+                    "days": 30,
+                    "resolution": "day",
+                    "buckets": [],
+                    "sources": [],
+                    "scanDurationMs": 0,
+                    "partial": false,
+                    "warnings": []
+                },
+                "limits": []
+            }))
+        }
     }
 
     struct HistorySearchRpc {
@@ -13828,6 +13862,53 @@ mod exit_regressions {
             cx.set_global(Theme::default());
             crate::app_menus::init(cx);
         });
+    }
+
+    #[gpui::test]
+    fn sidebar_usage_refresh_bridges_to_tokio_without_a_gpui_reactor(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        init_handoff_shell_test(cx, dir.path());
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let service = Arc::new(UsageRefreshRpc {
+            reads: AtomicUsize::new(0),
+        });
+        // memory_client sets up Tokio channels. Only that construction needs
+        // an enter guard; the sidebar action below deliberately has none.
+        let window = {
+            let _entered = runtime.enter();
+            command_palette_test_window(cx, dir.path(), Some(service.clone()), vec![], None)
+        };
+        window
+            .update(cx, |shell, _, cx| shell.toggle_usage_card(cx))
+            .unwrap();
+        for _ in 0..150 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            if window
+                .read_with(cx, |shell, _| {
+                    shell.usage_card_open
+                        && !shell.usage_refreshing
+                        && shell.usage_snapshot.is_some()
+                })
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        window
+            .read_with(cx, |shell, _| {
+                assert!(shell.usage_card_open);
+                assert!(!shell.usage_refreshing);
+                assert!(shell.usage_snapshot.is_some());
+                assert!(shell.usage_error.is_none());
+            })
+            .unwrap();
+        assert_eq!(service.reads.load(Ordering::SeqCst), 1);
     }
 
     fn handoff_shell(

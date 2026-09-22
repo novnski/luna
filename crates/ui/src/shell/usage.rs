@@ -239,7 +239,7 @@ fn limit_card(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64, compact: b
 }
 
 impl Shell {
-    fn toggle_usage_card(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn toggle_usage_card(&mut self, cx: &mut Context<Self>) {
         self.usage_card_open = !self.usage_card_open;
         if self.usage_card_open {
             if self.usage_environment_filter.is_none() {
@@ -354,8 +354,11 @@ impl Shell {
         let days = self.settings.usage_days;
         self.usage_refreshing = true;
         self.usage_error = None;
-        self.usage_task = Some(cx.spawn(async move |this, cx| {
-            let results = futures::future::join_all(targets.into_iter().map(|device| {
+        // RpcClient and tokio::time both require the Tokio reactor. A GPUI
+        // task may await this bridge, but must not poll the RPC fan-out itself.
+        // Dropping usage_task drops `fetch`, which aborts the Tokio task.
+        let fetch = gpui_tokio::Tokio::spawn(cx, async move {
+            futures::future::join_all(targets.into_iter().map(|device| {
                 let engine = engine.clone();
                 async move {
                     tokio::time::timeout(
@@ -368,7 +371,10 @@ impl Shell {
                     .await
                 }
             }))
-            .await;
+            .await
+        });
+        self.usage_task = Some(cx.spawn(async move |this, cx| {
+            let result = fetch.await;
             this.update(cx, |shell, cx| {
                 if shell.usage_request_epoch != epoch
                     || shell.state.read(cx).engine_generation() != engine_generation
@@ -376,6 +382,12 @@ impl Shell {
                     return;
                 }
                 shell.usage_refreshing = false;
+                let Ok(results) = result else {
+                    shell.usage_error =
+                        Some("Usage refresh stopped; showing last good data".into());
+                    cx.notify();
+                    return;
+                };
                 let mut snapshots = Vec::new();
                 let mut failures = 0;
                 for result in results {
