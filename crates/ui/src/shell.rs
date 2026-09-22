@@ -27,7 +27,8 @@ use zeron_engine::InstanceLock;
 use zeron_proto::{
     ActivityEnvelope, ActivityOutcome, AuthState, ChatConfig, ConversationForkBoundaryKind,
     HarnessId, HistoryRecoveryView, HistorySearchFilters, HistorySearchPage, HistorySearchRequest,
-    HistorySearchScope, PermissionMode, TaskCommandSnapshot, WorkspaceScope,
+    HistorySearchScope, PermissionMode, TaskCommandSnapshot, UsageProvider, UsageSnapshot,
+    WorkspaceScope,
 };
 use zeron_rpc::methods;
 
@@ -68,6 +69,7 @@ mod activity_center;
 mod command_palette;
 mod spaces;
 mod tabs;
+mod usage;
 
 use spaces::{AddSpaceFlow, RenameSpaceDialog};
 
@@ -431,10 +433,11 @@ pub enum SettingsSection {
     Shortcuts,
     Appshots,
     Archived,
+    Usage,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
         SettingsSection::Devices,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
@@ -444,6 +447,7 @@ impl SettingsSection {
         SettingsSection::Shortcuts,
         SettingsSection::Appshots,
         SettingsSection::Archived,
+        SettingsSection::Usage,
     ];
 
     /// Sidebar + header label (zeron settings-sidebar.tsx SECTIONS / __root.tsx
@@ -459,6 +463,7 @@ impl SettingsSection {
             SettingsSection::Shortcuts => "Shortcuts",
             SettingsSection::Appshots => "Appshots",
             SettingsSection::Archived => "Archived sessions",
+            SettingsSection::Usage => "Usage",
         }
     }
 }
@@ -1686,6 +1691,17 @@ pub struct Shell {
     right_tab_scroll: gpui::ScrollHandle,
     /// Chat outlet vs settings pages.
     route: Route,
+    /// One normalized service response shared by the full page and sidebar.
+    usage_snapshot: Option<UsageSnapshot>,
+    usage_environment_snapshots: Vec<UsageSnapshot>,
+    usage_environment_filter: Option<String>,
+    usage_error: Option<String>,
+    usage_refreshing: bool,
+    usage_card_open: bool,
+    usage_provider_filter: Option<UsageProvider>,
+    usage_request_epoch: u64,
+    usage_task: Option<Task<()>>,
+    usage_action_focus: FocusHandle,
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
     devices_page: Option<Entity<DevicesPage>>,
@@ -1995,6 +2011,7 @@ impl Shell {
             Some("settings/shortcuts") => Route::Settings(SettingsSection::Shortcuts),
             Some("settings/appshots") => Route::Settings(SettingsSection::Appshots),
             Some("settings/archived") => Route::Settings(SettingsSection::Archived),
+            Some("settings/usage") => Route::Settings(SettingsSection::Usage),
             // `new` pins the new-chat canvas (suppresses boot auto-select).
             Some("new") => {
                 state.update(cx, |s, _| s.auto_selected = true);
@@ -2078,6 +2095,16 @@ impl Shell {
             right_tab_drag: None,
             right_tab_scroll: gpui::ScrollHandle::new(),
             route,
+            usage_snapshot: None,
+            usage_environment_snapshots: Vec::new(),
+            usage_environment_filter: None,
+            usage_error: None,
+            usage_refreshing: false,
+            usage_card_open: false,
+            usage_provider_filter: None,
+            usage_request_epoch: 0,
+            usage_task: None,
+            usage_action_focus: cx.focus_handle().tab_stop(true),
             nav,
             devices_page: None,
             archived_page: None,
@@ -2282,6 +2309,15 @@ impl Shell {
             &mut self.history_engine_generation,
             engine_generation,
         );
+        if engine_changed {
+            self.usage_request_epoch = self.usage_request_epoch.wrapping_add(1);
+            self.usage_task = None;
+            self.usage_refreshing = false;
+            self.usage_snapshot = None;
+            self.usage_environment_snapshots.clear();
+            self.usage_environment_filter = None;
+            self.usage_error = Some("Engine changed · refresh usage for this environment".into());
+        }
         self.reconcile_session_history_scope(engine_changed, cx);
         self.reconcile_keep_awake(cx);
         self.ensure_activity_polling(cx);
@@ -2595,6 +2631,9 @@ impl Shell {
         self.pane_resize_active = None;
         self.pane_resize_dragging = None;
         self.settings.sidebar_collapsed = !self.settings.sidebar_collapsed;
+        if self.settings.sidebar_collapsed {
+            self.usage_card_open = false;
+        }
         self.sidebar_tween = Some(WidthTween::new(from, self.sidebar_target()));
         self.schedule_save(cx);
         cx.notify();
@@ -3948,6 +3987,10 @@ impl Shell {
             self.harnesses_page = None;
         }
         self.route = Route::Settings(section);
+        if section == SettingsSection::Usage {
+            self.usage_card_open = false;
+            self.refresh_usage(cx);
+        }
         self.nav.push(NavEntry::Settings(section));
         self.close_user_menu(cx);
         self.close_chat_menu(cx);
@@ -4252,6 +4295,7 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
+            SettingsSection::Usage => self.render_usage_page(cx),
         }
     }
 
@@ -6414,6 +6458,7 @@ impl Shell {
             SettingsSection::Shortcuts => icons::KEYBOARD,
             SettingsSection::Appshots => icons::MONITOR,
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
+            SettingsSection::Usage => icons::CHART,
         };
         // Match the user's dragged sidebar width — the pane container clips to
         // it, so a hardcoded default here left hover washes stopping short of
@@ -7385,6 +7430,9 @@ impl Shell {
             .when_some(self.render_activity_notice(theme, cx), |el, notice| {
                 el.child(notice)
             })
+            .when(!self.settings.usage_sidebar_hidden, |el| {
+                el.child(self.render_usage_footer(theme, cx))
+            })
             .child(div().p(px(Theme::SPACE_SM)).flex_none().child(user_menu))
             .into_any_element()
     }
@@ -8186,6 +8234,14 @@ impl Shell {
         }
         if event.keystroke.key == "escape" && self.capture_escape_surface(cx) {
             cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key == "escape" && self.usage_card_open {
+            self.usage_card_open = false;
+            window.focus(&self.usage_action_focus, cx);
+            cx.stop_propagation();
+            cx.notify();
+            return;
         }
     }
 

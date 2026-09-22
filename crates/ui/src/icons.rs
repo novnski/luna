@@ -72,6 +72,7 @@ icon_assets![
     (CLOCK_CIRCLE, "clock-circle"),
     (CALENDAR, "calendar"),
     (LIST, "list"),
+    (CHART, "chart"),
     (FOLDER_WITH_FILES, "folder-with-files"),
     (FOLDER, "folder"),
     // Hand-drawn floppy disk in the Solar Linear style. Workspace editor save.

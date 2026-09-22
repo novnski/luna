@@ -670,6 +670,10 @@ pub struct UiSettings {
     pub sidebar_show_harness: bool,
     pub sidebar_show_branch: bool,
     pub sidebar_show_pull_request: bool,
+    /// L16 Usage page preference; account limits ignore the historical window.
+    pub usage_days: u32,
+    pub usage_metric: String,
+    pub usage_sidebar_hidden: bool,
     /// The last selected space — restored on boot when the row still exists;
     /// also the new-tab default when the sidebar filter is "All".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -806,6 +810,9 @@ impl Default for UiSettings {
             sidebar_show_harness: true,
             sidebar_show_branch: true,
             sidebar_show_pull_request: true,
+            usage_days: 30,
+            usage_metric: "cost".into(),
+            usage_sidebar_hidden: false,
             last_space_id: None,
             open_tabs: None,
             space_filter: None,
@@ -1988,6 +1995,9 @@ mod tests {
             sidebar_show_harness: false,
             sidebar_show_branch: false,
             sidebar_show_pull_request: false,
+            usage_days: 7,
+            usage_metric: "tokens".into(),
+            usage_sidebar_hidden: true,
             last_space_id: Some("space-1".into()),
             open_tabs: Some(vec!["b".to_string(), "a".to_string()]),
             space_filter: Some("space-1".into()),

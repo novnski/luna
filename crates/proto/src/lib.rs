@@ -14,6 +14,7 @@ pub mod preview;
 pub mod recovery;
 pub mod task_command;
 pub mod task_identity;
+pub mod usage;
 pub mod view;
 pub mod workspace;
 
@@ -27,6 +28,7 @@ pub use preview::*;
 pub use recovery::*;
 pub use task_command::*;
 pub use task_identity::*;
+pub use usage::*;
 pub use workspace::*;
 
 /// Parse "0.2.12" (tolerating a `-suffix`/`+build` tail on the last part)

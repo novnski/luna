@@ -75,7 +75,7 @@ use zeron_proto::{
     HistoryCapabilityView, HistoryProjectPolicy, HistoryRebuildRequest, HistoryRebuildResult,
     HistoryRecoveryView, HistorySearchRequest, ImportOwnership, PermissionMode,
     ProviderForkCapability, ProviderForkRequest, TaskCommandEvent, TaskCommandSnapshot,
-    TaskLineage, ToolCall, WorkspaceScope,
+    TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 use zeron_sync::DocsStore;
@@ -4979,6 +4979,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_TASK_COMMAND_SNAPSHOT
             | methods::WATCH_TASK_COMMANDS
             | methods::SEARCH_SESSION_HISTORY
+            | methods::GET_USAGE_SNAPSHOT
             | methods::REBUILD_SESSION_HISTORY
             | methods::WATCH_DOC_MESSAGES
             // The queue lives on the chat doc, and only its host may send from
@@ -5471,6 +5472,17 @@ impl RpcService for EngineRpc {
                     .search_activity_events(&request)
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&page)
+            }
+            methods::GET_USAGE_SNAPSHOT => {
+                let request: UsageRequest = parse_params(params)?;
+                let mut snapshot =
+                    tokio::task::spawn_blocking(move || crate::usage::snapshot(request))
+                        .await
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                for source in &mut snapshot.summary.sources {
+                    source.environment_id = self.engine_info.device_id.clone();
+                }
+                RpcReply::value(&snapshot)
             }
             methods::REBUILD_SESSION_HISTORY => {
                 let request: HistoryRebuildRequest = parse_params(params)?;

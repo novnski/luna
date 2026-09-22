@@ -115,6 +115,8 @@ pub mod methods {
     pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
     /// Bounded search over the local derived session-activity index.
     pub const SEARCH_SESSION_HISTORY: &str = "SearchSessionHistory";
+    /// L16 normalized local usage. The runtime accepts only explicit synthetic homes.
+    pub const GET_USAGE_SNAPSHOT: &str = "GetUsageSnapshot";
     /// Rebuild the local derived index from authoritative task records.
     pub const REBUILD_SESSION_HISTORY: &str = "RebuildSessionHistory";
     /// Read/write project-local indexing exclusions and sensitive-surface policy.
