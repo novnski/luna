@@ -4253,6 +4253,9 @@ pub struct Composer {
     /// producing a second user steer.
     async_submissions: HashMap<(String, String), AsyncQuestionSubmission>,
     async_attempts: HashMap<(String, String), u32>,
+    /// The exact banner set by one async question, so its later doc readback
+    /// cannot erase an unrelated composer failure on the same chat.
+    async_failure: Option<((String, String), SharedString)>,
     advance_task: Option<Task<()>>,
     send_task: Option<Task<()>>,
     /// The queued message being edited in the composer (see
@@ -4570,6 +4573,7 @@ impl Composer {
             answered_requests: HashSet::new(),
             async_submissions: HashMap::new(),
             async_attempts: HashMap::new(),
+            async_failure: None,
             failure_key: None,
             action_task: None,
             advance_task: None,
@@ -5620,6 +5624,7 @@ impl Composer {
         self.answered_requests.clear();
         self.async_submissions.clear();
         self.async_attempts.clear();
+        self.async_failure = None;
         self.advance_task = None;
         self.send_task = None;
         self.action_task = None;
@@ -7591,11 +7596,6 @@ impl Composer {
         self.load_draft(self.current_key.clone(), cx);
         self.finish_pending_draft_owner_stage(cx);
 
-        // A pending agent question must not take over an active queue edit.
-        if self.editing_queued.is_some() {
-            cx.notify();
-            return;
-        }
         let transcript = self.state.read(cx).transcript.clone();
         let settled: Vec<_> = self
             .async_submissions
@@ -7606,9 +7606,16 @@ impl Composer {
             .cloned()
             .collect();
         for key in settled {
+            self.clear_async_delivery_failure(&key);
             self.async_submissions.remove(&key);
             self.async_attempts.remove(&key);
             self.answered_requests.remove(&key.1);
+        }
+        // A pending agent question must not take over an active queue edit.
+        // Its durable resolution still settles any delivery banner first.
+        if self.editing_queued.is_some() {
+            cx.notify();
+            return;
         }
         // Question card lifecycle; the regular composer keeps its own draft.
         match pending.as_ref() {
@@ -7627,7 +7634,7 @@ impl Composer {
                 }
             }
             _ => {
-                if let Some(wizard) = self.wizard.as_ref() {
+                if let Some(wizard) = self.wizard.clone() {
                     let transcript = self.state.read(cx).transcript.clone();
                     let released = match wizard.source {
                         QuestionSource::Blocking => {
@@ -7645,6 +7652,7 @@ impl Composer {
                     if released {
                         if wizard.source == QuestionSource::Async {
                             let key = (self.current_key.clone(), wizard.request_id.clone());
+                            self.clear_async_delivery_failure(&key);
                             self.async_submissions.remove(&key);
                             self.async_attempts.remove(&key);
                             self.answered_requests.remove(&wizard.request_id);
@@ -8744,6 +8752,28 @@ impl Composer {
 
     // ---- wizard glue ----
 
+    fn set_async_delivery_failure(&mut self, key: &(String, String), message: SharedString) {
+        self.failure = Some(message.clone());
+        self.failure_key = Some(key.0.clone());
+        self.async_failure = Some((key.clone(), message));
+    }
+
+    fn clear_async_delivery_failure(&mut self, key: &(String, String)) {
+        let Some((owner, message)) = self.async_failure.as_ref() else {
+            return;
+        };
+        if owner != key {
+            return;
+        }
+        if self.failure_key.as_deref() == Some(key.0.as_str())
+            && self.failure.as_ref() == Some(message)
+        {
+            self.failure = None;
+            self.failure_key = None;
+        }
+        self.async_failure = None;
+    }
+
     fn wizard_select(&mut self, option_ix: usize, cx: &mut Context<Self>) {
         if self
             .wizard
@@ -8875,18 +8905,23 @@ impl Composer {
         let command_id = submission.command_id.clone();
         let intent = submission.intent.clone();
         let chat_id = key.0.clone();
+        self.clear_async_delivery_failure(&key);
         cx.spawn(async move |this, cx| {
             let result = crate::task_commands::execute_with_id(
-                &engine, &chat_id, command_id, intent,
+                &engine, &chat_id, command_id.clone(), intent,
             ).await;
             this.update(cx, |composer, cx| {
+                // The doc may resolve before a Pending/transport reply reaches
+                // the UI. A settled card must not resurrect its error banner.
+                if !composer.async_submissions.get(&key).is_some_and(|submission| submission.command_id == command_id) {
+                    return;
+                }
                 match result {
                     Ok(receipt) if receipt.status == CommandReceiptStatus::Applied => {
                         if let Some(submission) = composer.async_submissions.get_mut(&key) {
                             submission.state = AsyncDeliveryState::Applied;
                         }
-                        composer.failure = None;
-                        composer.failure_key = None;
+                        composer.clear_async_delivery_failure(&key);
                         let check_key = key.clone();
                         cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(Duration::from_secs(3)).await;
@@ -8896,8 +8931,7 @@ impl Composer {
                                 if unresolved && let Some(submission) = composer.async_submissions.get_mut(&check_key)
                                     && submission.state == AsyncDeliveryState::Applied {
                                         submission.state = AsyncDeliveryState::Uncertain;
-                                        composer.failure = Some("Answer accepted, but its readback is delayed. Retry checks the same command.".into());
-                                        composer.failure_key = Some(check_key.0.clone());
+                                        composer.set_async_delivery_failure(&check_key, "Answer accepted, but its readback is delayed. Retry checks the same command.".into());
                                         cx.notify();
                                     }
                             }).ok();
@@ -8907,22 +8941,19 @@ impl Composer {
                         if let Some(submission) = composer.async_submissions.get_mut(&key) {
                             submission.state = AsyncDeliveryState::Uncertain;
                         }
-                        composer.failure = Some("Answer delivery is pending. Retry checks the same command.".into());
-                        composer.failure_key = Some(chat_id.clone());
+                        composer.set_async_delivery_failure(&key, "Answer delivery is pending. Retry checks the same command.".into());
                     }
                     Err(err) if matches!(err, RpcError::Failed(_) | RpcError::BadParams(_) | RpcError::UnknownMethod(_)) => {
                         composer.async_submissions.remove(&key);
                         *composer.async_attempts.entry(key.clone()).or_default() += 1;
                         composer.answered_requests.remove(&key.1);
-                        composer.failure = Some(format!("Answer failed: {err}").into());
-                        composer.failure_key = Some(chat_id.clone());
+                        composer.set_async_delivery_failure(&key, format!("Answer failed: {err}").into());
                     }
                     Err(err) => {
                         if let Some(submission) = composer.async_submissions.get_mut(&key) {
                             submission.state = AsyncDeliveryState::Uncertain;
                         }
-                        composer.failure = Some(format!("Answer delivery is uncertain: {err}. Retry checks the same command.").into());
-                        composer.failure_key = Some(chat_id.clone());
+                        composer.set_async_delivery_failure(&key, format!("Answer delivery is uncertain: {err}. Retry checks the same command.").into());
                     }
                 }
                 cx.notify();
@@ -8946,8 +8977,6 @@ impl Composer {
         };
         let async_question = wizard.source == QuestionSource::Async;
         self.advance_task = None;
-        self.failure = None;
-        self.failure_key = None;
         let request_id = wizard.request_id.clone();
         if async_question {
             let key = (chat_id.clone(), request_id.clone());
@@ -8971,6 +9000,8 @@ impl Composer {
             cx.notify();
             return;
         }
+        self.failure = None;
+        self.failure_key = None;
         self.wizard = None;
         self.answered_requests.insert(request_id.clone());
         self.answer_input
@@ -12426,6 +12457,181 @@ mod tests {
         }
         assert!(pending_async_question(&transcript).is_none());
         assert!(async_question_resolved(&transcript, "aq-call-1"));
+    }
+
+    #[gpui::test]
+    fn pending_skip_readback_clears_only_its_own_banner(cx: &mut gpui::TestAppContext) {
+        struct PendingSkipRpc {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+        #[async_trait]
+        impl RpcService for PendingSkipRpc {
+            async fn handle(
+                &self,
+                method: &str,
+                params: serde_json::Value,
+            ) -> Result<RpcReply, RpcError> {
+                match method {
+                    methods::GET_COMPOSER_DRAFT => {
+                        RpcReply::value(&zeron_proto::ComposerDraftRead {
+                            draft: None,
+                            submissions: vec![],
+                        })
+                    }
+                    methods::GET_TASK_COMMAND_SNAPSHOT => {
+                        RpcReply::value(&zeron_proto::TaskCommandRead {
+                            snapshot: zeron_proto::TaskCommandSnapshot {
+                                task_id: "async-task".into(),
+                                ..Default::default()
+                            },
+                            events: vec![],
+                            reload_required: false,
+                            next_task_sequence: None,
+                            has_more: false,
+                        })
+                    }
+                    methods::EXECUTE_TASK_COMMAND => {
+                        assert_eq!(params["intent"]["command"]["kind"], "respondAsyncQuestion");
+                        assert_eq!(
+                            params["intent"]["command"]["answers"],
+                            serde_json::json!([])
+                        );
+                        self.calls.fetch_add(1, Ordering::SeqCst);
+                        RpcReply::value(&zeron_proto::CommandReceipt {
+                            command_id: params["commandId"].as_str().unwrap().into(),
+                            task_id: "async-task".into(),
+                            intent: "respondAsyncQuestion".into(),
+                            payload_hash: "synthetic".into(),
+                            status: CommandReceiptStatus::Pending,
+                            snapshot: zeron_proto::TaskCommandSnapshot {
+                                task_id: "async-task".into(),
+                                ..Default::default()
+                            },
+                            event_sequence: None,
+                            actor_id: "synthetic".into(),
+                            client_id: "synthetic".into(),
+                            client_session_id: "synthetic".into(),
+                            execution_environment: None,
+                            correlation_id: None,
+                            reason: None,
+                            recovery_action: None,
+                            accepted_at_ms: 1,
+                            committed_at_ms: None,
+                            observed_at_ms: 1,
+                        })
+                    }
+                    other => Err(RpcError::UnknownMethod(other.into())),
+                }
+            }
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let service = Arc::new(PendingSkipRpc {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zeron_rpc::memory_client(service.clone()),
+            ));
+            state.selected_chat = Some("async-task".into());
+            state.transcript = vec![SessionMessageEntry {
+                id: "assistant-question".into(),
+                role: MessageRole::Assistant,
+                parts: vec![MessagePart::AsyncQuestion {
+                    id: "aq-call-1".into(),
+                    questions: vec![zeron_proto::AsyncUserInputQuestion {
+                        title: "Optional question?".into(),
+                        options: Some(vec!["A".into(), "B".into()]),
+                    }],
+                    resolved: false,
+                }],
+                created_at: 1,
+                device_id: "synthetic".into(),
+                status: Some(zeron_doc::MessageStatus::Complete),
+                continuation_of: None,
+            }];
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |composer, cx| {
+            composer.on_state_changed(cx);
+            composer
+                .input
+                .update(cx, |input, cx| input.set_text("Unrelated prompt", cx));
+            composer.wizard_skip(cx);
+        });
+        let key = ("async-task".to_string(), "aq-call-1".to_string());
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| {
+                composer
+                    .failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.as_ref().contains("delivery is pending"))
+            })
+        });
+        composer.read_with(cx, |composer, cx| {
+            assert!(composer.wizard.is_some());
+            assert!(composer.async_submissions.contains_key(&key));
+            assert_eq!(composer.input.read(cx).text(), "Unrelated prompt");
+        });
+        assert_eq!(service.calls.load(Ordering::SeqCst), 1);
+        state.update(cx, |state, _| {
+            if let MessagePart::AsyncQuestion { resolved, .. } = &mut state.transcript[0].parts[0] {
+                *resolved = true;
+            }
+        });
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.read_with(cx, |composer, cx| {
+            assert!(composer.wizard.is_none());
+            assert!(!composer.async_submissions.contains_key(&key));
+            assert!(
+                composer.failure.is_none(),
+                "the matching Pending banner clears"
+            );
+            assert_eq!(composer.input.read(cx).text(), "Unrelated prompt");
+        });
+        // Readback may beat the RPC reply; the late Pending result must not
+        // recreate a banner after the card has already been settled.
+        state.update(cx, |state, _| {
+            if let MessagePart::AsyncQuestion { id, resolved, .. } =
+                &mut state.transcript[0].parts[0]
+            {
+                *id = "aq-call-2".into();
+                *resolved = false;
+            }
+        });
+        composer.update(cx, |composer, cx| {
+            composer.on_state_changed(cx);
+            composer.wizard_skip(cx);
+        });
+        state.update(cx, |state, _| {
+            if let MessagePart::AsyncQuestion { resolved, .. } = &mut state.transcript[0].parts[0] {
+                *resolved = true;
+            }
+        });
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        pump_until(cx, &runtime, |_| service.calls.load(Ordering::SeqCst) == 2);
+        for _ in 0..10 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+        }
+        composer.read_with(cx, |composer, cx| {
+            assert!(composer.wizard.is_none());
+            assert!(
+                composer.failure.is_none(),
+                "late Pending reply stays settled"
+            );
+            assert_eq!(composer.input.read(cx).text(), "Unrelated prompt");
+        });
+        composer.update(cx, |composer, _| {
+            composer.set_async_delivery_failure(&key, "Answer delivery is pending".into());
+            composer.failure = Some("Unrelated draft failure".into());
+            composer.clear_async_delivery_failure(&key);
+            assert_eq!(composer.failure.as_deref(), Some("Unrelated draft failure"));
+        });
     }
 
     #[gpui::test]
