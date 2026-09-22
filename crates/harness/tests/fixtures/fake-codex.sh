@@ -390,6 +390,15 @@ case "$turnline" in
   cat "$(dirname "$0")/codex/v2-lifecycle.jsonl"
   ;;
 
+*scenario:child-unobserved*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"item/started","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"spawn-open","kind":"started","agentThreadId":"child-open","agentPath":"/root/open"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"spawn-open","kind":"started","agentThreadId":"child-open","agentPath":"/root/open"}}}'
+  emit '{"method":"item/agentMessage/delta","params":{"threadId":"child-open","itemId":"child-output","delta":"still working"}}'
+  emit '{"method":"thread/status/changed","params":{"threadId":"child-open","status":{"type":"idle"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+  ;;
+
 *scenario:subagent*)
   # Multi-agent v2 child-thread routing: registration via subAgentActivity,
   # tagged child items, consumed child turn bookkeeping (must never settle

@@ -115,8 +115,64 @@ pub enum MessageStatus {
 #[serde(rename_all = "camelCase")]
 pub enum SubagentStatus {
     Running,
+    Idle,
+    Waiting,
     Done,
     Failed,
+    Interrupted,
+    /// Parent event stream ended without a child completion observation.
+    Unobserved,
+}
+
+/// Provider-observed child details. Usage is the latest reported snapshot,
+/// not an aggregate across turns or a cost estimate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentActivity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+}
+
+impl SubagentActivity {
+    fn observed_text(text: &str) -> Option<String> {
+        let mut chars = text.trim().chars();
+        let mut bounded: String = chars.by_ref().take(500).collect();
+        if chars.next().is_some() {
+            bounded.push('…');
+        }
+        (!bounded.is_empty()).then_some(bounded)
+    }
+
+    pub fn apply(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::UserMessage { .. } | AgentEvent::Steered { .. } => *self = Self::default(),
+            AgentEvent::Usage {
+                input_tokens,
+                output_tokens,
+            } => {
+                self.input_tokens = Some(*input_tokens);
+                self.output_tokens = Some(*output_tokens);
+            }
+            AgentEvent::Done { result, error, .. } => {
+                self.result = result.as_deref().and_then(Self::observed_text);
+                self.error = error.as_deref().and_then(Self::observed_text);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn has_observation(&self) -> bool {
+        self.result.is_some()
+            || self.error.is_some()
+            || self.input_tokens.is_some()
+            || self.output_tokens.is_some()
+    }
 }
 
 /// One rendered part of an assistant message.
@@ -191,6 +247,8 @@ pub enum MessagePart {
         /// its tagged text deltas (capped; display-only).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent_tail: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent_activity: Option<SubagentActivity>,
     },
     #[serde(rename_all = "camelCase")]
     Input {
@@ -350,6 +408,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     subagent_ref: None,
                     subagent_status: None,
                     subagent_tail: None,
+                    subagent_activity: None,
                 });
             }
         }
@@ -459,13 +518,19 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             let status = match event.as_ref() {
                 AgentEvent::Done { status, .. } => Some(match status {
                     zeron_proto::DoneStatus::Errored => SubagentStatus::Failed,
-                    _ => SubagentStatus::Done,
+                    zeron_proto::DoneStatus::Interrupted => SubagentStatus::Interrupted,
+                    zeron_proto::DoneStatus::Completed => SubagentStatus::Done,
                 }),
                 // A new assignment reopens a settled chip. Providers may
                 // announce it with user text or a confirmed turn boundary.
-                AgentEvent::UserMessage { .. } | AgentEvent::Steered { .. } => {
-                    Some(SubagentStatus::Running)
-                }
+                AgentEvent::UserMessage { .. }
+                | AgentEvent::Steered { .. }
+                | AgentEvent::InputResolved { .. } => Some(SubagentStatus::Running),
+                AgentEvent::InputRequested { .. } => Some(SubagentStatus::Waiting),
+                AgentEvent::ChildStatus { status } => Some(match status {
+                    zeron_proto::ChildRuntimeStatus::Active => SubagentStatus::Running,
+                    zeron_proto::ChildRuntimeStatus::Idle => SubagentStatus::Idle,
+                }),
                 _ => None,
             };
             for p in out.iter_mut() {
@@ -473,6 +538,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     id,
                     call,
                     subagent_status,
+                    subagent_activity,
                     ..
                 } = p
                     && id == parent_tool_use_id
@@ -483,17 +549,42 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     && call.is_subagent_spawn()
                 {
                     match status {
+                        Some(_)
+                            if matches!(event.as_ref(), AgentEvent::ChildStatus { .. })
+                                && matches!(
+                                    subagent_status,
+                                    Some(SubagentStatus::Done)
+                                        | Some(SubagentStatus::Failed)
+                                        | Some(SubagentStatus::Interrupted)
+                                ) => {}
                         Some(s) => *subagent_status = Some(s),
-                        // Any tagged traffic proves the subagent is live;
-                        // never regress a terminal state.
+                        // Passive events do not resolve a waiting request or
+                        // regress a terminal state.
                         None if !matches!(
                             subagent_status,
-                            Some(SubagentStatus::Done) | Some(SubagentStatus::Failed)
+                            Some(SubagentStatus::Done)
+                                | Some(SubagentStatus::Failed)
+                                | Some(SubagentStatus::Interrupted)
+                                | Some(SubagentStatus::Unobserved)
+                                | Some(SubagentStatus::Waiting)
+                                | Some(SubagentStatus::Idle)
                         ) =>
                         {
                             *subagent_status = Some(SubagentStatus::Running);
                         }
                         None => {}
+                    }
+                    if let Some(activity) = subagent_activity.as_mut() {
+                        activity.apply(event);
+                        if !activity.has_observation() {
+                            *subagent_activity = None;
+                        }
+                    } else {
+                        let mut activity = SubagentActivity::default();
+                        activity.apply(event);
+                        if activity.has_observation() {
+                            *subagent_activity = Some(activity);
+                        }
                     }
                 }
             }
@@ -508,6 +599,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::ProviderCheckpoint { .. }
         | AgentEvent::AvailableCommands { .. }
         | AgentEvent::ProviderTaskChanged { .. }
+        | AgentEvent::ChildStatus { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
 }
@@ -1011,6 +1103,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                subagent_activity: None,
             },
         ];
         let chunks = split_parts(&parts);
@@ -1279,6 +1372,111 @@ mod tests {
             }
         ));
         // Content never leaked into the parent parts.
+        assert_eq!(parts.len(), 1);
+    }
+
+    #[test]
+    fn child_observations_keep_waiting_usage_result_and_reactivation_distinct() {
+        use zeron_proto::DoneStatus;
+        let mut parts = Vec::new();
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ToolCall {
+                id: "spawn".into(),
+                call: ToolCall::Unknown {
+                    name: "Agent: scan".into(),
+                    input: None,
+                },
+            },
+        );
+        let tagged = |event| AgentEvent::Subagent {
+            parent_tool_use_id: "spawn".into(),
+            event: Box::new(event),
+        };
+        // The child can finish before the parent spawn tool resolves.
+        fold_event_into_parts(
+            &mut parts,
+            &tagged(AgentEvent::InputRequested {
+                request_id: "approval".into(),
+                questions: Vec::new(),
+            }),
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &tagged(AgentEvent::Usage {
+                input_tokens: 12,
+                output_tokens: 0,
+            }),
+        );
+        assert!(matches!(
+            &parts[0],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Waiting),
+                subagent_activity: Some(SubagentActivity {
+                    input_tokens: Some(12),
+                    output_tokens: Some(0),
+                    ..
+                }),
+                ..
+            }
+        ));
+        fold_event_into_parts(
+            &mut parts,
+            &tagged(AgentEvent::InputResolved {
+                request_id: "approval".into(),
+            }),
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &tagged(AgentEvent::ChildStatus {
+                status: zeron_proto::ChildRuntimeStatus::Idle,
+            }),
+        );
+        assert!(matches!(
+            &parts[0],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Idle),
+                ..
+            }
+        ));
+        fold_event_into_parts(
+            &mut parts,
+            &tagged(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: Some("Found two fixes".into()),
+                error: None,
+                session_id: None,
+            }),
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ToolResult {
+                id: "spawn".into(),
+                is_error: false,
+                output: Some("summary".into()),
+                diff: None,
+            },
+        );
+        assert!(matches!(&parts[0], MessagePart::Tool {
+            subagent_status: Some(SubagentStatus::Done),
+            subagent_activity: Some(SubagentActivity { result: Some(result), .. }),
+            ..
+        } if result == "Found two fixes"));
+        fold_event_into_parts(
+            &mut parts,
+            &tagged(AgentEvent::Steered {
+                assistant_message_id: None,
+                next_assistant_message_id: None,
+            }),
+        );
+        assert!(matches!(
+            &parts[0],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Running),
+                subagent_activity: None,
+                ..
+            }
+        ));
         assert_eq!(parts.len(), 1);
     }
 

@@ -21,6 +21,7 @@
 {"method":"turn/completed","params":{"threadId":"child-alpha","turn":{"id":"alpha-turn-1","status":"completed"}}}
 {"method":"item/completed","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"followup-alpha","kind":"started","agentThreadId":"child-alpha","agentPath":"/root/alpha"}}}
 {"method":"item/completed","params":{"threadId":"child-alpha","item":{"type":"agentMessage","id":"alpha-answer-2","text":"second alpha"}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"child-alpha","tokenUsage":{"last":{"inputTokens":34,"outputTokens":5}}}}
 {"method":"turn/completed","params":{"threadId":"child-alpha","turn":{"id":"alpha-turn-2","status":"failed","error":{"message":"followup failed"}}}}
 {"method":"item/completed","params":{"threadId":"th-1","item":{"type":"subAgentActivity","id":"failed-alpha","kind":"failed","agentThreadId":"child-alpha","agentPath":"/root/alpha"}}}
 {"method":"thread/closed","params":{"threadId":"child-alpha"}}

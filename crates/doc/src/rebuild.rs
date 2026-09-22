@@ -184,6 +184,7 @@ mod tests {
                     subagent_ref: None,
                     subagent_status: None,
                     subagent_tail: None,
+                    subagent_activity: None,
                 },
             ],
             created_at: 5,

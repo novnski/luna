@@ -533,6 +533,15 @@ pub enum DoneStatus {
     Errored,
 }
 
+/// Provider-observed state of a reusable child session. This is distinct from
+/// a child turn's `Done`, which reports an assignment outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChildRuntimeStatus {
+    Active,
+    Idle,
+}
+
 /// The normalized streaming event every harness emits.
 ///
 /// Mirrors zeron's `AgentEvent` tagged enum.
@@ -617,6 +626,11 @@ pub enum AgentEvent {
     Usage {
         input_tokens: u64,
         output_tokens: u64,
+    },
+    /// Native child-session status, only meaningful inside `Subagent`.
+    #[serde(rename_all = "camelCase")]
+    ChildStatus {
+        status: ChildRuntimeStatus,
     },
     /// The agent advertised (or changed) its slash-command set — ACP
     /// `available_commands_update`. The engine caches the latest list per

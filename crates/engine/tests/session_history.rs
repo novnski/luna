@@ -45,6 +45,7 @@ fn tool(id: &str, call: ToolCall) -> MessagePart {
         subagent_ref: None,
         subagent_status: None,
         subagent_tail: None,
+        subagent_activity: None,
     }
 }
 

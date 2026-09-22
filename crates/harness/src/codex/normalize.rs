@@ -634,6 +634,17 @@ fn remember(ids: &mut std::collections::VecDeque<String>, id: String) -> bool {
 
 impl ChildStream {
     pub(super) fn map(&mut self, child: &str, method: &str, params: &Value) -> Vec<AgentEvent> {
+        if method == "thread/status/changed" {
+            return match params.pointer("/status/type").and_then(Value::as_str) {
+                Some("active") => vec![AgentEvent::ChildStatus {
+                    status: zeron_proto::ChildRuntimeStatus::Active,
+                }],
+                Some("idle") => vec![AgentEvent::ChildStatus {
+                    status: zeron_proto::ChildRuntimeStatus::Idle,
+                }],
+                _ => Vec::new(),
+            };
+        }
         if method == "turn/started" {
             let id = turn_id(params);
             if !id.is_empty() && self.completed_turns.contains(&id) {
@@ -701,6 +712,7 @@ impl ChildStream {
             return Vec::new();
         }
         match method {
+            "thread/tokenUsage/updated" => usage_event(params).into_iter().collect(),
             "item/agentMessage/delta" => {
                 let id = item_id(params);
                 if !id.is_empty() && self.completed_items.contains(&id) {
@@ -814,15 +826,15 @@ pub(crate) fn route_child_notification(method: &str) -> ChildRoute {
         | "turn/completed"
         | "turn/failed"
         | "turn/aborted"
+        | "thread/tokenUsage/updated"
+        | "thread/status/changed"
         | "error"
         | "thread/closed" => ChildRoute::Subagent,
         // Child status bookkeeping with no subagent meaning: consumed
         // so it can never settle the PARENT turn (the exact bug class the
         // explicit table exists for).
-        "thread/status/changed"
-        | "thread/tokenUsage/updated"
         // Child chatter with no consumer on this wire.
-        | "item/commandExecution/outputDelta"
+        "item/commandExecution/outputDelta"
         | "item/fileChange/outputDelta"
         | "item/fileChange/patchUpdated"
         | "item/plan/delta"
@@ -1088,6 +1100,45 @@ mod tests {
     }
 
     #[test]
+    fn child_usage_notification_keeps_only_the_provider_reported_snapshot() {
+        let mut child = ChildStream::default();
+        assert_eq!(
+            child.map(
+                "child-1",
+                "thread/tokenUsage/updated",
+                &json!({
+                    "threadId": "child-1",
+                    "tokenUsage": { "last": { "inputTokens": 21, "outputTokens": 3 } }
+                })
+            ),
+            vec![AgentEvent::Usage {
+                input_tokens: 21,
+                output_tokens: 3
+            }]
+        );
+    }
+
+    #[test]
+    fn child_idle_and_active_are_observed_without_settling_a_turn() {
+        let mut child = ChildStream::default();
+        for (native, expected) in [
+            ("idle", zeron_proto::ChildRuntimeStatus::Idle),
+            ("active", zeron_proto::ChildRuntimeStatus::Active),
+        ] {
+            assert_eq!(
+                child.map(
+                    "child-1",
+                    "thread/status/changed",
+                    &json!({
+                        "threadId": "child-1", "status": { "type": native }
+                    })
+                ),
+                vec![AgentEvent::ChildStatus { status: expected }]
+            );
+        }
+    }
+
+    #[test]
     fn child_routing_table_fails_open_to_parent() {
         // Child content/lifecycle → the subagent path, deltas included
         // (live-verified: child threads stream them on this wire).
@@ -1098,6 +1149,8 @@ mod tests {
             "item/reasoning/textDelta",
             "error",
             "thread/closed",
+            "thread/tokenUsage/updated",
+            "thread/status/changed",
         ] {
             assert_eq!(route_child_notification(m), ChildRoute::Subagent, "{m}");
         }

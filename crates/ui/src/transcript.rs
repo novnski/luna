@@ -39,7 +39,9 @@ use gpui::{
     TextAlign, TextRun, Window, canvas, div, img, list, point, prelude::*, px, quad, size,
 };
 
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
+use zeron_doc::{
+    MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentActivity, SubagentStatus,
+};
 use zeron_proto::{ConversationForkBoundaryKind, ToolCall};
 
 use crate::markdown::parser::{
@@ -360,6 +362,7 @@ pub struct ToolItem {
     /// per-delta header rewrites read as noise). Never rendered; still
     /// fingerprinted so an old doc's chips re-splice correctly.
     pub subagent_tail: Option<SharedString>,
+    pub subagent_activity: Option<SubagentActivity>,
     /// A REASONING part riding the tool group as a chip (user request: the
     /// thought process belongs inside the combined "Ran N commands"
     /// accordion, opening/closing with the same tween). Synthesized in
@@ -389,7 +392,25 @@ fn is_agent_tool(item: &ToolItem) -> bool {
 /// A chip renders as the spawn LINK (whole-card click → subagent tab) only
 /// when an agent call has actually been bound to its doc.
 fn is_spawn_link(item: &ToolItem) -> bool {
-    is_agent_call(&item.call) && item.subagent_ref.is_some()
+    child_action_supported(item, ChildAction::OpenTranscript)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChildAction {
+    OpenTranscript,
+    Message,
+    StopChild,
+    StopGroup,
+}
+
+/// The provider adapters currently expose a child transcript ref, but no
+/// addressed child/group mutation API. Keep unsupported controls absent until
+/// an adapter supplies a capability and an observed command receipt.
+fn child_action_supported(item: &ToolItem, action: ChildAction) -> bool {
+    match action {
+        ChildAction::OpenTranscript => is_agent_call(&item.call) && item.subagent_ref.is_some(),
+        ChildAction::Message | ChildAction::StopChild | ChildAction::StopGroup => false,
+    }
 }
 
 /// Ordinary tool groups fold behind a summary header; agent/spawn chips
@@ -715,6 +736,7 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
         subagent_ref: None,
         subagent_status: None,
         subagent_tail: None,
+        subagent_activity: None,
         is_thought: true,
     }
 }
@@ -1170,12 +1192,21 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
                 | match t.subagent_status {
                     None => 0,
                     Some(SubagentStatus::Running) => 1 << 1,
+                    Some(SubagentStatus::Idle) => 7 << 1,
+                    Some(SubagentStatus::Waiting) => 4 << 1,
                     Some(SubagentStatus::Done) => 2 << 1,
                     Some(SubagentStatus::Failed) => 3 << 1,
+                    Some(SubagentStatus::Interrupted) => 5 << 1,
+                    Some(SubagentStatus::Unobserved) => 6 << 1,
                 },
         );
         if let Some(tail) = &t.subagent_tail {
             acc.extend_from_slice(tail.as_bytes());
+        }
+        if let Some(activity) = &t.subagent_activity
+            && let Ok(bytes) = serde_json::to_vec(activity)
+        {
+            acc.extend_from_slice(&bytes);
         }
     }
     acc.push(auto_open as u8);
@@ -1333,6 +1364,7 @@ pub fn rows_for_entry(
                 subagent_ref,
                 subagent_status,
                 subagent_tail,
+                subagent_activity,
                 ..
             } => {
                 let item = ToolItem {
@@ -1349,6 +1381,7 @@ pub fn rows_for_entry(
                     subagent_ref: subagent_ref.clone().map(SharedString::from),
                     subagent_status: *subagent_status,
                     subagent_tail: subagent_tail.clone().map(SharedString::from),
+                    subagent_activity: subagent_activity.clone(),
                     is_thought: false,
                 };
                 // Agent chips don't share a fold with ordinary tools: flush
@@ -6817,7 +6850,10 @@ impl Transcript {
                     let title = subagent_tab_title(&tool.call);
                     let frozen = matches!(
                         tool.subagent_status,
-                        Some(SubagentStatus::Done) | Some(SubagentStatus::Failed)
+                        Some(SubagentStatus::Done)
+                            | Some(SubagentStatus::Failed)
+                            | Some(SubagentStatus::Interrupted)
+                            | Some(SubagentStatus::Unobserved)
                     );
                     return subagent_chip(
                         tool,
@@ -7459,11 +7495,92 @@ enum ChipTrail {
 /// when the chip expands or links out). Shared between the plain chip, the
 /// header of an expandable chip card, and the spawn link chip.
 ///
-/// Spawn chips carry their subagent's lifecycle VISUALLY, in the chip's own
-/// language: while running the mini working spinner (the sidebar's) pulses
-/// at the right of the ordinary static detail; done is the ordinary quiet
-/// chip; failed takes the danger tint — no status words, no live text (a
-/// header rewriting itself per stream delta read as noise — user report).
+fn child_status_label(status: Option<SubagentStatus>) -> &'static str {
+    match status {
+        Some(SubagentStatus::Running) => "Running",
+        Some(SubagentStatus::Idle) => "Idle",
+        Some(SubagentStatus::Waiting) => "Waiting",
+        Some(SubagentStatus::Done) => "Done",
+        Some(SubagentStatus::Failed) => "Failed",
+        Some(SubagentStatus::Interrupted) => "Interrupted",
+        Some(SubagentStatus::Unobserved) => "Not observed",
+        None => "Status unavailable",
+    }
+}
+
+fn child_inspection_lines(tool: &ToolItem) -> Vec<String> {
+    let mut lines = vec![format!(
+        "Status: {}",
+        child_status_label(tool.subagent_status)
+    )];
+    let available = [
+        (ChildAction::OpenTranscript, "Open transcript"),
+        (ChildAction::Message, "Message"),
+        (ChildAction::StopChild, "Stop child"),
+        (ChildAction::StopGroup, "Stop group"),
+    ]
+    .into_iter()
+    .filter_map(|(action, label)| child_action_supported(tool, action).then_some(label))
+    .collect::<Vec<_>>();
+    if !available.is_empty() {
+        lines.push(format!("Available: {}", available.join(", ")));
+    }
+    if let ToolCall::Unknown {
+        input: Some(input), ..
+    }
+    | ToolCall::Mcp {
+        input: Some(input), ..
+    } = &tool.call
+        && let Some(role) = input
+            .get("subagent_type")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+    {
+        lines.push(format!("Role: {role}"));
+    }
+    if let Some(model) = tool.call.subagent_model() {
+        lines.push(format!("Model: {model}"));
+    }
+    if let Some(activity) = &tool.subagent_activity {
+        if let (Some(input), Some(output)) = (activity.input_tokens, activity.output_tokens) {
+            lines.push(format!(
+                "Latest reported usage: {input} input, {output} output tokens"
+            ));
+        }
+        if let Some(result) = &activity.result {
+            lines.push(format!("Result: {result}"));
+        }
+        if let Some(error) = &activity.error {
+            lines.push(format!("Error: {error}"));
+        }
+    }
+    lines
+}
+
+struct ChildInspectionTooltip {
+    lines: Vec<String>,
+}
+
+impl gpui::Render for ChildInspectionTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = &Theme::of(cx).for_popup();
+        let card = crate::popover::popover_card(theme)
+            .w(px(340.0))
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(7.0))
+            .children(self.lines.iter().map(|line| {
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text)
+                    .child(line.clone())
+            }));
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+    }
+}
+
+/// Spawn chips keep the existing card and show only observed child metadata.
 fn chip_header_row(
     tool: &ToolItem,
     trail: Option<ChipTrail>,
@@ -7486,9 +7603,13 @@ fn chip_header_row(
     };
     let running = tool.subagent_ref.is_some()
         && matches!(tool.subagent_status, Some(SubagentStatus::Running));
-    let failed = tool.is_error
-        || (tool.subagent_ref.is_some()
-            && matches!(tool.subagent_status, Some(SubagentStatus::Failed)));
+    let failed = if is_agent_tool(tool) && tool.subagent_status.is_some() {
+        // The parent tool result may be an early summary. Only the child's
+        // own completion can make a child card look failed.
+        matches!(tool.subagent_status, Some(SubagentStatus::Failed))
+    } else {
+        tool.is_error
+    };
     // Text resolves its color during layout, so group-hover text needs stable
     // child IDs under the keyed, expandable header to retain hover state.
     let hover_text = activity && trail.is_some() && !failed;
@@ -7673,6 +7794,22 @@ fn chip_header_row(
                     .child(SharedString::from(model.to_owned())),
             )
         })
+        .when(
+            is_agent_tool(tool) && tool.subagent_status.is_some(),
+            |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.0))
+                        .text_color(if failed {
+                            theme.danger
+                        } else {
+                            theme.text_faint
+                        })
+                        .child(child_status_label(tool.subagent_status)),
+                )
+            },
+        )
         .when(running, |row| {
             // The sidebar working-row spinner, in the chip's trailing slot —
             // paint-local (fixed footprint), so it never moves the layout.
@@ -7937,6 +8074,40 @@ fn tool_chip(
     } else {
         CHIP_HEIGHT
     };
+    let card = div()
+        .when(rail, |el| el.ml(px(ACTIVITY_TEXT_GAP)))
+        .my(px((row_height - CHIP_CARD_HEIGHT) / 2.0))
+        .h(px(CHIP_CARD_HEIGHT))
+        .min_w_0()
+        .flex_1()
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .when(!rail, |card| {
+            card.rounded(px(9.0))
+                .border_1()
+                .border_color(crate::theme::hairline(0.07))
+                .bg(crate::theme::ink(0.03))
+        })
+        .when(rail && content_reveal < 1.0, |card| {
+            card.relative()
+                .top(px(4.0 * (1.0 - content_reveal)))
+                .opacity(content_reveal)
+        })
+        .child(chip_header_row(tool, None, theme, view, cx));
+    let card = if is_agent_tool(tool) {
+        let inspection = child_inspection_lines(tool);
+        card.id(format!("child-inspection-{}", tool.part_id))
+            .tooltip(move |_, cx| {
+                cx.new(|_| ChildInspectionTooltip {
+                    lines: inspection.clone(),
+                })
+                .into()
+            })
+            .into_any_element()
+    } else {
+        card.into_any_element()
+    };
     div()
         .h(px(row_height))
         .w_full()
@@ -7954,29 +8125,7 @@ fn tool_chip(
                 theme,
             ))
         })
-        .child(
-            div()
-                .when(rail, |el| el.ml(px(ACTIVITY_TEXT_GAP)))
-                .my(px((row_height - CHIP_CARD_HEIGHT) / 2.0))
-                .h(px(CHIP_CARD_HEIGHT))
-                .min_w_0()
-                .flex_1()
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .when(!rail, |card| {
-                    card.rounded(px(9.0))
-                        .border_1()
-                        .border_color(crate::theme::hairline(0.07))
-                        .bg(crate::theme::ink(0.03))
-                })
-                .when(rail && content_reveal < 1.0, |card| {
-                    card.relative()
-                        .top(px(4.0 * (1.0 - content_reveal)))
-                        .opacity(content_reveal)
-                })
-                .child(chip_header_row(tool, None, theme, view, cx)),
-        )
+        .child(card)
         .into_any_element()
 }
 
@@ -7994,6 +8143,7 @@ fn subagent_chip(
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
+    let inspection = child_inspection_lines(tool);
     div()
         .h(px(CHIP_HEIGHT))
         .w_full()
@@ -8028,6 +8178,12 @@ fn subagent_chip(
                 .cursor_pointer()
                 .hover(|s| s.bg(crate::theme::ink(0.05)))
                 .on_click(on_open)
+                .tooltip(move |_, cx| {
+                    cx.new(|_| ChildInspectionTooltip {
+                        lines: inspection.clone(),
+                    })
+                    .into()
+                })
                 .child(chip_header_row(
                     tool,
                     Some(ChipTrail::OpenArrow),
@@ -8059,6 +8215,7 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
             subagent_ref,
             subagent_status,
             subagent_tail,
+            subagent_activity,
             ..
         } = part
         {
@@ -8072,12 +8229,21 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
                     | match subagent_status {
                         None => 0,
                         Some(SubagentStatus::Running) => 1 << 1,
+                        Some(SubagentStatus::Idle) => 7 << 1,
+                        Some(SubagentStatus::Waiting) => 4 << 1,
                         Some(SubagentStatus::Done) => 2 << 1,
                         Some(SubagentStatus::Failed) => 3 << 1,
+                        Some(SubagentStatus::Interrupted) => 5 << 1,
+                        Some(SubagentStatus::Unobserved) => 6 << 1,
                     },
             );
             if let Some(tail) = subagent_tail {
                 acc.extend_from_slice(tail.as_bytes());
+            }
+            if let Some(activity) = subagent_activity
+                && let Ok(bytes) = serde_json::to_vec(activity)
+            {
+                acc.extend_from_slice(&bytes);
             }
         }
         if let MessagePart::Image {
@@ -9958,6 +10124,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            subagent_activity: None,
         }
     }
 
@@ -10080,6 +10247,7 @@ mod tests {
             subagent_ref: Some(format!("chat--sub--{id}")),
             subagent_status: Some(SubagentStatus::Running),
             subagent_tail: None,
+            subagent_activity: None,
         }
     }
 
@@ -10175,6 +10343,44 @@ mod tests {
         assert!(tool_group_collapses(tools));
         assert!(tools.iter().all(|t| !is_agent_tool(t)));
         assert!(tools.iter().all(|t| !is_spawn_link(t)));
+    }
+
+    #[test]
+    fn child_control_table_only_advertises_an_existing_transcript() {
+        let entry = assistant(
+            "m-child",
+            MessageStatus::Complete,
+            vec![agent_part("s1", "scan")],
+        );
+        let rows = rows_for_entry(&entry, false, &mut parse);
+        let RowKind::ToolGroup { tools, .. } = &rows[0].kind else {
+            panic!("agent group expected")
+        };
+        let child = &tools[0];
+        assert!(child_action_supported(child, ChildAction::OpenTranscript));
+        for action in [
+            ChildAction::Message,
+            ChildAction::StopChild,
+            ChildAction::StopGroup,
+        ] {
+            assert!(!child_action_supported(child, action));
+        }
+        let mut absent = child.clone();
+        absent.subagent_ref = None;
+        assert!(!child_action_supported(
+            &absent,
+            ChildAction::OpenTranscript
+        ));
+        absent.subagent_status = Some(SubagentStatus::Idle);
+        absent.subagent_activity = Some(SubagentActivity {
+            input_tokens: Some(7),
+            output_tokens: Some(0),
+            ..Default::default()
+        });
+        let inspection = child_inspection_lines(&absent).join("\n");
+        assert!(inspection.contains("Status: Idle"));
+        assert!(inspection.contains("7 input, 0 output"));
+        assert!(!inspection.contains("Open transcript"));
     }
 
     #[test]
@@ -12185,6 +12391,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            subagent_activity: None,
             is_thought: false,
         };
         let edit = |p: &str| ToolItem {
@@ -12204,6 +12411,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            subagent_activity: None,
             is_thought: false,
         };
         let tools = vec![
@@ -12239,6 +12447,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                subagent_activity: None,
                 is_thought: false,
             },
             ToolItem {
@@ -12256,6 +12465,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                subagent_activity: None,
                 is_thought: false,
             },
             ToolItem {
@@ -12271,6 +12481,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                subagent_activity: None,
                 is_thought: false,
             },
         ];

@@ -130,6 +130,22 @@ async fn check_persistence(
             ),
         ]
     );
+    if scenario == "v2-lifecycle" {
+        assert!(
+            parent
+                .iter()
+                .flat_map(|e| &e.parts)
+                .any(|part| matches!(part,
+                    MessagePart::Tool {
+                        id,
+                        subagent_activity: Some(zeron_doc::SubagentActivity {
+                            input_tokens: Some(34), output_tokens: Some(5), error: Some(error), ..
+                        }),
+                        ..
+                    } if id == "spawn-alpha" && error == "followup failed"
+                ))
+        );
+    }
     for part in parent.iter().flat_map(|e| &e.parts) {
         if let MessagePart::Tool {
             call, subagent_ref, ..
@@ -239,4 +255,51 @@ async fn v2_followup_appends_to_the_original_document_and_updates_the_original_c
         "First assignment",
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _profile) = assemble(dir.path());
+    let request = RunRequest {
+        prompt: "scenario:child-unobserved".into(),
+        harness: None,
+        provider_account_id: None,
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        cwd: dir.path().display().to_string(),
+        sandbox: SandboxLevel::ReadOnly,
+        auto_approve: true,
+        permission_mode: zeron_proto::PermissionMode::Ask,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        attachments: vec![],
+        worktree: None,
+        resume: None,
+    };
+    core.sessions
+        .dispatch(CHAT, HarnessId::Codex, request, Some("user-prompt".into()))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if core.sessions.session_status(CHAT)
+                .is_some_and(|status| status.status == SessionStatus::Idle)
+                && entries(&core, CHAT).iter().flat_map(|entry| &entry.parts).any(|part| matches!(part,
+                    MessagePart::Tool { id, subagent_status: Some(SubagentStatus::Unobserved), .. }
+                        if id == "spawn-open"
+                )) { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("parent completes without child terminal event");
+    assert!(
+        text(
+            &entries(&core, &format!("{CHAT}--sub--spawn-open")),
+            MessageRole::Assistant
+        )
+        .contains("still working")
+    );
+    core.shutdown().await;
 }
