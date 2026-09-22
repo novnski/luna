@@ -10,6 +10,7 @@ pub(super) struct CommandPalette {
     focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
     pub(super) active: usize,
+    selection: PaletteSelection,
     enter_press: EnterPress,
     // Claim focus during mount so the shell does not restore the composer
     // while this input is still absent from the dispatch tree.
@@ -44,6 +45,29 @@ pub(super) enum ResultGroup {
     OtherChats,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EntryIdentity {
+    NewChat,
+    NewProject,
+    Settings,
+    Theme,
+    SearchAllContent,
+    SearchCurrentContent,
+    Chat(String),
+    History(String),
+    LoadOlder(ResultGroup),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PaletteSelection {
+    Default,
+    Bound {
+        identity: EntryIdentity,
+        owner_task: Option<String>,
+    },
+    Cleared,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Entry {
     NewChat,
@@ -64,6 +88,20 @@ pub(super) enum Entry {
 }
 
 impl Entry {
+    fn identity(&self) -> EntryIdentity {
+        match self {
+            Self::NewChat => EntryIdentity::NewChat,
+            Self::NewProject => EntryIdentity::NewProject,
+            Self::Settings => EntryIdentity::Settings,
+            Self::Theme(_) => EntryIdentity::Theme,
+            Self::SearchAllContent => EntryIdentity::SearchAllContent,
+            Self::SearchCurrentContent => EntryIdentity::SearchCurrentContent,
+            Self::Chat { id, .. } => EntryIdentity::Chat(id.clone()),
+            Self::History { event_id, .. } => EntryIdentity::History(event_id.clone()),
+            Self::LoadOlder(group) => EntryIdentity::LoadOlder(*group),
+        }
+    }
+
     fn action(&self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::NewChat => Some(("New chat", icons::PEN_NEW_SQUARE)),
@@ -135,6 +173,7 @@ impl Shell {
             if matches!(event, ComposerInputEvent::Edited) {
                 if let Some(palette) = this.command_palette.as_mut() {
                     palette.active = 0;
+                    palette.selection = PaletteSelection::Default;
                     palette.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
                 }
                 this.begin_session_history_search(cx);
@@ -147,6 +186,7 @@ impl Shell {
             focus: cx.focus_handle(),
             previous_focus,
             active: 0,
+            selection: PaletteSelection::Default,
             enter_press: EnterPress::default(),
             focus_pending: true,
             scroll: gpui::ScrollHandle::new(),
@@ -287,6 +327,77 @@ impl Shell {
         entries
     }
 
+    fn command_entry_owner(&self, entry: &Entry) -> Option<String> {
+        match entry {
+            Entry::Chat { id, .. } => Some(id.clone()),
+            Entry::History { event_id, .. } => self
+                .history_search_results
+                .iter()
+                .find(|event| &event.event_id == event_id)
+                .map(|event| event.task_id.clone()),
+            _ => None,
+        }
+    }
+
+    fn command_selection_for(&self, entry: &Entry) -> PaletteSelection {
+        PaletteSelection::Bound {
+            identity: entry.identity(),
+            owner_task: self.command_entry_owner(entry),
+        }
+    }
+
+    fn reconcile_command_palette_selection(&mut self, entries: &[Entry]) {
+        let Some(selection) = self
+            .command_palette
+            .as_ref()
+            .map(|palette| palette.selection.clone())
+        else {
+            return;
+        };
+        let resolution = match selection {
+            PaletteSelection::Default => None,
+            PaletteSelection::Cleared => Some((None, PaletteSelection::Cleared)),
+            PaletteSelection::Bound {
+                identity,
+                owner_task,
+            } => {
+                if let Some(index) = entries
+                    .iter()
+                    .position(|entry| entry.identity() == identity)
+                {
+                    Some((
+                        Some(index),
+                        PaletteSelection::Bound {
+                            identity,
+                            owner_task,
+                        },
+                    ))
+                } else if let Some(owner_task) = owner_task {
+                    entries
+                        .iter()
+                        .position(|entry| {
+                            self.command_entry_owner(entry).as_deref() == Some(owner_task.as_str())
+                        })
+                        .map(|index| (Some(index), self.command_selection_for(&entries[index])))
+                        .or(Some((None, PaletteSelection::Cleared)))
+                } else {
+                    Some((None, PaletteSelection::Cleared))
+                }
+            }
+        };
+        let Some(palette) = self.command_palette.as_mut() else {
+            return;
+        };
+        if let Some((index, selection)) = resolution {
+            if let Some(index) = index {
+                palette.active = index;
+            }
+            palette.selection = selection;
+        } else {
+            palette.active = palette.active.min(entries.len().saturating_sub(1));
+        }
+    }
+
     fn activate_command(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
         match entry {
             Entry::Theme(mode) => {
@@ -299,6 +410,7 @@ impl Shell {
                 self.history_search_global = true;
                 if let Some(palette) = self.command_palette.as_mut() {
                     palette.active = 0;
+                    palette.selection = PaletteSelection::Default;
                     palette.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
                 }
                 self.begin_session_history_search(cx);
@@ -308,6 +420,7 @@ impl Shell {
                 self.history_search_global = false;
                 if let Some(palette) = self.command_palette.as_mut() {
                     palette.active = 0;
+                    palette.selection = PaletteSelection::Default;
                     palette.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
                 }
                 self.begin_session_history_search(cx);
@@ -475,16 +588,30 @@ impl Shell {
     ) -> bool {
         match event.keystroke.key.as_str() {
             "up" | "down" => {
-                let count = self.command_entries(cx).len();
-                if count > 0
-                    && let Some(palette) = self.command_palette.as_mut()
-                {
-                    palette.active = if event.keystroke.key == "down" {
-                        (palette.active + 1) % count
-                    } else {
-                        (palette.active + count - 1) % count
-                    };
-                    palette.scroll.scroll_to_item(palette.active);
+                let entries = self.command_entries(cx);
+                self.reconcile_command_palette_selection(&entries);
+                if !entries.is_empty() {
+                    let next = self.command_palette.as_ref().map(|palette| {
+                        if palette.selection == PaletteSelection::Cleared {
+                            if event.keystroke.key == "down" {
+                                0
+                            } else {
+                                entries.len() - 1
+                            }
+                        } else if event.keystroke.key == "down" {
+                            (palette.active + 1) % entries.len()
+                        } else {
+                            (palette.active + entries.len() - 1) % entries.len()
+                        }
+                    });
+                    let selection = next.map(|index| self.command_selection_for(&entries[index]));
+                    if let (Some(next), Some(selection), Some(palette)) =
+                        (next, selection, self.command_palette.as_mut())
+                    {
+                        palette.active = next;
+                        palette.selection = selection;
+                        palette.scroll.scroll_to_item(next);
+                    }
                     cx.notify();
                 }
             }
@@ -495,9 +622,11 @@ impl Shell {
                     .is_some_and(|palette| palette.enter_press.press(event.is_held));
                 if activate {
                     let entries = self.command_entries(cx);
+                    self.reconcile_command_palette_selection(&entries);
                     if let Some(entry) = self
                         .command_palette
                         .as_ref()
+                        .filter(|palette| palette.selection != PaletteSelection::Cleared)
                         .and_then(|palette| entries.get(palette.active))
                         .cloned()
                     {
@@ -518,12 +647,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let entries = self.command_entries(cx);
+        self.reconcile_command_palette_selection(&entries);
         let palette = self.command_palette.as_mut()?;
         if std::mem::take(&mut palette.focus_pending) {
             window.focus(&palette.search.focus_handle(cx), cx);
         }
-        palette.active = palette.active.min(entries.len().saturating_sub(1));
-        let active = palette.active;
+        let active = (palette.selection != PaletteSelection::Cleared).then_some(palette.active);
         let search = palette.search.clone();
         let query = search.read(cx).text().to_string();
         let focus = palette.focus.clone();
@@ -577,7 +706,7 @@ impl Shell {
                     _ => None,
                 };
                 let entry = entry.clone();
-                popover::menu_row(&theme, ix == active, format!("command-action-{ix}"))
+                popover::menu_row(&theme, active == Some(ix), format!("command-action-{ix}"))
                     .id(("command-action", ix))
                     .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .role(gpui::Role::Button)
@@ -642,7 +771,7 @@ impl Shell {
                     pr,
                     harness,
                     state.display_status_for(chat, Utc::now()),
-                    ix == active,
+                    active == Some(ix),
                     chat.archived,
                     None,
                     Some(&query),
@@ -650,10 +779,10 @@ impl Shell {
                     cx,
                 )
             } else if let Entry::History { event_id, group } = entry {
-                self.render_command_history_row(event_id, *group, ix == active, &theme, cx)?
+                self.render_command_history_row(event_id, *group, active == Some(ix), &theme, cx)?
             } else if let Entry::LoadOlder(group) = entry {
                 let entry = Entry::LoadOlder(*group);
-                popover::menu_row(&theme, ix == active, "command-history-load-older")
+                popover::menu_row(&theme, active == Some(ix), "command-history-load-older")
                     .id("command-history-load-older")
                     .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .role(gpui::Role::Button)

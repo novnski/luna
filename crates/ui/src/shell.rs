@@ -7120,6 +7120,13 @@ impl Shell {
         debounce: bool,
         cx: &mut Context<Self>,
     ) {
+        if reset {
+            // Replacement requests must stop exposing the previous query or
+            // scope before debounce, engine lookup, or RPC completion. Append
+            // requests deliberately retain their current page while loading.
+            self.history_search_results.clear();
+            self.history_search_next_cursor = None;
+        }
         let generation = self.history_search_generation;
         let (handle, engine_generation) = {
             let state = self.state.read(cx);
@@ -13343,11 +13350,39 @@ mod exit_regressions {
         release: tokio::sync::Notify,
     }
 
+    struct PaletteReplacementRpc {
+        calls: Mutex<Vec<HistorySearchRequest>>,
+        release: tokio::sync::Notify,
+    }
+
+    struct PaletteSelectionRpc {
+        calls: Mutex<Vec<HistorySearchRequest>>,
+        release: tokio::sync::Notify,
+    }
+
     impl PaletteFenceRpc {
         fn new(label: &'static str, block_stale: bool) -> Self {
             Self {
                 label,
                 block_stale,
+                calls: Mutex::new(Vec::new()),
+                release: tokio::sync::Notify::new(),
+            }
+        }
+    }
+
+    impl PaletteReplacementRpc {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                release: tokio::sync::Notify::new(),
+            }
+        }
+    }
+
+    impl PaletteSelectionRpc {
+        fn new() -> Self {
+            Self {
                 calls: Mutex::new(Vec::new()),
                 release: tokio::sync::Notify::new(),
             }
@@ -13470,6 +13505,74 @@ mod exit_regressions {
             let mut event = HistorySearchRpc::event(project, 0);
             event.event_id = format!("{}-{}-{project}", self.label, request.query);
             event.summary = format!("{}:{}:{project}", self.label, request.query);
+            RpcReply::value(&HistorySearchPage {
+                events: vec![event],
+                next_cursor: None,
+                indexed_through_ms: 10_000,
+                heuristic_redaction: true,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl RpcService for PaletteReplacementRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            if method != methods::SEARCH_SESSION_HISTORY {
+                return Err(RpcError::UnknownMethod(method.into()));
+            }
+            let request: HistorySearchRequest = serde_json::from_value(params)
+                .map_err(|error| RpcError::BadParams(error.to_string()))?;
+            self.calls.lock().unwrap().push(request.clone());
+            if request.query == "held"
+                || (request.query == "scope-switch"
+                    && request.scope == HistorySearchScope::SelectedProject)
+                || request.cursor.is_some()
+            {
+                self.release.notified().await;
+            }
+            if request.query == "error" {
+                return Err(RpcError::Failed("synthetic history failure".into()));
+            }
+            let project = if request.scope == HistorySearchScope::Global {
+                "global"
+            } else {
+                request.project_id.as_deref().unwrap_or("personal")
+            };
+            let mut event = HistorySearchRpc::event(project, 0);
+            event.event_id = format!("{}-{project}", request.query);
+            event.summary = format!("{} {project}", request.query);
+            RpcReply::value(&HistorySearchPage {
+                events: vec![event],
+                next_cursor: None,
+                indexed_through_ms: 10_000,
+                heuristic_redaction: true,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl RpcService for PaletteSelectionRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            if method != methods::SEARCH_SESSION_HISTORY {
+                return Err(RpcError::UnknownMethod(method.into()));
+            }
+            let request: HistorySearchRequest = serde_json::from_value(params)
+                .map_err(|error| RpcError::BadParams(error.to_string()))?;
+            self.calls.lock().unwrap().push(request);
+            self.release.notified().await;
+            let mut event = HistorySearchRpc::event("project-a", 0);
+            event.task_id = "stable-a".into();
+            event.source.task_id = "stable-a".into();
+            event.event_id = "stable-a-event".into();
+            event.summary = "stable async content".into();
             RpcReply::value(&HistorySearchPage {
                 events: vec![event],
                 next_cursor: None,
@@ -13901,11 +14004,7 @@ mod exit_regressions {
                 assert_eq!(shell.command_palette.as_ref().unwrap().active, 1)
             })
             .unwrap();
-        window
-            .update(cx, |shell, _, _| {
-                shell.command_palette.as_mut().unwrap().active = 2
-            })
-            .unwrap();
+        palette_key(&window, "down", cx);
         palette_key(&window, "enter", cx);
         window
             .read_with(cx, |shell, _| {
@@ -13944,6 +14043,353 @@ mod exit_regressions {
                 assert_eq!(
                     shell.state.read(cx).selected_chat.as_deref(),
                     Some("project-a-task")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn command_palette_replacement_hides_stale_content_and_keeps_append_rows(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        init_handoff_shell_test(cx, dir.path());
+        let service = Arc::new(PaletteReplacementRpc::new());
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                    zeron_rpc::memory_client(service.clone()),
+                ));
+                state.spaces = vec![zeron_proto::Space {
+                    id: "project-a".into(),
+                    device_id: "local".into(),
+                    path: "/synthetic/project-a".into(),
+                    name: Some("Alpha".into()),
+                    git_detected: false,
+                    git_checked_at: None,
+                    checkout_id: None,
+                    created_at: Utc::now(),
+                }];
+                state.selected_space = Some("project-a".into());
+                state
+            });
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+
+        set_palette_query(&window, "ready", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.summary == "ready project-a")
+                })
+            })
+        });
+
+        set_palette_query(&window, "held", cx);
+        pump_history_until(cx, &runtime, |_| {
+            service
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.query == "held")
+        });
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(shell.history_search_results.is_empty());
+                assert!(
+                    !shell
+                        .command_entries(cx)
+                        .iter()
+                        .any(|entry| matches!(entry, command_palette::Entry::History { .. }))
+                );
+            })
+            .unwrap();
+        service.release.notify_one();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.summary == "held project-a")
+                })
+            })
+        });
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.history_search_next_cursor = Some(zeron_proto::HistoryCursor {
+                    timestamp_ms: 1,
+                    sequence: 0,
+                    event_id: "append-cursor".into(),
+                });
+                shell.load_more_session_history(cx);
+                assert_eq!(shell.history_search_results.len(), 1);
+                assert_eq!(shell.history_search_results[0].summary, "held project-a");
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |_| {
+            service
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.cursor.is_some())
+        });
+        window
+            .read_with(cx, |shell, _| {
+                assert_eq!(shell.history_search_results.len(), 1);
+                assert_eq!(shell.history_search_results[0].summary, "held project-a");
+            })
+            .unwrap();
+        service.release.notify_one();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window
+                    .read(cx)
+                    .is_ok_and(|shell| !shell.history_search_loading)
+            })
+        });
+
+        set_palette_query(&window, "error", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window
+                    .read(cx)
+                    .is_ok_and(|shell| shell.history_search_error.is_some())
+            })
+        });
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(shell.history_search_results.is_empty());
+                assert!(
+                    !shell
+                        .command_entries(cx)
+                        .iter()
+                        .any(|entry| matches!(entry, command_palette::Entry::History { .. }))
+                );
+            })
+            .unwrap();
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.history_search_global = true;
+                let search = shell.command_palette.as_ref().unwrap().search.clone();
+                search.update(cx, |input, cx| input.set_text("scope-switch", cx));
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.project_id.as_deref() == Some("global"))
+                })
+            })
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                let entries = shell.command_entries(cx);
+                shell.command_palette.as_mut().unwrap().active = entries
+                    .iter()
+                    .position(|entry| matches!(entry, command_palette::Entry::SearchCurrentContent))
+                    .unwrap();
+            })
+            .unwrap();
+        palette_key(&window, "enter", cx);
+        pump_history_until(cx, &runtime, |_| {
+            service.calls.lock().unwrap().iter().any(|request| {
+                request.query == "scope-switch"
+                    && request.scope == HistorySearchScope::SelectedProject
+            })
+        });
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(shell.history_search_results.is_empty());
+                assert!(
+                    !shell
+                        .command_entries(cx)
+                        .iter()
+                        .any(|entry| matches!(entry, command_palette::Entry::History { .. }))
+                );
+            })
+            .unwrap();
+        service.release.notify_one();
+
+        let offline_dir = tempfile::tempdir().unwrap();
+        let offline = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.selected_space = Some("project-a".into());
+                state
+            });
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: offline_dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        offline
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx);
+                shell.history_search_results = vec![HistorySearchRpc::event("project-a", 9)];
+            })
+            .unwrap();
+        set_palette_query(&offline, "offline", cx);
+        cx.run_until_parked();
+        offline
+            .read_with(cx, |shell, cx| {
+                assert!(shell.history_search_error.is_some());
+                assert!(shell.history_search_results.is_empty());
+                assert!(
+                    !shell
+                        .command_entries(cx)
+                        .iter()
+                        .any(|entry| matches!(entry, command_palette::Entry::History { .. }))
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn command_palette_keeps_keyboard_target_stable_across_async_dedup(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        init_handoff_shell_test(cx, dir.path());
+        let service = Arc::new(PaletteSelectionRpc::new());
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                    zeron_rpc::memory_client(service.clone()),
+                ));
+                state.spaces = vec![zeron_proto::Space {
+                    id: "project-a".into(),
+                    device_id: "local".into(),
+                    path: "/synthetic/project-a".into(),
+                    name: Some("Alpha".into()),
+                    git_detected: false,
+                    git_checked_at: None,
+                    checkout_id: None,
+                    created_at: Utc::now(),
+                }];
+                let mut alpha = palette_chat("stable-a", Some("project-a"), "Stable alpha");
+                let mut beta = palette_chat("stable-b", Some("project-a"), "Stable beta");
+                alpha.created_at = Utc::now();
+                beta.created_at = alpha.created_at - chrono::Duration::seconds(1);
+                state.chats = vec![alpha, beta];
+                state.selected_chat = Some("stable-a".into());
+                state.selected_space = Some("project-a".into());
+                state
+            });
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&window, "stable", cx);
+        pump_history_until(cx, &runtime, |_| !service.calls.lock().unwrap().is_empty());
+        let target_index = window
+            .read_with(cx, |shell, cx| {
+                shell
+                    .command_entries(cx)
+                    .iter()
+                    .position(|entry| {
+                        matches!(entry, command_palette::Entry::Chat { id, .. } if id == "stable-b")
+                    })
+                    .unwrap()
+            })
+            .unwrap();
+        for _ in 0..target_index {
+            palette_key(&window, "down", cx);
+        }
+        service.release.notify_one();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.event_id == "stable-a-event")
+                })
+            })
+        });
+        window
+            .read_with(cx, |shell, cx| {
+                let entries = shell.command_entries(cx);
+                let new_target = entries
+                    .iter()
+                    .position(|entry| {
+                        matches!(entry, command_palette::Entry::Chat { id, .. } if id == "stable-b")
+                    })
+                    .unwrap();
+                assert_ne!(new_target, target_index);
+                assert!(!matches!(
+                    entries.get(target_index),
+                    Some(command_palette::Entry::Chat { id, .. }) if id == "stable-b"
+                ));
+            })
+            .unwrap();
+        palette_key(&window, "enter", cx);
+        window
+            .read_with(cx, |shell, cx| {
+                assert_eq!(
+                    shell.state.read(cx).selected_chat.as_deref(),
+                    Some("stable-b")
                 );
             })
             .unwrap();
