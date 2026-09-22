@@ -776,6 +776,13 @@ struct TerminalIdParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ListTerminalsParams {
+    #[serde(default)]
+    chat_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SubscribeTerminalParams {
     terminal_id: String,
     #[serde(default)]
@@ -1578,6 +1585,10 @@ impl EngineRpc {
                 let chat_ids = deleted.chat_ids;
                 for chat_id in &chat_ids {
                     self.task_identity.tombstone_task(chat_id).map_err(failed)?;
+                    let removed = self.terminals.delete_task(chat_id).map_err(failed)?;
+                    if removed > 0 {
+                        tracing::info!(chat = %chat_id, records = removed, "deleted task terminal history");
+                    }
                 }
                 tokio::spawn(async move {
                     for chat_id in chat_ids {
@@ -4163,6 +4174,15 @@ impl EngineRpc {
                     },
                 )?;
                 self.doc_host.evict_chat(task_id);
+                // The task tombstone is authoritative. Stop only PTYs opened
+                // for this task and remove their local output history.
+                let removed = self
+                    .terminals
+                    .delete_task(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if removed > 0 {
+                    tracing::info!(task = %task_id, records = removed, "deleted task terminal history");
+                }
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetBranch { branch } => {
@@ -5027,6 +5047,7 @@ fn forwardable(method: &str) -> bool {
             | methods::WRITE_TERMINAL
             | methods::RESIZE_TERMINAL
             | methods::CLOSE_TERMINAL
+            | methods::LIST_TERMINALS
             // Provider account metadata may be inspected per device. Login,
             // activation, forgetting, polling, and cancellation remain local
             // until L29-L31 establish paired authenticated E2EE transport.
@@ -6947,7 +6968,7 @@ impl RpcService for EngineRpc {
                     .unwrap_or_else(|| home_dir().to_string_lossy().to_string());
                 let session = self
                     .terminals
-                    .open(&cwd, p.cols, p.rows)
+                    .open_for_task(&p.chat_id, &cwd, p.cols, p.rows)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&session)
             }
@@ -6984,6 +7005,14 @@ impl RpcService for EngineRpc {
                     .close(&p.terminal_id)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::LIST_TERMINALS => {
+                let p: ListTerminalsParams = parse_params(params)?;
+                let entries = self
+                    .terminals
+                    .list(p.chat_id.as_deref())
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&entries)
             }
             methods::LIST_AGENT_ACCOUNTS => {
                 let p: ListAgentAccountsParams = parse_params(params)?;

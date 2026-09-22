@@ -1054,6 +1054,31 @@ pub struct TerminalSession {
     pub shell: String,
 }
 
+/// A terminal owned by this engine. Saved output can outlive its PTY; only
+/// `running` entries accept input or represent a live process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalProcessState {
+    Running,
+    Exited,
+    Stopped,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInventoryEntry {
+    pub id: String,
+    pub chat_id: String,
+    pub device_id: String,
+    pub cwd: String,
+    pub shell: String,
+    pub state: TerminalProcessState,
+    pub exit_code: Option<i32>,
+    pub last_seq: u64,
+    pub updated_at_ms: i64,
+}
+
 /// One `SubscribeTerminal` stream item. `seq` is a per-terminal monotonic counter
 /// used for replay resumption (`afterSeq`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
