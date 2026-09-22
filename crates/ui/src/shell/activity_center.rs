@@ -1,18 +1,17 @@
-//! Existing-style Activity action, persistent rows, exact navigation, and one
-//! transition router. The engine owns lifecycle; the Shell owns presentation.
+//! Sidebar Activity filter, exact task navigation, and transition delivery.
+//! The engine owns attention lifecycle; the Shell only presents task rows.
 
 use super::*;
 use crate::settings::TaskNotificationPolicy;
 use zeron_proto::{
-    AttentionItem, AttentionKind, AttentionMutation, AttentionMutationRequest,
-    AttentionMutationResult, AttentionReadRequest, AttentionSnapshot, AttentionTarget,
+    AttentionItem, AttentionKind, AttentionReadRequest, AttentionSnapshot, AttentionTarget,
     AttentionTransition, AttentionTransitionBatch, AttentionTransitionClaim,
     AttentionTransitionKind,
 };
 
 #[derive(Default)]
 pub(super) struct ActivityUi {
-    pub(super) open: bool,
+    pub(super) view_active: bool,
     snapshot: Option<AttentionSnapshot>,
     error: Option<SharedString>,
     loading: bool,
@@ -23,28 +22,7 @@ pub(super) struct ActivityUi {
     last_request: Option<std::time::Instant>,
     poll_task: Option<Task<()>>,
     ticker: Option<Task<()>>,
-    mutation_task: Option<Task<()>>,
-    queued_mutations: std::collections::VecDeque<PendingMutation>,
-    previous_focus: Option<FocusHandle>,
-    focus: Option<FocusHandle>,
     pub(super) notice: Option<AttentionItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PendingMutation {
-    mutation: AttentionMutation,
-    retries: u8,
-    command_id: Option<String>,
-}
-
-impl PendingMutation {
-    fn retry_with_command_id(&self, command_id: String) -> Self {
-        Self {
-            mutation: self.mutation.clone(),
-            retries: self.retries.saturating_add(1),
-            command_id: Some(command_id),
-        }
-    }
 }
 
 impl ActivityUi {
@@ -55,21 +33,6 @@ impl ActivityUi {
         }) {
             self.snapshot = Some(snapshot);
         }
-    }
-
-    fn queue_mutation(&mut self, pending: PendingMutation) -> bool {
-        if self
-            .queued_mutations
-            .iter()
-            .any(|queued| queued.mutation == pending.mutation)
-        {
-            return true;
-        }
-        if self.queued_mutations.len() >= 32 {
-            return false;
-        }
-        self.queued_mutations.push_back(pending);
-        true
     }
 }
 
@@ -197,8 +160,6 @@ impl Shell {
             self.activity.engine_generation = engine_generation;
             self.activity.request_generation = self.activity.request_generation.wrapping_add(1);
             self.activity.poll_task = None;
-            self.activity.mutation_task = None;
-            self.activity.queued_mutations.clear();
             self.activity.snapshot = None;
             self.activity.error = None;
             self.activity.armed = false;
@@ -274,14 +235,6 @@ impl Shell {
                         for transition in transitions.transitions {
                             shell.deliver_activity_transition(transition, cx);
                         }
-                        if shell.activity.mutation_task.is_none()
-                            && let Some(pending) = shell.activity.queued_mutations.pop_front()
-                        {
-                            shell.mutate_activity_with_retry(pending, cx);
-                        }
-                        if shell.activity.open {
-                            shell.mark_initial_activity_seen(cx);
-                        }
                     }
                     Err(error) => shell.activity.error = Some(error.to_string().into()),
                 }
@@ -352,7 +305,7 @@ impl Shell {
     }
 
     pub(super) fn toggle_activity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.activity.open {
+        if self.activity.view_active {
             self.close_activity(window, cx);
             return;
         }
@@ -360,127 +313,38 @@ impl Shell {
             self.close_command_palette(window, cx);
         }
         self.add_space = None;
-        self.activity.open = true;
-        self.activity.previous_focus = window.focused(cx);
-        let focus = cx.focus_handle();
-        window.focus(&focus, cx);
-        self.activity.focus = Some(focus);
+        self.close_spaces_menu(cx);
+        self.close_sidebar_view_menu(cx);
+        self.activity.view_active = true;
+        self.sidebar_prev_order.clear();
+        self.sidebar_resort.clear();
+        self.sidebar_new_keys.clear();
+        self.activity_sidebar_scroll
+            .set_offset(gpui::Point::default());
         self.refresh_activity(cx);
-        self.mark_initial_activity_seen(cx);
         cx.notify();
     }
 
-    pub(super) fn close_activity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.activity.open = false;
-        self.activity.focus = None;
-        if let Some(previous) = self.activity.previous_focus.take() {
-            window.focus(&previous, cx);
-        } else {
-            window.focus(&self.shortcut_focus, cx);
-        }
+    pub(super) fn close_activity(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.activity.view_active = false;
+        self.sidebar_prev_order.clear();
+        self.sidebar_resort.clear();
+        self.sidebar_new_keys.clear();
         cx.notify();
     }
 
-    fn mark_initial_activity_seen(&mut self, cx: &mut Context<Self>) {
-        let Some(snapshot) = &self.activity.snapshot else {
-            return;
-        };
-        let ids = snapshot
-            .needs_attention
-            .iter()
-            .take(5)
-            .chain(snapshot.recent.iter().take(5))
-            .filter(|item| item.seen_at_ms.is_none())
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>();
-        if !ids.is_empty() && self.activity.mutation_task.is_none() {
-            self.mutate_activity(AttentionMutation::MarkSeen { item_ids: ids }, cx);
-        }
-    }
-
-    fn mutate_activity(&mut self, mutation: AttentionMutation, cx: &mut Context<Self>) {
-        self.mutate_activity_with_retry(
-            PendingMutation {
-                mutation,
-                retries: 0,
-                command_id: None,
-            },
-            cx,
-        );
-    }
-
-    fn mutate_activity_with_retry(&mut self, pending: PendingMutation, cx: &mut Context<Self>) {
-        let Some(snapshot) = &self.activity.snapshot else {
-            return;
-        };
-        let (handle, engine_generation) = {
-            let state = self.state.read(cx);
-            (state.engine().cloned(), state.engine_generation())
-        };
-        let Some(handle) = handle else {
-            self.activity.error = Some("Activity is unavailable while reconnecting.".into());
-            return;
-        };
-        if self.activity.mutation_task.is_some() {
-            if !self.activity.queue_mutation(pending) {
-                self.activity.error =
-                    Some("Activity has too many pending actions; try again shortly.".into());
-                cx.notify();
-            }
-            return;
-        }
-        let generation = self.activity.request_generation;
-        let command_id = pending
-            .command_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let retry = pending.retry_with_command_id(command_id.clone());
-        let request = AttentionMutationRequest {
-            command_id,
-            expected_revision: snapshot.revision,
-            mutation: pending.mutation,
-            target_device_id: Some(handle.engine_info().device_id.clone()),
-        };
-        self.activity.mutation_task = Some(cx.spawn(async move |this, cx| {
-            let result = handle
-                .client()
-                .call(
-                    methods::MUTATE_ATTENTION,
-                    serde_json::to_value(request).unwrap_or_default(),
-                )
-                .await
-                .and_then(|value| {
-                    serde_json::from_value::<AttentionMutationResult>(value)
-                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
-                });
-            this.update(cx, |shell, cx| {
-                if generation != shell.activity.request_generation
-                    || engine_generation != shell.state.read(cx).engine_generation()
-                {
-                    return;
-                }
-                shell.activity.mutation_task = None;
-                match result {
-                    Ok(result) => {
-                        shell.activity.accept_snapshot(result.snapshot);
-                        shell.activity.error = None;
-                        if let Some(next) = shell.activity.queued_mutations.pop_front() {
-                            shell.mutate_activity_with_retry(next, cx);
-                        }
-                    }
-                    Err(error) => {
-                        shell.activity.error = Some(error.to_string().into());
-                        if pending.retries == 0 {
-                            shell.activity.queued_mutations.push_front(retry);
-                        }
-                        shell.activity.last_request = None;
-                        shell.refresh_activity(cx);
-                    }
-                }
-                cx.notify();
+    pub(super) fn activity_task_keys(&self) -> std::collections::HashSet<(String, String)> {
+        self.activity
+            .snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| &snapshot.needs_attention)
+            .filter_map(|item| {
+                item.task_id
+                    .as_ref()
+                    .map(|task_id| (item.device_id.clone(), task_id.clone()))
             })
-            .ok();
-        }));
+            .collect()
     }
 
     fn open_attention_item(
@@ -620,38 +484,51 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let count = self
-            .activity
-            .snapshot
-            .as_ref()
-            .map_or(0, |snapshot| snapshot.unresolved_count);
-        let wide = self.viewport_width >= 1040.0;
-        let popup = if self.activity.open && wide {
-            Some(popover::anchored_menu_above(
-                "activity-popover",
-                self.render_activity_card(theme, cx),
-                None,
-            ))
-        } else {
-            None
-        };
+        let active = self.activity.view_active;
+        let task_keys = self.activity_task_keys();
+        let has_attention = self
+            .state
+            .read(cx)
+            .overview_chats(chrono::Utc::now())
+            .iter()
+            .any(|(status, chat)| {
+                matches!(
+                    status,
+                    zeron_proto::ChatIndicator::AwaitingApproval
+                        | zeron_proto::ChatIndicator::AwaitingInput
+                        | zeron_proto::ChatIndicator::Errored
+                        | zeron_proto::ChatIndicator::Completed
+                ) || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
+            });
         div()
             .id("sidebar-activity-action")
-            .mx(px(Theme::SPACE_SM))
-            .px(px(Theme::SPACE_SM))
-            .py(px(7.0))
+            .relative()
+            .size(px(29.0))
+            .flex_none()
             .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.border.opacity(0.0))
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .justify_center()
             .role(gpui::Role::Button)
-            .aria_label(if count == 0 {
-                "View Activity".into()
+            .aria_label(if active {
+                "Turn off activity view"
             } else {
-                format!("View Activity, {count} needs attention")
+                "View activity"
+            })
+            .aria_toggled(if active {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
             })
             .tab_index(0)
-            .focus_visible(move |style| style.border_2().border_color(theme.accent))
+            .focus_visible(move |style| style.border_color(theme.border_strong))
+            .bg(if active {
+                theme.glass_hover()
+            } else {
+                theme.glass_hover().opacity(0.0)
+            })
             .cursor_pointer()
             .hover(|style| style.bg(theme.glass_hover()))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
@@ -661,291 +538,22 @@ impl Shell {
                     cx.stop_propagation();
                 }
             }))
-            .child(
-                icon(icons::BELL)
-                    .size(px(16.0))
-                    .text_color(theme.text_muted),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .child("Activity"),
-            )
-            .when(count > 0, |row| {
-                row.child(
+            .child(icon(icons::BELL).size(px(16.0)).text_color(if active {
+                theme.accent
+            } else {
+                theme.text_muted
+            }))
+            .when(has_attention, |button| {
+                button.child(
                     div()
-                        .px(px(5.0))
-                        .rounded(px(5.0))
-                        .bg(theme.warning.opacity(0.16))
-                        .text_color(theme.warning)
-                        .text_size(crate::typography::ui_rems(10.0))
-                        .child(format!("{count}")),
+                        .absolute()
+                        .top(px(2.0))
+                        .right(px(2.0))
+                        .size(px(5.0))
+                        .rounded_full()
+                        .bg(theme.accent),
                 )
             })
-            .children(popup)
-            .into_any_element()
-    }
-
-    pub(super) fn render_activity_compact_overlay(
-        &mut self,
-        viewport: gpui::Size<Pixels>,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.activity.open || self.viewport_width >= 1040.0 {
-            return None;
-        }
-        let theme = Theme::of(cx).for_popup();
-        Some(popover::modal(
-            "activity-compact-dialog",
-            viewport,
-            self.render_activity_card(&theme, cx),
-        ))
-    }
-
-    fn render_activity_card(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let snapshot = self.activity.snapshot.clone();
-        let error = self.activity.error.clone();
-        let needs = snapshot
-            .as_ref()
-            .map_or(&[][..], |snapshot| snapshot.needs_attention.as_slice());
-        let recent = snapshot
-            .as_ref()
-            .map_or(&[][..], |snapshot| snapshot.recent.as_slice());
-        let can_clear = !recent.is_empty();
-        let focus = self.activity.focus.clone();
-        popover::popover_card(theme)
-            .id("activity-center")
-            .w(px(380.0))
-            .max_h(px(480.0))
-            .when_some(focus, |card, focus| card.track_focus(&focus))
-            .on_mouse_down_out(cx.listener(|this, _, window, cx| this.close_activity(window, cx)))
-            .child(
-                div()
-                    .px(px(10.0))
-                    .py(px(8.0))
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Activity"),
-                    )
-                    .when(can_clear, |row| {
-                        row.child(
-                            popover::btn_ghost(theme, "Clear recent", "activity-clear-recent")
-                                .id("activity-clear-recent")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.mutate_activity(AttentionMutation::ClearRecent, cx)
-                                })),
-                        )
-                    }),
-            )
-            .when_some(error, |card, error| {
-                card.child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(5.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.danger)
-                        .child(error),
-                )
-            })
-            .child(
-                div()
-                    .id("activity-scroll")
-                    .max_h(px(420.0))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_activity_section("Needs attention", needs, theme, cx))
-                    .child(self.render_activity_section("Recent", recent, theme, cx)),
-            )
-            .into_any_element()
-    }
-
-    fn render_activity_section(
-        &self,
-        label: &'static str,
-        items: &[AttentionItem],
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        div()
-            .px(px(6.0))
-            .pb(px(8.0))
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .px(px(9.0))
-                    .py(px(5.0))
-                    .text_size(crate::typography::ui_rems(10.0))
-                    .text_color(theme.text_faint)
-                    .child(label),
-            )
-            .when(items.is_empty(), |column| {
-                column.child(
-                    div()
-                        .px(px(9.0))
-                        .py(px(7.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .child(if label == "Recent" {
-                            "No recent activity"
-                        } else {
-                            "Nothing needs attention"
-                        }),
-                )
-            })
-            .children(
-                items
-                    .iter()
-                    .cloned()
-                    .map(|item| self.render_activity_row(item, theme, cx)),
-            )
-            .into_any_element()
-    }
-
-    fn render_activity_row(
-        &self,
-        item: AttentionItem,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let id = item.id.clone();
-        let title = item.title.clone();
-        let summary = item.summary.clone();
-        let time = chrono::DateTime::from_timestamp_millis(item.updated_at_ms)
-            .map(|at| format_time_ago(at, Utc::now()))
-            .unwrap_or_else(|| "now".into());
-        let task_label = item
-            .task_id
-            .as_ref()
-            .and_then(|id| {
-                self.state
-                    .read(cx)
-                    .chats
-                    .iter()
-                    .find(|chat| &chat.id == id)
-                    .and_then(|chat| chat.title.clone())
-            })
-            .unwrap_or_else(|| "Task".into());
-        let unresolved = item.unresolved() && item.actionable();
-        let unseen = item.seen_at_ms.is_none();
-        div()
-            .id(SharedString::from(format!("activity-row-{id}")))
-            .px(px(9.0))
-            .py(px(8.0))
-            .rounded(px(8.0))
-            .flex()
-            .flex_col()
-            .gap(px(3.0))
-            .role(gpui::Role::Button)
-            .aria_label(format!("{title}, {task_label}, {time}"))
-            .tab_index(0)
-            .focus_visible(move |style| style.border_2().border_color(theme.accent))
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.glass_hover()))
-            .on_hover({
-                let id = id.clone();
-                cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered && unseen {
-                        this.mutate_activity(
-                            AttentionMutation::MarkSeen {
-                                item_ids: vec![id.clone()],
-                            },
-                            cx,
-                        );
-                    }
-                })
-            })
-            .on_click({
-                let item = item.clone();
-                cx.listener(move |this, _, window, cx| {
-                    this.open_attention_item(item.clone(), window, cx)
-                })
-            })
-            .on_key_down({
-                let item = item.clone();
-                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") && !event.is_held {
-                        this.open_attention_item(item.clone(), window, cx);
-                        cx.stop_propagation();
-                    }
-                })
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .font_weight(if unseen {
-                                gpui::FontWeight::SEMIBOLD
-                            } else {
-                                gpui::FontWeight::MEDIUM
-                            })
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(10.0))
-                            .text_color(theme.text_faint)
-                            .child(time),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .child(summary),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .text_size(crate::typography::ui_rems(10.0))
-                    .text_color(theme.text_faint)
-                    .child(task_label)
-                    .when(unresolved, |row| {
-                        let item_id = id.clone();
-                        row.child(
-                            popover::btn_ghost(theme, "Acknowledge", format!("ack-{id}"))
-                                .id(SharedString::from(format!("activity-ack-{id}")))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.mutate_activity(
-                                        AttentionMutation::Acknowledge {
-                                            item_id: item_id.clone(),
-                                        },
-                                        cx,
-                                    );
-                                })),
-                        )
-                    })
-                    .when(!unresolved, |row| {
-                        let item_id = id.clone();
-                        row.child(
-                            popover::btn_ghost(theme, "Dismiss", format!("dismiss-{id}"))
-                                .id(SharedString::from(format!("activity-dismiss-{id}")))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.mutate_activity(
-                                        AttentionMutation::DismissRecent {
-                                            item_id: item_id.clone(),
-                                        },
-                                        cx,
-                                    );
-                                })),
-                        )
-                    }),
-            )
             .into_any_element()
     }
 }
@@ -1105,24 +713,5 @@ mod tests {
         assert!(routed.in_app);
         assert!(!routed.banner);
         assert_eq!(routed.sound, Some(crate::sound::Sound::Attention));
-    }
-
-    #[test]
-    fn pending_actions_are_serialized_and_duplicate_clicks_coalesce() {
-        let mut activity = ActivityUi::default();
-        let action = PendingMutation {
-            mutation: AttentionMutation::Acknowledge {
-                item_id: "synthetic-item".into(),
-            },
-            retries: 0,
-            command_id: None,
-        };
-        assert!(activity.queue_mutation(action.clone()));
-        assert!(activity.queue_mutation(action.clone()));
-        assert_eq!(activity.queued_mutations.len(), 1);
-        assert_eq!(activity.queued_mutations.pop_front(), Some(action.clone()));
-        let retry = action.retry_with_command_id("same-command".into());
-        assert_eq!(retry.retries, 1);
-        assert_eq!(retry.command_id.as_deref(), Some("same-command"));
     }
 }

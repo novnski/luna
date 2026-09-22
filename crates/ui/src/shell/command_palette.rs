@@ -121,7 +121,7 @@ impl Entry {
             Self::NewChat => Some(("New chat", icons::PEN_NEW_SQUARE)),
             Self::NewProject => Some(("New project", icons::FOLDER)),
             Self::Settings => Some(("Open settings", icons::SETTINGS_MINIMALISTIC)),
-            Self::Activity => Some(("View activity", icons::BELL)),
+            Self::Activity => Some(("Toggle activity view", icons::BELL)),
             Self::Theme(mode) => Some((
                 match mode {
                     AppearanceMode::System => "Switch to system theme",
@@ -180,9 +180,6 @@ impl Shell {
         if self.command_palette.is_some() {
             self.close_command_palette(window, cx);
             return;
-        }
-        if self.activity.open {
-            self.close_activity(window, cx);
         }
         self.add_space = None;
         let search = cx.new(|cx| {

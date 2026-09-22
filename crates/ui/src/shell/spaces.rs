@@ -46,6 +46,55 @@ pub(super) fn compare_sidebar_chats(
     primary.then_with(|| left.id.cmp(&right.id))
 }
 
+/// Activity is a view of the existing task rows, not a second inbox. Unseen
+/// completions and unresolved task-scoped attention need checking; live work
+/// follows them. A stale session has already fallen back to Idle upstream.
+fn activity_sidebar_bucket(status: ChatIndicator, has_attention: bool) -> Option<u8> {
+    if has_attention
+        || matches!(
+            status,
+            ChatIndicator::AwaitingApproval
+                | ChatIndicator::AwaitingInput
+                | ChatIndicator::Errored
+                | ChatIndicator::Completed
+        )
+    {
+        Some(0)
+    } else if status == ChatIndicator::Working {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn activity_sidebar_chats<'a>(
+    rows: Vec<(ChatIndicator, &'a zeron_proto::Chat)>,
+    attention_task_keys: &std::collections::HashSet<(String, String)>,
+) -> Vec<(ChatIndicator, &'a zeron_proto::Chat)> {
+    let mut rows: Vec<_> = rows
+        .into_iter()
+        .filter_map(|(status, chat)| {
+            let key = (chat.device_id.clone(), chat.id.clone());
+            activity_sidebar_bucket(status, attention_task_keys.contains(&key))
+                .map(|bucket| (bucket, status, chat))
+        })
+        .collect();
+    rows.sort_by(|(left_bucket, _, left), (right_bucket, _, right)| {
+        left_bucket
+            .cmp(right_bucket)
+            .then_with(|| {
+                right
+                    .last_message_at
+                    .unwrap_or(right.created_at)
+                    .cmp(&left.last_message_at.unwrap_or(left.created_at))
+            })
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    rows.into_iter()
+        .map(|(_, status, chat)| (status, chat))
+        .collect()
+}
+
 /// The space-filter dropdown, `Some` while open. The same searchable-menu
 /// recipe as the composer's ref picker: filter input on top
 /// (`PaletteSearch` context so ↑↓/⏎ bubble to the card), ranked substring
@@ -598,7 +647,7 @@ impl Shell {
         }
     }
 
-    fn close_sidebar_view_menu(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_sidebar_view_menu(&mut self, cx: &mut Context<Self>) {
         if self.sidebar_view_menu.begin_close() {
             popover::reap_popup(cx, |shell: &mut Self| &mut shell.sidebar_view_menu);
             cx.notify();
@@ -791,6 +840,32 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.activity.view_active {
+            return div()
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(Theme::SPACE_SM))
+                .pt(px(8.0))
+                .pb(px(4.0))
+                .child(
+                    div()
+                        .id("sidebar-activity-label")
+                        .flex_1()
+                        .h(px(29.0))
+                        .px(px(Theme::SPACE_SM))
+                        .flex()
+                        .items_center()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child("Activity"),
+                )
+                .child(self.render_activity_action(theme, cx))
+                .into_any_element();
+        }
         let filter = self.settings.space_filter.clone();
         // Name + the dropdown rows' "@ device" tag on the trigger itself, so
         // the filtered space's host reads without opening the picker.
@@ -997,6 +1072,7 @@ impl Shell {
             .pt(px(8.0))
             .pb(px(4.0))
             .child(trigger)
+            .child(self.render_activity_action(theme, cx))
             .child(view_trigger)
             .into_any_element()
     }
@@ -1213,12 +1289,28 @@ impl Shell {
     pub(super) fn sidebar_visible_order(&self, cx: &Context<Self>) -> Vec<String> {
         let filter = self.settings.space_filter.clone();
         let state = self.state.read(cx);
-        let mut chats: Vec<zeron_proto::Chat> = state
-            .sidebar_chats(Utc::now(), filter.as_deref())
+        let mut chats: Vec<zeron_proto::Chat> = if self.activity.view_active {
+            activity_sidebar_chats(
+                state.sidebar_chats(Utc::now(), None),
+                &self.activity_task_keys(),
+            )
             .into_iter()
             .map(|(_, chat)| chat.clone())
-            .collect();
-        chats.sort_by(|left, right| compare_sidebar_chats(self.settings.sidebar_sort, left, right));
+            .collect()
+        } else {
+            let mut chats: Vec<_> = state
+                .sidebar_chats(Utc::now(), filter.as_deref())
+                .into_iter()
+                .map(|(_, chat)| chat.clone())
+                .collect();
+            chats.sort_by(|left, right| {
+                compare_sidebar_chats(self.settings.sidebar_sort, left, right)
+            });
+            chats
+        };
+        if self.activity.view_active {
+            return chats.into_iter().map(|chat| chat.id).collect();
+        }
         if self.settings.sidebar_organization != SidebarOrganization::ByDevice {
             return chats.into_iter().map(|chat| chat.id).collect();
         }
@@ -1247,9 +1339,9 @@ impl Shell {
         ordered
     }
 
-    /// The sidebar's Sessions list: every session (idle included) of the
-    /// filter space — or all spaces under "All" — attention-sorted. Rows are
-    /// keyed for the FLIP resort glide.
+    /// Normal sidebar: every session (idle included) under the saved project
+    /// filter and sort. Activity view: only actionable/running sessions from
+    /// all projects, using the same row renderer. Rows are keyed for FLIP.
     pub(super) fn render_active_rows(
         &mut self,
         theme: &Theme,
@@ -1257,19 +1349,23 @@ impl Shell {
     ) -> Vec<(String, f32, AnyElement)> {
         let now = Utc::now();
         let filter = self.settings.space_filter.clone();
+        let activity_view = self.activity.view_active;
+        let attention_task_keys = self.activity_task_keys();
         let mut rows: Vec<ActiveChatRow> = {
             let state = self.state.read(cx);
-            let mut chats: Vec<_> = state
-                .sidebar_chats(now, filter.as_deref())
-                .into_iter()
-                .map(|(status, chat)| (status, chat.clone()))
-                .collect();
-            chats.sort_by(|left, right| {
-                compare_sidebar_chats(self.settings.sidebar_sort, &left.1, &right.1)
-            });
+            let chats: Vec<_> = if activity_view {
+                activity_sidebar_chats(state.sidebar_chats(now, None), &attention_task_keys)
+            } else {
+                let mut chats = state.sidebar_chats(now, filter.as_deref());
+                chats.sort_by(|left, right| {
+                    compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
+                });
+                chats
+            };
             chats
                 .into_iter()
                 .map(|(status, chat)| {
+                    let chat = chat.clone();
                     // Line 1 is "project @ device" (t3code's project row);
                     // project-less sessions read as their home-dir cwd `~`.
                     let space = state.space_for_chat(&chat);
@@ -1294,7 +1390,9 @@ impl Shell {
                         .filter(|b| !b.is_empty())
                         .map(str::to_string);
                     let change_request = state.change_request_for_chat(&chat).cloned();
-                    let group = if chat.pinned_order.is_some() {
+                    let group = if activity_view {
+                        None
+                    } else if chat.pinned_order.is_some() {
                         Some(("__luna_pinned__".into(), "Pinned".into()))
                     } else {
                         match self.settings.sidebar_organization {
@@ -1332,7 +1430,7 @@ impl Shell {
                 groups.push((row.group.clone(), vec![row]));
             }
         }
-        if self.settings.sidebar_organization == SidebarOrganization::ByDevice {
+        if !activity_view && self.settings.sidebar_organization == SidebarOrganization::ByDevice {
             let local_device_id = self.state.read(cx).local_device_id.clone();
             if groups.first().is_some_and(|(group, _)| {
                 group
@@ -3102,10 +3200,16 @@ impl Shell {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use chrono::{TimeZone as _, Utc};
 
-    use super::{compare_sidebar_chats, promote_local_device_group};
+    use super::{
+        activity_sidebar_bucket, activity_sidebar_chats, compare_sidebar_chats,
+        promote_local_device_group,
+    };
     use crate::settings::SidebarSort;
+    use zeron_proto::ChatIndicator;
 
     fn group(device: &str, value: u8) -> (Option<(String, String)>, Vec<u8>) {
         (Some((device.into(), device.into())), vec![value])
@@ -3133,6 +3237,68 @@ mod tests {
             manually_unread: false,
             room_gen: None,
         }
+    }
+
+    #[test]
+    fn activity_view_shows_actionable_and_running_tasks_not_idle_pins() {
+        let mut idle = chat("idle-pinned");
+        idle.pinned_order = Some("0".into());
+        let approval = chat("approval");
+        let input = chat("input");
+        let error = chat("error");
+        let unread = chat("unread");
+        let queued_failure = chat("queued-failure");
+        let running = chat("running");
+        let attention =
+            HashSet::from([(queued_failure.device_id.clone(), queued_failure.id.clone())]);
+        let rows = activity_sidebar_chats(
+            vec![
+                (ChatIndicator::Idle, &idle),
+                (ChatIndicator::Working, &running),
+                (ChatIndicator::Completed, &unread),
+                (ChatIndicator::Idle, &queued_failure),
+                (ChatIndicator::Errored, &error),
+                (ChatIndicator::AwaitingInput, &input),
+                (ChatIndicator::AwaitingApproval, &approval),
+            ],
+            &attention,
+        );
+        assert_eq!(
+            rows.into_iter()
+                .map(|(_, chat)| chat.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "approval",
+                "error",
+                "input",
+                "queued-failure",
+                "unread",
+                "running"
+            ]
+        );
+        assert_eq!(activity_sidebar_bucket(ChatIndicator::Idle, false), None);
+        assert_eq!(activity_sidebar_bucket(ChatIndicator::Idle, true), Some(0));
+        assert_eq!(
+            activity_sidebar_bucket(ChatIndicator::Working, false),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn activity_attention_matches_the_exact_task_device() {
+        let local = chat("same-id");
+        let mut remote = local.clone();
+        remote.device_id = "remote-device".into();
+        let attention = HashSet::from([(local.device_id.clone(), local.id.clone())]);
+        let rows = activity_sidebar_chats(
+            vec![
+                (ChatIndicator::Idle, &remote),
+                (ChatIndicator::Idle, &local),
+            ],
+            &attention,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.device_id, "device");
     }
 
     #[test]

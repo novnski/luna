@@ -1739,6 +1739,7 @@ pub struct Shell {
     chat_status_hover: Option<String>,
     /// Scroll position of the sidebar lists region (drives its edge fades).
     sidebar_scroll: gpui::ScrollHandle,
+    activity_sidebar_scroll: gpui::ScrollHandle,
     /// L14 session-history query state. Cmd+K owns the only query input;
     /// results are derived/index-only rows and navigate back to the
     /// authoritative transcript.
@@ -2111,6 +2112,7 @@ impl Shell {
             sidebar_view_trigger_focus: cx.focus_handle().tab_stop(true),
             chat_status_hover: None,
             sidebar_scroll: gpui::ScrollHandle::new(),
+            activity_sidebar_scroll: gpui::ScrollHandle::new(),
             history_search_global: false,
             history_search_results: Vec::new(),
             history_search_loading: false,
@@ -5069,7 +5071,6 @@ impl Shell {
     /// stranding it over a session the user never picked.
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
-            || self.activity.open
             || self.add_space.is_some()
             || self.composer.read(cx).pickers().read(cx).is_open()
     }
@@ -7171,6 +7172,7 @@ impl Shell {
     }
 
     fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let activity_view = self.activity.view_active;
         let (user, workspace_scope) = {
             let state = self.state.read(cx);
             (state.auth_user().cloned(), state.workspace_scope)
@@ -7241,7 +7243,11 @@ impl Shell {
             .collect();
 
         // t3code's archived accordion, below the active list.
-        let archived_section = self.render_archived_section(theme, cx);
+        let archived_section = if activity_view {
+            None
+        } else {
+            self.render_archived_section(theme, cx)
+        };
 
         let (user_line, trigger_subline, menu_identity): (
             SharedString,
@@ -7276,9 +7282,14 @@ impl Shell {
         let user_menu =
             self.render_user_menu(user_line.clone(), trigger_subline, menu_identity, theme, cx);
 
-        // The space filter lives ABOVE the scroll region (fixed) so its
-        // dropdown can float without being clipped by the list's overflow.
+        // The normal project filter and Activity toggle share the existing
+        // fixed header row above the sidebar's scrolling task list.
         let filter_row = self.render_spaces_filter(theme, cx);
+        let sidebar_scroll = if activity_view {
+            self.activity_sidebar_scroll.clone()
+        } else {
+            self.sidebar_scroll.clone()
+        };
 
         // The (filtered) Sessions list scrolls inside an EdgeFade scope —
         // a true per-glyph gradient at active overflow edges. Glass-safe
@@ -7298,7 +7309,7 @@ impl Shell {
                     .id("sidebar-lists")
                     .size_full()
                     .overflow_y_scroll()
-                    .track_scroll(&self.sidebar_scroll)
+                    .track_scroll(&sidebar_scroll)
                     .px(px(Theme::SPACE_SM))
                     .flex()
                     .flex_col()
@@ -7318,13 +7329,17 @@ impl Shell {
                             .pb(px(Theme::SPACE_SM))
                             .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text_faint)
-                            .child(SharedString::from("No sessions yet"))
+                            .child(SharedString::from(if activity_view {
+                                "No tasks need attention or are running"
+                            } else {
+                                "No sessions yet"
+                            }))
                             .into_any_element()
                     })
                     .children(archived_section),
             ),
         )
-        .fade_overflow_y(&self.sidebar_scroll);
+        .fade_overflow_y(&sidebar_scroll);
 
         div()
             .w(px(self.settings.sidebar_width))
@@ -7370,7 +7385,6 @@ impl Shell {
             .when_some(self.render_activity_notice(theme, cx), |el, notice| {
                 el.child(notice)
             })
-            .child(self.render_activity_action(theme, cx))
             .child(div().p(px(Theme::SPACE_SM)).flex_none().child(user_menu))
             .into_any_element()
     }
@@ -8165,11 +8179,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.keystroke.key == "escape" && self.activity.open {
-            self.close_activity(window, cx);
-            cx.stop_propagation();
-            return;
-        }
         if event.keystroke.key == "escape" && self.command_palette.is_some() {
             self.close_command_palette(window, cx);
             cx.stop_propagation();
@@ -8239,9 +8248,6 @@ impl Shell {
     ) -> Vec<AnyElement> {
         let theme = Theme::of(cx).for_popup();
         let mut overlays: Vec<AnyElement> = Vec::new();
-        if let Some(activity) = self.render_activity_compact_overlay(viewport, cx) {
-            overlays.push(activity);
-        }
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
