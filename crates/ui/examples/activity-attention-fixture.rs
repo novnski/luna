@@ -170,7 +170,39 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
         last_completed_turn: Some("synthetic-completed-turn".into()),
         recovery: None,
     });
+    // The optional Codex-style card is transcript metadata, not a live
+    // provider resolver. Keep it on the existing completed task so native QA
+    // can inspect card + ordinary composer without creating a fifth task or
+    // changing the runner's exact-root/task guard.
+    core.doc_host
+        .open(COMPLETE)?
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "synthetic-async-card".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::AsyncQuestion {
+                id: "aq-synthetic-call".into(),
+                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    title: "Which synthetic sample should I use?".into(),
+                    options: Some(vec!["Option A".into(), "Option B".into()]),
+                }],
+                resolved: false,
+            }],
+            created_at: chrono::Utc::now().timestamp_millis(),
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })?;
     core.doc_host.flush_all();
+    core.workspace
+        .mark_chat_seen(COMPLETE, chrono::Utc::now() + chrono::Duration::seconds(1))?;
+    anyhow::ensure!(
+        core.workspace
+            .read_chats()?
+            .iter()
+            .any(|chat| chat.id == COMPLETE && !chat.unseen()),
+        "completed synthetic task must be idle in Activity filter"
+    );
     let client = zeron_rpc::memory_client(core.rpc_service());
     let snapshot: zeron_proto::AttentionSnapshot = client
         .call_as(
@@ -197,6 +229,8 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
             "needsAttention": 3,
             "recent": 1,
             "defaultTask": APPROVAL,
+            "asyncQuestionTask": COMPLETE,
+            "idleTask": COMPLETE,
         }))?,
     )?;
     Ok(())
