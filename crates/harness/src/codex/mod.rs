@@ -549,6 +549,9 @@ fn parse_skill_commands(result: &Value) -> Vec<SlashCommand> {
 
 #[async_trait]
 impl Harness for CodexHarness {
+    fn luna_runtime_delivery(&self) -> zeron_proto::RuntimeDelivery {
+        zeron_proto::RuntimeDelivery::CodexDynamicTools
+    }
     fn id(&self) -> HarnessId {
         HarnessId::Codex
     }
@@ -707,6 +710,30 @@ impl CodexHarness {
         controls: RunControls,
         title_only: bool,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        if !title_only
+            && let Some(value) = request
+                .model_options
+                .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+        {
+            let contract: zeron_proto::LunaAgentRuntimeContract =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    HarnessError::Protocol(format!("invalid LUNA runtime contract: {error}"))
+                })?;
+            if contract.context.harness != HarnessId::Codex
+                || !matches!(
+                    contract.delivery,
+                    zeron_proto::RuntimeDelivery::CodexDynamicTools
+                        | zeron_proto::RuntimeDelivery::CodexInstructionsOnly
+                )
+                || (contract.delivery == zeron_proto::RuntimeDelivery::CodexInstructionsOnly
+                    && !contract.tools.is_empty())
+                || (!contract.tools.is_empty() && controls.invoke_luna_tool.is_none())
+            {
+                return Err(HarnessError::Protocol(
+                    "Codex LUNA tool contract has no matching engine executor".into(),
+                ));
+            }
+        }
         let exe = self.resolve_executable()?;
         // Title generation has no tools and remains read-only. Ordinary runs
         // keep the engine-resolved sandbox; never broaden it in the adapter.
@@ -714,6 +741,25 @@ impl CodexHarness {
             request.sandbox = zeron_proto::SandboxLevel::ReadOnly;
         }
         let mut cmd = Command::new(&exe);
+        if let Some(contract) = request
+            .model_options
+            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .and_then(|value| {
+                serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+            })
+        {
+            for (name, value) in contract.environment {
+                if matches!(
+                    name.as_str(),
+                    "LUNA_THREAD_ID"
+                        | "LUNA_PROJECT_ID"
+                        | "LUNA_ENVIRONMENT_ID"
+                        | "LUNA_MACHINE_ID"
+                ) {
+                    cmd.env(name, value);
+                }
+            }
+        }
         let force_file_auth = request
             .model_options
             .remove(LUNA_CODEX_FILE_AUTH_OPTION)
@@ -912,8 +958,16 @@ async fn run_session(session: Session) {
         request_input,
         mut steering,
         interrupt,
+        invoke_luna_tool,
     } = controls;
     let request_input = Arc::new(request_input);
+    let runtime_contract = request
+        .model_options
+        .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+        .and_then(|value| {
+            serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+        })
+        .filter(|contract| contract.context.harness == HarnessId::Codex);
 
     // ---- wire params ------------------------------------------------------
     let effective_mode = request
@@ -963,6 +1017,35 @@ async fn run_session(session: Session) {
         } else {
             // Ordinary LUNA work must materialize as a provider-native thread.
             p.insert("ephemeral".into(), false.into());
+            if let Some(contract) = runtime_contract.as_ref() {
+                if !contract.instructions.is_empty() {
+                    p.insert(
+                        "developerInstructions".into(),
+                        render_luna_instructions(contract).into(),
+                    );
+                }
+                if contract.delivery == zeron_proto::RuntimeDelivery::CodexDynamicTools
+                    && invoke_luna_tool.is_some()
+                {
+                    p.insert(
+                        "dynamicTools".into(),
+                        Value::Array(
+                            contract
+                                .tools
+                                .iter()
+                                .map(|tool| {
+                                    json!({
+                                        "type": "function",
+                                        "name": tool.name,
+                                        "description": tool.description,
+                                        "inputSchema": tool.input_schema,
+                                    })
+                                })
+                                .collect(),
+                        ),
+                    );
+                }
+            }
         }
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
         p.insert("approvalPolicy".into(), approval_policy.into());
@@ -1018,6 +1101,9 @@ async fn run_session(session: Session) {
             .unwrap_or(false);
         let thread = if let Some(resume) = &request.resume {
             let mut p = start_params.clone();
+            // Dynamic tools are retained in the provider's original thread
+            // metadata; thread/resume has no replacement dynamicTools field.
+            p.remove("dynamicTools");
             p.insert("threadId".into(), Value::String(resume.clone()));
             match client.request("thread/resume", Value::Object(p)).await {
                 Ok(thread) => thread,
@@ -1522,9 +1608,15 @@ async fn run_session(session: Session) {
                         id,
                         &method,
                         &params,
-                        request.auto_approve,
-                        request.permission_policy.clone().unwrap_or_default(),
-                        &request_input,
+                        ServerRequestContext {
+                            auto_approve: request.auto_approve,
+                            permission_policy: request.permission_policy.clone().unwrap_or_default(),
+                            request_input: &request_input,
+                            thread_id: &thread_id,
+                            active_turn_id: router.active_id(),
+                            runtime_contract: runtime_contract.as_ref(),
+                            invoke_luna_tool: invoke_luna_tool.as_ref(),
+                        },
                     );
                 }
 
@@ -1823,20 +1915,85 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
-/// Serve one server→client request. Approval requests round-trip through
-/// `request_input` as a synthesized yes/no question (in a subtask so the
-/// message loop keeps flowing); with `auto_approve` they're accepted outright
-/// (belt to the wire-level `approvalPolicy: "never"`). Anything else is
-/// rejected as unsupported so the server never wedges awaiting a reply.
+fn render_luna_instructions(contract: &zeron_proto::LunaAgentRuntimeContract) -> String {
+    let mut text = String::new();
+    for section in &contract.instructions {
+        text.push_str(&format!(
+            "[LUNA {:?}: {} | {}]\n{}\n\n",
+            section.source, section.name, section.provenance, section.text
+        ));
+    }
+    text
+}
+
+/// Immutable authority and routing context for one provider request.
+struct ServerRequestContext<'a> {
+    auto_approve: bool,
+    permission_policy: zeron_proto::PermissionPolicy,
+    request_input: &'a Arc<RequestInputFn>,
+    thread_id: &'a str,
+    active_turn_id: Option<&'a str>,
+    runtime_contract: Option<&'a zeron_proto::LunaAgentRuntimeContract>,
+    invoke_luna_tool: Option<&'a crate::LunaToolExecutor>,
+}
+
+/// Serve one server→client request. Approval requests round-trip through the
+/// input bridge; dynamic LUNA tools go to the engine's scoped registry.
 fn handle_server_request(
     client: &RpcClient,
     id: Value,
     method: &str,
     params: &Value,
-    auto_approve: bool,
-    permission_policy: zeron_proto::PermissionPolicy,
-    request_input: &Arc<RequestInputFn>,
+    context: ServerRequestContext<'_>,
 ) {
+    let ServerRequestContext {
+        auto_approve,
+        permission_policy,
+        request_input,
+        thread_id,
+        active_turn_id,
+        runtime_contract,
+        invoke_luna_tool,
+    } = context;
+    if method == "item/tool/call" {
+        let matching_context = active_turn_id.is_some()
+            && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+            && params.get("turnId").and_then(Value::as_str) == active_turn_id
+            && params.get("namespace").is_none_or(Value::is_null)
+            && params
+                .get("callId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty());
+        let name = params.get("tool").and_then(Value::as_str).unwrap_or("");
+        let attached = runtime_contract
+            .is_some_and(|contract| contract.tools.iter().any(|tool| tool.name == name));
+        let Some(executor) = invoke_luna_tool.filter(|_| matching_context && attached) else {
+            client.respond(&id, json!({
+                "success": false,
+                "contentItems": [{"type":"inputText","text":"LUNA tool is not attached to this task or turn"}]
+            }));
+            return;
+        };
+        let client = client.clone();
+        let executor = Arc::clone(executor);
+        let name = name.to_string();
+        let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+        tokio::spawn(async move {
+            let outcome = executor(name, arguments).await;
+            let (success, text) = match outcome {
+                Ok(value) => (true, value.to_string()),
+                Err(error) => (false, error.to_string()),
+            };
+            client.respond(
+                &id,
+                json!({
+                    "success": success,
+                    "contentItems": [{"type":"inputText","text":text}]
+                }),
+            );
+        });
+        return;
+    }
     // A tool's user-input request (EXPERIMENTAL, codex 0.146.x) is a CONTENT
     // question, never auto-approvable — route it to the input bridge and
     // answer keyed by question id, `{ answers: { <id>: { answers: [..] } } }`.

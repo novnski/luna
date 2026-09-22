@@ -31,7 +31,7 @@ use zeron_sync::DocsStore;
 
 use crate::EngineError;
 use crate::chat2_host::CHAT2_DOC_EPOCH;
-use crate::run_journal::journal_paths;
+use crate::run_journal::{journal_paths, runtime_receipt_paths};
 use crate::uploads::Uploads;
 use crate::workspace_host::WorkspaceHost;
 
@@ -423,6 +423,17 @@ impl LocalImporter {
         if src_resume.is_file() && !dst_resume.exists() {
             std::fs::create_dir_all(&self.inner.target_journals)?;
             std::fs::copy(&src_resume, &dst_resume)?;
+        }
+        for source in runtime_receipt_paths(source_journals, &chat.id)? {
+            let destination = self.inner.target_journals.join(
+                source
+                    .file_name()
+                    .ok_or_else(|| EngineError::Other("invalid runtime receipt name".into()))?,
+            );
+            if !destination.exists() {
+                std::fs::create_dir_all(&self.inner.target_journals)?;
+                std::fs::copy(&source, &destination)?;
+            }
         }
 
         // Row last: once it appears in watchers the chat is clickable, and by

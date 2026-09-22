@@ -5031,6 +5031,7 @@ fn forwardable(method: &str) -> bool {
             // activation, forgetting, polling, and cancellation remain local
             // until L29-L31 establish paired authenticated E2EE transport.
             | methods::LIST_AGENT_ACCOUNTS
+            | methods::GET_RUNTIME_CONTRACT
             // Uploads/attachments target the chat's host device (the agent reads
             // the committed file from that device's disk).
             | methods::UPLOAD_CHUNK
@@ -5606,6 +5607,96 @@ impl RpcService for EngineRpc {
             methods::GET_TASK_IDENTITY => {
                 let p: TaskIdentityParams = parse_params(params)?;
                 RpcReply::value(&self.task_identity.view(&p.task_id))
+            }
+            methods::GET_RUNTIME_CONTRACT => {
+                let p: TaskIdentityParams = parse_params(params)?;
+                let chat = self
+                    .workspace
+                    .chat(&p.task_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                if chat.is_none() {
+                    return Err(RpcError::Failed("task not found".into()));
+                }
+                if !self.workspace.is_host(&p.task_id) {
+                    return Err(RpcError::Failed(
+                        "runtime diagnostics require the task's owning device; pass targetDeviceId"
+                            .into(),
+                    ));
+                }
+                let binding = self
+                    .task_identity
+                    .view(&p.task_id)
+                    .and_then(|view| view.current_binding);
+                let provider = chat
+                    .as_ref()
+                    .and_then(|chat| chat.config.as_ref().map(|config| config.harness))
+                    .or_else(|| binding.as_ref().map(|binding| binding.provider_id));
+                let provider_delivery = provider
+                    .and_then(|provider| self.registry.resolve(provider).ok())
+                    .map(|adapter| adapter.luna_runtime_delivery())
+                    .unwrap_or(zeron_proto::RuntimeDelivery::Unsupported);
+                let session_id = binding
+                    .map(|binding| binding.provider_task_id)
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| {
+                        chat.as_ref()
+                            .and_then(|chat| chat.harness_session_id.clone())
+                    });
+                let mut receipt = session_id
+                    .as_deref()
+                    .map(|id| self.sessions.runtime_contract_diagnostics(&p.task_id, id))
+                    .transpose()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?
+                    .flatten();
+                if let (Some(receipt), Some(request)) = (
+                    receipt.as_mut(),
+                    self.doc_host.request_from_chat_row(&p.task_id, ""),
+                ) {
+                    let context = self
+                        .sessions
+                        .runtime_context_for(
+                            &p.task_id,
+                            request.harness.unwrap_or(HarnessId::Mock),
+                            &request,
+                        )
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    let compiled =
+                        crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
+                            context,
+                            provider_delivery,
+                            user_instructions: Vec::new(),
+                            workspace_instructions: Vec::new(),
+                            resume: true,
+                            acknowledged_contract: Some(receipt.clone()),
+                        })
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    receipt.restart_required =
+                        compiled.restart_required || compiled.must_reconstruct;
+                }
+                let has_receipt = receipt.is_some();
+                if let Some(receipt) = receipt.as_mut() {
+                    // Provider-native session identifiers remain an engine
+                    // detail. The app-facing readback uses the LUNA task id.
+                    receipt.provider_session_id.clear();
+                }
+                RpcReply::value(&zeron_proto::RuntimeContractView {
+                    task_id: p.task_id,
+                    provider,
+                    provider_delivery,
+                    effective: receipt,
+                    unavailable_reason: match provider_delivery {
+                        zeron_proto::RuntimeDelivery::Unsupported => Some(
+                            "This provider has no verified LUNA runtime instruction or tool delivery path.".into()
+                        ),
+                        zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly => Some(
+                            "Claude instructions are supported; LUNA tools are unavailable until its scoped MCP transport is verified.".into()
+                        ),
+                        _ if !has_receipt => Some(
+                            "No provider session has acknowledged a LUNA runtime contract yet.".into()
+                        ),
+                        _ => None,
+                    },
+                })
             }
             methods::GET_HISTORY_CAPABILITY => {
                 let p: TaskIdentityParams = parse_params(params)?;
@@ -7260,6 +7351,7 @@ mod tests {
         assert!(forwardable(methods::EXECUTE_TASK_COMMAND));
         assert!(forwardable(methods::GET_TASK_COMMAND_RECEIPT));
         assert!(forwardable(methods::GET_TASK_COMMAND_SNAPSHOT));
+        assert!(forwardable(methods::GET_RUNTIME_CONTRACT));
         assert!(forwardable(methods::WATCH_TASK_COMMANDS));
         assert!(is_stream_method(methods::WATCH_TASK_COMMANDS));
         assert!(forwardable(methods::SEARCH_FILES));

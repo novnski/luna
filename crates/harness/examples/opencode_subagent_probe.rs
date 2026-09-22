@@ -39,6 +39,7 @@ async fn main() {
         }),
         steering,
         interrupt: CancellationToken::new(),
+        invoke_luna_tool: None,
     };
     // Optional second arg overrides the prompt (e.g. the mock rig's
     // "TWO subagents" variant exercising concurrent binding).

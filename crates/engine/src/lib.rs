@@ -38,6 +38,7 @@ pub mod registry;
 pub mod repos;
 pub mod rpc;
 pub mod run_journal;
+pub mod runtime_contract;
 pub mod sessions;
 pub mod source_control;
 pub mod spaces;

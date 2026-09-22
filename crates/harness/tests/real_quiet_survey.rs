@@ -36,6 +36,7 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        invoke_luna_tool: None,
     };
     (controls, steer_tx, token)
 }

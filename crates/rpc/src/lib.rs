@@ -113,6 +113,8 @@ pub mod methods {
     pub const ENGINE_READY: &str = "EngineReady";
     /// Durable LUNA task identity and all preserved execution-binding generations.
     pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
+    /// Redacted, provider-acknowledged LUNA runtime contract for one task.
+    pub const GET_RUNTIME_CONTRACT: &str = "GetRuntimeContract";
     /// Bounded search over the local derived session-activity index.
     pub const SEARCH_SESSION_HISTORY: &str = "SearchSessionHistory";
     /// Rebuild the local derived index from authoritative task records.

@@ -79,6 +79,7 @@ fn controls(
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        invoke_luna_tool: None,
     };
     (controls, steer_tx, token)
 }
@@ -95,6 +96,41 @@ async fn run_to_end(
     )
     .await
     .expect("run finished in time")
+}
+
+#[tokio::test]
+async fn synthetic_luna_instructions_append_without_replacing_provider_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    let mut req = request("scenario:runtime-instructions");
+    req.cwd = root.path().to_str().unwrap().into();
+    req.model_options.insert(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(), serde_json::json!({
+        "version": 1,
+        "contentHash": "synthetic",
+        "environment": {"LUNA_THREAD_ID":"thread-a","LUNA_ENVIRONMENT_ID":"environment-a","LUNA_MACHINE_ID":"machine-a"},
+        "localEndpoints": [],
+        "context": {
+            "appVersion":"test", "protocolVersion":1, "threadId":"thread-a",
+            "parentThreadId":null, "sourceThreadId":null, "projectId":null, "projectName":null,
+            "environmentId":"environment-a", "machineId":"machine-a", "machineName":"machine-a",
+            "workspaceRoot":"/synthetic", "worktreeId":null, "branch":null,
+            "harness":"claude-code", "model":null, "reasoning":null,
+            "executionRoute":"local", "grantedScopes":[]
+        },
+        "instructions":[{"name":"LUNA core","source":"lunaCore","provenance":"synthetic","text":"Run inside LUNA."}],
+        "tools":[], "omittedTools":[], "delivery":"claudeInstructionsOnly"
+    }));
+    let (controls, _steer, _token) = controls("Yes");
+    let events = run_to_end(&harness(), req, controls).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
 }
 
 #[tokio::test]
@@ -310,6 +346,7 @@ async fn ask_user_question_round_trips_through_the_control_channel() {
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        invoke_luna_tool: None,
     };
     let mut req = request("scenario:askuser");
     req.permission_mode = zeron_proto::PermissionMode::Full;
