@@ -45,6 +45,7 @@ mod notice;
 pub mod notify;
 pub mod pickers;
 pub mod popover;
+mod power;
 pub mod queue;
 pub mod rail;
 pub mod settings;
@@ -254,7 +255,30 @@ pub fn run_app(config: UiConfig) {
 /// A clicked banner: bring Zeron forward on that chat through the sidebar's
 /// own path (chat route + composer focus), reopening the main window first if
 /// ⌘W closed it.
-fn open_notified_chat(chat_id: String, state: &gpui::Entity<state::AppState>, cx: &mut App) {
+fn parse_activity_notification_target(click_target: &str) -> Option<(&str, &str)> {
+    click_target
+        .strip_prefix("l15:")
+        .and_then(|target| target.split_once(':'))
+        .filter(|(environment, chat)| !environment.is_empty() && !chat.is_empty())
+}
+
+fn open_notified_chat(click_target: String, state: &gpui::Entity<state::AppState>, cx: &mut App) {
+    let Some((environment_id, chat_id)) = parse_activity_notification_target(&click_target) else {
+        return;
+    };
+    let exact_owner = {
+        let current = state.read(cx);
+        current
+            .engine()
+            .is_some_and(|engine| engine.engine_info().device_id == environment_id)
+            && current
+                .chats
+                .iter()
+                .any(|chat| chat.id == chat_id && chat.device_id == environment_id)
+    };
+    if !exact_owner {
+        return;
+    }
     cx.activate(true);
     if cx.windows().is_empty()
         && let Some(reopen) = cx.try_global::<ReopenState>()
@@ -270,10 +294,28 @@ fn open_notified_chat(chat_id: String, state: &gpui::Entity<state::AppState>, cx
         Some(shell) => {
             let _ = shell.update(cx, |shell, window, cx| {
                 window.activate_window();
-                shell.open_chat(chat_id, cx);
+                shell.open_chat(chat_id.to_string(), cx);
             });
         }
-        None => state.update(cx, |state, cx| state.select_chat(Some(chat_id), cx)),
+        None => state.update(cx, |state, cx| {
+            state.select_chat(Some(chat_id.to_string()), cx)
+        }),
+    }
+}
+
+#[cfg(test)]
+mod activity_notification_tests {
+    use super::*;
+
+    #[test]
+    fn banner_target_requires_an_exact_l15_environment_and_task() {
+        assert_eq!(
+            parse_activity_notification_target("l15:device:task"),
+            Some(("device", "task"))
+        );
+        for invalid in ["task", "l15::task", "l15:device:", "l14:device:task"] {
+            assert_eq!(parse_activity_notification_target(invalid), None);
+        }
     }
 }
 

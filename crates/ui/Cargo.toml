@@ -54,6 +54,10 @@ name = "session-history-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "activity-attention-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "new-project-fixture"
 required-features = ["project-palette-fixture"]
 

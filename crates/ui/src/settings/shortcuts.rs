@@ -266,6 +266,21 @@ impl ShortcutsPage {
                     cx.stop_propagation();
                     return;
                 }
+                if recording == ShortcutId::OpenActivity
+                    && crate::settings::activity_combo_is_reserved(&combo)
+                {
+                    self.conflict_notice = Some(
+                        format!(
+                            "{} is reserved for an application action.",
+                            display_combo(&combo)
+                        )
+                        .into(),
+                    );
+                    self.stop_recording();
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
                 // A combo already bound elsewhere is REFUSED, naming the owner
                 // (zeron settings.shortcuts.tsx: "… is already assigned to …").
                 if let Some(owner) = conflict_owner(&self.keymap, recording, &combo) {
@@ -515,6 +530,7 @@ fn group(id: ShortcutId) -> &'static str {
         | ShortcutId::NextSession
         | ShortcutId::PrevSession
         | ShortcutId::ArchiveSession => "Sessions",
+        ShortcutId::OpenActivity => "Sessions",
         ShortcutId::JumpSession(_) => "Jump to session",
     }
 }
@@ -523,6 +539,7 @@ fn group(id: ShortcutId) -> &'static str {
 /// `SHORTCUT_DEFINITIONS` descriptions, verbatim).
 fn description(id: ShortcutId) -> &'static str {
     match id {
+        ShortcutId::OpenActivity => "Open the Activity and attention center.",
         ShortcutId::CaptureAppshot => {
             "Capture the focused application from anywhere on your desktop."
         }

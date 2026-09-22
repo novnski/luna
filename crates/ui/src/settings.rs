@@ -607,6 +607,42 @@ impl WindowGeometry {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskNotificationPolicy {
+    #[default]
+    All,
+    ImportantOnly,
+    Muted,
+}
+
+impl TaskNotificationPolicy {
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::ImportantOnly,
+            Self::ImportantOnly => Self::Muted,
+            Self::Muted => Self::All,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::ImportantOnly => "Important only",
+            Self::Muted => "Muted",
+        }
+    }
+}
+
+/// Fixed application/menu chords are unavailable to the optional Activity
+/// binding. Activity has no default chord and must not shadow these actions.
+pub fn activity_combo_is_reserved(combo: &str) -> bool {
+    matches!(
+        combo,
+        "mod-k" | "mod-," | "mod-q" | "mod-w" | "mod-m" | "mod-h" | "mod-alt-h"
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiSettings {
@@ -671,6 +707,14 @@ pub struct UiSettings {
     /// Suppress the banner while a Zeron window is focused (the chime covers
     /// the foreground case).
     pub notifications_background_only: bool,
+    /// Foreground notices for events in another task. The active task never
+    /// gets a completion notice over its own transcript.
+    pub in_app_notices_enabled: bool,
+    /// Device-local routing preference. An absent task inherits `All`.
+    pub task_notification_policies: std::collections::HashMap<String, TaskNotificationPolicy>,
+    /// Explicit device-local keep-awake selections; assertions exist only
+    /// while one selected task has an active run in this viewport.
+    pub keep_awake_task_ids: std::collections::HashSet<String>,
     pub right_pane_width: f32,
     /// Legacy: panel *open* flags are session-scoped in-memory state now
     /// (`shell::SessionPanels`, zeron `sessionPanels` parity). Kept for file
@@ -773,6 +817,9 @@ impl Default for UiSettings {
             sound_attention_enabled: true,
             notifications_enabled: true,
             notifications_background_only: true,
+            in_app_notices_enabled: true,
+            task_notification_policies: std::collections::HashMap::new(),
+            keep_awake_task_ids: std::collections::HashSet::new(),
             right_pane_width: RIGHT_PANE_DEFAULT,
             right_pane_open: false,
             terminal_height: TERMINAL_DEFAULT_HEIGHT,
@@ -853,6 +900,7 @@ pub enum ShortcutId {
     NewSession,
     NewProject,
     OpenModelPicker,
+    OpenActivity,
     NextSession,
     PrevSession,
     ArchiveSession,
@@ -860,7 +908,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 12 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 13 + JUMP_SLOTS] = [
         ShortcutId::CaptureAppshot,
         ShortcutId::SaveFile,
         ShortcutId::BrowserReload,
@@ -870,6 +918,7 @@ impl ShortcutId {
         ShortcutId::NewSession,
         ShortcutId::NewProject,
         ShortcutId::OpenModelPicker,
+        ShortcutId::OpenActivity,
         ShortcutId::NextSession,
         ShortcutId::PrevSession,
         ShortcutId::ArchiveSession,
@@ -900,6 +949,7 @@ impl ShortcutId {
             ShortcutId::NewSession => "New session",
             ShortcutId::NewProject => "New project",
             ShortcutId::OpenModelPicker => "Open model picker",
+            ShortcutId::OpenActivity => "Open Activity",
             ShortcutId::NextSession => "Next session",
             ShortcutId::PrevSession => "Previous session",
             ShortcutId::ArchiveSession => "Archive session",
@@ -926,6 +976,9 @@ impl ShortcutId {
             ShortcutId::NewSession => "mod-n",
             ShortcutId::NewProject => "mod-shift-n",
             ShortcutId::OpenModelPicker => "mod-/",
+            // Explicitly unbound: no new reserved chord is taken from a
+            // user's existing keymap before collision checking.
+            ShortcutId::OpenActivity => "",
             // Ctrl+Tab on every platform — but spelled the way THAT platform's
             // recorder spells ctrl (see `combo_from_keystroke`). Off macOS
             // ctrl IS the primary and stores as "mod"; on macOS it is its own
@@ -972,6 +1025,7 @@ pub struct KeymapConfig {
     pub new_session: String,
     pub new_project: String,
     pub open_model_picker: String,
+    pub open_activity: String,
     pub next_session: String,
     pub prev_session: String,
     pub archive_session: String,
@@ -994,6 +1048,7 @@ impl Default for KeymapConfig {
             new_session: ShortcutId::NewSession.default_combo().into(),
             new_project: ShortcutId::NewProject.default_combo().into(),
             open_model_picker: ShortcutId::OpenModelPicker.default_combo().into(),
+            open_activity: String::new(),
             next_session: ShortcutId::NextSession.default_combo().into(),
             prev_session: ShortcutId::PrevSession.default_combo().into(),
             archive_session: ShortcutId::ArchiveSession.default_combo().into(),
@@ -1014,6 +1069,7 @@ impl KeymapConfig {
             ShortcutId::NewSession => &self.new_session,
             ShortcutId::NewProject => &self.new_project,
             ShortcutId::OpenModelPicker => &self.open_model_picker,
+            ShortcutId::OpenActivity => &self.open_activity,
             ShortcutId::NextSession => &self.next_session,
             ShortcutId::PrevSession => &self.prev_session,
             ShortcutId::ArchiveSession => &self.archive_session,
@@ -1036,6 +1092,7 @@ impl KeymapConfig {
             ShortcutId::NewSession => self.new_session = combo,
             ShortcutId::NewProject => self.new_project = combo,
             ShortcutId::OpenModelPicker => self.open_model_picker = combo,
+            ShortcutId::OpenActivity => self.open_activity = combo,
             ShortcutId::NextSession => self.next_session = combo,
             ShortcutId::PrevSession => self.prev_session = combo,
             ShortcutId::ArchiveSession => self.archive_session = combo,
@@ -1945,6 +2002,12 @@ mod tests {
             sound_attention_enabled: false,
             notifications_enabled: false,
             notifications_background_only: false,
+            in_app_notices_enabled: false,
+            task_notification_policies: std::collections::HashMap::from([(
+                "b".to_string(),
+                TaskNotificationPolicy::ImportantOnly,
+            )]),
+            keep_awake_task_ids: std::collections::HashSet::from(["b".to_string()]),
             right_pane_width: 700.0,
             right_pane_open: true,
             terminal_height: 320.0,
@@ -2023,6 +2086,26 @@ mod tests {
         assert!(json.contains(r#""terminalFontSize": 15.0"#));
         assert!(json.contains(r#""codeFontFamily": "geist""#));
         assert!(json.contains(r#""codeFontSize": 11.0"#));
+    }
+
+    #[test]
+    fn activity_shortcut_is_unbound_and_fixed_chords_remain_reserved() {
+        let mut keymap = KeymapConfig::default();
+        assert!(keymap.open_activity.is_empty());
+        for combo in [
+            "mod-k",
+            "mod-,",
+            "mod-q",
+            "mod-w",
+            "mod-m",
+            "mod-h",
+            "mod-alt-h",
+        ] {
+            assert!(activity_combo_is_reserved(combo));
+        }
+        assert!(!activity_combo_is_reserved("mod-shift-y"));
+        keymap.open_activity = keymap.toggle_sidebar.clone();
+        assert!(conflicted_shortcuts(&keymap).contains(&ShortcutId::OpenActivity));
     }
 
     #[test]
@@ -2546,6 +2629,9 @@ mod tests {
         // its default must parse on this platform.
         assert!(conflicted_shortcuts(&KeymapConfig::default()).is_empty());
         for id in ShortcutId::ALL {
+            if id.default_combo().is_empty() {
+                continue;
+            }
             assert!(
                 gpui::Keystroke::parse(&platform_combo(id.default_combo())).is_ok(),
                 "{:?} default combo does not parse",
@@ -2605,6 +2691,11 @@ mod tests {
         for mac in [true, false] {
             for id in ShortcutId::ALL {
                 let combo = id.default_combo_on(mac);
+                if combo.is_empty() {
+                    // Activity is intentionally unbound until a user records
+                    // a collision-checked chord.
+                    continue;
+                }
                 // Via the platform spelling, where modifier names are
                 // unambiguous, so the decode can't inherit the bug it checks.
                 let bound = platform_combo_on(mac, combo);

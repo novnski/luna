@@ -10,6 +10,7 @@ use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*, px};
 use crate::icons;
 use crate::popover;
 use crate::settings::widgets;
+use crate::settings::{TaskNotificationPolicy, UiSettings};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone)]
@@ -22,7 +23,49 @@ pub enum NotificationsEvent {
         attention_sound: bool,
         desktop: bool,
         background_only: bool,
+        in_app: bool,
     },
+    TaskPolicyChanged {
+        task_id: String,
+        policy: TaskNotificationPolicy,
+    },
+    KeepAwakeChanged {
+        task_id: String,
+        enabled: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationTask {
+    pub id: String,
+    pub title: String,
+    pub policy: TaskNotificationPolicy,
+    pub keep_awake: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct NotificationPreferences {
+    sound: bool,
+    completion_sound: bool,
+    input_sound: bool,
+    attention_sound: bool,
+    desktop: bool,
+    background_only: bool,
+    in_app: bool,
+}
+
+impl From<&UiSettings> for NotificationPreferences {
+    fn from(settings: &UiSettings) -> Self {
+        Self {
+            sound: settings.sound_enabled,
+            completion_sound: settings.sound_completion_enabled,
+            input_sound: settings.sound_input_enabled,
+            attention_sound: settings.sound_attention_enabled,
+            desktop: settings.notifications_enabled,
+            background_only: settings.notifications_background_only,
+            in_app: settings.in_app_notices_enabled,
+        }
+    }
 }
 
 pub struct NotificationsPage {
@@ -33,6 +76,8 @@ pub struct NotificationsPage {
     attention_sound: bool,
     desktop: bool,
     background_only: bool,
+    in_app: bool,
+    tasks: Vec<NotificationTask>,
 }
 
 impl EventEmitter<NotificationsEvent> for NotificationsPage {}
@@ -45,6 +90,7 @@ enum NotificationPreference {
     AttentionSound,
     Desktop,
     BackgroundOnly,
+    InApp,
 }
 
 fn is_switch_activation(key: &str, is_held: bool) -> bool {
@@ -74,22 +120,20 @@ fn interactive_switch(
 
 impl NotificationsPage {
     pub fn new(
-        sound: bool,
-        completion_sound: bool,
-        input_sound: bool,
-        attention_sound: bool,
-        desktop: bool,
-        background_only: bool,
+        preferences: NotificationPreferences,
+        tasks: Vec<NotificationTask>,
         _cx: &mut Context<Self>,
     ) -> Self {
         Self {
             scroll: widgets::PageScroll::default(),
-            sound,
-            completion_sound,
-            input_sound,
-            attention_sound,
-            desktop,
-            background_only,
+            sound: preferences.sound,
+            completion_sound: preferences.completion_sound,
+            input_sound: preferences.input_sound,
+            attention_sound: preferences.attention_sound,
+            desktop: preferences.desktop,
+            background_only: preferences.background_only,
+            in_app: preferences.in_app,
+            tasks,
         }
     }
 
@@ -101,6 +145,7 @@ impl NotificationsPage {
             attention_sound: self.attention_sound,
             desktop: self.desktop,
             background_only: self.background_only,
+            in_app: self.in_app,
         });
     }
 
@@ -112,10 +157,40 @@ impl NotificationsPage {
             NotificationPreference::AttentionSound => &mut self.attention_sound,
             NotificationPreference::Desktop => &mut self.desktop,
             NotificationPreference::BackgroundOnly => &mut self.background_only,
+            NotificationPreference::InApp => &mut self.in_app,
         };
         *value = !*value;
         self.emit(cx);
         cx.notify();
+    }
+
+    pub fn set_tasks(&mut self, tasks: Vec<NotificationTask>, cx: &mut Context<Self>) {
+        if self.tasks != tasks {
+            self.tasks = tasks;
+            cx.notify();
+        }
+    }
+
+    fn cycle_task_policy(&mut self, task_id: &str, cx: &mut Context<Self>) {
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
+            task.policy = task.policy.next();
+            cx.emit(NotificationsEvent::TaskPolicyChanged {
+                task_id: task.id.clone(),
+                policy: task.policy,
+            });
+            cx.notify();
+        }
+    }
+
+    fn toggle_task_awake(&mut self, task_id: &str, cx: &mut Context<Self>) {
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == task_id) {
+            task.keep_awake = !task.keep_awake;
+            cx.emit(NotificationsEvent::KeepAwakeChanged {
+                task_id: task.id.clone(),
+                enabled: task.keep_awake,
+            });
+            cx.notify();
+        }
     }
 
     fn on_scroll_hovered(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
@@ -145,6 +220,8 @@ impl Render for NotificationsPage {
         let attention_sound = self.attention_sound;
         let desktop = self.desktop;
         let background_only = self.background_only;
+        let in_app = self.in_app;
+        let tasks = self.tasks.clone();
         let toggle = |id: &'static str, label: &'static str, enabled: bool, interactive: bool| {
             // Keep the familiar 32×18 visual inside a 40×40 activation target.
             // Disabled subordinate controls remain named switches in the
@@ -388,6 +465,99 @@ impl Render for NotificationsPage {
                     ),
             );
 
+        let card = card.child(
+            widgets::card_row(&theme, false)
+                .child(widgets::row_tile(&theme, icons::BELL))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(widgets::row_title(&theme, "In-app notices"))
+                        .child(widgets::meta_line(
+                            &theme,
+                            vec![div()
+                                .child("Show a small notice when another task needs attention or finishes.")
+                                .into_any_element()],
+                        )),
+                )
+                .child(interactive_switch(
+                    toggle("notifications-in-app-toggle", "In-app notices", in_app, true),
+                    accent,
+                    NotificationPreference::InApp,
+                    cx,
+                )),
+        );
+
+        let task_card = widgets::section_card(&theme).children(tasks.into_iter().enumerate().map(
+            |(index, task)| {
+                let policy_id = task.id.clone();
+                let policy_key_id = task.id.clone();
+                let awake_id = task.id.clone();
+                let awake_key_id = task.id.clone();
+                let label = task.title.clone();
+                widgets::card_row(&theme, index > 0)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(widgets::row_title(&theme, &label))
+                            .child(widgets::meta_line(
+                                &theme,
+                                vec![div()
+                                    .child("Notification policy · Keep awake only while selected and working")
+                                    .into_any_element()],
+                            )),
+                    )
+                    .child(
+                        popover::btn_ghost(
+                            &theme,
+                            task.policy.label(),
+                            format!("task-notification-policy-{}", task.id),
+                        )
+                        .id(SharedString::from(format!("task-notification-policy-{}", task.id)))
+                        .role(gpui::Role::Button)
+                        .aria_label(format!("Notification policy for {}: {}", label, task.policy.label()))
+                        .tab_index(0)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.cycle_task_policy(&policy_id, cx)
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                            if is_switch_activation(&event.keystroke.key, event.is_held) {
+                                this.cycle_task_policy(&policy_key_id, cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("task-keep-awake-{}", task.id)))
+                            .role(gpui::Role::Switch)
+                            .aria_label(format!("Keep awake for {}", label))
+                            .aria_toggled(if task.keep_awake {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .tab_index(0)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_task_awake(&awake_id, cx)
+                            }))
+                            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                if is_switch_activation(&event.keystroke.key, event.is_held) {
+                                    this.toggle_task_awake(&awake_key_id, cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                            .child(widgets::toggle_switch(&theme, task.keep_awake)),
+                    )
+            },
+        ));
+
         let scrollbar = popover::rail(self, "notifications-page-scrollbar", &theme, cx);
         div()
             .id("notifications-page-host")
@@ -412,7 +582,9 @@ impl Render for NotificationsPage {
                                 .max_w(px(512.0))
                                 .line_height(px(20.0)),
                             )
-                            .child(card),
+                            .child(card)
+                            .child(widgets::page_header(&theme, "Per-task preferences", None))
+                            .child(task_card),
                     ),
             )
             .children(scrollbar)

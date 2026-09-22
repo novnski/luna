@@ -50,6 +50,7 @@ enum EntryIdentity {
     NewChat,
     NewProject,
     Settings,
+    Activity,
     Theme,
     SearchAllContent,
     SearchCurrentContent,
@@ -73,6 +74,7 @@ pub(super) enum Entry {
     NewChat,
     NewProject,
     Settings,
+    Activity,
     Theme(AppearanceMode),
     SearchAllContent,
     SearchCurrentContent,
@@ -91,7 +93,7 @@ impl Entry {
     fn is_ordinary_action(&self) -> bool {
         matches!(
             self,
-            Self::NewChat | Self::NewProject | Self::Settings | Self::Theme(_)
+            Self::NewChat | Self::NewProject | Self::Settings | Self::Activity | Self::Theme(_)
         )
     }
 
@@ -104,6 +106,7 @@ impl Entry {
             Self::NewChat => EntryIdentity::NewChat,
             Self::NewProject => EntryIdentity::NewProject,
             Self::Settings => EntryIdentity::Settings,
+            Self::Activity => EntryIdentity::Activity,
             Self::Theme(_) => EntryIdentity::Theme,
             Self::SearchAllContent => EntryIdentity::SearchAllContent,
             Self::SearchCurrentContent => EntryIdentity::SearchCurrentContent,
@@ -118,6 +121,7 @@ impl Entry {
             Self::NewChat => Some(("New chat", icons::PEN_NEW_SQUARE)),
             Self::NewProject => Some(("New project", icons::FOLDER)),
             Self::Settings => Some(("Open settings", icons::SETTINGS_MINIMALISTIC)),
+            Self::Activity => Some(("View activity", icons::BELL)),
             Self::Theme(mode) => Some((
                 match mode {
                     AppearanceMode::System => "Switch to system theme",
@@ -153,6 +157,7 @@ fn actions_for(query: &str, is_dark: bool) -> Vec<Entry> {
         Entry::NewChat,
         Entry::NewProject,
         Entry::Settings,
+        Entry::Activity,
         Entry::Theme(if is_dark {
             AppearanceMode::Light
         } else {
@@ -175,6 +180,9 @@ impl Shell {
         if self.command_palette.is_some() {
             self.close_command_palette(window, cx);
             return;
+        }
+        if self.activity.open {
+            self.close_activity(window, cx);
         }
         self.add_space = None;
         let search = cx.new(|cx| {
@@ -473,6 +481,7 @@ impl Shell {
             Entry::NewChat => self.open_new_session(cx),
             Entry::NewProject => self.open_add_space(cx),
             Entry::Settings => self.open_settings(SettingsSection::Devices, cx),
+            Entry::Activity => self.toggle_activity(window, cx),
             Entry::Theme(_) => unreachable!(),
             Entry::Chat { id, .. } => self.open_chat(id, cx),
             Entry::History { .. } => {
@@ -734,6 +743,10 @@ impl Shell {
                         }))
                     }
                     Entry::Settings => Some(crate::settings::badge_combo("mod-,")),
+                    Entry::Activity => {
+                        let combo = self.settings.keymap.get(ShortcutId::OpenActivity);
+                        (!combo.is_empty()).then(|| crate::settings::badge_combo(combo))
+                    }
                     _ => None,
                 };
                 let entry = entry.clone();

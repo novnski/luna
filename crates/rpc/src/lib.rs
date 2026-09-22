@@ -120,6 +120,11 @@ pub mod methods {
     /// Read/write project-local indexing exclusions and sensitive-surface policy.
     pub const GET_SESSION_HISTORY_POLICY: &str = "GetSessionHistoryPolicy";
     pub const SET_SESSION_HISTORY_POLICY: &str = "SetSessionHistoryPolicy";
+    /// L15 local minimized Activity projection. These calls are deliberately
+    /// not relay-forwarded while remote grants and scopes are unsupported.
+    pub const GET_ATTENTION: &str = "GetAttention";
+    pub const CLAIM_ATTENTION_TRANSITIONS: &str = "ClaimAttentionTransitions";
+    pub const MUTATE_ATTENTION: &str = "MutateAttention";
     /// Read the current provider-native history fork capability for one task.
     pub const GET_HISTORY_CAPABILITY: &str = "GetHistoryCapability";
     /// Read durable pre-edit recovery snapshots available for one task.

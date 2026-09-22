@@ -9,11 +9,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use zeron_proto::{
-    ActivityEnvelope, CommandReasonCode, CommandReceipt, CommandReceiptReason,
-    CommandReceiptStatus, ComposerDraft, ComposerDraftRead, ComposerDraftSaveOutcome,
-    DraftSubmission, DraftSubmissionState, HistoryCursor, HistoryProjectPolicy, HistorySearchPage,
-    HistorySearchRequest, HistorySearchScope, TaskCommandEvent, TaskCommandRead,
-    TaskCommandSnapshot,
+    ActivityEnvelope, AttentionItem, AttentionKind, AttentionLifecycle, AttentionMutation,
+    AttentionTransition, AttentionTransitionKind, CommandReasonCode, CommandReceipt,
+    CommandReceiptReason, CommandReceiptStatus, ComposerDraft, ComposerDraftRead,
+    ComposerDraftSaveOutcome, DraftSubmission, DraftSubmissionState, HistoryCursor,
+    HistoryProjectPolicy, HistorySearchPage, HistorySearchRequest, HistorySearchScope,
+    TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
 };
 
 /// Errors surfaced by [`DocsStore`].
@@ -31,6 +32,12 @@ pub enum StoreError {
     DraftRevisionConflict(String),
     #[error("task recovery state changed before the requested transition")]
     RecoveryConflict,
+    #[error("attention projection revision changed before the requested mutation")]
+    AttentionRevisionConflict,
+    #[error("attention mutation command id was reused with different content")]
+    AttentionCommandConflict,
+    #[error("cannot dismiss unresolved attention")]
+    UnresolvedAttention,
 }
 
 /// Ordered, append-only migrations. Each entry runs once inside a transaction;
@@ -178,6 +185,42 @@ const MIGRATIONS: &[&str] = &[
         policy_json BLOB NOT NULL,
         updated_at INTEGER NOT NULL
      ) STRICT;",
+    // v8 — L15 local activity/attention projection. Authoritative task,
+    // request, recovery, queue, and connectivity state remains in its owning
+    // subsystem; these rows persist minimized presentation lifecycle only.
+    "CREATE TABLE attention_meta (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        revision INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+     ) STRICT;
+     INSERT INTO attention_meta(singleton,revision,updated_at) VALUES(1,0,0);
+     CREATE TABLE attention_items (
+        item_id TEXT PRIMARY KEY,
+        dedup_key TEXT NOT NULL UNIQUE,
+        source_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        lifecycle TEXT NOT NULL,
+        actionable INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        dismissed INTEGER NOT NULL DEFAULT 0,
+        item_json BLOB NOT NULL
+     ) STRICT;
+     CREATE INDEX attention_items_source ON attention_items(source_key,updated_at DESC);
+     CREATE INDEX attention_items_recent ON attention_items(dismissed,lifecycle,updated_at DESC);
+     CREATE TABLE attention_transitions (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id TEXT NOT NULL,
+        transition_json BLOB NOT NULL,
+        claimed_by TEXT,
+        claimed_at INTEGER
+     ) STRICT;
+     CREATE INDEX attention_transitions_claim ON attention_transitions(claimed_by,sequence);
+     CREATE TABLE attention_mutations (
+        command_id TEXT PRIMARY KEY,
+        mutation_json BLOB NOT NULL,
+        revision INTEGER NOT NULL,
+        committed_at INTEGER NOT NULL
+     ) STRICT;",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +257,20 @@ pub struct TaskRecoveryExpectation {
 pub struct TaskRecoveryTransition {
     pub expected: Option<TaskRecoveryExpectation>,
     pub next: StoredTaskRecovery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAttentionSnapshot {
+    pub revision: u64,
+    pub unresolved_count: u32,
+    pub needs_attention: Vec<AttentionItem>,
+    pub recent: Vec<AttentionItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttentionMutationCommit {
+    pub duplicate: bool,
+    pub revision: u64,
 }
 
 /// SQLite-backed store under a data directory (`{data_dir}/docs.sqlite3`).
@@ -468,6 +525,337 @@ impl DocsStore {
             next_cursor,
             indexed_through_ms,
             heuristic_redaction: true,
+        })
+    }
+
+    /// Reconcile the minimized Activity projection with a fresh authoritative
+    /// snapshot. Presentation state survives unchanged; only disappearance
+    /// from one of the explicitly managed producer kinds resolves an item.
+    pub fn reconcile_attention_items(
+        &self,
+        desired: &[AttentionItem],
+        managed_kinds: &[AttentionKind],
+    ) -> Result<u64, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mut changed = false;
+        let now = now_ms();
+        let desired_keys = desired
+            .iter()
+            .map(|item| item.dedup_key.as_str())
+            .collect::<HashSet<_>>();
+
+        for incoming in desired {
+            let existing: Option<Vec<u8>> = tx
+                .query_row(
+                    "SELECT item_json FROM attention_items WHERE dedup_key=?1",
+                    params![incoming.dedup_key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let (mut item, inserted, reopened, kind_changed, dismissed) =
+                if let Some(bytes) = existing {
+                    let previous: AttentionItem = serde_json::from_slice(&bytes)?;
+                    let mut next = incoming.clone();
+                    next.id = previous.id.clone();
+                    next.created_at_ms = previous.created_at_ms;
+                    next.seen_at_ms = previous.seen_at_ms;
+                    next.acknowledged_at_ms = previous.acknowledged_at_ms;
+                    let reopened =
+                        previous.lifecycle == AttentionLifecycle::Resolved && incoming.unresolved();
+                    let kind_changed = next.kind != previous.kind && next.unresolved();
+                    if reopened || kind_changed {
+                        next.seen_at_ms = None;
+                        next.acknowledged_at_ms = None;
+                    }
+                    if incoming.unresolved() {
+                        next.resolved_at_ms = None;
+                        next.lifecycle = if next.acknowledged_at_ms.is_some() {
+                            AttentionLifecycle::Acknowledged
+                        } else {
+                            AttentionLifecycle::Unresolved
+                        };
+                    }
+                    // A producer heartbeat is not a new Activity transition. The
+                    // source key denotes a material authoritative transition.
+                    if next.source_key == previous.source_key {
+                        next.updated_at_ms = previous.updated_at_ms;
+                        if next.lifecycle == AttentionLifecycle::Resolved {
+                            next.resolved_at_ms = previous.resolved_at_ms;
+                        }
+                    }
+                    if previous == next {
+                        continue;
+                    }
+                    let dismissed: bool = tx.query_row(
+                        "SELECT dismissed FROM attention_items WHERE item_id=?1",
+                        params![previous.id],
+                        |row| row.get(0),
+                    )?;
+                    (next, false, reopened, kind_changed, dismissed && !reopened)
+                } else {
+                    (incoming.clone(), true, false, false, false)
+                };
+            if inserted {
+                item.updated_at_ms = item.updated_at_ms.max(now);
+            }
+            tx.execute(
+                "INSERT INTO attention_items(
+                    item_id,dedup_key,source_key,kind,lifecycle,actionable,updated_at,dismissed,item_json
+                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+                 ON CONFLICT(item_id) DO UPDATE SET
+                    dedup_key=excluded.dedup_key,source_key=excluded.source_key,
+                    kind=excluded.kind,lifecycle=excluded.lifecycle,
+                    actionable=excluded.actionable,updated_at=excluded.updated_at,
+                    dismissed=excluded.dismissed,item_json=excluded.item_json",
+                params![
+                    item.id,
+                    item.dedup_key,
+                    item.source_key,
+                    enum_key(&item.kind)?,
+                    enum_key(&item.lifecycle)?,
+                    item.actionable(),
+                    item.updated_at_ms,
+                    dismissed,
+                    serde_json::to_vec(&item)?,
+                ],
+            )?;
+            if inserted || reopened || kind_changed {
+                let transition = if item.actionable() && item.unresolved() {
+                    AttentionTransitionKind::NeedsAttention
+                } else {
+                    AttentionTransitionKind::Recent
+                };
+                insert_attention_transition(&tx, transition, &item)?;
+            }
+            changed = true;
+        }
+
+        let managed = managed_kinds
+            .iter()
+            .map(enum_key)
+            .collect::<Result<HashSet<_>, _>>()?;
+        let mut stmt = tx.prepare(
+            "SELECT item_json FROM attention_items
+             WHERE dismissed=0 AND lifecycle<>?1",
+        )?;
+        let rows = stmt
+            .query_map(params![enum_key(&AttentionLifecycle::Resolved)?], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for bytes in rows {
+            let mut item: AttentionItem = serde_json::from_slice(&bytes)?;
+            if !managed.contains(&enum_key(&item.kind)?)
+                || desired_keys.contains(item.dedup_key.as_str())
+            {
+                continue;
+            }
+            item.lifecycle = AttentionLifecycle::Resolved;
+            item.resolved_at_ms = Some(now);
+            item.updated_at_ms = now;
+            update_attention_item(&tx, &item, false)?;
+            insert_attention_transition(&tx, AttentionTransitionKind::Resolved, &item)?;
+            changed = true;
+        }
+
+        // BB's inspected notification center keeps 200 rows. LUNA applies
+        // that bound only to Recent presentation; unresolved action items are
+        // excluded from this pruning query and therefore never evicted.
+        let mut stmt = tx.prepare(
+            "SELECT item_id FROM attention_items
+             WHERE dismissed=0 AND (lifecycle=?1 OR actionable=0)
+             ORDER BY updated_at DESC,item_id DESC LIMIT -1 OFFSET 200",
+        )?;
+        let overflow = stmt
+            .query_map(params![enum_key(&AttentionLifecycle::Resolved)?], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for item_id in overflow {
+            changed |= tx.execute(
+                "UPDATE attention_items SET dismissed=1 WHERE item_id=?1 AND dismissed=0",
+                params![item_id],
+            )? > 0;
+        }
+
+        let revision = if changed {
+            bump_attention_revision(&tx, now)?
+        } else {
+            attention_revision(&tx)?
+        };
+        tx.commit()?;
+        Ok(revision)
+    }
+
+    pub fn attention_snapshot(&self) -> Result<StoredAttentionSnapshot, StoreError> {
+        let conn = self.conn();
+        let revision = attention_revision(&conn)?;
+        let resolved_key = enum_key(&AttentionLifecycle::Resolved)?;
+        let needs_attention = read_attention_items(
+            &conn,
+            "SELECT item_json FROM attention_items
+             WHERE dismissed=0 AND actionable=1 AND lifecycle<>?1
+             ORDER BY
+               CASE kind
+                 WHEN '\"approvalRequired\"' THEN 0
+                 WHEN '\"userInputRequired\"' THEN 1
+                 WHEN '\"taskFailed\"' THEN 2
+                 WHEN '\"queuedSendFailed\"' THEN 3
+                 ELSE 4 END,
+               updated_at DESC,item_id DESC",
+            params![resolved_key.clone()],
+        )?;
+        let recent = read_attention_items(
+            &conn,
+            "SELECT item_json FROM attention_items
+             WHERE dismissed=0 AND (lifecycle=?1 OR actionable=0)
+             ORDER BY updated_at DESC,item_id DESC LIMIT 200",
+            params![resolved_key],
+        )?;
+        Ok(StoredAttentionSnapshot {
+            revision,
+            unresolved_count: needs_attention.len().try_into().unwrap_or(u32::MAX),
+            needs_attention,
+            recent,
+        })
+    }
+
+    /// Mark-before-delivery avoids sound/banner replay storms after a crash or
+    /// reconnect. A baseline claim intentionally returns no historical rows.
+    pub fn claim_attention_transitions(
+        &self,
+        consumer_id: &str,
+        deliver_existing: bool,
+    ) -> Result<Vec<AttentionTransition>, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let now = now_ms();
+        if !deliver_existing {
+            tx.execute(
+                "UPDATE attention_transitions SET claimed_by=?1,claimed_at=?2 WHERE claimed_by IS NULL",
+                params![consumer_id, now],
+            )?;
+            prune_claimed_attention_transitions(&tx)?;
+            tx.commit()?;
+            return Ok(Vec::new());
+        }
+        let mut stmt = tx.prepare(
+            "SELECT sequence,transition_json FROM attention_transitions
+             WHERE claimed_by IS NULL ORDER BY sequence LIMIT 100",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut transitions = Vec::with_capacity(rows.len());
+        for (sequence, bytes) in rows {
+            tx.execute(
+                "UPDATE attention_transitions SET claimed_by=?1,claimed_at=?2
+                 WHERE sequence=?3 AND claimed_by IS NULL",
+                params![consumer_id, now, sequence],
+            )?;
+            let mut transition: AttentionTransition = serde_json::from_slice(&bytes)?;
+            transition.sequence = sequence;
+            transitions.push(transition);
+        }
+        prune_claimed_attention_transitions(&tx)?;
+        tx.commit()?;
+        Ok(transitions)
+    }
+
+    pub fn mutate_attention(
+        &self,
+        command_id: &str,
+        expected_revision: u64,
+        mutation: &AttentionMutation,
+    ) -> Result<AttentionMutationCommit, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mutation_json = serde_json::to_vec(mutation)?;
+        if let Some((prior_json, revision)) = tx
+            .query_row(
+                "SELECT mutation_json,revision FROM attention_mutations WHERE command_id=?1",
+                params![command_id],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .optional()?
+        {
+            if prior_json != mutation_json {
+                return Err(StoreError::AttentionCommandConflict);
+            }
+            tx.commit()?;
+            return Ok(AttentionMutationCommit {
+                duplicate: true,
+                revision,
+            });
+        }
+        let current = attention_revision(&tx)?;
+        if current != expected_revision {
+            return Err(StoreError::AttentionRevisionConflict);
+        }
+        let now = now_ms();
+        let mut changed = false;
+        match mutation {
+            AttentionMutation::MarkSeen { item_ids } => {
+                for item_id in item_ids {
+                    if let Some(mut item) = read_attention_item(&tx, item_id)?
+                        && item.seen_at_ms.is_none()
+                    {
+                        item.seen_at_ms = Some(now);
+                        update_attention_item(&tx, &item, false)?;
+                        changed = true;
+                    }
+                }
+            }
+            AttentionMutation::Acknowledge { item_id } => {
+                if let Some(mut item) = read_attention_item(&tx, item_id)?
+                    && item.unresolved()
+                    && item.acknowledged_at_ms.is_none()
+                {
+                    item.acknowledged_at_ms = Some(now);
+                    item.lifecycle = AttentionLifecycle::Acknowledged;
+                    item.updated_at_ms = now;
+                    update_attention_item(&tx, &item, false)?;
+                    changed = true;
+                }
+            }
+            AttentionMutation::DismissRecent { item_id } => {
+                if let Some(item) = read_attention_item(&tx, item_id)? {
+                    if item.actionable() && item.unresolved() {
+                        return Err(StoreError::UnresolvedAttention);
+                    }
+                    changed |= tx.execute(
+                        "UPDATE attention_items SET dismissed=1 WHERE item_id=?1 AND dismissed=0",
+                        params![item_id],
+                    )? > 0;
+                }
+            }
+            AttentionMutation::ClearRecent => {
+                changed |= tx.execute(
+                    "UPDATE attention_items SET dismissed=1
+                     WHERE dismissed=0 AND (lifecycle=?1 OR actionable=0)",
+                    params![enum_key(&AttentionLifecycle::Resolved)?],
+                )? > 0;
+            }
+        }
+        let revision = if changed {
+            bump_attention_revision(&tx, now)?
+        } else {
+            current
+        };
+        tx.execute(
+            "INSERT INTO attention_mutations(command_id,mutation_json,revision,committed_at) VALUES(?1,?2,?3,?4)",
+            params![command_id, mutation_json, revision, now],
+        )?;
+        tx.commit()?;
+        Ok(AttentionMutationCommit {
+            duplicate: false,
+            revision,
         })
     }
 
@@ -2154,6 +2542,122 @@ fn append_lower_text_in(
     values.extend(items.into_iter().map(rusqlite::types::Value::from));
 }
 
+fn enum_key<T: serde::Serialize>(value: &T) -> Result<String, StoreError> {
+    Ok(serde_json::to_string(value)?)
+}
+
+fn attention_revision(conn: &Connection) -> Result<u64, StoreError> {
+    Ok(conn.query_row(
+        "SELECT revision FROM attention_meta WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+fn bump_attention_revision(tx: &rusqlite::Transaction<'_>, now: i64) -> Result<u64, StoreError> {
+    tx.execute(
+        "UPDATE attention_meta SET revision=revision+1,updated_at=?1 WHERE singleton=1",
+        params![now],
+    )?;
+    attention_revision(tx)
+}
+
+fn read_attention_item(
+    conn: &Connection,
+    item_id: &str,
+) -> Result<Option<AttentionItem>, StoreError> {
+    let bytes: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT item_json FROM attention_items WHERE item_id=?1",
+            params![item_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    bytes
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()
+        .map_err(StoreError::from)
+}
+
+fn read_attention_items<P: rusqlite::Params>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+) -> Result<Vec<AttentionItem>, StoreError> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(params, |row| row.get::<_, Vec<u8>>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|bytes| serde_json::from_slice(&bytes).map_err(StoreError::from))
+        .collect()
+}
+
+fn update_attention_item(
+    tx: &rusqlite::Transaction<'_>,
+    item: &AttentionItem,
+    dismissed: bool,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE attention_items SET
+           source_key=?2,kind=?3,lifecycle=?4,actionable=?5,updated_at=?6,
+           dismissed=?7,item_json=?8 WHERE item_id=?1",
+        params![
+            item.id,
+            item.source_key,
+            enum_key(&item.kind)?,
+            enum_key(&item.lifecycle)?,
+            item.actionable(),
+            item.updated_at_ms,
+            dismissed,
+            serde_json::to_vec(item)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_attention_transition(
+    tx: &rusqlite::Transaction<'_>,
+    transition: AttentionTransitionKind,
+    item: &AttentionItem,
+) -> Result<(), StoreError> {
+    let placeholder = AttentionTransition {
+        sequence: 0,
+        transition,
+        item: item.clone(),
+    };
+    tx.execute(
+        "INSERT INTO attention_transitions(item_id,transition_json) VALUES(?1,?2)",
+        params![item.id, serde_json::to_vec(&placeholder)?],
+    )?;
+    let sequence = tx.last_insert_rowid() as u64;
+    let committed = AttentionTransition {
+        sequence,
+        transition,
+        item: item.clone(),
+    };
+    tx.execute(
+        "UPDATE attention_transitions SET transition_json=?1 WHERE sequence=?2",
+        params![serde_json::to_vec(&committed)?, sequence],
+    )?;
+    Ok(())
+}
+
+fn prune_claimed_attention_transitions(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
+    // Unclaimed transitions remain deliverable; only old delivered/baselined
+    // receipts are bounded. The item table remains the durable source of UI
+    // state and has its own Recent presentation bound.
+    tx.execute(
+        "DELETE FROM attention_transitions WHERE sequence IN (
+            SELECT sequence FROM attention_transitions
+            WHERE claimed_by IS NOT NULL
+            ORDER BY sequence DESC LIMIT -1 OFFSET 1000
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
 fn insert_activity_event(
     tx: &rusqlite::Transaction<'_>,
     event: &ActivityEnvelope,
@@ -2326,8 +2830,9 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use zeron_proto::{
-        ACTIVITY_ENVELOPE_VERSION, ActivityKind, ActivityRedaction, ActivitySourceRef,
-        HistorySearchFilters,
+        ACTIVITY_ENVELOPE_VERSION, ATTENTION_CONTRACT_VERSION, ActivityKind, ActivityRedaction,
+        ActivitySourceRef, AttentionItem, AttentionKind, AttentionLifecycle, AttentionMutation,
+        AttentionSeverity, AttentionSourcePointer, AttentionTarget, HistorySearchFilters,
     };
 
     fn activity(
@@ -2379,6 +2884,278 @@ mod tests {
             limit: 50,
             target_device_id: None,
         }
+    }
+
+    fn attention(id: &str, kind: AttentionKind, lifecycle: AttentionLifecycle) -> AttentionItem {
+        AttentionItem {
+            contract_version: ATTENTION_CONTRACT_VERSION,
+            id: id.into(),
+            dedup_key: format!("dedup:{id}"),
+            source_key: format!("source:{id}"),
+            kind,
+            severity: AttentionSeverity::Warning,
+            lifecycle,
+            environment_id: "env".into(),
+            device_id: "device".into(),
+            task_id: Some("task".into()),
+            turn_id: Some("turn".into()),
+            request_id: Some(id.into()),
+            title: "Attention needed".into(),
+            summary: "A task is waiting for a safe action.".into(),
+            created_at_ms: 10,
+            updated_at_ms: 10,
+            seen_at_ms: None,
+            acknowledged_at_ms: None,
+            resolved_at_ms: None,
+            target: AttentionTarget::Task {
+                task_id: "task".into(),
+            },
+            source: AttentionSourcePointer {
+                task_id: Some("task".into()),
+                message_id: Some("message".into()),
+                part_id: None,
+                request_id: Some(id.into()),
+                queue_id: None,
+                recovery_id: None,
+                activity_event_id: None,
+            },
+        }
+    }
+
+    #[test]
+    fn attention_reconcile_persists_presentation_without_resolving_on_seen_or_ack() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let item = attention(
+            "approval-1",
+            AttentionKind::ApprovalRequired,
+            AttentionLifecycle::Unresolved,
+        );
+        let revision = store
+            .reconcile_attention_items(&[item.clone()], &[AttentionKind::ApprovalRequired])
+            .unwrap();
+        assert_eq!(revision, 1);
+        assert_eq!(store.attention_snapshot().unwrap().unresolved_count, 1);
+
+        let seen = store
+            .mutate_attention(
+                "seen",
+                revision,
+                &AttentionMutation::MarkSeen {
+                    item_ids: vec![item.id.clone()],
+                },
+            )
+            .unwrap();
+        let ack = store
+            .mutate_attention(
+                "ack",
+                seen.revision,
+                &AttentionMutation::Acknowledge {
+                    item_id: item.id.clone(),
+                },
+            )
+            .unwrap();
+        let snapshot = store.attention_snapshot().unwrap();
+        assert_eq!(snapshot.unresolved_count, 1);
+        assert_eq!(
+            snapshot.needs_attention[0].lifecycle,
+            AttentionLifecycle::Acknowledged
+        );
+        assert!(snapshot.needs_attention[0].seen_at_ms.is_some());
+
+        let duplicate = store
+            .mutate_attention(
+                "ack",
+                revision,
+                &AttentionMutation::Acknowledge {
+                    item_id: item.id.clone(),
+                },
+            )
+            .unwrap();
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.revision, ack.revision);
+        assert!(matches!(
+            store.mutate_attention("stale", revision, &AttentionMutation::ClearRecent,),
+            Err(StoreError::AttentionRevisionConflict)
+        ));
+        assert!(matches!(
+            store.mutate_attention("ack", ack.revision, &AttentionMutation::ClearRecent,),
+            Err(StoreError::AttentionCommandConflict)
+        ));
+
+        store
+            .reconcile_attention_items(&[], &[AttentionKind::ApprovalRequired])
+            .unwrap();
+        let resolved = store.attention_snapshot().unwrap();
+        assert_eq!(resolved.unresolved_count, 0);
+        assert_eq!(resolved.recent.len(), 1);
+        assert_eq!(resolved.recent[0].lifecycle, AttentionLifecycle::Resolved);
+        assert!(resolved.recent[0].acknowledged_at_ms.is_some());
+        assert!(resolved.recent[0].seen_at_ms.is_some());
+
+        let baseline = store.claim_attention_transitions("ui", false).unwrap();
+        assert!(baseline.is_empty());
+    }
+
+    #[test]
+    fn attention_heartbeat_is_stable_and_recovery_kind_change_reopens_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let mut completed = attention(
+            "completion",
+            AttentionKind::TaskCompleted,
+            AttentionLifecycle::Resolved,
+        );
+        completed.resolved_at_ms = Some(10);
+        let first = store
+            .reconcile_attention_items(&[completed.clone()], &[AttentionKind::TaskCompleted])
+            .unwrap();
+        completed.updated_at_ms = 20;
+        completed.resolved_at_ms = Some(20);
+        assert_eq!(
+            store
+                .reconcile_attention_items(&[completed], &[AttentionKind::TaskCompleted])
+                .unwrap(),
+            first
+        );
+        assert_eq!(
+            store.attention_snapshot().unwrap().recent[0].resolved_at_ms,
+            Some(10)
+        );
+
+        let sign_in = attention(
+            "recovery-chain",
+            AttentionKind::ProviderAuthenticationRequired,
+            AttentionLifecycle::Unresolved,
+        );
+        let revision = store
+            .reconcile_attention_items(
+                &[sign_in.clone()],
+                &[
+                    AttentionKind::ProviderAuthenticationRequired,
+                    AttentionKind::TaskFailed,
+                ],
+            )
+            .unwrap();
+        store.claim_attention_transitions("ui", false).unwrap();
+        store
+            .mutate_attention(
+                "ack-sign-in",
+                revision,
+                &AttentionMutation::Acknowledge {
+                    item_id: sign_in.id.clone(),
+                },
+            )
+            .unwrap();
+        let mut failed = sign_in;
+        failed.kind = AttentionKind::TaskFailed;
+        failed.source_key.push_str(":failure");
+        store
+            .reconcile_attention_items(
+                &[failed],
+                &[
+                    AttentionKind::ProviderAuthenticationRequired,
+                    AttentionKind::TaskFailed,
+                ],
+            )
+            .unwrap();
+        let needs = store.attention_snapshot().unwrap();
+        assert_eq!(needs.unresolved_count, 1);
+        assert_eq!(
+            needs.needs_attention[0].lifecycle,
+            AttentionLifecycle::Unresolved
+        );
+        assert_eq!(needs.needs_attention[0].acknowledged_at_ms, None);
+        let transitions = store.claim_attention_transitions("ui", true).unwrap();
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].item.kind, AttentionKind::TaskFailed);
+    }
+
+    #[test]
+    fn attention_recent_is_bounded_without_evicting_unresolved_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let mut desired = (0..205)
+            .map(|index| {
+                let mut item = attention(
+                    &format!("completed-{index}"),
+                    AttentionKind::TaskCompleted,
+                    AttentionLifecycle::Resolved,
+                );
+                item.updated_at_ms = 100 + index;
+                item.resolved_at_ms = Some(100 + index);
+                item
+            })
+            .collect::<Vec<_>>();
+        let approval = attention(
+            "approval-never-evicted",
+            AttentionKind::ApprovalRequired,
+            AttentionLifecycle::Unresolved,
+        );
+        desired.push(approval.clone());
+        store
+            .reconcile_attention_items(
+                &desired,
+                &[
+                    AttentionKind::TaskCompleted,
+                    AttentionKind::ApprovalRequired,
+                ],
+            )
+            .unwrap();
+        let snapshot = store.attention_snapshot().unwrap();
+        assert_eq!(snapshot.recent.len(), 200);
+        assert_eq!(snapshot.unresolved_count, 1);
+        assert_eq!(snapshot.needs_attention[0].id, approval.id);
+        assert!(
+            store
+                .mutate_attention(
+                    "reject-unresolved-dismiss",
+                    snapshot.revision,
+                    &AttentionMutation::DismissRecent {
+                        item_id: approval.id
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(store.attention_snapshot().unwrap().unresolved_count, 1);
+    }
+
+    #[test]
+    fn repeat_outage_reopens_without_inheriting_old_acknowledgment() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let item = attention(
+            "connectivity",
+            AttentionKind::ConnectivityUnavailable,
+            AttentionLifecycle::Unresolved,
+        );
+        let revision = store
+            .reconcile_attention_items(&[item.clone()], &[AttentionKind::ConnectivityUnavailable])
+            .unwrap();
+        let ack = store
+            .mutate_attention(
+                "ack-old-outage",
+                revision,
+                &AttentionMutation::Acknowledge {
+                    item_id: item.id.clone(),
+                },
+            )
+            .unwrap();
+        assert!(ack.revision > revision);
+        store
+            .reconcile_attention_items(&[], &[AttentionKind::ConnectivityUnavailable])
+            .unwrap();
+        store
+            .reconcile_attention_items(&[item], &[AttentionKind::ConnectivityUnavailable])
+            .unwrap();
+        let reopened = store.attention_snapshot().unwrap();
+        assert_eq!(reopened.unresolved_count, 1);
+        assert_eq!(
+            reopened.needs_attention[0].lifecycle,
+            AttentionLifecycle::Unresolved
+        );
+        assert_eq!(reopened.needs_attention[0].acknowledged_at_ms, None);
+        assert_eq!(reopened.needs_attention[0].seen_at_ms, None);
     }
 
     #[test]

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{HarnessId, ReasoningLevel};
 
 pub const ACTIVITY_ENVELOPE_VERSION: u32 = 1;
+pub const ATTENTION_CONTRACT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -201,6 +202,232 @@ pub struct HistoryRebuildResult {
     pub completed_at_ms: i64,
 }
 
+/// The deliberately small set of events projected into Activity. Exhaustive
+/// tool/model/file history remains in the L14 index above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttentionKind {
+    ApprovalRequired,
+    UserInputRequired,
+    TaskFailed,
+    QueuedSendFailed,
+    TaskCompleted,
+    TaskRecovered,
+    HostDisconnected,
+    HostReconnected,
+    ConnectivityUnavailable,
+    ProviderAuthenticationRequired,
+    CompatibilityBlocked,
+    AutomationFailed,
+    AutomationCompleted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttentionSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttentionLifecycle {
+    Unresolved,
+    Acknowledged,
+    Resolved,
+}
+
+/// An exact navigation target. Unsupported owners return `Unavailable` with
+/// a reason instead of falling back to another task/profile or inventing a
+/// mutation path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AttentionTarget {
+    Task {
+        task_id: String,
+    },
+    TaskRequest {
+        task_id: String,
+        request_id: String,
+        message_id: String,
+    },
+    TaskQueue {
+        task_id: String,
+        queue_id: String,
+    },
+    TaskRecovery {
+        task_id: String,
+        recovery_id: String,
+    },
+    SettingsAccounts,
+    SettingsDevices,
+    Unavailable {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionSourcePointer {
+    pub task_id: Option<String>,
+    pub message_id: Option<String>,
+    pub part_id: Option<String>,
+    pub request_id: Option<String>,
+    pub queue_id: Option<String>,
+    pub recovery_id: Option<String>,
+    pub activity_event_id: Option<String>,
+}
+
+/// Durable minimized projection. Presentation timestamps are kept separately
+/// from authoritative resolution; none of these fields contains prompt,
+/// command, output, screenshot, credential, or file-path content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionItem {
+    pub contract_version: u32,
+    pub id: String,
+    pub dedup_key: String,
+    pub source_key: String,
+    pub kind: AttentionKind,
+    pub severity: AttentionSeverity,
+    pub lifecycle: AttentionLifecycle,
+    pub environment_id: String,
+    pub device_id: String,
+    pub task_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub request_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub seen_at_ms: Option<i64>,
+    pub acknowledged_at_ms: Option<i64>,
+    pub resolved_at_ms: Option<i64>,
+    pub target: AttentionTarget,
+    pub source: AttentionSourcePointer,
+}
+
+impl AttentionItem {
+    pub fn unresolved(&self) -> bool {
+        self.lifecycle != AttentionLifecycle::Resolved
+    }
+
+    pub fn actionable(&self) -> bool {
+        matches!(
+            self.kind,
+            AttentionKind::ApprovalRequired
+                | AttentionKind::UserInputRequired
+                | AttentionKind::TaskFailed
+                | AttentionKind::QueuedSendFailed
+                | AttentionKind::HostDisconnected
+                | AttentionKind::ConnectivityUnavailable
+                | AttentionKind::ProviderAuthenticationRequired
+                | AttentionKind::CompatibilityBlocked
+                | AttentionKind::AutomationFailed
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionProducerAvailability {
+    pub source: String,
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionSnapshot {
+    pub contract_version: u32,
+    pub revision: u64,
+    pub read_at_ms: i64,
+    pub unresolved_count: u32,
+    pub needs_attention: Vec<AttentionItem>,
+    pub recent: Vec<AttentionItem>,
+    pub producers: Vec<AttentionProducerAvailability>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionReadRequest {
+    pub target_device_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttentionTransitionKind {
+    NeedsAttention,
+    Resolved,
+    Recent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionTransition {
+    pub sequence: u64,
+    pub transition: AttentionTransitionKind,
+    pub item: AttentionItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionTransitionClaim {
+    pub consumer_id: String,
+    /// Startup/reconnect baselines claim old transitions without replaying
+    /// banners or sounds. Once armed, the same call returns newly claimed
+    /// transitions for delivery.
+    #[serde(default)]
+    pub deliver_existing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionTransitionBatch {
+    pub through_sequence: u64,
+    pub transitions: Vec<AttentionTransition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AttentionMutation {
+    MarkSeen { item_ids: Vec<String> },
+    Acknowledge { item_id: String },
+    DismissRecent { item_id: String },
+    ClearRecent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionMutationRequest {
+    pub command_id: String,
+    pub expected_revision: u64,
+    pub mutation: AttentionMutation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionMutationResult {
+    pub command_id: String,
+    pub applied: bool,
+    pub duplicate: bool,
+    pub revision: u64,
+    pub snapshot: AttentionSnapshot,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +438,49 @@ mod tests {
         assert_eq!(request.scope, HistorySearchScope::SelectedProject);
         assert_eq!(request.limit, 50);
         assert!(request.filters.device_ids.is_empty());
+    }
+
+    #[test]
+    fn seen_and_acknowledged_attention_remains_unresolved() {
+        let mut item = AttentionItem {
+            contract_version: ATTENTION_CONTRACT_VERSION,
+            id: "item".into(),
+            dedup_key: "request:one".into(),
+            source_key: "request:one".into(),
+            kind: AttentionKind::ApprovalRequired,
+            severity: AttentionSeverity::Warning,
+            lifecycle: AttentionLifecycle::Acknowledged,
+            environment_id: "env".into(),
+            device_id: "device".into(),
+            task_id: Some("task".into()),
+            turn_id: Some("turn".into()),
+            request_id: Some("request".into()),
+            title: "Approval needed".into(),
+            summary: "A task is waiting for approval.".into(),
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            seen_at_ms: Some(2),
+            acknowledged_at_ms: Some(2),
+            resolved_at_ms: None,
+            target: AttentionTarget::TaskRequest {
+                task_id: "task".into(),
+                request_id: "request".into(),
+                message_id: "message".into(),
+            },
+            source: AttentionSourcePointer {
+                task_id: Some("task".into()),
+                message_id: Some("message".into()),
+                part_id: Some("part".into()),
+                request_id: Some("request".into()),
+                queue_id: None,
+                recovery_id: None,
+                activity_event_id: None,
+            },
+        };
+        assert!(item.unresolved());
+        assert!(item.actionable());
+        item.lifecycle = AttentionLifecycle::Resolved;
+        item.resolved_at_ms = Some(3);
+        assert!(!item.unresolved());
     }
 }

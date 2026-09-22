@@ -45,7 +45,9 @@ use crate::settings::archived::ArchivedPage;
 use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
-use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
+use crate::settings::notifications::{
+    NotificationPreferences, NotificationTask, NotificationsEvent, NotificationsPage,
+};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, JUMP_SLOTS, KeymapConfig, RIGHT_PANE_DEFAULT,
@@ -62,6 +64,7 @@ use crate::theme::Theme;
 use crate::transcript::{self, Transcript, TranscriptEvent};
 use crate::workspace_links::resolve_workspace_file_link;
 
+mod activity_center;
 mod command_palette;
 mod spaces;
 mod tabs;
@@ -76,6 +79,7 @@ actions!(
         ToggleChanges,
         AddSpacePalette,
         ToggleCommandPalette,
+        ToggleActivity,
         OpenModelPicker,
         NewSession,
         OpenSettings,
@@ -385,6 +389,16 @@ pub fn apply_keymap(
             None,
         ),
     ]);
+    if !keymap.open_activity.is_empty() {
+        let combo = platform_combo(&keymap.open_activity);
+        if !crate::settings::activity_combo_is_reserved(&keymap.open_activity)
+            && Keystroke::parse(&combo).is_ok()
+        {
+            cx.bind_keys([KeyBinding::new(&combo, ToggleActivity, None)]);
+        } else {
+            tracing::warn!(combo = %keymap.open_activity, "unparseable Activity shortcut; leaving it unbound");
+        }
+    }
     crate::browser::bind_keys(cx, keymap);
     // ⌘1..⌘9 open the sidebar's first nine rows. A slot left unbound (an empty
     // combo in a hand-edited file) binds nothing rather than falling back —
@@ -1736,16 +1750,10 @@ pub struct Shell {
     history_search_task: Option<Task<()>>,
     history_search_next_cursor: Option<zeron_proto::HistoryCursor>,
     history_search_scope_key: Option<HistorySearchScopeKey>,
+    activity: activity_center::ActivityUi,
+    keep_awake: crate::power::KeepAwake<crate::power::SystemPower>,
     /// `settings.last_space_id` applied once after the first spaces frame.
     space_boot_applied: bool,
-    /// Last seen session status per chat — the chime trigger compares against
-    /// it (a row's FIRST appearance never chimes, so boot stays silent).
-    sound_prev: std::collections::HashMap<String, crate::sound::SessionNotificationState>,
-    /// Startup-aware durable connectivity notification baseline.
-    connectivity_notifications: crate::sound::ConnectivityNotificationState,
-    /// Persistent across AppState observer callbacks so simultaneous session
-    /// failures and connectivity degradation produce one attention sound.
-    attention_sound_gate: crate::sound::AttentionSoundGate,
     user_menu: popover::Popup<()>,
     /// Inline sidebar error strip (mutation failures); click dismisses.
     sidebar_notice: Option<SharedString>,
@@ -2111,10 +2119,9 @@ impl Shell {
             history_search_task: None,
             history_search_next_cursor: None,
             history_search_scope_key: None,
+            activity: activity_center::ActivityUi::default(),
+            keep_awake: crate::power::KeepAwake::new(crate::power::SystemPower),
             space_boot_applied: false,
-            sound_prev: std::collections::HashMap::new(),
-            connectivity_notifications: Default::default(),
-            attention_sound_gate: Default::default(),
             user_menu: popover::Popup::default(),
             sidebar_notice: None,
             update_flow: UpdateFlow::Idle,
@@ -2274,6 +2281,9 @@ impl Shell {
             engine_generation,
         );
         self.reconcile_session_history_scope(engine_changed, cx);
+        self.reconcile_keep_awake(cx);
+        self.ensure_activity_polling(cx);
+        self.refresh_activity(cx);
         if let Some(notice) = state.update(cx, |state, _| state.take_deep_link_notice()) {
             self.sidebar_notice = Some(notice.into());
         }
@@ -2377,96 +2387,6 @@ impl Shell {
                     );
                     cx.notify();
                 });
-            }
-        }
-        // Banners and chimes share one session detector. Completion markers survive
-        // queue handoffs and never advance for interrupts or stale activity.
-        // A row's first appearance seeds the baseline silently (boot/replay).
-        // Pending sends consume completion changes silently, while questions
-        // still ring immediately. Output settings do not affect the baseline.
-        {
-            let now = Utc::now();
-            type Ping = (
-                String,
-                crate::sound::SessionNotificationState,
-                bool,
-                Option<String>,
-            );
-            let (sessions, connectivity, connectivity_observed) = {
-                let state = state.read(cx);
-                let sessions: Vec<Ping> = state
-                    .sessions
-                    .iter()
-                    .map(|s| {
-                        let status = crate::sound::SessionNotificationState::new(s, now);
-                        let send_pending = state.send_pending(&s.chat_id, now);
-                        let title = state
-                            .chats
-                            .iter()
-                            .find(|c| c.id == s.chat_id)
-                            .and_then(|c| c.title.clone());
-                        (s.chat_id.clone(), status, send_pending, title)
-                    })
-                    .collect();
-                (
-                    sessions,
-                    state.connectivity.state,
-                    state.connectivity_observed,
-                )
-            };
-            // Background-only banners: `active_window()` is app-level (any
-            // Zeron window being key), so a ping for a *background chat* in a
-            // focused app still stays a chime — you're already looking at
-            // Zeron; the sidebar dot carries the rest.
-            let app_focused = cx.active_window().is_some();
-            for (chat_id, status, send_pending, title) in sessions {
-                let prev = self.sound_prev.insert(chat_id.clone(), status.clone());
-                if let Some(prev) = prev
-                    && let Some(sound) = status.sound_since(&prev, send_pending)
-                {
-                    if self.settings.session_sound_enabled(sound) {
-                        let should_play = sound != crate::sound::Sound::Attention
-                            || self
-                                .attention_sound_gate
-                                .should_play(std::time::Instant::now());
-                        if should_play {
-                            crate::sound::play(sound);
-                        }
-                    }
-                    if self.settings.notifications_enabled
-                        && !(self.settings.notifications_background_only && app_focused)
-                    {
-                        let title = title.unwrap_or_else(|| "New session".into());
-                        let body = match sound {
-                            crate::sound::Sound::Done => "Run finished",
-                            crate::sound::Sound::Request => "Waiting on your input",
-                            crate::sound::Sound::Attention => "Run failed",
-                        };
-                        crate::notify::post(&title, body, Some(&chat_id));
-                    }
-                }
-            }
-            if let Some(sound) = self.connectivity_notifications.update(
-                connectivity,
-                connectivity_observed,
-                std::time::Instant::now(),
-            ) {
-                if self.settings.session_sound_enabled(sound)
-                    && self
-                        .attention_sound_gate
-                        .should_play(std::time::Instant::now())
-                {
-                    crate::sound::play(sound);
-                }
-                if self.settings.notifications_enabled
-                    && !(self.settings.notifications_background_only && app_focused)
-                {
-                    let body = match connectivity {
-                        zeron_proto::ConnectivityState::Offline => "Your device is offline",
-                        _ => "LUNA is trying to reconnect",
-                    };
-                    crate::notify::post("Connection unavailable", body, None);
-                }
             }
         }
         // An explicit projectless canvas must be visible in the sidebar:
@@ -3647,6 +3567,7 @@ impl Shell {
     }
 
     fn prepare_exit(&mut self, action: PendingExit, cx: &mut Context<Self>) -> bool {
+        let _ = self.keep_awake.reconcile(None);
         let composer_ready = self
             .composer
             .update(cx, |composer, cx| composer.prepare_close(cx));
@@ -4186,36 +4107,47 @@ impl Shell {
                 }
             }
             SettingsSection::Notifications => {
+                let notification_tasks = self.notification_tasks(cx);
                 if self.notifications_page.is_none() {
-                    let page = cx.new(|cx| {
-                        NotificationsPage::new(
-                            self.settings.sound_enabled,
-                            self.settings.sound_completion_enabled,
-                            self.settings.sound_input_enabled,
-                            self.settings.sound_attention_enabled,
-                            self.settings.notifications_enabled,
-                            self.settings.notifications_background_only,
-                            cx,
-                        )
-                    });
+                    let task_rows = notification_tasks.clone();
+                    let preferences = NotificationPreferences::from(&self.settings);
+                    let page = cx.new(|cx| NotificationsPage::new(preferences, task_rows, cx));
                     // Persist the flags whenever the page flips one.
                     self.notifications_sub = Some(cx.subscribe(
                         &page,
                         |this: &mut Shell, _, event: &NotificationsEvent, cx| {
-                            let NotificationsEvent::Changed {
-                                sound,
-                                completion_sound,
-                                input_sound,
-                                attention_sound,
-                                desktop,
-                                background_only,
-                            } = *event;
-                            this.settings.sound_enabled = sound;
-                            this.settings.sound_completion_enabled = completion_sound;
-                            this.settings.sound_input_enabled = input_sound;
-                            this.settings.sound_attention_enabled = attention_sound;
-                            this.settings.notifications_enabled = desktop;
-                            this.settings.notifications_background_only = background_only;
+                            match event {
+                                NotificationsEvent::Changed {
+                                    sound,
+                                    completion_sound,
+                                    input_sound,
+                                    attention_sound,
+                                    desktop,
+                                    background_only,
+                                    in_app,
+                                } => {
+                                    this.settings.sound_enabled = *sound;
+                                    this.settings.sound_completion_enabled = *completion_sound;
+                                    this.settings.sound_input_enabled = *input_sound;
+                                    this.settings.sound_attention_enabled = *attention_sound;
+                                    this.settings.notifications_enabled = *desktop;
+                                    this.settings.notifications_background_only = *background_only;
+                                    this.settings.in_app_notices_enabled = *in_app;
+                                }
+                                NotificationsEvent::TaskPolicyChanged { task_id, policy } => {
+                                    this.settings
+                                        .task_notification_policies
+                                        .insert(task_id.clone(), *policy);
+                                }
+                                NotificationsEvent::KeepAwakeChanged { task_id, enabled } => {
+                                    if *enabled {
+                                        this.settings.keep_awake_task_ids.insert(task_id.clone());
+                                    } else {
+                                        this.settings.keep_awake_task_ids.remove(task_id);
+                                    }
+                                    this.reconcile_keep_awake(cx);
+                                }
+                            }
                             this.schedule_save(cx);
                             cx.notify();
                         },
@@ -4223,7 +4155,10 @@ impl Shell {
                     self.notifications_page = Some(page);
                 }
                 match &self.notifications_page {
-                    Some(page) => page.clone().into_any_element(),
+                    Some(page) => {
+                        page.update(cx, |page, cx| page.set_tasks(notification_tasks, cx));
+                        page.clone().into_any_element()
+                    }
                     None => Empty.into_any_element(),
                 }
             }
@@ -5134,6 +5069,7 @@ impl Shell {
     /// stranding it over a session the user never picked.
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
+            || self.activity.open
             || self.add_space.is_some()
             || self.composer.read(cx).pickers().read(cx).is_open()
     }
@@ -7431,6 +7367,10 @@ impl Shell {
                         .child(notice),
                 )
             })
+            .when_some(self.render_activity_notice(theme, cx), |el, notice| {
+                el.child(notice)
+            })
+            .child(self.render_activity_action(theme, cx))
             .child(div().p(px(Theme::SPACE_SM)).flex_none().child(user_menu))
             .into_any_element()
     }
@@ -8225,6 +8165,11 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.activity.open {
+            self.close_activity(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape" && self.command_palette.is_some() {
             self.close_command_palette(window, cx);
             cx.stop_propagation();
@@ -8294,6 +8239,9 @@ impl Shell {
     ) -> Vec<AnyElement> {
         let theme = Theme::of(cx).for_popup();
         let mut overlays: Vec<AnyElement> = Vec::new();
+        if let Some(activity) = self.render_activity_compact_overlay(viewport, cx) {
+            overlays.push(activity);
+        }
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -11711,6 +11659,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
                 this.toggle_command_palette(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ToggleActivity, window, cx| {
+                this.toggle_activity(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
                     let pickers = this.composer.read(cx).pickers().clone();
@@ -12413,6 +12364,9 @@ mod tests {
         // `apply_keymap` silently falls back on an unparseable combo, so a
         // default gpui cannot parse would ship as a dead shortcut.
         for id in crate::settings::ShortcutId::ALL {
+            if id.default_combo().is_empty() {
+                continue;
+            }
             let combo = platform_combo(id.default_combo());
             assert!(
                 Keystroke::parse(&combo).is_ok(),

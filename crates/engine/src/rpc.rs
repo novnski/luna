@@ -66,6 +66,8 @@ use zeron_doc::{
     SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry,
 };
 use zeron_proto::{
+    AttentionMutationRequest, AttentionMutationResult, AttentionProducerAvailability,
+    AttentionReadRequest, AttentionSnapshot, AttentionTransitionBatch, AttentionTransitionClaim,
     BindingOrigin, Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
     CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead, ContextBoundary,
     ContextBoundaryKind, ContextControlState, ContextHandoff, ContextOperationStatus,
@@ -1193,6 +1195,94 @@ impl EngineRpc {
         self.local_import
             .as_ref()
             .ok_or_else(|| RpcError::Failed("local import requires a synced workspace".into()))
+    }
+
+    fn ensure_local_attention_target(&self, target_device_id: &str) -> Result<(), RpcError> {
+        if target_device_id != self.engine_info.device_id {
+            return Err(RpcError::Failed(
+                "Activity for another environment is unavailable until scoped remote access is implemented."
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn reconcile_attention(&self) -> Result<AttentionSnapshot, RpcError> {
+        let chats = self
+            .workspace
+            .read_chats()
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        // The live session map is process-local. Settled status and completion
+        // markers are mirrored into the workspace doc, so a restart must use
+        // those rows until this engine emits another transition.
+        let stored_sessions = self
+            .workspace
+            .read_sessions()
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let mut desired = Vec::new();
+        let connectivity = self.doc_host.watch_connectivity();
+        if let Some(item) = crate::attention::project_connectivity(
+            &self.engine_info.device_id,
+            connectivity.borrow().state,
+            crate::now_ms(),
+        ) {
+            desired.push(item);
+        }
+        for chat in chats
+            .iter()
+            .filter(|chat| chat.device_id == self.engine_info.device_id)
+        {
+            let handle = self
+                .doc_host
+                .open(&chat.id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            let entries = handle
+                .doc()
+                .read_entries()
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            let queue = handle
+                .doc()
+                .read_queue()
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            let session = self.sessions.session_status(&chat.id).or_else(|| {
+                stored_sessions
+                    .iter()
+                    .find(|session| {
+                        session.chat_id == chat.id
+                            && session.device_id == self.engine_info.device_id
+                    })
+                    .cloned()
+            });
+            desired.extend(crate::attention::project_task(
+                &self.engine_info.device_id,
+                chat,
+                session.as_ref(),
+                &entries,
+                &queue,
+            ));
+        }
+        self.store
+            .reconcile_attention_items(&desired, crate::attention::MANAGED_KINDS)
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let stored = self
+            .store
+            .attention_snapshot()
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        Ok(AttentionSnapshot {
+            contract_version: zeron_proto::ATTENTION_CONTRACT_VERSION,
+            revision: stored.revision,
+            read_at_ms: crate::now_ms(),
+            unresolved_count: stored.unresolved_count,
+            needs_attention: stored.needs_attention,
+            recent: stored.recent,
+            producers: vec![
+                AttentionProducerAvailability { source: "local task requests, run/recovery state, queue, and edge connectivity".into(), available: true, reason: None },
+                AttentionProducerAvailability { source: "remote host and device grants".into(), available: false, reason: Some("Scoped remote authorization is not implemented.".into()) },
+                AttentionProducerAvailability { source: "automations".into(), available: false, reason: Some("Automations are a later roadmap feature.".into()) },
+                AttentionProducerAvailability { source: "engine/CLI compatibility blockers".into(), available: false, reason: Some("A stable operation-blocking compatibility producer is not available.".into()) },
+                AttentionProducerAvailability { source: "provider account health".into(), available: false, reason: Some("Only a task's authoritative recovery sign-in state is available; no provider health probe is performed.".into()) },
+            ],
+        })
     }
 
     fn validate_composer_draft(&self, draft: &ComposerDraft) -> Result<(), RpcError> {
@@ -5325,6 +5415,54 @@ impl RpcService for EngineRpc {
         match method {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
+            methods::GET_ATTENTION => {
+                let request: AttentionReadRequest = parse_params(params)?;
+                self.ensure_local_attention_target(&request.target_device_id)?;
+                RpcReply::value(&self.reconcile_attention()?)
+            }
+            methods::CLAIM_ATTENTION_TRANSITIONS => {
+                let request: AttentionTransitionClaim = parse_params(params)?;
+                self.ensure_local_attention_target(
+                    request.target_device_id.as_deref().unwrap_or(""),
+                )?;
+                self.reconcile_attention()?;
+                let transitions = self
+                    .store
+                    .claim_attention_transitions(&request.consumer_id, request.deliver_existing)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&AttentionTransitionBatch {
+                    through_sequence: transitions.last().map_or(0, |row| row.sequence),
+                    transitions,
+                })
+            }
+            methods::MUTATE_ATTENTION => {
+                let request: AttentionMutationRequest = parse_params(params)?;
+                self.ensure_local_attention_target(
+                    request.target_device_id.as_deref().unwrap_or(""),
+                )?;
+                if request.command_id.is_empty() || request.command_id.len() > 128 {
+                    return Err(RpcError::BadParams("invalid Activity commandId".into()));
+                }
+                self.reconcile_attention()?;
+                let result = self
+                    .store
+                    .mutate_attention(
+                        &request.command_id,
+                        request.expected_revision,
+                        &request.mutation,
+                    )
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let snapshot = self.reconcile_attention()?;
+                RpcReply::value(&AttentionMutationResult {
+                    command_id: request.command_id,
+                    applied: !result.duplicate,
+                    duplicate: result.duplicate,
+                    // Receipt revision is stable for an idempotent replay even
+                    // when the accompanying fresh snapshot has advanced.
+                    revision: result.revision,
+                    snapshot,
+                })
+            }
             methods::SEARCH_SESSION_HISTORY => {
                 let request: HistorySearchRequest = parse_params(params)?;
                 let page = self
