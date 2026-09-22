@@ -626,6 +626,10 @@ fn wizard_escape_goes_back(key: &str, input_focused: bool, input_empty: bool) ->
     key == "escape" && (!input_focused || input_empty)
 }
 
+fn wizard_option_activates(key: &str, is_held: bool, modified: bool) -> bool {
+    !is_held && !modified && matches!(key, "enter" | "space")
+}
+
 /// Find the unresolved input request the panel should serve, if any: an
 /// unresolved input part on the LAST assistant entry — regardless of the
 /// entry's run status. The question stays answerable until the user actually
@@ -7408,6 +7412,11 @@ impl Composer {
             // so switching away and back must not erase the one visible
             // trace of a failed send.
             self.wizard = None;
+            // The input entity survives navigation. Release the old question's
+            // placeholder now; a pending question on the new route will set
+            // its own placeholder below.
+            self.input
+                .update(cx, |input, cx| input.set_placeholder("Do anything…", cx));
             // Attachments stay stashed under their chat key (the map swap IS
             // the navigation); only the transient chrome resets.
             self.preview = None;
@@ -8785,12 +8794,27 @@ impl Composer {
         let surface_radius =
             composer_surface_radius(self.dock_frame.map_or(0.0, |frame| frame.amount));
 
+        let composer_for_a11y = cx.entity().downgrade();
         let options = question.options.iter().enumerate().map(|(ix, label)| {
             // Selection reads on the row only while no typed override exists
             // (typed answers win — zeron question-panel.tsx `isSel`).
             let picked = wizard.is_picked(ix) && typed_empty;
+            let composer_for_a11y = composer_for_a11y.clone();
             div()
                 .id(("wizard-option", ix))
+                .role(if question.multi_select {
+                    gpui::Role::CheckBox
+                } else {
+                    gpui::Role::RadioButton
+                })
+                .aria_label(label.clone())
+                .aria_toggled(if picked {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .tab_index(0)
+                .focus_visible(|style| style.border_color(theme.accent))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -8816,6 +8840,21 @@ impl Composer {
                 })
                 .on_hover(motion::hover_listener(format!("wizard-option-{ix}")))
                 .cursor_pointer()
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    if wizard_option_activates(
+                        &event.keystroke.key,
+                        event.is_held,
+                        event.keystroke.modifiers.modified(),
+                    ) {
+                        cx.stop_propagation();
+                        this.wizard_select(ix, cx);
+                    }
+                }))
+                .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                    composer_for_a11y
+                        .update(cx, |this, cx| this.wizard_select(ix, cx))
+                        .ok();
+                })
                 .on_click(cx.listener(move |this, _, _, cx| this.wizard_select(ix, cx)))
                 .child(
                     div()
@@ -10834,6 +10873,82 @@ mod tests {
     fn wizard_borrows_the_generic_enter_context_only_while_active() {
         assert_eq!(message_input_context(false), MESSAGE_COMPOSER_CONTEXT);
         assert_eq!(message_input_context(true), GENERIC_COMPOSER_CONTEXT);
+    }
+
+    #[test]
+    fn wizard_option_keyboard_activation_requires_bare_single_press() {
+        assert!(wizard_option_activates("enter", false, false));
+        assert!(wizard_option_activates("space", false, false));
+        assert!(!wizard_option_activates("enter", true, false));
+        assert!(!wizard_option_activates("space", false, true));
+        assert!(!wizard_option_activates("tab", false, false));
+    }
+
+    #[gpui::test]
+    fn question_placeholder_follows_task_route_and_survives_transient_blip(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let pending = |request_id: &str| SessionMessageEntry {
+            id: format!("message-{request_id}"),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Input {
+                id: format!("input-{request_id}"),
+                request_id: request_id.into(),
+                questions: vec![question("q", &["one", "two"], false)],
+                resolved: false,
+            }],
+            created_at: 0,
+            device_id: "synthetic".into(),
+            status: Some(zeron_doc::MessageStatus::Streaming),
+            continuation_of: None,
+        };
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.selected_chat = Some("question-a".into());
+            state.transcript = vec![pending("request-a")];
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(composer.wizard.as_ref().unwrap().request_id, "request-a");
+            assert_eq!(
+                composer.input.read(cx).placeholder.as_ref(),
+                "Type your own answer, or pick an option above"
+            );
+        });
+
+        state.update(cx, |state, _| state.transcript.clear());
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.read_with(cx, |composer, cx| {
+            assert!(
+                composer.wizard.is_some(),
+                "transient blip keeps the question"
+            );
+            assert_eq!(
+                composer.input.read(cx).placeholder.as_ref(),
+                "Type your own answer, or pick an option above"
+            );
+        });
+
+        state.update(cx, |state, _| state.selected_chat = Some("ordinary".into()));
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.read_with(cx, |composer, cx| {
+            assert!(composer.wizard.is_none());
+            assert_eq!(composer.input.read(cx).placeholder.as_ref(), "Do anything…");
+        });
+
+        state.update(cx, |state, _| {
+            state.selected_chat = Some("question-b".into());
+            state.transcript = vec![pending("request-b")];
+        });
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(composer.wizard.as_ref().unwrap().request_id, "request-b");
+            assert_eq!(
+                composer.input.read(cx).placeholder.as_ref(),
+                "Type your own answer, or pick an option above"
+            );
+        });
     }
 
     #[test]
