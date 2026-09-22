@@ -25,6 +25,7 @@ pub mod context_controls;
 pub mod credentials;
 pub mod diff_sync;
 pub mod doc_host;
+pub mod git_actions;
 pub mod history_operations;
 mod http_error;
 pub mod instance_lock;

@@ -208,6 +208,9 @@ pub mod methods {
     pub const WATCH_CHECKOUT_CHANGE_REQUEST: &str = "WatchCheckoutChangeRequest";
     pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
     pub const GET_CHECKOUT_FILE_DIFF_TEXT: &str = "GetCheckoutFileDiffText";
+    pub const GET_GIT_ACTION_PREVIEW: &str = "GetGitActionPreview";
+    pub const EXECUTE_GIT_ACTION: &str = "ExecuteGitAction";
+    pub const GENERATE_GIT_COMMIT_MESSAGE: &str = "GenerateGitCommitMessage";
     // Agent account metadata is relay-readable; credential/login actions stay local.
     pub const LIST_AGENT_ACCOUNTS: &str = "ListAgentAccounts";
     pub const ACTIVATE_AGENT_ACCOUNT: &str = "ActivateAgentAccount";

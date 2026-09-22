@@ -994,6 +994,7 @@ pub struct EngineRpc {
     workspace: WorkspaceHost,
     registry: std::sync::Arc<HarnessRegistry>,
     repos: Repos,
+    git_actions: crate::git_actions::GitActions,
     workspace_files: crate::WorkspaceFiles,
     terminals: Terminals,
     previews: Option<zeron_preview::PreviewService>,
@@ -1045,6 +1046,7 @@ impl EngineRpc {
             doc_host,
             workspace,
             registry,
+            git_actions: crate::git_actions::GitActions::new(repos.clone()),
             repos,
             workspace_files,
             terminals,
@@ -4956,6 +4958,8 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         methods::CLONE_REPO | methods::FETCH_ALL | methods::APPLY_UPDATE => {
             Duration::from_secs(15 * 60)
         }
+        methods::EXECUTE_GIT_ACTION => Duration::from_secs(150),
+        methods::GENERATE_GIT_COMMIT_MESSAGE => Duration::from_secs(45),
         methods::CREATE_WORKTREE => Duration::from_secs(120),
         _ => Duration::from_secs(30),
     }
@@ -5021,6 +5025,9 @@ fn forwardable(method: &str) -> bool {
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
             | methods::GET_CHECKOUT_DIFF
             | methods::GET_CHECKOUT_FILE_DIFF_TEXT
+            | methods::GET_GIT_ACTION_PREVIEW
+            | methods::EXECUTE_GIT_ACTION
+            | methods::GENERATE_GIT_COMMIT_MESSAGE
             // Terminals live on the chat's host device.
             | methods::OPEN_TERMINAL
             | methods::SUBSCRIBE_TERMINAL
@@ -6397,6 +6404,47 @@ impl RpcService for EngineRpc {
             }
             methods::WATCH_CHECKOUT_DIFFS => {
                 Ok(RpcReply::Stream(watch_stream(self.diff_sync.watch_diffs())))
+            }
+            methods::GET_GIT_ACTION_PREVIEW => {
+                #[derive(Deserialize)]
+                struct P {
+                    cwd: String,
+                }
+                let p: P = parse_params(params)?;
+                let preview = self
+                    .git_actions
+                    .preview(&p.cwd)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&preview)
+            }
+            methods::EXECUTE_GIT_ACTION => {
+                let request: zeron_proto::GitActionRequest = parse_params(params)?;
+                let receipt = self
+                    .git_actions
+                    .execute(request)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&receipt)
+            }
+            methods::GENERATE_GIT_COMMIT_MESSAGE => {
+                let request: zeron_proto::GitMessageRequest = parse_params(params)?;
+                let preferred_harness = request.harness;
+                let diff = self
+                    .git_actions
+                    .staged_context(request)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                let titles = crate::titles::TitleGenerator::new(
+                    self.workspace.clone(),
+                    self.registry.clone(),
+                    self.repos.clone(),
+                );
+                let message = titles
+                    .generate_commit_message(&diff, preferred_harness)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&serde_json::json!({ "message": message }))
             }
             methods::WATCH_CHECKOUT_CHANGE_REQUEST => {
                 let p: CheckoutChangeRequestParams = parse_params(params)?;

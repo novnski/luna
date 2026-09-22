@@ -32,7 +32,7 @@
 //!   code plane: gutters, comment affordances, and sticky headers stay fixed,
 //!   while the virtual list measures each logical row's resulting height.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,7 +43,7 @@ use gpui::{
 };
 use unicode_width::UnicodeWidthChar as _;
 
-use zeron_proto::{Chat, CheckoutDiff, GitHistoryCommit};
+use zeron_proto::{Chat, CheckoutDiff, GitActionPreview, GitHistoryCommit};
 use zeron_rpc::methods;
 
 use crate::comments::{self, CommentSide, ReviewComment};
@@ -58,6 +58,8 @@ use crate::popover::{self, Popup};
 use crate::state::{AppState, EngineHandle};
 use crate::theme::Theme;
 use zeron_syntax::LanguageId as Lang;
+
+mod git_actions;
 
 // ---------------------------------------------------------------------------
 // Layout numbers (analytic — they drive the fold tween)
@@ -1693,6 +1695,15 @@ pub struct Changes {
     /// Pinned commit for a [`DiffScope::Commit`] pane (sha + subject drive
     /// the fetch and the surface-tab title).
     commit: Option<GitHistoryCommit>,
+    git_open: bool,
+    git_preview: Option<GitActionPreview>,
+    git_target: Option<String>,
+    git_selected: HashSet<String>,
+    git_message: Entity<ComposerInput>,
+    git_message_events: Subscription,
+    git_busy: bool,
+    git_notice: Option<String>,
+    git_task: Option<Task<()>>,
     _observe: Subscription,
 }
 
@@ -1728,6 +1739,9 @@ impl Changes {
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
+        let git_message =
+            cx.new(|cx| ComposerInput::with_context("Commit message…", "GitCommitMessage", cx));
+        let git_message_events = cx.subscribe(&git_message, |_, _, _, cx| cx.notify());
         Self {
             state,
             mode,
@@ -1769,6 +1783,15 @@ impl Changes {
             history_view_button: None,
             history_events: None,
             commit: None,
+            git_open: false,
+            git_preview: None,
+            git_target: None,
+            git_selected: HashSet::new(),
+            git_message,
+            git_message_events,
+            git_busy: false,
+            git_notice: None,
+            git_task: None,
             _observe: observe,
         }
     }
@@ -3896,6 +3919,29 @@ impl Changes {
                 .flex()
                 .items_center()
                 .gap(px(crate::surface_chrome::CONTROL_GAP))
+                .when(scope == DiffScope::WorkingTree, |el| {
+                    el.child(
+                        div()
+                            .id("changes-git-actions")
+                            .h(px(crate::surface_chrome::CONTROL_SIZE))
+                            .px(px(8.0))
+                            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .bg(crate::theme::wash(0.05))
+                            .text_size(px(11.0))
+                            .text_color(theme.text)
+                            .child("Git")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.git_open = !this.git_open;
+                                if this.git_open {
+                                    this.load_git(cx);
+                                }
+                                cx.notify();
+                            })),
+                    )
+                })
                 .child(self.split_toggle(&theme, cx))
                 .child(self.wrap_toggle(&theme, cx))
                 .child(
@@ -4859,6 +4905,15 @@ impl Render for Changes {
             return div().size_full().child(history).into_any_element();
         }
         let theme = Theme::of(cx).clone();
+        if self.git_open {
+            let current = self.git_context(cx).map(|(_, _, key)| key);
+            if current != self.git_target {
+                self.git_preview = None;
+                self.git_selected.clear();
+                self.git_target = current;
+                self.load_git(cx);
+            }
+        }
         let active = self.active_diff(cx);
         let scope = self.scope;
         let base = self.base_ref.clone();
@@ -4996,6 +5051,10 @@ impl Render for Changes {
             // Changes is a code-adjacent surface: chrome stays Geist while
             // paths, hunks, gutters, and source runs keep their mono overrides.
             .font_family(theme.font_sans_fixed.clone())
+            .when(
+                self.git_open && self.scope == DiffScope::WorkingTree,
+                |el| el.child(self.render_git_card(&theme, cx)),
+            )
             .when_some(error, |el, message| {
                 el.child(
                     div()
