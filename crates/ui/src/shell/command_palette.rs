@@ -1,15 +1,15 @@
-//! Global action and conversation search, using the sidebar's conversation rows.
+//! Project-aware command, conversation, and recorded-content search.
 use super::*;
 use crate::appearance::AppearanceMode;
 
-const HISTORY_RESULT_LIMIT: usize = 30;
+const CHAT_RESULT_LIMIT: usize = 30;
 const RESULTS_FADE_BAND: f32 = 18.0;
 
 pub(super) struct CommandPalette {
-    search: Entity<ComposerInput>,
+    pub(super) search: Entity<ComposerInput>,
     focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
-    active: usize,
+    pub(super) active: usize,
     enter_press: EnterPress,
     // Claim focus during mount so the shell does not restore the composer
     // while this input is still absent from the dispatch tree.
@@ -36,13 +36,31 @@ impl EnterPress {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResultGroup {
+    CurrentChats,
+    CurrentContent,
+    AllContent,
+    OtherChats,
+}
+
 #[derive(Clone, Debug, PartialEq)]
-enum Entry {
+pub(super) enum Entry {
     NewChat,
     NewProject,
     Settings,
     Theme(AppearanceMode),
-    Chat(String),
+    SearchAllContent,
+    SearchCurrentContent,
+    Chat {
+        id: String,
+        group: ResultGroup,
+    },
+    History {
+        event_id: String,
+        group: ResultGroup,
+    },
+    LoadOlder(ResultGroup),
 }
 
 impl Entry {
@@ -59,7 +77,19 @@ impl Entry {
                 },
                 mode.icon(),
             )),
-            Self::Chat(_) => None,
+            Self::SearchAllContent => Some(("Search content in all projects", icons::GLOBE)),
+            Self::SearchCurrentContent => {
+                Some(("Search content in current project", icons::FOLDER))
+            }
+            Self::Chat { .. } | Self::History { .. } | Self::LoadOlder(_) => None,
+        }
+    }
+
+    fn group(&self) -> Option<ResultGroup> {
+        match self {
+            Self::Chat { group, .. } | Self::History { group, .. } => Some(*group),
+            Self::LoadOlder(group) => Some(*group),
+            _ => None,
         }
     }
 }
@@ -99,7 +129,7 @@ impl Shell {
         }
         self.add_space = None;
         let search = cx.new(|cx| {
-            ComposerInput::with_context("Search commands and chats…", "PaletteSearch", cx)
+            ComposerInput::with_context("Search commands, chats, and content…", "PaletteSearch", cx)
         });
         let events = cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, ComposerInputEvent::Edited) {
@@ -107,6 +137,7 @@ impl Shell {
                     palette.active = 0;
                     palette.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
                 }
+                this.begin_session_history_search(cx);
                 cx.notify();
             }
         });
@@ -129,19 +160,51 @@ impl Shell {
             if let Some(focus) = palette.previous_focus {
                 window.focus(&focus, cx);
             }
+            self.reset_session_history_search(cx);
             cx.notify();
         }
     }
 
-    fn command_entries(&self, cx: &App) -> Vec<Entry> {
+    pub(super) fn dismiss_command_palette(&mut self, cx: &mut Context<Self>) {
+        if self.command_palette.take().is_some() {
+            self.reset_session_history_search(cx);
+        }
+    }
+
+    pub(super) fn command_palette_query(&self, cx: &App) -> Option<String> {
+        self.command_palette
+            .as_ref()
+            .map(|palette| palette.search.read(cx).text().trim().to_string())
+            .filter(|query| !query.is_empty())
+    }
+
+    pub(super) fn command_entries(&self, cx: &App) -> Vec<Entry> {
         let Some(palette) = &self.command_palette else {
             return Vec::new();
         };
         let query = palette.search.read(cx).text().trim().to_lowercase();
         let mut entries = actions_for(&query, Theme::of(cx).appearance.is_dark());
+        if !query.is_empty() {
+            entries.push(if self.history_search_global {
+                Entry::SearchCurrentContent
+            } else {
+                Entry::SearchAllContent
+            });
+        }
         let state = self.state.read(cx);
-        // Global history deliberately ignores the sidebar's project filter and
-        // collapsed groups. Archived conversations remain searchable too.
+        let current_project = match self.settings.space_filter.as_deref() {
+            Some(crate::settings::PERSONAL_SPACE_FILTER) => None,
+            Some(space_id) => Some(space_id.to_string()),
+            None => state.selected_space.clone(),
+        };
+        let content_tasks = self
+            .history_search_results
+            .iter()
+            .map(|event| event.task_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        // Metadata search deliberately includes archived chats and ignores the
+        // sidebar's collapsed groups. Scope only controls which stable section
+        // receives the match.
         let mut chats: Vec<_> = state
             .chats
             .iter()
@@ -172,31 +235,280 @@ impl Shell {
             })
             .collect();
         chats.sort_by(|a, b| spaces::compare_sidebar_chats(self.settings.sidebar_sort, a, b));
-        // Limit after filtering and sorting so every chat remains searchable.
+        let (current_chats, other_chats): (Vec<_>, Vec<_>) = chats
+            .into_iter()
+            .partition(|chat| chat.space_id == current_project);
+        // A matching indexed event is the more precise canonical row for its
+        // task. Suppress the parallel title row while retaining every useful
+        // event and its continuation.
         entries.extend(
-            chats
+            current_chats
                 .into_iter()
-                .take(HISTORY_RESULT_LIMIT)
-                .map(|chat| Entry::Chat(chat.id.clone())),
+                .filter(|chat| !content_tasks.contains(chat.id.as_str()))
+                .take(CHAT_RESULT_LIMIT)
+                .map(|chat| Entry::Chat {
+                    id: chat.id.clone(),
+                    group: ResultGroup::CurrentChats,
+                }),
         );
+        let history_group = if self
+            .history_search_scope_key
+            .as_ref()
+            .is_some_and(|scope| scope.scope == HistorySearchScope::Global)
+            || (self.history_search_scope_key.is_none() && self.history_search_global)
+        {
+            ResultGroup::AllContent
+        } else {
+            ResultGroup::CurrentContent
+        };
+        entries.extend(
+            self.history_search_results
+                .iter()
+                .map(|event| Entry::History {
+                    event_id: event.event_id.clone(),
+                    group: history_group,
+                }),
+        );
+        if self.history_search_next_cursor.is_some() {
+            entries.push(Entry::LoadOlder(history_group));
+        }
+        if !query.is_empty() {
+            entries.extend(
+                other_chats
+                    .into_iter()
+                    .filter(|chat| !content_tasks.contains(chat.id.as_str()))
+                    .take(CHAT_RESULT_LIMIT)
+                    .map(|chat| Entry::Chat {
+                        id: chat.id.clone(),
+                        group: ResultGroup::OtherChats,
+                    }),
+            );
+        }
         entries
     }
 
     fn activate_command(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
-        if let Entry::Theme(mode) = entry {
-            // Keep the palette open so this ordinary action updates to its next state.
-            crate::appearance::set_mode(mode, cx);
-            cx.notify();
-            return;
+        match entry {
+            Entry::Theme(mode) => {
+                // Keep the palette open so this ordinary action updates to its next state.
+                crate::appearance::set_mode(mode, cx);
+                cx.notify();
+                return;
+            }
+            Entry::SearchAllContent => {
+                self.history_search_global = true;
+                if let Some(palette) = self.command_palette.as_mut() {
+                    palette.active = 0;
+                    palette.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+                }
+                self.begin_session_history_search(cx);
+                return;
+            }
+            Entry::SearchCurrentContent => {
+                self.history_search_global = false;
+                if let Some(palette) = self.command_palette.as_mut() {
+                    palette.active = 0;
+                    palette.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+                }
+                self.begin_session_history_search(cx);
+                return;
+            }
+            Entry::LoadOlder(_) => {
+                self.load_more_session_history(cx);
+                return;
+            }
+            _ => {}
         }
+        let history_event = if let Entry::History { ref event_id, .. } = entry {
+            self.history_search_results
+                .iter()
+                .find(|event| &event.event_id == event_id)
+                .cloned()
+        } else {
+            None
+        };
         self.close_command_palette(window, cx);
         match entry {
             Entry::NewChat => self.open_new_session(cx),
             Entry::NewProject => self.open_add_space(cx),
             Entry::Settings => self.open_settings(SettingsSection::Devices, cx),
             Entry::Theme(_) => unreachable!(),
-            Entry::Chat(id) => self.open_chat(id, cx),
+            Entry::Chat { id, .. } => self.open_chat(id, cx),
+            Entry::History { .. } => {
+                if let Some(event) = history_event {
+                    self.open_session_history_result(event, cx);
+                }
+            }
+            Entry::SearchAllContent | Entry::SearchCurrentContent | Entry::LoadOlder(_) => {
+                unreachable!()
+            }
         }
+    }
+
+    fn command_group_label(&self, group: ResultGroup, cx: &Context<Self>) -> SharedString {
+        let state = self.state.read(cx);
+        let label_for = |project_id: Option<&str>| -> String {
+            project_id
+                .and_then(|id| state.spaces.iter().find(|space| space.id == id))
+                .map(|space| space.display_name().to_string())
+                .unwrap_or_else(|| {
+                    if project_id.is_none() {
+                        "Personal".into()
+                    } else {
+                        "Current project".into()
+                    }
+                })
+        };
+        let label = match group {
+            ResultGroup::CurrentChats => {
+                let project_id = match self.settings.space_filter.as_deref() {
+                    Some(crate::settings::PERSONAL_SPACE_FILTER) => None,
+                    Some(space_id) => Some(space_id),
+                    None => state.selected_space.as_deref(),
+                };
+                format!("{} · Chats", label_for(project_id))
+            }
+            ResultGroup::CurrentContent => {
+                let project_id = self
+                    .current_session_history_request(None, cx)
+                    .and_then(|request| request.project_id);
+                format!("{} · Recorded content", label_for(project_id.as_deref()))
+            }
+            ResultGroup::AllContent => "All projects · Recorded content".into(),
+            ResultGroup::OtherChats => "Other projects · Matching chats".into(),
+        };
+        label.into()
+    }
+
+    fn render_command_history_row(
+        &self,
+        event_id: &str,
+        group: ResultGroup,
+        active: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let event = self
+            .history_search_results
+            .iter()
+            .find(|event| event.event_id == event_id)?
+            .clone();
+        let project = {
+            let state = self.state.read(cx);
+            event
+                .project_id
+                .as_ref()
+                .and_then(|id| state.spaces.iter().find(|space| &space.id == id))
+                .map(|space| space.display_name().to_string())
+                .unwrap_or_else(|| "Personal".into())
+        };
+        let outcome = match event.outcome {
+            ActivityOutcome::Pending => "Pending",
+            ActivityOutcome::Succeeded => "Done",
+            ActivityOutcome::Failed => "Failed",
+            ActivityOutcome::Interrupted => "Interrupted",
+            ActivityOutcome::Unknown => "Unknown",
+        };
+        let metadata = if event.source.available_here {
+            format!(
+                "Recorded content · {project} · {} · {outcome}",
+                event.model.as_deref().unwrap_or("Unknown model")
+            )
+        } else {
+            format!("Recorded content · {project} · Other device")
+        };
+        let entry = Entry::History {
+            event_id: event.event_id.clone(),
+            group,
+        };
+        Some(
+            popover::menu_row(theme, active, format!("command-history-{}", event.event_id))
+                .id(SharedString::from(format!(
+                    "command-history-{}",
+                    event.event_id
+                )))
+                .rounded(px(popover::PALETTE_ITEM_RADIUS))
+                .role(gpui::Role::Button)
+                .aria_label(event.summary.clone())
+                .min_h(px(42.0))
+                .py(px(5.0))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.activate_command(entry.clone(), window, cx)
+                }))
+                .child(
+                    icon(icons::LIST)
+                        .size(px(16.0))
+                        .flex_none()
+                        .text_color(theme.text_muted),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_color(theme.text)
+                                .child(SharedString::from(transcript::single_line(&event.summary))),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(crate::typography::ui_rems(9.5))
+                                .text_color(theme.text_faint)
+                                .child(SharedString::from(metadata)),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn command_palette_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match event.keystroke.key.as_str() {
+            "up" | "down" => {
+                let count = self.command_entries(cx).len();
+                if count > 0
+                    && let Some(palette) = self.command_palette.as_mut()
+                {
+                    palette.active = if event.keystroke.key == "down" {
+                        (palette.active + 1) % count
+                    } else {
+                        (palette.active + count - 1) % count
+                    };
+                    palette.scroll.scroll_to_item(palette.active);
+                    cx.notify();
+                }
+            }
+            "enter" => {
+                let activate = self
+                    .command_palette
+                    .as_mut()
+                    .is_some_and(|palette| palette.enter_press.press(event.is_held));
+                if activate {
+                    let entries = self.command_entries(cx);
+                    if let Some(entry) = self
+                        .command_palette
+                        .as_ref()
+                        .and_then(|palette| entries.get(palette.active))
+                        .cloned()
+                    {
+                        self.activate_command(entry, window, cx);
+                    }
+                }
+            }
+            "escape" => self.close_command_palette(window, cx),
+            _ => return false,
+        }
+        true
     }
 
     pub(super) fn render_command_palette(
@@ -217,8 +529,8 @@ impl Shell {
         let focus = palette.focus.clone();
         let scroll = palette.scroll.clone();
         let theme = Theme::of(cx).for_popup();
-        let action_count = entries.iter().take_while(|e| e.action().is_some()).count();
         let mut rows = Vec::new();
+        let mut previous_group = None;
         for (ix, entry) in entries.iter().enumerate() {
             // End spacing belongs to the content, so it scrolls out of the
             // fade instead of leaving a permanent gutter beside the chrome.
@@ -227,8 +539,23 @@ impl Shell {
                 .flex_none()
                 .when(ix == 0, |row| row.pt(px(8.0)))
                 .when(ix + 1 == entries.len(), |row| row.pb(px(8.0)));
-            if ix == action_count && action_count > 0 {
-                row = row.child(spaces::sidebar_separator(&theme).w_full().my(px(8.0)));
+            if let Some(group) = entry.group()
+                && previous_group != Some(group)
+            {
+                if ix > 0 {
+                    row = row.child(spaces::sidebar_separator(&theme).w_full().my(px(7.0)));
+                }
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("command-section-{group:?}")))
+                        .px(px(10.0))
+                        .pb(px(4.0))
+                        .text_size(crate::typography::ui_rems(9.5))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text_faint)
+                        .child(self.command_group_label(group, cx)),
+                );
+                previous_group = Some(group);
             }
             let content = if let Some((label, glyph)) = entry.action() {
                 let shortcut = match entry {
@@ -275,7 +602,7 @@ impl Shell {
                         row.child(popover::kbd_hint(&theme, &shortcut))
                     })
                     .into_any_element()
-            } else if let Entry::Chat(id) = entry {
+            } else if let Entry::Chat { id, .. } = entry {
                 let state = self.state.read(cx);
                 let chat = state.chats.iter().find(|chat| &chat.id == id)?;
                 let project = match (state.space_for_chat(chat), chat.space_id.as_deref()) {
@@ -322,11 +649,54 @@ impl Shell {
                     &theme,
                     cx,
                 )
+            } else if let Entry::History { event_id, group } = entry {
+                self.render_command_history_row(event_id, *group, ix == active, &theme, cx)?
+            } else if let Entry::LoadOlder(group) = entry {
+                let entry = Entry::LoadOlder(*group);
+                popover::menu_row(&theme, ix == active, "command-history-load-older")
+                    .id("command-history-load-older")
+                    .rounded(px(popover::PALETTE_ITEM_RADIUS))
+                    .role(gpui::Role::Button)
+                    .aria_label("Load older recorded content")
+                    .min_h(px(30.0))
+                    .justify_center()
+                    .text_color(theme.text_muted)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_command(entry.clone(), window, cx)
+                    }))
+                    .child(if self.history_search_loading {
+                        "Loading older…"
+                    } else {
+                        "Load older"
+                    })
+                    .into_any_element()
             } else {
                 unreachable!()
             };
             rows.push(row.child(div().px(px(8.0)).child(content)));
         }
+        let has_search_results = entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Chat { .. } | Entry::History { .. }));
+        let history_status: Option<(SharedString, bool)> = if !query.trim().is_empty() {
+            if self.history_search_loading {
+                Some(("Searching recorded content…".into(), false))
+            } else if let Some(error) = self.history_search_error.clone() {
+                Some((
+                    format!("Recorded content unavailable · {error}").into(),
+                    true,
+                ))
+            } else if !has_search_results {
+                Some((
+                    "No matching chats or recorded content in this scope".into(),
+                    false,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let height = (f32::from(viewport.height) - 180.0).clamp(100.0, 360.0);
         let body = div()
             .id("command-results")
@@ -338,6 +708,21 @@ impl Shell {
             .flex_col()
             .gap(px(SIDEBAR_LIST_GAP))
             .children(rows)
+            .when_some(history_status, |el, (status, danger)| {
+                el.child(
+                    div()
+                        .id("command-history-status")
+                        .px(px(16.0))
+                        .py(px(8.0))
+                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_color(if danger {
+                            theme.danger
+                        } else {
+                            theme.text_faint
+                        })
+                        .child(status),
+                )
+            })
             .when(entries.is_empty(), |el| {
                 el.child(
                     div()
@@ -373,44 +758,9 @@ impl Shell {
             .text_color(theme.text)
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
-                    match event.keystroke.key.as_str() {
-                        "up" | "down" => {
-                            let count = this.command_entries(cx).len();
-                            if count > 0
-                                && let Some(palette) = this.command_palette.as_mut()
-                            {
-                                palette.active = if event.keystroke.key == "down" {
-                                    (palette.active + 1) % count
-                                } else {
-                                    (palette.active + count - 1) % count
-                                };
-                                palette.scroll.scroll_to_item(palette.active);
-                                cx.notify();
-                            }
-                        }
-                        "enter" => {
-                            let activate = this
-                                .command_palette
-                                .as_mut()
-                                .is_some_and(|palette| palette.enter_press.press(event.is_held));
-                            if !activate {
-                                cx.stop_propagation();
-                                return;
-                            }
-                            let entries = this.command_entries(cx);
-                            if let Some(entry) = this
-                                .command_palette
-                                .as_ref()
-                                .and_then(|p| entries.get(p.active))
-                                .cloned()
-                            {
-                                this.activate_command(entry, window, cx);
-                            }
-                        }
-                        "escape" => this.close_command_palette(window, cx),
-                        _ => return,
+                    if this.command_palette_key_down(event, window, cx) {
+                        cx.stop_propagation();
                     }
-                    cx.stop_propagation();
                 }),
             )
             .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _, cx| {

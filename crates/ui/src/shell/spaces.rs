@@ -1743,7 +1743,7 @@ impl Shell {
     }
 
     fn open_add_space_with_origin(&mut self, origin: AddSpaceOrigin, cx: &mut Context<Self>) {
-        self.command_palette = None;
+        self.dismiss_command_palette(cx);
         self.add_space_flow_seq = self.add_space_flow_seq.wrapping_add(1);
         let flow_id = self.add_space_flow_seq;
         // "PaletteSearch" context: navigation keys stay unbound so ↑↓/←/→/⏎

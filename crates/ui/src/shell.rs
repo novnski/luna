@@ -1725,9 +1725,9 @@ pub struct Shell {
     chat_status_hover: Option<String>,
     /// Scroll position of the sidebar lists region (drives its edge fades).
     sidebar_scroll: gpui::ScrollHandle,
-    /// L14 session-history query state. Results are derived/index-only rows;
-    /// opening one navigates back to the authoritative transcript.
-    history_search_input: Entity<ComposerInput>,
+    /// L14 session-history query state. Cmd+K owns the only query input;
+    /// results are derived/index-only rows and navigate back to the
+    /// authoritative transcript.
     history_search_global: bool,
     history_search_results: Vec<ActivityEnvelope>,
     history_search_loading: bool,
@@ -1876,7 +1876,6 @@ pub struct Shell {
     _ticker: Task<()>,
     _state_observation: Subscription,
     _composer_events: Subscription,
-    _history_search_events: Subscription,
     /// The primary transcript's spawn-chip events (subagent tabs).
     _transcript_events: Subscription,
     _transcript_invalidation: Subscription,
@@ -1891,19 +1890,6 @@ impl Shell {
         let transcript = cx.new(|cx| Transcript::new(state.clone(), cx));
         transcript.update(cx, |transcript, _| transcript.retain_for_route_exit());
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
-        let history_search_input = cx.new(|cx| {
-            ComposerInput::with_context(
-                "Search history · tool: app: model: status: after:",
-                "HistorySearch",
-                cx,
-            )
-        });
-        let history_search_events =
-            cx.subscribe(&history_search_input, |this: &mut Shell, _, event, cx| {
-                if matches!(event, ComposerInputEvent::Edited) {
-                    this.begin_session_history_search(cx);
-                }
-            });
         let links = Self::session_links(None, cx);
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
@@ -2117,7 +2103,6 @@ impl Shell {
             sidebar_view_trigger_focus: cx.focus_handle().tab_stop(true),
             chat_status_hover: None,
             sidebar_scroll: gpui::ScrollHandle::new(),
-            history_search_input,
             history_search_global: false,
             history_search_results: Vec::new(),
             history_search_loading: false,
@@ -2192,7 +2177,6 @@ impl Shell {
             _ticker: ticker,
             _state_observation: observation,
             _composer_events: composer_events,
-            _history_search_events: history_search_events,
             _transcript_events: transcript_events,
             _transcript_invalidation: transcript_invalidation,
         }
@@ -2277,7 +2261,7 @@ impl Shell {
             self.history_search_error = None;
             self.history_search_next_cursor = None;
             self.history_search_scope_key = current_scope;
-            if !self.history_search_input.read(cx).is_empty() {
+            if self.command_palette_query(cx).is_some() {
                 self.begin_session_history_search(cx);
             }
         }
@@ -4034,7 +4018,7 @@ impl Shell {
     }
 
     fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
-        self.command_palette = None;
+        self.dismiss_command_palette(cx);
         // Recreate per visit: the page's ListHarnesses load re-probes which
         // CLIs are installed, so installing one shows up on the next open.
         if section == SettingsSection::Harnesses {
@@ -7068,15 +7052,26 @@ impl Shell {
         self.request_session_history_page(request, true, true, cx);
     }
 
+    fn reset_session_history_search(&mut self, cx: &mut Context<Self>) {
+        self.history_search_generation = self.history_search_generation.wrapping_add(1);
+        if let Some(task) = self.history_search_task.take() {
+            task.detach();
+        }
+        self.history_search_global = false;
+        self.history_search_results.clear();
+        self.history_search_loading = false;
+        self.history_search_error = None;
+        self.history_search_next_cursor = None;
+        self.history_search_scope_key = None;
+        cx.notify();
+    }
+
     fn current_session_history_request(
         &self,
         cursor: Option<zeron_proto::HistoryCursor>,
         cx: &Context<Self>,
     ) -> Option<HistorySearchRequest> {
-        let query = self.history_search_input.read(cx).text().trim().to_string();
-        if query.is_empty() {
-            return None;
-        }
+        let query = self.command_palette_query(cx)?;
         let (selected_project, spaces, devices) = {
             let state = self.state.read(cx);
             // An explicit sidebar project is the user's search selection even
@@ -7197,203 +7192,6 @@ impl Shell {
             .ok();
         }));
         cx.notify();
-    }
-
-    fn render_session_history_search(
-        &mut self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let input = self.history_search_input.clone();
-        let global = self.history_search_global;
-        let scope_label = if global { "All" } else { "Project" };
-        let status = if self.history_search_loading {
-            Some(SharedString::from("Searching…"))
-        } else {
-            self.history_search_error.clone()
-        };
-        div()
-            .flex_none()
-            .px(px(Theme::SPACE_SM))
-            .pb(px(4.0))
-            .flex()
-            .flex_col()
-            .gap(px(3.0))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(div().flex_1().min_w_0().child(popover::search_input_frame(
-                        theme,
-                        input.into_any_element(),
-                    )))
-                    .child(
-                        div()
-                            .id("history-search-scope")
-                            .h(px(28.0))
-                            .px(px(7.0))
-                            .rounded(px(Theme::CONTROL_RADIUS))
-                            .border_1()
-                            .border_color(theme.border.opacity(0.7))
-                            .flex()
-                            .items_center()
-                            .text_size(crate::typography::ui_rems(10.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(if global { theme.accent } else { theme.text_muted })
-                            .cursor_pointer()
-                            .hover(|style| style.bg(theme.glass_hover()))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.history_search_global = !this.history_search_global;
-                                this.begin_session_history_search(cx);
-                            }))
-                            .child(SharedString::from(scope_label)),
-                    ),
-            )
-            .child(
-                div()
-                    .px(px(4.0))
-                    .text_size(crate::typography::ui_rems(9.5))
-                    .text_color(theme.text_faint)
-                    .child(SharedString::from(
-                        "Filters: machine: project: harness: model: status: tool: app: after: before:",
-                    )),
-            )
-            .when_some(status, |element, status| {
-                element.child(
-                    div()
-                        .px(px(4.0))
-                        .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(if self.history_search_error.is_some() {
-                            theme.danger
-                        } else {
-                            theme.text_faint
-                        })
-                        .child(status),
-                )
-            })
-            .into_any_element()
-    }
-
-    fn render_session_history_results(
-        &mut self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if self.history_search_loading && self.history_search_results.is_empty() {
-            return div()
-                .px(px(Theme::SPACE_SM))
-                .py(px(8.0))
-                .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text_faint)
-                .child("Searching session history…")
-                .into_any_element();
-        }
-        if self.history_search_results.is_empty() {
-            return div()
-                .px(px(Theme::SPACE_SM))
-                .py(px(8.0))
-                .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text_faint)
-                .child("No matching recorded activity")
-                .into_any_element();
-        }
-        let space_names = self
-            .state
-            .read(cx)
-            .spaces
-            .iter()
-            .map(|space| (space.id.clone(), space.display_name().to_string()))
-            .collect::<std::collections::HashMap<_, _>>();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .children(
-                self.history_search_results
-                    .clone()
-                    .into_iter()
-                    .map(|event| {
-                        let project = event
-                            .project_id
-                            .as_ref()
-                            .and_then(|id| space_names.get(id))
-                            .cloned()
-                            .unwrap_or_else(|| "Personal".into());
-                        let outcome = match event.outcome {
-                            ActivityOutcome::Pending => "Pending",
-                            ActivityOutcome::Succeeded => "Done",
-                            ActivityOutcome::Failed => "Failed",
-                            ActivityOutcome::Interrupted => "Interrupted",
-                            ActivityOutcome::Unknown => "Unknown",
-                        };
-                        let metadata = format!(
-                            "{} · {}{}",
-                            project,
-                            event.model.as_deref().unwrap_or("Unknown model"),
-                            if event.source.available_here {
-                                format!(" · {outcome}")
-                            } else {
-                                " · Other device".into()
-                            }
-                        );
-                        let event_id = event.event_id.clone();
-                        let summary = event.summary.clone();
-                        let open_event = event.clone();
-                        div()
-                            .id(SharedString::from(format!("history-result-{event_id}")))
-                            .px(px(Theme::SPACE_SM))
-                            .py(px(6.0))
-                            .rounded(px(6.0))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(theme.glass_hover()))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_session_history_result(open_event.clone(), cx)
-                            }))
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.text)
-                                    .child(SharedString::from(summary)),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(2.0))
-                                    .text_size(crate::typography::ui_rems(9.5))
-                                    .text_color(theme.text_faint)
-                                    .child(SharedString::from(metadata)),
-                            )
-                    }),
-            )
-            .when(self.history_search_next_cursor.is_some(), |element| {
-                element.child(
-                    div()
-                        .id("history-search-load-older")
-                        .mx(px(Theme::SPACE_SM))
-                        .my(px(4.0))
-                        .h(px(28.0))
-                        .rounded(px(Theme::CONTROL_RADIUS))
-                        .border_1()
-                        .border_color(theme.border.opacity(0.7))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(theme.text_muted)
-                        .cursor_pointer()
-                        .hover(|style| style.bg(theme.glass_hover()))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.load_more_session_history(cx);
-                        }))
-                        .child(if self.history_search_loading {
-                            "Loading older…"
-                        } else {
-                            "Load older"
-                        }),
-                )
-            })
-            .into_any_element()
     }
 
     fn open_session_history_result(&mut self, event: ActivityEnvelope, cx: &mut Context<Self>) {
@@ -7538,7 +7336,6 @@ impl Shell {
         // The space filter lives ABOVE the scroll region (fixed) so its
         // dropdown can float without being clipped by the list's overflow.
         let filter_row = self.render_spaces_filter(theme, cx);
-        let history_search = self.render_session_history_search(theme, cx);
 
         // The (filtered) Sessions list scrolls inside an EdgeFade scope —
         // a true per-glyph gradient at active overflow edges. Glass-safe
@@ -7549,8 +7346,6 @@ impl Shell {
         // rode the previous frame's offset, so the last frame of a content
         // shrink (row archived while scrolled) left a phantom fade stuck
         // over an unscrollable list (user report).
-        let searching = !self.history_search_input.read(cx).is_empty();
-        let search_results = searching.then(|| self.render_session_history_results(theme, cx));
         let sidebar_lists = crate::edge_fade::edge_faded(
             SIDEBAR_GLASS_FADE_BAND,
             true,
@@ -7567,9 +7362,7 @@ impl Shell {
                     // No "Sessions" header (user request) — the list
                     // is the whole column; a little air stands in.
                     .pt(px(4.0))
-                    .child(if let Some(results) = search_results {
-                        results
-                    } else if !list_items.is_empty() {
+                    .child(if !list_items.is_empty() {
                         div()
                             .flex()
                             .flex_col()
@@ -7598,7 +7391,6 @@ impl Shell {
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
             .child(filter_row)
-            .child(history_search)
             .child(sidebar_lists)
             // Global connection pill (durable-by-design UI truth): appears
             // whenever the edge posture is degraded; hidden while healthy —
@@ -13544,6 +13336,24 @@ mod exit_regressions {
         release_project_a: tokio::sync::Notify,
     }
 
+    struct PaletteFenceRpc {
+        label: &'static str,
+        block_stale: bool,
+        calls: Mutex<Vec<HistorySearchRequest>>,
+        release: tokio::sync::Notify,
+    }
+
+    impl PaletteFenceRpc {
+        fn new(label: &'static str, block_stale: bool) -> Self {
+            Self {
+                label,
+                block_stale,
+                calls: Mutex::new(Vec::new()),
+                release: tokio::sync::Notify::new(),
+            }
+        }
+    }
+
     impl HistorySearchRpc {
         fn new() -> Self {
             Self {
@@ -13631,6 +13441,38 @@ mod exit_regressions {
             RpcReply::value(&HistorySearchPage {
                 events,
                 next_cursor,
+                indexed_through_ms: 10_000,
+                heuristic_redaction: true,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl RpcService for PaletteFenceRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            if method != methods::SEARCH_SESSION_HISTORY {
+                return Err(RpcError::UnknownMethod(method.into()));
+            }
+            let request: HistorySearchRequest = serde_json::from_value(params)
+                .map_err(|error| RpcError::BadParams(error.to_string()))?;
+            self.calls.lock().unwrap().push(request.clone());
+            let project = request.project_id.as_deref().unwrap_or("personal");
+            if self.block_stale
+                && ((request.query.starts_with("old") && project == "project-a")
+                    || request.query == "profile")
+            {
+                self.release.notified().await;
+            }
+            let mut event = HistorySearchRpc::event(project, 0);
+            event.event_id = format!("{}-{}-{project}", self.label, request.query);
+            event.summary = format!("{}:{}:{project}", self.label, request.query);
+            RpcReply::value(&HistorySearchPage {
+                events: vec![event],
+                next_cursor: None,
                 indexed_through_ms: 10_000,
                 heuristic_redaction: true,
             })
@@ -13761,6 +13603,13 @@ mod exit_regressions {
         .unwrap()
     }
 
+    fn palette_chat(id: &str, project_id: Option<&str>, title: &str) -> zeron_proto::Chat {
+        let mut chat = handoff_chat(id);
+        chat.space_id = project_id.map(str::to_string);
+        chat.title = Some(title.into());
+        chat
+    }
+
     fn handoff_transcript() -> Vec<zeron_doc::SessionMessageEntry> {
         [
             (
@@ -13874,6 +13723,479 @@ mod exit_regressions {
         assert!(done(cx), "session history fixture did not settle");
     }
 
+    fn set_palette_query(window: &gpui::WindowHandle<Shell>, query: &str, cx: &mut TestAppContext) {
+        let search = window
+            .read_with(cx, |shell, _| {
+                shell.command_palette.as_ref().unwrap().search.clone()
+            })
+            .unwrap();
+        search.update(cx, |input, cx| input.set_text(query, cx));
+    }
+
+    fn palette_key(window: &gpui::WindowHandle<Shell>, key: &str, cx: &mut TestAppContext) {
+        let event = gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke::parse(key).unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        };
+        window
+            .update(cx, |shell, window, cx| {
+                assert!(shell.command_palette_key_down(&event, window, cx));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn command_palette_groups_actions_chats_and_content_and_restores_focus(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        init_handoff_shell_test(cx, dir.path());
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new(
+                &platform_combo("mod-k"),
+                ToggleCommandPalette,
+                None,
+            )]);
+        });
+        let service = Arc::new(HistorySearchRpc::new());
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                    zeron_rpc::memory_client(service),
+                ));
+                state.spaces = ["project-a", "project-b"]
+                    .into_iter()
+                    .map(|id| zeron_proto::Space {
+                        id: id.into(),
+                        device_id: "local".into(),
+                        path: format!("/synthetic/{id}"),
+                        name: Some(if id == "project-a" { "Alpha" } else { "Beta" }.into()),
+                        git_detected: false,
+                        git_checked_at: None,
+                        checkout_id: None,
+                        created_at: Utc::now(),
+                    })
+                    .collect();
+                state.chats = vec![
+                    palette_chat(
+                        "project-a-task",
+                        Some("project-a"),
+                        "New cache investigation",
+                    ),
+                    palette_chat(
+                        "project-b-task",
+                        Some("project-b"),
+                        "New cache investigation",
+                    ),
+                    palette_chat("personal-task", None, "New personal notes"),
+                ];
+                state.selected_chat = Some("project-b-task".into());
+                state.selected_space = Some("project-a".into());
+                state
+            });
+            let mut shell = Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            );
+            shell.debug_gate = Some(GatePhase::Ready);
+            shell.splash = SplashPhase::Gone;
+            shell
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                window.focus(&shell.composer.focus_handle(cx), cx);
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+
+        cx.simulate_keystrokes(window.into(), &platform_combo("mod-k"));
+        set_palette_query(&window, "new", cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.history_search_task = None;
+                shell.history_search_loading = false;
+                shell.history_search_error = None;
+                shell.history_search_results = vec![HistorySearchRpc::event("project-a", 0)];
+                shell.history_search_next_cursor = Some(zeron_proto::HistoryCursor {
+                    timestamp_ms: 1,
+                    sequence: 0,
+                    event_id: "cursor".into(),
+                });
+                let entries = shell.command_entries(cx);
+                assert!(matches!(entries[0], command_palette::Entry::NewChat));
+                assert!(matches!(entries[1], command_palette::Entry::NewProject));
+                assert!(matches!(
+                    entries[2],
+                    command_palette::Entry::SearchAllContent
+                ));
+                assert!(entries.iter().any(|entry| matches!(
+                    entry,
+                    command_palette::Entry::History {
+                        group: command_palette::ResultGroup::CurrentContent,
+                        ..
+                    }
+                )));
+                assert!(!entries.iter().any(|entry| matches!(
+                    entry,
+                    command_palette::Entry::Chat { id, .. } if id == "project-a-task"
+                )));
+                assert!(entries.iter().any(|entry| matches!(
+                    entry,
+                    command_palette::Entry::Chat {
+                        id,
+                        group: command_palette::ResultGroup::OtherChats,
+                    } if id == "project-b-task"
+                )));
+
+                shell.settings.space_filter = Some(crate::settings::PERSONAL_SPACE_FILTER.into());
+                shell.history_search_results = vec![HistorySearchRpc::event("personal", 0)];
+                shell.history_search_results[0].task_id = "personal-task".into();
+                shell.history_search_results[0].source.task_id = "personal-task".into();
+                let projectless = shell.command_entries(cx);
+                assert!(!projectless.iter().any(|entry| matches!(
+                    entry,
+                    command_palette::Entry::Chat { id, .. } if id == "personal-task"
+                )));
+                assert!(projectless.iter().any(|entry| matches!(
+                    entry,
+                    command_palette::Entry::Chat {
+                        id,
+                        group: command_palette::ResultGroup::OtherChats,
+                    } if id == "project-a-task"
+                )));
+
+                shell.settings.space_filter = Some("project-a".into());
+                shell.history_search_results = vec![HistorySearchRpc::event("project-a", 0)];
+                shell.command_palette.as_mut().unwrap().active = 0;
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        window
+            .update(cx, |shell, window, cx| {
+                let search = shell.command_palette.as_ref().unwrap().search.clone();
+                window.focus(&search.focus_handle(cx), cx);
+            })
+            .unwrap();
+
+        palette_key(&window, "down", cx);
+        window
+            .read_with(cx, |shell, _| {
+                assert_eq!(shell.command_palette.as_ref().unwrap().active, 1)
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                shell.command_palette.as_mut().unwrap().active = 2
+            })
+            .unwrap();
+        palette_key(&window, "enter", cx);
+        window
+            .read_with(cx, |shell, _| {
+                assert!(shell.history_search_global);
+                assert!(shell.command_palette.is_some());
+            })
+            .unwrap();
+        palette_key(&window, "escape", cx);
+        window
+            .update(cx, |shell, window, cx| {
+                assert!(shell.command_palette.is_none());
+                assert!(shell.composer.focus_handle(cx).is_focused(window));
+            })
+            .unwrap();
+
+        cx.simulate_keystrokes(window.into(), &platform_combo("mod-k"));
+        set_palette_query(&window, "new", cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.history_search_task = None;
+                shell.history_search_loading = false;
+                shell.history_search_results = vec![HistorySearchRpc::event("project-a", 0)];
+                let entries = shell.command_entries(cx);
+                shell.command_palette.as_mut().unwrap().active = entries
+                    .iter()
+                    .position(|entry| matches!(entry, command_palette::Entry::History { .. }))
+                    .unwrap();
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        palette_key(&window, "enter", cx);
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(shell.command_palette.is_none());
+                assert_eq!(
+                    shell.state.read(cx).selected_chat.as_deref(),
+                    Some("project-a-task")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn sidebar_renders_chat_navigation_without_l14_search_chrome(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        init_handoff_shell_test(cx, dir.path());
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.connection = ConnectionStatus::Ready;
+                state.workspace_scope = Some(WorkspaceScope::Local);
+                state.auth = Some(zeron_proto::AuthState::SignedOut);
+                state.chats = vec![palette_chat(
+                    "sidebar-chat",
+                    None,
+                    "Sidebar navigation remains",
+                )];
+                state.selected_chat = Some("sidebar-chat".into());
+                state
+            });
+            let mut shell = Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            );
+            shell.debug_gate = Some(GatePhase::Ready);
+            shell.splash = SplashPhase::Gone;
+            shell
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        shell.update(cx, |shell, cx| {
+            assert!(matches!(shell.route, Route::Chat));
+            assert!(shell.sidebar_now() > 0.0);
+            let theme = Theme::of(cx).clone();
+            let _ = shell.render_chat_sidebar(&theme, cx);
+        });
+        assert!(cx.debug_bounds("history-search-scope").is_none());
+    }
+
+    #[gpui::test]
+    fn command_palette_rejects_delayed_query_project_and_profile_results(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        init_handoff_shell_test(cx, dir.path());
+        let old_service = Arc::new(PaletteFenceRpc::new("old-engine", true));
+        let new_service = Arc::new(PaletteFenceRpc::new("new-engine", false));
+        let close_service = Arc::new(PaletteFenceRpc::new("close-engine", true));
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                    zeron_rpc::memory_client(old_service.clone()),
+                ));
+                state.spaces = ["project-a", "project-b"]
+                    .into_iter()
+                    .map(|id| zeron_proto::Space {
+                        id: id.into(),
+                        device_id: "local".into(),
+                        path: format!("/synthetic/{id}"),
+                        name: None,
+                        git_detected: false,
+                        git_checked_at: None,
+                        checkout_id: None,
+                        created_at: Utc::now(),
+                    })
+                    .collect();
+                state.selected_space = Some("project-a".into());
+                state
+            });
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+
+        set_palette_query(&window, "old-query", cx);
+        pump_history_until(cx, &runtime, |_| {
+            old_service
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.query == "old-query")
+        });
+        set_palette_query(&window, "new-query", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.summary == "old-engine:new-query:project-a")
+                })
+            })
+        });
+        old_service.release.notify_one();
+        runtime.block_on(tokio::task::yield_now());
+        cx.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                assert_eq!(
+                    shell.history_search_results[0].summary,
+                    "old-engine:new-query:project-a"
+                )
+            })
+            .unwrap();
+
+        set_palette_query(&window, "old-project", cx);
+        pump_history_until(cx, &runtime, |_| {
+            old_service.calls.lock().unwrap().iter().any(|request| {
+                request.query == "old-project" && request.project_id.as_deref() == Some("project-a")
+            })
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                shell.set_space_filter(Some("project-b".into()), cx)
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.summary == "old-engine:old-project:project-b")
+                })
+            })
+        });
+        old_service.release.notify_one();
+        runtime.block_on(tokio::task::yield_now());
+        cx.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                assert_eq!(
+                    shell.history_search_results[0].summary,
+                    "old-engine:old-project:project-b"
+                )
+            })
+            .unwrap();
+
+        set_palette_query(&window, "profile", cx);
+        pump_history_until(cx, &runtime, |_| {
+            old_service
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.query == "profile")
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, cx| {
+                    state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                        zeron_rpc::memory_client(new_service.clone()),
+                    ));
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.summary == "new-engine:profile:project-b")
+                })
+            })
+        });
+        old_service.release.notify_one();
+        runtime.block_on(tokio::task::yield_now());
+        cx.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                assert_eq!(
+                    shell.history_search_results[0].summary,
+                    "new-engine:profile:project-b"
+                )
+            })
+            .unwrap();
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.state.update(cx, |state, cx| {
+                    state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                        zeron_rpc::memory_client(close_service.clone()),
+                    ));
+                    cx.notify();
+                });
+                shell.set_space_filter(Some("project-a".into()), cx);
+            })
+            .unwrap();
+        set_palette_query(&window, "old-close", cx);
+        pump_history_until(cx, &runtime, |_| {
+            close_service
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.query == "old-close")
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                shell.close_command_palette(window, cx)
+            })
+            .unwrap();
+        close_service.release.notify_waiters();
+        runtime.block_on(tokio::task::yield_now());
+        cx.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                assert!(shell.command_palette.is_none());
+                assert!(shell.history_search_results.is_empty());
+                assert!(shell.history_search_next_cursor.is_none());
+                assert!(!shell.history_search_loading);
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     fn session_history_scope_fences_out_of_order_results_and_loads_older_pages(
         cx: &mut TestAppContext,
@@ -13930,12 +14252,11 @@ mod exit_regressions {
         });
 
         window
-            .update(cx, |shell, _, cx| {
-                shell
-                    .history_search_input
-                    .update(cx, |input, cx| input.set_text("needle", cx));
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx);
             })
             .unwrap();
+        set_palette_query(&window, "needle", cx);
         pump_history_until(cx, &runtime, |_| {
             service
                 .calls
@@ -14131,26 +14452,27 @@ mod exit_regressions {
             })
         });
 
+        set_palette_query(&window, "", cx);
         window
             .update(cx, |shell, _, cx| {
-                shell
-                    .history_search_input
-                    .update(cx, |input, cx| input.set_text("", cx));
                 shell.set_space_filter(Some(crate::settings::PERSONAL_SPACE_FILTER.into()), cx);
-                shell
-                    .history_search_input
-                    .update(cx, |input, cx| input.set_text("needle", cx));
+            })
+            .unwrap();
+        set_palette_query(&window, "needle", cx);
+        window
+            .update(cx, |shell, _, cx| {
                 let request = shell.current_session_history_request(None, cx).unwrap();
                 assert_eq!(request.scope, HistorySearchScope::SelectedProject);
                 assert_eq!(
                     request.project_id, None,
                     "Personal/no project is a projectless scope, never an implicit global search"
                 );
-
                 shell.history_search_global = true;
-                shell.history_search_input.update(cx, |input, cx| {
-                    input.set_text("needle project:project-b", cx)
-                });
+            })
+            .unwrap();
+        set_palette_query(&window, "needle project:project-b", cx);
+        window
+            .update(cx, |shell, _, cx| {
                 let request = shell.current_session_history_request(None, cx).unwrap();
                 assert_eq!(request.scope, HistorySearchScope::SelectedProject);
                 assert_eq!(request.project_id.as_deref(), Some("project-b"));
