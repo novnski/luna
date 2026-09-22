@@ -515,6 +515,16 @@ pub struct UserInputAnswer {
     pub labels: Vec<String>,
 }
 
+/// A Codex async question is assistant-message metadata, not a pending
+/// `request_user_input` RPC. Its answer is a later user message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AsyncUserInputQuestion {
+    pub title: String,
+    #[serde(default)]
+    pub options: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DoneStatus {
@@ -632,6 +642,12 @@ pub enum AgentEvent {
     #[serde(rename_all = "camelCase")]
     InputResolved {
         request_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    AsyncQuestions {
+        /// Stable provider agent-message item id for replay and command dedup.
+        message_id: String,
+        questions: Vec<AsyncUserInputQuestion>,
     },
     /// A confirmed new assignment. When tagged as Subagent, this reopens the
     /// same child transcript even if the provider does not echo the user text.

@@ -1167,6 +1167,7 @@ async fn run_session(session: Session) {
     // Deltas seen per agent-message item, so a model that never streams
     // (item/completed only) still emits its text exactly once.
     let mut streamed_text: HashSet<String> = HashSet::new();
+    let mut async_questions_seen: HashSet<String> = HashSet::new();
     let mut reasoning_streams: HashMap<String, ReasoningStream> = HashMap::new();
     let mut context_compactions = ContextCompactionStream::default();
     // Token usage is held until the turn ends, emitted just before Done.
@@ -1311,6 +1312,22 @@ async fn run_session(session: Session) {
                                 {
                                     break 'main;
                                 }
+                                // `request_user_input_async` is delivered as
+                                // assistant-message metadata, not as a
+                                // `tool/requestUserInput` server request.
+                                // Preserve the typed questions alongside the
+                                // ordinary text so the UI can offer a later
+                                // answer without parking this turn.
+                                if let Some(AgentEvent::AsyncQuestions { message_id, questions }) =
+                                    async_questions_from_item(item)
+                                    && async_questions_seen.insert(message_id.clone())
+                                    && !send(&event_tx, AgentEvent::AsyncQuestions {
+                                        message_id,
+                                        questions,
+                                    }).await
+                                {
+                                    break 'main;
+                                }
                                 // Deltas are token chunks, not steering
                                 // boundaries: the completed item is the
                                 // provider-authoritative end of the text part.
@@ -1356,6 +1373,7 @@ async fn run_session(session: Session) {
                         // Item ids never span turns; without this the set grew
                         // one entry per message for a persistent session's life.
                         streamed_text.clear();
+                        async_questions_seen.clear();
                         if let Some(usage) = pending_usage.take()
                             && !send(&event_tx, usage).await
                         {
@@ -1713,6 +1731,28 @@ async fn run_session(session: Session) {
     }
 }
 
+/// The only source of nonblocking question cards is Codex's typed async
+/// agent-message item. Ordinary prose and the blocking server request never
+/// enter this path.
+fn async_questions_from_item(item: &Value) -> Option<AgentEvent> {
+    if item.get("delivery")?.as_str()? != "async" {
+        return None;
+    }
+    let message_id = item.get("id")?.as_str()?.to_string();
+    if message_id.is_empty() {
+        return None;
+    }
+    let questions: Vec<zeron_proto::AsyncUserInputQuestion> =
+        serde_json::from_value(item.get("questions")?.clone()).ok()?;
+    if questions.is_empty() || questions.iter().any(|q| q.title.trim().is_empty()) {
+        return None;
+    }
+    Some(AgentEvent::AsyncQuestions {
+        message_id,
+        questions,
+    })
+}
+
 fn codex_permission_settings(
     mode: zeron_proto::PermissionMode,
     title_only: bool,
@@ -2023,6 +2063,33 @@ use crate::{Signal, send_signal, shutdown_child};
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn async_question_requires_typed_agent_message_metadata() {
+        let item = json!({
+            "type": "agentMessage",
+            "id": "call-42",
+            "text": "Which sample should I use?",
+            "delivery": "async",
+            "questions": [{"title": "Which sample should I use?", "options": ["A", "B"]}]
+        });
+        assert_eq!(
+            async_questions_from_item(&item),
+            Some(AgentEvent::AsyncQuestions {
+                message_id: "call-42".into(),
+                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    title: "Which sample should I use?".into(),
+                    options: Some(vec!["A".into(), "B".into()]),
+                }],
+            })
+        );
+        let mut ordinary = item.clone();
+        ordinary.as_object_mut().unwrap().remove("delivery");
+        assert!(async_questions_from_item(&ordinary).is_none());
+        ordinary["delivery"] = json!("async");
+        ordinary["questions"] = json!([]);
+        assert!(async_questions_from_item(&ordinary).is_none());
+    }
 
     #[test]
     fn explicit_steer_owner_clears_only_on_its_terminal_turn() {

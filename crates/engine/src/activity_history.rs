@@ -254,7 +254,7 @@ fn part_event(
                 None,
             )
         }
-        MessagePart::Input { .. } => (
+        MessagePart::Input { .. } | MessagePart::AsyncQuestion { .. } => (
             ActivityKind::Withheld,
             "Interactive input withheld from search".into(),
             ActivityRedaction::Withheld,

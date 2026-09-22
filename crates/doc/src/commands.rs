@@ -21,6 +21,7 @@ pub enum SessionCommandKind {
     Steer,
     Interrupt,
     RespondInput,
+    RespondAsyncQuestion,
     RespondApproval,
 }
 
@@ -55,6 +56,13 @@ pub enum SessionCommandPayload {
         request_id: String,
         answers: Vec<UserInputAnswer>,
     },
+    /// Answers/dismisses an assistant async question card. There is no live
+    /// provider request to resolve; nonempty answers become ordinary steering.
+    #[serde(rename_all = "camelCase")]
+    RespondAsyncQuestion {
+        message_id: String,
+        answers: Vec<UserInputAnswer>,
+    },
     #[serde(rename_all = "camelCase")]
     RespondApproval {
         request_id: String,
@@ -69,6 +77,9 @@ impl SessionCommandPayload {
             SessionCommandPayload::Steer { .. } => SessionCommandKind::Steer,
             SessionCommandPayload::Interrupt {} => SessionCommandKind::Interrupt,
             SessionCommandPayload::RespondInput { .. } => SessionCommandKind::RespondInput,
+            SessionCommandPayload::RespondAsyncQuestion { .. } => {
+                SessionCommandKind::RespondAsyncQuestion
+            }
             SessionCommandPayload::RespondApproval { .. } => SessionCommandKind::RespondApproval,
         }
     }

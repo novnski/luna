@@ -6237,6 +6237,56 @@ impl DocHost {
                     Some("answered as new turn".into()),
                 ))
             }
+            SessionCommandPayload::RespondAsyncQuestion {
+                message_id,
+                answers,
+            } => {
+                // Unlike RespondInput, this provider tool has already
+                // returned. The card is transcript metadata; its response is
+                // either a durable dismissal or an ordinary user steer.
+                let question_set = handle.doc.read_entries()?.into_iter().rev().find_map(|e| {
+                    e.parts.into_iter().find_map(|p| match p {
+                        MessagePart::AsyncQuestion {
+                            id,
+                            questions,
+                            resolved: false,
+                        } if id == *message_id => Some(questions),
+                        _ => None,
+                    })
+                });
+                let Some(questions) = question_set else {
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some("no open async question".into()),
+                    ));
+                };
+                let prompt = match async_answer_prompt(&questions, answers) {
+                    Ok(prompt) => prompt,
+                    Err(reason) => {
+                        return Ok((SessionCommandStatus::Rejected, Some(reason.into())));
+                    }
+                };
+                let Some(prompt) = prompt else {
+                    handle.doc.resolve_async_question(message_id)?;
+                    return Ok((
+                        SessionCommandStatus::Applied,
+                        Some("question skipped".into()),
+                    ));
+                };
+                let (status, detail) = self
+                    .deliver_prompt(
+                        sessions,
+                        handle,
+                        &prompt,
+                        Some(entry.id.clone()),
+                        entry.issued_at,
+                    )
+                    .await?;
+                if status == SessionCommandStatus::Applied {
+                    handle.doc.resolve_async_question(message_id)?;
+                }
+                Ok((status, detail))
+            }
         }
     }
 
@@ -6540,6 +6590,70 @@ impl DocHost {
             lock(&handle.chat2).take();
             // Retain the durable subscription through agent shutdown cleanup.
         }
+    }
+}
+
+/// Format a late answer as ordinary user input. Empty answers mean Skip;
+/// malformed question ids must not silently turn an intended answer into Skip.
+fn async_answer_prompt(
+    questions: &[zeron_proto::AsyncUserInputQuestion],
+    answers: &[UserInputAnswer],
+) -> Result<Option<String>, &'static str> {
+    let mut lines = Vec::new();
+    for answer in answers {
+        let index = answer
+            .question_id
+            .parse::<usize>()
+            .map_err(|_| "invalid async question id")?;
+        let title = questions
+            .get(index)
+            .ok_or("invalid async question id")?
+            .title
+            .trim();
+        let labels: Vec<_> = answer
+            .labels
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if !labels.is_empty() {
+            lines.push(format!("{title}: {}", labels.join(", ")));
+        }
+    }
+    Ok((!lines.is_empty())
+        .then(|| format!("Answering your earlier question:\n{}", lines.join("\n"))))
+}
+
+#[cfg(test)]
+mod async_question_tests {
+    use super::async_answer_prompt;
+    use zeron_proto::{AsyncUserInputQuestion, UserInputAnswer};
+
+    #[test]
+    fn answer_becomes_contextual_steering_and_skip_has_no_prompt() {
+        let questions = vec![AsyncUserInputQuestion {
+            title: "Which sample should I use?".into(),
+            options: Some(vec!["A".into(), "B".into()]),
+        }];
+        assert_eq!(async_answer_prompt(&questions, &[]).unwrap(), None);
+        let answer = UserInputAnswer {
+            question_id: "0".into(),
+            labels: vec!["B".into()],
+        };
+        assert_eq!(
+            async_answer_prompt(&questions, &[answer]).unwrap(),
+            Some("Answering your earlier question:\nWhich sample should I use?: B".into())
+        );
+        assert!(
+            async_answer_prompt(
+                &questions,
+                &[UserInputAnswer {
+                    question_id: "9".into(),
+                    labels: vec!["A".into()],
+                }]
+            )
+            .is_err()
+        );
     }
 }
 

@@ -1,7 +1,7 @@
 //! The composer: a hand-rolled multiline text input (adapted from gpui's
 //! `examples/input.rs`), the compact↔expanded flip, the Send/Queue/Stop morph,
-//! optimistic send with failure recovery, per-chat drafts, and the question
-//! wizard that replaces the composer while a run awaits input.
+//! optimistic send with failure recovery, per-chat drafts, and an independent
+//! question card above the ordinary composer.
 //!
 //! Pure decision logic (flip, auto-grow math, button morph, wizard reducer,
 //! pending-input detection) lives in free functions/structs with unit tests;
@@ -23,6 +23,7 @@ use gpui::{
     TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill, img, point,
     prelude::*, px, quad, relative, size,
 };
+use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
 use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
@@ -630,6 +631,14 @@ fn wizard_option_activates(key: &str, is_held: bool, modified: bool) -> bool {
     !is_held && !modified && matches!(key, "enter" | "space")
 }
 
+fn wizard_number_shortcut(key: &str, modified: bool, answer_focused: bool) -> Option<usize> {
+    if modified || answer_focused {
+        return None;
+    }
+    let digit = key.parse::<usize>().ok()?;
+    (1..=9).contains(&digit).then_some(digit - 1)
+}
+
 /// Find the unresolved input request the panel should serve, if any: an
 /// unresolved input part on the LAST assistant entry — regardless of the
 /// entry's run status. The question stays answerable until the user actually
@@ -679,6 +688,61 @@ pub fn input_request_resolved(transcript: &[SessionMessageEntry], request_id: &s
     })
 }
 
+/// Latest open async card across assistant entries. Codex may keep speaking
+/// after emitting it, so a newer assistant message does not supersede it.
+pub fn pending_async_question(
+    transcript: &[SessionMessageEntry],
+) -> Option<(String, Vec<zeron_proto::AsyncUserInputQuestion>)> {
+    transcript
+        .iter()
+        .rev()
+        .filter(|entry| entry.role == MessageRole::Assistant)
+        .find_map(|entry| {
+            entry.parts.iter().rev().find_map(|part| match part {
+                MessagePart::AsyncQuestion {
+                    id,
+                    questions,
+                    resolved: false,
+                } if !questions.is_empty() => Some((id.clone(), questions.clone())),
+                _ => None,
+            })
+        })
+}
+
+fn async_question_resolved(transcript: &[SessionMessageEntry], message_id: &str) -> bool {
+    transcript.iter().any(|entry| {
+        entry.parts.iter().any(|part| {
+            matches!(part,
+                MessagePart::AsyncQuestion { id, resolved: true, .. } if id == message_id
+            )
+        })
+    })
+}
+
+fn async_question_open(transcript: &[SessionMessageEntry], message_id: &str) -> bool {
+    transcript.iter().any(|entry| {
+        entry.parts.iter().any(|part| {
+            matches!(part,
+                MessagePart::AsyncQuestion { id, resolved: false, .. } if id == message_id
+            )
+        })
+    })
+}
+
+fn async_question_command_id(chat_id: &str, request_id: &str, attempt: u32) -> String {
+    let mut digest = Sha256::new();
+    digest.update(chat_id.len().to_be_bytes());
+    digest.update(chat_id.as_bytes());
+    digest.update(request_id.as_bytes());
+    digest.update(attempt.to_be_bytes());
+    let hex = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("async-question-{hex}")
+}
+
 // ---------------------------------------------------------------------------
 // Question wizard (pure reducer)
 // ---------------------------------------------------------------------------
@@ -693,11 +757,35 @@ pub enum WizardStep {
     Done(Vec<UserInputAnswer>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionSource {
+    /// A provider server request with a live answer resolver.
+    Blocking,
+    /// Codex `request_user_input_async` agent-message metadata. Answer by
+    /// ordinary user steering; Skip only dismisses the card.
+    Async,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsyncDeliveryState {
+    Sending,
+    Applied,
+    Uncertain,
+}
+
+#[derive(Debug, Clone)]
+struct AsyncQuestionSubmission {
+    command_id: String,
+    intent: serde_json::Value,
+    state: AsyncDeliveryState,
+}
+
 /// Paged question state ("1/3"): single-select auto-advances, multi-select and
 /// typed answers advance explicitly, number keys 1-9 select, Back pages back.
 #[derive(Debug, Clone)]
 pub struct Wizard {
     pub request_id: String,
+    pub source: QuestionSource,
     pub questions: Vec<UserInputQuestion>,
     pub page: usize,
     picked: Vec<Vec<usize>>,
@@ -709,11 +797,35 @@ impl Wizard {
         let n = questions.len();
         Self {
             request_id,
+            source: QuestionSource::Blocking,
             questions,
             page: 0,
             picked: vec![Vec::new(); n],
             typed: vec![String::new(); n],
         }
+    }
+
+    pub fn new_async(
+        message_id: String,
+        questions: Vec<zeron_proto::AsyncUserInputQuestion>,
+    ) -> Self {
+        let mut wizard = Self::new(
+            message_id,
+            questions
+                .into_iter()
+                .enumerate()
+                .map(|(ix, question)| UserInputQuestion {
+                    id: ix.to_string(),
+                    header: "Question".into(),
+                    question: question.title,
+                    options: question.options.unwrap_or_default(),
+                    multi_select: false,
+                    approval: None,
+                })
+                .collect(),
+        );
+        wizard.source = QuestionSource::Async;
+        wizard
     }
 
     pub fn counter(&self) -> String {
@@ -757,7 +869,11 @@ impl Wizard {
             WizardStep::Stay
         } else {
             *picked = vec![option_ix];
-            WizardStep::AutoAdvance
+            if self.source == QuestionSource::Blocking {
+                WizardStep::AutoAdvance
+            } else {
+                WizardStep::Stay
+            }
         }
     }
 
@@ -773,6 +889,14 @@ impl Wizard {
         if let Some(slot) = self.typed.get_mut(self.page) {
             *slot = text;
         }
+    }
+
+    pub fn current_typed(&self) -> &str {
+        self.typed.get(self.page).map(String::as_str).unwrap_or("")
+    }
+
+    pub fn page_has_answer(&self) -> bool {
+        self.page_has_pick() || !self.current_typed().trim().is_empty()
     }
 
     /// Explicit submit / auto-advance landing.
@@ -1417,14 +1541,6 @@ fn message_enter_bindings(
         action: MessageEnterBindingAction::OppositeSubmit,
     });
     bindings
-}
-
-fn message_input_context(wizard_active: bool) -> &'static str {
-    if wizard_active {
-        GENERIC_COMPOSER_CONTEXT
-    } else {
-        MESSAGE_COMPOSER_CONTEXT
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4050,6 +4166,7 @@ struct PendingDraftOwnerStage {
 pub struct Composer {
     pub(crate) state: Entity<AppState>,
     pub(crate) input: Entity<ComposerInput>,
+    answer_input: Entity<ComposerInput>,
     /// Draft displaced while a queued message occupies the composer.
     pub(crate) queue_edit_draft: Option<(String, Vec<StagedAttachment>, Vec<CapturedAppshot>)>,
     /// Composer actions row plus the new-session floating target tab
@@ -4131,6 +4248,11 @@ pub struct Composer {
     /// Requests already answered locally (suppresses the panel until the doc
     /// frame marks them resolved).
     answered_requests: HashSet<String>,
+    /// Preserve the exact command id and payload across uncertain transport
+    /// outcomes. Retry can ask the host about the same command without
+    /// producing a second user steer.
+    async_submissions: HashMap<(String, String), AsyncQuestionSubmission>,
+    async_attempts: HashMap<(String, String), u32>,
     advance_task: Option<Task<()>>,
     send_task: Option<Task<()>>,
     /// The queued message being edited in the composer (see
@@ -4217,6 +4339,7 @@ pub struct Composer {
     _pickers_observe: Subscription,
     _picker_focus: Subscription,
     _input_events: Subscription,
+    _answer_input_events: Subscription,
 }
 
 struct RestoredComposerDraft {
@@ -4311,6 +4434,13 @@ impl Composer {
             input.enable_mentions();
             input
         });
+        let answer_input = cx.new(|cx| {
+            ComposerInput::with_context(
+                "Type your own answer, or pick an option above",
+                MESSAGE_COMPOSER_CONTEXT,
+                cx,
+            )
+        });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
@@ -4338,7 +4468,7 @@ impl Composer {
             ComposerInputEvent::OppositeSubmitted => this.on_opposite_submit(cx),
             ComposerInputEvent::Edited => {
                 this.on_input_edited(cx);
-                if this.wizard.is_none() && !std::mem::take(&mut this.suppress_next_draft_edit) {
+                if !std::mem::take(&mut this.suppress_next_draft_edit) {
                     this.mark_draft_dirty(cx);
                 }
             }
@@ -4377,10 +4507,19 @@ impl Composer {
             }
             ComposerInputEvent::PastedPaths(paths) => this.add_paths(paths.clone(), cx),
         });
+        let answer_input_events =
+            cx.subscribe(&answer_input, |this: &mut Self, _, event, cx| match event {
+                ComposerInputEvent::Submitted
+                | ComposerInputEvent::ModifierSubmitted
+                | ComposerInputEvent::OppositeSubmitted => this.wizard_advance(cx),
+                ComposerInputEvent::Edited | ComposerInputEvent::ViewportChanged => cx.notify(),
+                _ => {}
+            });
         let current_key = state.read(cx).selected_chat.clone().unwrap_or_default();
         let mut composer = Self {
             state,
             input,
+            answer_input,
             queue_edit_draft: None,
             pickers,
             drafts: HashMap::new(),
@@ -4429,6 +4568,8 @@ impl Composer {
             wizard: None,
             wizard_focus: cx.focus_handle(),
             answered_requests: HashSet::new(),
+            async_submissions: HashMap::new(),
+            async_attempts: HashMap::new(),
             failure_key: None,
             action_task: None,
             advance_task: None,
@@ -4479,6 +4620,7 @@ impl Composer {
             _pickers_observe: pickers_observe,
             _picker_focus: picker_focus,
             _input_events: input_events,
+            _answer_input_events: answer_input_events,
         };
         // Dev knob: pre-stage attachments (drop/paste can't be synthesized on
         // a rig) — `ZERON_ATTACH=/path/a.png[,/path/b.png]`, and
@@ -4529,7 +4671,7 @@ impl Composer {
     }
 
     pub(crate) fn can_edit_queue_in_composer(&self) -> bool {
-        !self.sending && self.wizard.is_none()
+        !self.sending
     }
 
     fn draft_id_for(&self, key: &str) -> String {
@@ -5476,6 +5618,8 @@ impl Composer {
         self.failure_key = None;
         self.wizard = None;
         self.answered_requests.clear();
+        self.async_submissions.clear();
+        self.async_attempts.clear();
         self.advance_task = None;
         self.send_task = None;
         self.action_task = None;
@@ -6661,15 +6805,6 @@ impl Composer {
     }
 
     fn on_input_edited(&mut self, cx: &mut Context<Self>) {
-        if self.wizard.is_some() {
-            if self.mention.token.is_some() || self.mention_task.is_some() {
-                self.reset_mention(None, cx);
-            }
-            if self.slash.token.is_some() || self.slash_task.is_some() {
-                self.reset_slash(None, cx);
-            }
-            return;
-        }
         let (text, cursor) = {
             let input = self.input.read(cx);
             (input.text().to_string(), input.cursor_offset())
@@ -7353,7 +7488,12 @@ impl Composer {
             let s = self.state.read(cx);
             (
                 s.selected_chat.clone().unwrap_or_default(),
-                pending_input_request(&s.transcript),
+                pending_input_request(&s.transcript)
+                    .map(|(id, questions)| Wizard::new(id, questions))
+                    .or_else(|| {
+                        pending_async_question(&s.transcript)
+                            .map(|(id, questions)| Wizard::new_async(id, questions))
+                    }),
                 editing_id
                     .as_ref()
                     .is_none_or(|id| s.queue.iter().any(|item| item.id == *id)),
@@ -7412,11 +7552,8 @@ impl Composer {
             // so switching away and back must not erase the one visible
             // trace of a failed send.
             self.wizard = None;
-            // The input entity survives navigation. Release the old question's
-            // placeholder now; a pending question on the new route will set
-            // its own placeholder below.
-            self.input
-                .update(cx, |input, cx| input.set_placeholder("Do anything…", cx));
+            self.answer_input
+                .update(cx, |input, cx| input.set_text("", cx));
             // Attachments stay stashed under their chat key (the map swap IS
             // the navigation); only the transient chrome resets.
             self.preview = None;
@@ -7459,50 +7596,67 @@ impl Composer {
             cx.notify();
             return;
         }
-        // Question panel lifecycle (wizard state cached per request id).
-        match pending {
-            Some((request_id, questions)) if !self.answered_requests.contains(&request_id) => {
-                let same = self
-                    .wizard
-                    .as_ref()
-                    .is_some_and(|w| w.request_id == request_id);
+        let transcript = self.state.read(cx).transcript.clone();
+        let settled: Vec<_> = self
+            .async_submissions
+            .keys()
+            .filter(|(chat, id)| {
+                chat == &self.current_key && async_question_resolved(&transcript, id)
+            })
+            .cloned()
+            .collect();
+        for key in settled {
+            self.async_submissions.remove(&key);
+            self.async_attempts.remove(&key);
+            self.answered_requests.remove(&key.1);
+        }
+        // Question card lifecycle; the regular composer keeps its own draft.
+        match pending.as_ref() {
+            Some(candidate)
+                if candidate.source == QuestionSource::Async
+                    || !self.answered_requests.contains(&candidate.request_id) =>
+            {
+                let same = self.wizard.as_ref().is_some_and(|w| {
+                    w.request_id == candidate.request_id && w.source == candidate.source
+                });
                 if !same {
-                    self.reset_mention(None, cx);
-                    self.wizard = Some(Wizard::new(request_id, questions));
+                    self.wizard = Some(candidate.clone());
                     self.advance_task = None;
-                    // The shared input becomes the panel's free-text override.
-                    self.input.update(cx, |input, cx| {
-                        input.set_placeholder("Type your own answer, or pick an option above", cx)
-                    });
+                    self.answer_input
+                        .update(cx, |input, cx| input.set_text("", cx));
                 }
             }
             _ => {
                 if let Some(wizard) = self.wizard.as_ref() {
-                    // LATCH (original composer.tsx `inputLatch`): a transient
-                    // fold/sync blip — or a steer appended behind the
-                    // streaming entry — must not unmount the panel and lose
-                    // the user's picks. Release only on explicit resolution
-                    // (here or on another device) or when a NON-EMPTY
-                    // transcript shows the question superseded (a newer
-                    // assistant entry took over). Never on run death: the
-                    // question stays answerable until answered — the engine
-                    // delivers a dead run's answer as a resumed turn.
                     let transcript = self.state.read(cx).transcript.clone();
-                    let released = input_request_resolved(&transcript, &wizard.request_id)
-                        || (!transcript.is_empty()
-                            && !self.answered_requests.contains(&wizard.request_id));
+                    let released = match wizard.source {
+                        QuestionSource::Blocking => {
+                            input_request_resolved(&transcript, &wizard.request_id)
+                                || (!transcript.is_empty()
+                                    && !self.answered_requests.contains(&wizard.request_id))
+                        }
+                        QuestionSource::Async => {
+                            async_question_resolved(&transcript, &wizard.request_id)
+                                || pending.as_ref().is_some_and(|candidate| {
+                                    candidate.request_id != wizard.request_id
+                                })
+                        }
+                    };
                     if released {
+                        if wizard.source == QuestionSource::Async {
+                            let key = (self.current_key.clone(), wizard.request_id.clone());
+                            self.async_submissions.remove(&key);
+                            self.async_attempts.remove(&key);
+                            self.answered_requests.remove(&wizard.request_id);
+                        }
                         self.wizard = None;
                         self.advance_task = None;
-                        self.input
-                            .update(cx, |input, cx| input.set_placeholder("Do anything…", cx));
+                        self.answer_input
+                            .update(cx, |input, cx| input.set_text("", cx));
                     }
                 }
             }
         }
-        let input_context = message_input_context(self.wizard.is_some());
-        self.input
-            .update(cx, |input, cx| input.set_key_context(input_context, cx));
         cx.notify();
     }
 
@@ -7567,15 +7721,6 @@ impl Composer {
         if self.commit_queue_edit(cx) {
             return;
         }
-        if self.wizard.is_some() {
-            // Enter inside the panel's free-text input submits the page.
-            let typed = self.input.read(cx).text().trim().to_string();
-            if let Some(w) = self.wizard.as_mut() {
-                w.set_typed(typed);
-            }
-            self.wizard_advance(cx);
-            return;
-        }
         let text = self.input.read(cx).text().trim().to_string();
         let no_content = !composer_has_content(
             &text,
@@ -7609,7 +7754,7 @@ impl Composer {
             self.staged().len() + self.staged_appshots().len(),
             self.staged_comments(cx).len(),
         );
-        if no_content && self.wizard.is_none() && self.editing_queued.is_none() {
+        if no_content && self.editing_queued.is_none() {
             self.activate_latest_queued_primary(cx);
         } else {
             self.on_submit(cx);
@@ -8600,12 +8745,20 @@ impl Composer {
     // ---- wizard glue ----
 
     fn wizard_select(&mut self, option_ix: usize, cx: &mut Context<Self>) {
+        if self
+            .wizard
+            .as_ref()
+            .is_some_and(|wizard| self.answered_requests.contains(&wizard.request_id))
+        {
+            self.retry_async_submission(cx);
+            return;
+        }
         let Some(wizard) = self.wizard.as_mut() else {
             return;
         };
         let step = wizard.select(option_ix);
         let has_pick = wizard.page_has_pick();
-        self.input.update(cx, |input, cx| {
+        self.answer_input.update(cx, |input, cx| {
             input.set_placeholder(
                 if has_pick {
                     "Type your own answer, or leave this blank to use the selected option"
@@ -8634,46 +8787,194 @@ impl Composer {
     }
 
     fn wizard_advance(&mut self, cx: &mut Context<Self>) {
+        if self
+            .wizard
+            .as_ref()
+            .is_some_and(|wizard| self.answered_requests.contains(&wizard.request_id))
+        {
+            return;
+        }
+        let typed = self.answer_input.read(cx).text().trim().to_string();
         let Some(wizard) = self.wizard.as_mut() else {
             return;
         };
+        wizard.set_typed(typed);
+        if !wizard.page_has_answer() {
+            return;
+        }
         match wizard.advance() {
             WizardStep::Done(answers) => self.wizard_finish(answers, cx),
             _ => {
-                // Moving on: clear the shared free-text input for the next page.
-                self.input.update(cx, |input, cx| input.set_text("", cx));
+                let next = wizard.current_typed().to_string();
+                self.answer_input
+                    .update(cx, |input, cx| input.set_text(next, cx));
                 cx.notify();
             }
         }
     }
 
     fn wizard_back(&mut self, cx: &mut Context<Self>) {
+        if self
+            .wizard
+            .as_ref()
+            .is_some_and(|wizard| self.answered_requests.contains(&wizard.request_id))
+        {
+            return;
+        }
+        let typed = self.answer_input.read(cx).text().to_string();
         if let Some(wizard) = self.wizard.as_mut() {
+            wizard.set_typed(typed);
             wizard.back();
+            let previous = wizard.current_typed().to_string();
+            self.answer_input
+                .update(cx, |input, cx| input.set_text(previous, cx));
             cx.notify();
         }
     }
 
-    /// Submit RespondInput and retire the panel.
-    fn wizard_finish(&mut self, answers: Vec<UserInputAnswer>, cx: &mut Context<Self>) {
-        let Some(wizard) = self.wizard.take() else {
+    fn wizard_skip(&mut self, cx: &mut Context<Self>) {
+        if self.wizard.as_ref().is_some_and(|wizard| {
+            wizard.source == QuestionSource::Async
+                && !self.answered_requests.contains(&wizard.request_id)
+        }) {
+            self.wizard_finish(Vec::new(), cx);
+        }
+    }
+
+    fn retry_async_submission(&mut self, cx: &mut Context<Self>) {
+        let Some(wizard) = self.wizard.as_ref() else {
             return;
         };
-        self.advance_task = None;
-        self.answered_requests.insert(wizard.request_id.clone());
-        self.input.update(cx, |input, cx| {
-            input.set_text("", cx);
-            // The panel borrowed the composer input; hand back its identity.
-            input.set_placeholder("Do anything…", cx);
-            input.set_key_context(MESSAGE_COMPOSER_CONTEXT, cx);
-        });
+        let key = (self.current_key.clone(), wizard.request_id.clone());
+        if self
+            .async_submissions
+            .get(&key)
+            .is_none_or(|submission| submission.state != AsyncDeliveryState::Uncertain)
+        {
+            return;
+        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.failure = Some("Engine not connected".into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return;
+        };
+        self.dispatch_async_submission(key, engine, cx);
+    }
+
+    fn dispatch_async_submission(
+        &mut self,
+        key: (String, String),
+        engine: crate::state::EngineHandle,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(submission) = self.async_submissions.get_mut(&key) else {
+            return;
+        };
+        submission.state = AsyncDeliveryState::Sending;
+        let command_id = submission.command_id.clone();
+        let intent = submission.intent.clone();
+        let chat_id = key.0.clone();
+        cx.spawn(async move |this, cx| {
+            let result = crate::task_commands::execute_with_id(
+                &engine, &chat_id, command_id, intent,
+            ).await;
+            this.update(cx, |composer, cx| {
+                match result {
+                    Ok(receipt) if receipt.status == CommandReceiptStatus::Applied => {
+                        if let Some(submission) = composer.async_submissions.get_mut(&key) {
+                            submission.state = AsyncDeliveryState::Applied;
+                        }
+                        composer.failure = None;
+                        composer.failure_key = None;
+                        let check_key = key.clone();
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(Duration::from_secs(3)).await;
+                            this.update(cx, |composer, cx| {
+                                let unresolved = composer.current_key != check_key.0
+                                    || async_question_open(&composer.state.read(cx).transcript, &check_key.1);
+                                if unresolved && let Some(submission) = composer.async_submissions.get_mut(&check_key)
+                                    && submission.state == AsyncDeliveryState::Applied {
+                                        submission.state = AsyncDeliveryState::Uncertain;
+                                        composer.failure = Some("Answer accepted, but its readback is delayed. Retry checks the same command.".into());
+                                        composer.failure_key = Some(check_key.0.clone());
+                                        cx.notify();
+                                    }
+                            }).ok();
+                        }).detach();
+                    }
+                    Ok(_) => {
+                        if let Some(submission) = composer.async_submissions.get_mut(&key) {
+                            submission.state = AsyncDeliveryState::Uncertain;
+                        }
+                        composer.failure = Some("Answer delivery is pending. Retry checks the same command.".into());
+                        composer.failure_key = Some(chat_id.clone());
+                    }
+                    Err(err) if matches!(err, RpcError::Failed(_) | RpcError::BadParams(_) | RpcError::UnknownMethod(_)) => {
+                        composer.async_submissions.remove(&key);
+                        *composer.async_attempts.entry(key.clone()).or_default() += 1;
+                        composer.answered_requests.remove(&key.1);
+                        composer.failure = Some(format!("Answer failed: {err}").into());
+                        composer.failure_key = Some(chat_id.clone());
+                    }
+                    Err(err) => {
+                        if let Some(submission) = composer.async_submissions.get_mut(&key) {
+                            submission.state = AsyncDeliveryState::Uncertain;
+                        }
+                        composer.failure = Some(format!("Answer delivery is uncertain: {err}. Retry checks the same command.").into());
+                        composer.failure_key = Some(chat_id.clone());
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
+    /// Submit the exact question command without touching the prompt draft.
+    fn wizard_finish(&mut self, answers: Vec<UserInputAnswer>, cx: &mut Context<Self>) {
+        let Some(wizard) = self.wizard.clone() else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.failure = Some("Engine not connected".into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
             return;
         };
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
             return;
         };
+        let async_question = wizard.source == QuestionSource::Async;
+        self.advance_task = None;
+        self.failure = None;
+        self.failure_key = None;
         let request_id = wizard.request_id.clone();
+        if async_question {
+            let key = (chat_id.clone(), request_id.clone());
+            let attempt = self.async_attempts.get(&key).copied().unwrap_or(0);
+            let command_id = async_question_command_id(&chat_id, &request_id, attempt);
+            let command = SessionCommandPayload::RespondAsyncQuestion {
+                message_id: request_id.clone(),
+                answers,
+            };
+            let Ok(value) = serde_json::to_value(command) else {
+                return;
+            };
+            let submission = AsyncQuestionSubmission {
+                command_id,
+                intent: serde_json::json!({ "kind": "session", "command": value }),
+                state: AsyncDeliveryState::Sending,
+            };
+            self.async_submissions.insert(key.clone(), submission);
+            self.answered_requests.insert(request_id);
+            self.dispatch_async_submission(key, engine, cx);
+            cx.notify();
+            return;
+        }
+        self.wizard = None;
+        self.answered_requests.insert(request_id.clone());
+        self.answer_input
+            .update(cx, |input, cx| input.set_text("", cx));
         let approval = wizard
             .questions
             .iter()
@@ -8712,8 +9013,8 @@ impl Composer {
                 this.update(cx, |composer, cx| {
                     composer.failure = Some(format!("Answer failed: {err}").into());
                     composer.failure_key = Some(failure_chat);
-                    // The answer never left this device — put the panel back.
                     composer.answered_requests.remove(&request_id);
+                    composer.on_state_changed(cx);
                     cx.notify();
                 })
                 .ok();
@@ -8743,22 +9044,17 @@ impl Composer {
         // Keys bubbling out of the free-text input must not double-handle:
         // digits select options only while the input is empty, and Enter is the
         // input's own Submit action when it has focus.
-        let input_focused = self.input.read(cx).focus_handle.is_focused(window);
-        let input_empty = self.input.read(cx).is_empty();
+        let input_focused = self.answer_input.read(cx).focus_handle.is_focused(window);
+        let input_empty = self.answer_input.read(cx).is_empty();
         let key = event.keystroke.key.as_str();
-        // A BARE digit picks an option. With a modifier held the keystroke
-        // belongs to an app shortcut — ⌘1..⌘9 jump to a sidebar row — and the
-        // panel must not also consume it as a selection.
-        if let Ok(digit) = key.parse::<usize>()
-            && (1..=9).contains(&digit)
-            && !event.keystroke.modifiers.modified()
+        // A bare digit picks an option only while focus is on the card, not
+        // the answer field. Focused free text must accept numeric answers.
+        // Modified digits still belong to app shortcuts such as ⌘1..⌘9.
+        if let Some(option_ix) =
+            wizard_number_shortcut(key, event.keystroke.modifiers.modified(), input_focused)
         {
-            if !input_focused || input_empty {
-                self.wizard_select(digit - 1, cx);
-                // Consumed as a selection: stop the platform from also
-                // inserting the digit into the focused free-text input.
-                cx.stop_propagation();
-            }
+            self.wizard_select(option_ix, cx);
+            cx.stop_propagation();
         } else if key == "enter" {
             if !input_focused {
                 self.wizard_advance(cx);
@@ -8774,8 +9070,8 @@ impl Composer {
 
     // ---- render pieces ----
 
-    /// The agent-asked-a-question panel (zeron question-panel.tsx), rendered in
-    /// place of the composer: the same theme-aware floating pill, uppercase
+    /// The agent-asked-a-question panel above the ordinary composer: the same
+    /// theme-aware floating pill, uppercase
     /// header + "1/3" counter chip, option rows with number kbd chips, a
     /// composer-surface free-text override, and Back / Next-Submit footer.
     fn render_wizard(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -8789,8 +9085,14 @@ impl Composer {
         };
         let page = wizard.page;
         let last = page + 1 >= wizard.questions.len();
-        let typed_empty = self.input.read(cx).is_empty();
-        let can_advance = wizard.page_has_pick() || !typed_empty;
+        let typed_empty = self.answer_input.read(cx).is_empty();
+        let submitting = self.answered_requests.contains(&wizard.request_id);
+        let delivery_state = self
+            .async_submissions
+            .get(&(self.current_key.clone(), wizard.request_id.clone()))
+            .map(|submission| submission.state);
+        let retryable = delivery_state == Some(AsyncDeliveryState::Uncertain);
+        let can_advance = retryable || (!submitting && (wizard.page_has_pick() || !typed_empty));
         let surface_radius =
             composer_surface_radius(self.dock_frame.map_or(0.0, |frame| frame.amount));
 
@@ -8982,7 +9284,7 @@ impl Composer {
                                         .items_center()
                                         .min_w_0()
                                         .px(px(8.0))
-                                        .child(self.input.clone()),
+                                        .child(self.answer_input.clone()),
                                 ),
                         ),
                     ),
@@ -8996,20 +9298,56 @@ impl Composer {
                     .px(px(16.0))
                     .pb(px(16.0))
                     .pt(px(4.0))
-                    .child(if page > 0 {
-                        crate::popover::btn_ghost(&theme, "Back", "wizard-back")
-                            .id("wizard-back")
-                            .on_click(cx.listener(|this, _, _, cx| this.wizard_back(cx)))
-                            .into_any_element()
-                    } else {
-                        gpui::Empty.into_any_element()
-                    })
                     .child(
-                        crate::popover::btn_primary(&theme, if last { "Submit" } else { "Next" })
-                            .id("wizard-submit")
-                            .px(px(16.0))
-                            .when(!can_advance, |el| el.opacity(0.4))
-                            .on_click(cx.listener(|this, _, _, cx| this.wizard_advance(cx))),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .when(page > 0, |el| {
+                                el.child(
+                                    crate::popover::btn_ghost(&theme, "Back", "wizard-back")
+                                        .id("wizard-back")
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.wizard_back(cx)),
+                                        ),
+                                )
+                            })
+                            .when(
+                                wizard.source == QuestionSource::Async && !submitting,
+                                |el| {
+                                    el.child(
+                                        crate::popover::btn_ghost(&theme, "Skip", "wizard-skip")
+                                            .id("wizard-skip")
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.wizard_skip(cx)),
+                                            ),
+                                    )
+                                },
+                            ),
+                    )
+                    .child(
+                        crate::popover::btn_primary(
+                            &theme,
+                            if retryable {
+                                "Retry delivery"
+                            } else if submitting {
+                                "Sending…"
+                            } else if last {
+                                "Send"
+                            } else {
+                                "Next"
+                            },
+                        )
+                        .id("wizard-submit")
+                        .px(px(16.0))
+                        .when(!can_advance, |el| el.opacity(0.4))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if retryable {
+                                this.retry_async_submission(cx);
+                            } else {
+                                this.wizard_advance(cx);
+                            }
+                        })),
                     ),
             );
         crate::frost::frosted(surface_radius, 16.0, panel).into_any_element()
@@ -9098,14 +9436,10 @@ impl Render for Composer {
         }
         let theme = Theme::of(cx).clone();
         let wizard_active = self.wizard.is_some();
-        if self.mention.token.is_some()
-            && (wizard_active || !self.input.focus_handle(cx).is_focused(window))
-        {
+        if self.mention.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
             self.reset_mention(None, cx);
         }
-        if self.slash.token.is_some()
-            && (wizard_active || !self.input.focus_handle(cx).is_focused(window))
-        {
+        if self.slash.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
             self.reset_slash(None, cx);
         }
         let mode = self.button_mode(cx);
@@ -9350,10 +9684,12 @@ impl Render for Composer {
                 ))
             });
 
-        if wizard_active {
+        let container = if wizard_active {
             let wizard = self.render_wizard(cx);
-            return container.child(motion::fade_quick("composer-wizard", div().child(wizard)));
-        }
+            container.child(motion::fade_quick("composer-wizard", div().child(wizard)))
+        } else {
+            container
+        };
 
         // What is waiting to be sent, stacked directly above the box it was
         // typed in — the queue is a property of this composer, not a panel
@@ -10162,9 +10498,9 @@ mod tests {
         runtime: &tokio::runtime::Runtime,
         mut done: impl FnMut(&gpui::TestAppContext) -> bool,
     ) {
-        for _ in 0..100 {
+        for _ in 0..500 {
             cx.run_until_parked();
-            runtime.block_on(tokio::task::yield_now());
+            runtime.block_on(tokio::time::sleep(Duration::from_millis(1)));
             if done(cx) {
                 return;
             }
@@ -10870,12 +11206,6 @@ mod tests {
     }
 
     #[test]
-    fn wizard_borrows_the_generic_enter_context_only_while_active() {
-        assert_eq!(message_input_context(false), MESSAGE_COMPOSER_CONTEXT);
-        assert_eq!(message_input_context(true), GENERIC_COMPOSER_CONTEXT);
-    }
-
-    #[test]
     fn wizard_option_keyboard_activation_requires_bare_single_press() {
         assert!(wizard_option_activates("enter", false, false));
         assert!(wizard_option_activates("space", false, false));
@@ -10884,8 +11214,18 @@ mod tests {
         assert!(!wizard_option_activates("tab", false, false));
     }
 
+    #[test]
+    fn numeric_answer_input_keeps_digit_keys_for_text() {
+        assert_eq!(wizard_number_shortcut("1", false, false), Some(0));
+        assert_eq!(wizard_number_shortcut("9", false, false), Some(8));
+        assert_eq!(wizard_number_shortcut("1", false, true), None);
+        assert_eq!(wizard_number_shortcut("9", false, true), None);
+        assert_eq!(wizard_number_shortcut("1", true, false), None);
+        assert_eq!(wizard_number_shortcut("0", false, false), None);
+    }
+
     #[gpui::test]
-    fn question_placeholder_follows_task_route_and_survives_transient_blip(
+    fn question_card_keeps_prompt_composer_independent_across_routes(
         cx: &mut gpui::TestAppContext,
     ) {
         let pending = |request_id: &str| SessionMessageEntry {
@@ -10911,10 +11251,20 @@ mod tests {
         composer.update(cx, |composer, cx| composer.on_state_changed(cx));
         composer.read_with(cx, |composer, cx| {
             assert_eq!(composer.wizard.as_ref().unwrap().request_id, "request-a");
+            assert_eq!(composer.input.read(cx).placeholder.as_ref(), "Do anything…");
             assert_eq!(
-                composer.input.read(cx).placeholder.as_ref(),
+                composer.answer_input.read(cx).placeholder.as_ref(),
                 "Type your own answer, or pick an option above"
             );
+        });
+
+        composer.update(cx, |composer, cx| {
+            composer
+                .input
+                .update(cx, |input, cx| input.set_text("Independent prompt", cx));
+            composer
+                .answer_input
+                .update(cx, |input, cx| input.set_text("Separate answer", cx));
         });
 
         state.update(cx, |state, _| state.transcript.clear());
@@ -10924,8 +11274,10 @@ mod tests {
                 composer.wizard.is_some(),
                 "transient blip keeps the question"
             );
+            assert_eq!(composer.answer_input.read(cx).text(), "Separate answer");
+            assert_eq!(composer.input.read(cx).text(), "Independent prompt");
             assert_eq!(
-                composer.input.read(cx).placeholder.as_ref(),
+                composer.answer_input.read(cx).placeholder.as_ref(),
                 "Type your own answer, or pick an option above"
             );
         });
@@ -10935,6 +11287,7 @@ mod tests {
         composer.read_with(cx, |composer, cx| {
             assert!(composer.wizard.is_none());
             assert_eq!(composer.input.read(cx).placeholder.as_ref(), "Do anything…");
+            assert!(composer.answer_input.read(cx).is_empty());
         });
 
         state.update(cx, |state, _| {
@@ -10944,8 +11297,9 @@ mod tests {
         composer.update(cx, |composer, cx| composer.on_state_changed(cx));
         composer.read_with(cx, |composer, cx| {
             assert_eq!(composer.wizard.as_ref().unwrap().request_id, "request-b");
+            assert_eq!(composer.input.read(cx).placeholder.as_ref(), "Do anything…");
             assert_eq!(
-                composer.input.read(cx).placeholder.as_ref(),
+                composer.answer_input.read(cx).placeholder.as_ref(),
                 "Type your own answer, or pick an option above"
             );
         });
@@ -12001,6 +12355,288 @@ mod tests {
         assert_eq!(answers.len(), 2);
         assert_eq!(answers[0].labels, vec!["b"]);
         assert_eq!(answers[1].labels, vec!["x"]);
+    }
+
+    #[test]
+    fn async_question_selection_waits_for_send_and_uses_index_ids() {
+        let mut wizard = Wizard::new_async(
+            "aq-call-1".into(),
+            vec![zeron_proto::AsyncUserInputQuestion {
+                title: "Which option?".into(),
+                options: Some(vec!["A".into(), "B".into()]),
+            }],
+        );
+        assert_eq!(wizard.source, QuestionSource::Async);
+        assert_eq!(wizard.select(1), WizardStep::Stay);
+        assert!(wizard.page_has_answer());
+        let WizardStep::Done(answers) = wizard.advance() else {
+            panic!("answer expected")
+        };
+        assert_eq!(answers[0].question_id, "0");
+        assert_eq!(answers[0].labels, vec!["B"]);
+    }
+
+    #[test]
+    fn async_question_command_id_is_stable_and_bounded() {
+        let chat = "chat".repeat(100);
+        let request = "call".repeat(100);
+        let first = async_question_command_id(&chat, &request, 0);
+        assert_eq!(first, async_question_command_id(&chat, &request, 0));
+        assert!(first.len() < 128);
+        assert_ne!(first, async_question_command_id("other", &request, 0));
+        assert_ne!(first, async_question_command_id(&chat, &request, 1));
+    }
+
+    #[test]
+    fn async_question_stays_visible_after_later_assistant_text_until_resolved() {
+        let question = SessionMessageEntry {
+            id: "assistant-1".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::AsyncQuestion {
+                id: "aq-call-1".into(),
+                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    title: "Which option?".into(),
+                    options: Some(vec!["A".into(), "B".into()]),
+                }],
+                resolved: false,
+            }],
+            created_at: 1,
+            device_id: "synthetic".into(),
+            status: Some(zeron_doc::MessageStatus::Complete),
+            continuation_of: None,
+        };
+        let later = SessionMessageEntry {
+            id: "assistant-2".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Text {
+                id: "t".into(),
+                text: "Continuing".into(),
+            }],
+            created_at: 2,
+            ..question.clone()
+        };
+        let mut transcript = vec![question, later];
+        assert_eq!(
+            pending_async_question(&transcript).map(|(id, _)| id),
+            Some("aq-call-1".into())
+        );
+        assert!(!async_question_resolved(&transcript, "aq-call-1"));
+        if let MessagePart::AsyncQuestion { resolved, .. } = &mut transcript[0].parts[0] {
+            *resolved = true;
+        }
+        assert!(pending_async_question(&transcript).is_none());
+        assert!(async_question_resolved(&transcript, "aq-call-1"));
+    }
+
+    #[gpui::test]
+    fn uncertain_async_answer_retries_exact_command_without_touching_prompt(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct AsyncRetryRpc {
+            calls: std::sync::atomic::AtomicUsize,
+            envelopes: Mutex<Vec<serde_json::Value>>,
+            methods: Mutex<Vec<String>>,
+        }
+        #[async_trait]
+        impl RpcService for AsyncRetryRpc {
+            async fn handle(
+                &self,
+                method: &str,
+                params: serde_json::Value,
+            ) -> Result<RpcReply, RpcError> {
+                self.methods.lock().unwrap().push(method.into());
+                match method {
+                    methods::GET_COMPOSER_DRAFT => {
+                        RpcReply::value(&zeron_proto::ComposerDraftRead {
+                            draft: None,
+                            submissions: vec![],
+                        })
+                    }
+                    methods::GET_TASK_COMMAND_SNAPSHOT => {
+                        RpcReply::value(&zeron_proto::TaskCommandRead {
+                            snapshot: zeron_proto::TaskCommandSnapshot {
+                                task_id: "async-task".into(),
+                                ..Default::default()
+                            },
+                            events: vec![],
+                            reload_required: false,
+                            next_task_sequence: None,
+                            has_more: false,
+                        })
+                    }
+                    methods::GET_TASK_COMMAND_RECEIPT => {
+                        RpcReply::value(&Option::<zeron_proto::CommandReceipt>::None)
+                    }
+                    methods::EXECUTE_TASK_COMMAND => {
+                        self.envelopes.lock().unwrap().push(params.clone());
+                        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                        if call < 2 {
+                            return Err(RpcError::Transport("synthetic lost reply".into()));
+                        }
+                        RpcReply::value(&zeron_proto::CommandReceipt {
+                            command_id: params["commandId"].as_str().unwrap().into(),
+                            task_id: "async-task".into(),
+                            intent: "respondAsyncQuestion".into(),
+                            payload_hash: "synthetic".into(),
+                            status: CommandReceiptStatus::Applied,
+                            snapshot: zeron_proto::TaskCommandSnapshot {
+                                task_id: "async-task".into(),
+                                ..Default::default()
+                            },
+                            event_sequence: None,
+                            actor_id: "synthetic".into(),
+                            client_id: "synthetic".into(),
+                            client_session_id: "synthetic".into(),
+                            execution_environment: None,
+                            correlation_id: None,
+                            reason: None,
+                            recovery_action: None,
+                            accepted_at_ms: 1,
+                            committed_at_ms: Some(1),
+                            observed_at_ms: 1,
+                        })
+                    }
+                    other => Err(RpcError::UnknownMethod(other.into())),
+                }
+            }
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let service = Arc::new(AsyncRetryRpc {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            envelopes: Mutex::new(vec![]),
+            methods: Mutex::new(vec![]),
+        });
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zeron_rpc::memory_client(service.clone()),
+            ));
+            state.selected_chat = Some("async-task".into());
+            state.transcript = vec![SessionMessageEntry {
+                id: "assistant-question".into(),
+                role: MessageRole::Assistant,
+                parts: vec![MessagePart::AsyncQuestion {
+                    id: "aq-call-1".into(),
+                    questions: vec![zeron_proto::AsyncUserInputQuestion {
+                        title: "Which option?".into(),
+                        options: Some(vec!["A".into(), "B".into()]),
+                    }],
+                    resolved: false,
+                }],
+                created_at: 1,
+                device_id: "synthetic".into(),
+                status: Some(zeron_doc::MessageStatus::Complete),
+                continuation_of: None,
+            }];
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |composer, cx| {
+            composer.on_state_changed(cx);
+            assert!(composer.wizard.is_some(), "synthetic card must mount");
+            composer
+                .input
+                .update(cx, |input, cx| input.set_text("Unrelated prompt", cx));
+            composer.wizard_select(1, cx);
+            composer.wizard_advance(cx);
+            assert!(
+                composer
+                    .async_submissions
+                    .contains_key(&("async-task".into(), "aq-call-1".into()))
+            );
+        });
+        let mut uncertain = false;
+        for _ in 0..100 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            std::thread::sleep(Duration::from_millis(1));
+            uncertain = composer.read_with(cx, |composer, _| {
+                composer
+                    .async_submissions
+                    .get(&("async-task".into(), "aq-call-1".into()))
+                    .is_some_and(|submission| submission.state == AsyncDeliveryState::Uncertain)
+            });
+            if uncertain {
+                break;
+            }
+        }
+        assert!(
+            uncertain,
+            "async state={:?}, calls={}, methods={:?}, failure={:?}",
+            composer.read_with(cx, |composer, _| composer
+                .async_submissions
+                .get(&("async-task".into(), "aq-call-1".into()))
+                .map(|s| s.state)),
+            service.calls.load(Ordering::SeqCst),
+            service.methods.lock().unwrap(),
+            composer.read_with(cx, |composer, _| composer.failure.clone())
+        );
+        composer.read_with(cx, |composer, cx| {
+            assert!(
+                composer.wizard.is_some(),
+                "uncertain card remains actionable"
+            );
+            assert_eq!(composer.input.read(cx).text(), "Unrelated prompt");
+        });
+        let question_transcript = state.read_with(cx, |state, _| state.transcript.clone());
+        state.update(cx, |state, _| {
+            state.selected_chat = Some("another-task".into());
+            state.transcript.clear();
+        });
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        state.update(cx, |state, _| {
+            state.selected_chat = Some("async-task".into());
+            state.transcript = question_transcript;
+        });
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.read_with(cx, |composer, _| {
+            assert!(
+                composer.wizard.is_some(),
+                "route return restores the retry card"
+            );
+            assert!(
+                composer
+                    .async_submissions
+                    .get(&("async-task".into(), "aq-call-1".into()))
+                    .is_some_and(|submission| submission.state == AsyncDeliveryState::Uncertain)
+            );
+        });
+        composer.update(cx, |composer, cx| composer.retry_async_submission(cx));
+        let mut applied = false;
+        for _ in 0..500 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            std::thread::sleep(Duration::from_millis(1));
+            applied = composer.read_with(cx, |composer, _| {
+                composer
+                    .async_submissions
+                    .get(&("async-task".into(), "aq-call-1".into()))
+                    .is_some_and(|submission| submission.state == AsyncDeliveryState::Applied)
+            });
+            if applied {
+                break;
+            }
+        }
+        assert!(applied, "retry did not settle");
+        let envelopes = service.envelopes.lock().unwrap();
+        assert_eq!(envelopes.len(), 3);
+        assert!(
+            envelopes
+                .iter()
+                .all(|envelope| envelope["commandId"] == envelopes[0]["commandId"])
+        );
+        assert!(
+            envelopes
+                .iter()
+                .all(|envelope| envelope["intent"] == envelopes[0]["intent"])
+        );
+        assert_eq!(
+            envelopes[0]["intent"]["command"]["answers"][0]["labels"][0],
+            "B"
+        );
     }
 
     #[test]

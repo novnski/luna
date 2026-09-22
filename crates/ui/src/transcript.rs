@@ -1499,6 +1499,9 @@ pub fn rows_for_entry(
                             copy_text: None,
                         });
                     }
+                    // The async question is already shown in the assistant's
+                    // text and as a separate answer card beside the composer.
+                    MessagePart::AsyncQuestion { .. } => {}
                     MessagePart::Error {
                         id: part_id,
                         message,
@@ -8091,6 +8094,9 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
         }
         if let MessagePart::Input { resolved, .. } = part {
             acc.push(0x10 | *resolved as u8);
+        }
+        if let MessagePart::AsyncQuestion { resolved, .. } = part {
+            acc.push(0x20 | *resolved as u8);
         }
     }
     fnv1a(&acc)

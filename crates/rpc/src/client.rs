@@ -322,10 +322,17 @@ async fn route_frame(shared: &Arc<Shared>, out: &mpsc::Sender<String>, frame: Se
 }
 
 fn wire_error(error: String) -> RpcError {
-    error
-        .strip_prefix("unknown method: ")
-        .map(|method| RpcError::UnknownMethod(method.to_owned()))
-        .unwrap_or(RpcError::Failed(error))
+    if let Some(method) = error.strip_prefix("unknown method: ") {
+        RpcError::UnknownMethod(method.to_owned())
+    } else if let Some(message) = error.strip_prefix("bad params: ") {
+        RpcError::BadParams(message.to_owned())
+    } else if let Some(message) = error.strip_prefix("transport: ") {
+        RpcError::Transport(message.to_owned())
+    } else if error == "connection closed" {
+        RpcError::Closed
+    } else {
+        RpcError::Failed(error)
+    }
 }
 
 /// How long a dial may take before we give up.

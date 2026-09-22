@@ -262,14 +262,33 @@ pub struct ClientFrame {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServerFrame {
     pub id: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_json_value"
+    )]
     pub ok: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub err: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_json_value"
+    )]
     pub item: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
+}
+
+// A present `ok: null` is a successful nullable RPC result, not a missing
+// response field. Serde's default Option<Value> decoder collapses both to None.
+fn deserialize_present_json_value<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 /// What a service returns for one invocation.
@@ -371,6 +390,7 @@ mod tests {
                 }
                 "Never" => Ok(RpcReply::Stream(futures::stream::pending().boxed())),
                 "Boom" => Err(RpcError::Failed("boom".into())),
+                "RelayLost" => Err(RpcError::Transport("synthetic relay loss".into())),
                 other => Err(RpcError::UnknownMethod(other.into())),
             }
         }
@@ -408,6 +428,33 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RpcError::Failed(m) if m == "boom"));
+    }
+
+    #[tokio::test]
+    async fn nullable_unary_result_completes() {
+        let client = memory_client(Arc::new(TestService));
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            client.call_as::<Option<u64>>("Echo", serde_json::Value::Null),
+        )
+        .await
+        .expect("null reply must settle the pending call")
+        .unwrap();
+        assert_eq!(result, None);
+        let frame: ServerFrame = serde_json::from_str(r#"{"id":1,"ok":null}"#).unwrap();
+        assert_eq!(frame.ok, Some(serde_json::Value::Null));
+        let absent: ServerFrame = serde_json::from_str(r#"{"id":1}"#).unwrap();
+        assert_eq!(absent.ok, None);
+    }
+
+    #[tokio::test]
+    async fn transport_error_preserves_retryable_kind() {
+        let client = memory_client(Arc::new(TestService));
+        let error = client
+            .call("RelayLost", serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, RpcError::Transport(message) if message == "synthetic relay loss"));
     }
 
     #[tokio::test]

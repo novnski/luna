@@ -431,6 +431,7 @@ impl TaskCommandIntent {
                 SessionCommandPayload::Steer { .. } => "steer",
                 SessionCommandPayload::Interrupt {} => "stop",
                 SessionCommandPayload::RespondInput { .. } => "respondInput",
+                SessionCommandPayload::RespondAsyncQuestion { .. } => "respondAsyncQuestion",
                 SessionCommandPayload::RespondApproval { .. } => "respondApproval",
             },
             Self::Rename { .. } => "rename",

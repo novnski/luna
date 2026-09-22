@@ -9,7 +9,7 @@
 //! - `queue`:    LoroMovableList of LoroMap {
 //!   id, text, attachments?, issuedBy, issuedAt, editedAt? }        (any device writes)
 //!
-//! Part maps: { id, kind: "text"|"reasoning"|"tool"|"input"|"error"|"image", text?: LoroText,
+//! Part maps: { id, kind: "text"|"reasoning"|"tool"|"input"|"asyncQuestion"|"error"|"image", text?: LoroText,
 //! reasoning?: LoroText, call?: json, isError?, questions?: json, resolved?, message? }.
 //! Text bodies are **LoroText** so streaming appends RLE-merge (1.03x oplog overhead vs
 //! 125x for whole-value rewrites).
@@ -195,6 +195,17 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             resolved: Some(*resolved),
             ..Default::default()
         },
+        MessagePart::AsyncQuestion {
+            id,
+            questions,
+            resolved,
+        } => DocPartJson {
+            id: id.clone(),
+            kind: "asyncQuestion".into(),
+            questions: Some(serde_json::to_value(questions)?),
+            resolved: Some(*resolved),
+            ..Default::default()
+        },
         MessagePart::Error { id, message } => DocPartJson {
             id: id.clone(),
             kind: "error".into(),
@@ -237,6 +248,14 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
         "input" => MessagePart::Input {
             id: p.id.clone(),
             request_id: p.id,
+            questions: p
+                .questions
+                .and_then(|q| serde_json::from_value(q).ok())
+                .unwrap_or_default(),
+            resolved: p.resolved.unwrap_or(false),
+        },
+        "asyncQuestion" => MessagePart::AsyncQuestion {
+            id: p.id,
             questions: p
                 .questions
                 .and_then(|q| serde_json::from_value(q).ok())
@@ -672,6 +691,16 @@ impl SessionDoc {
     /// question whose run already died — no fold owns the entry anymore.
     /// Returns `false` when no such part exists.
     pub fn resolve_input(&self, request_id: &str) -> Result<bool, DocError> {
+        self.resolve_question_part("input", request_id)
+    }
+
+    /// Dismiss an async answer card by its provider message id. This is a
+    /// durable UI state change; the provider tool already returned earlier.
+    pub fn resolve_async_question(&self, message_id: &str) -> Result<bool, DocError> {
+        self.resolve_question_part("asyncQuestion", message_id)
+    }
+
+    fn resolve_question_part(&self, kind: &str, id: &str) -> Result<bool, DocError> {
         let messages = self.doc.get_list("messages");
         for i in 0..messages.len() {
             let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
@@ -690,15 +719,25 @@ impl SessionDoc {
                 else {
                     continue;
                 };
-                let is_input = matches!(
+                let kind_matches = matches!(
                     part.get("kind"),
-                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == "input"
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == kind
                 );
                 let id_matches = matches!(
                     part.get("id"),
-                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == request_id
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == id
                 );
-                if is_input && id_matches {
+                let unresolved = !matches!(
+                    part.get("resolved"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::Bool(true)))
+                );
+                if kind_matches && id_matches {
+                    if !unresolved {
+                        // Preserve resolve_input's existing idempotent
+                        // existence result. Async cards need a false return
+                        // so a second answer is not treated as fresh.
+                        return Ok(kind == "input");
+                    }
                     part.insert("resolved", true)?;
                     self.doc.commit();
                     return Ok(true);
@@ -1619,10 +1658,50 @@ mod tests {
         .unwrap();
         assert!(!doc.resolve_input("nope").unwrap());
         assert!(doc.resolve_input("r1").unwrap());
+        assert!(
+            doc.resolve_input("r1").unwrap(),
+            "existing input resolution stays idempotent"
+        );
         let entries = doc.read_entries().unwrap();
         assert!(matches!(
             &entries[0].parts[0],
             MessagePart::Input { resolved: true, .. }
+        ));
+    }
+
+    #[test]
+    fn async_question_round_trips_and_dismisses_once() {
+        let doc = SessionDoc::init("chat-async").unwrap();
+        doc.push_message(&SessionMessageEntry {
+            id: "m-async".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::AsyncQuestion {
+                id: "aq-call-1".into(),
+                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    title: "Which option?".into(),
+                    options: Some(vec!["A".into(), "B".into()]),
+                }],
+                resolved: false,
+            }],
+            created_at: 1,
+            device_id: "synthetic".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+        let restored = SessionDoc::from_doc({
+            let other = LoroDoc::new();
+            other.import(&doc.export_snapshot().unwrap()).unwrap();
+            other
+        });
+        assert!(matches!(&restored.read_entries().unwrap()[0].parts[0],
+            MessagePart::AsyncQuestion { id, resolved: false, questions }
+                if id == "aq-call-1" && questions[0].title == "Which option?"));
+        assert!(restored.resolve_async_question("aq-call-1").unwrap());
+        assert!(!restored.resolve_async_question("aq-call-1").unwrap());
+        assert!(matches!(
+            &restored.read_entries().unwrap()[0].parts[0],
+            MessagePart::AsyncQuestion { resolved: true, .. }
         ));
     }
 

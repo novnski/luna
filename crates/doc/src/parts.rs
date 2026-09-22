@@ -200,6 +200,15 @@ pub enum MessagePart {
         #[serde(default)]
         resolved: bool,
     },
+    /// Codex `request_user_input_async` completes immediately. This durable
+    /// card never marks the run AwaitingInput and has no provider resolver.
+    #[serde(rename_all = "camelCase")]
+    AsyncQuestion {
+        id: String,
+        questions: Vec<zeron_proto::AsyncUserInputQuestion>,
+        #[serde(default)]
+        resolved: bool,
+    },
     Error {
         id: String,
         message: String,
@@ -214,6 +223,7 @@ impl MessagePart {
             | MessagePart::Reasoning { id, .. }
             | MessagePart::Tool { id, .. }
             | MessagePart::Input { id, .. }
+            | MessagePart::AsyncQuestion { id, .. }
             | MessagePart::Error { id, .. } => id,
         }
     }
@@ -238,6 +248,9 @@ impl MessagePart {
                         .map_or(0, |s| serde_json::to_vec(s).map_or(0, |v| v.len()))
             }
             MessagePart::Input { questions, .. } => {
+                serde_json::to_vec(questions).map_or(0, |v| v.len())
+            }
+            MessagePart::AsyncQuestion { questions, .. } => {
                 serde_json::to_vec(questions).map_or(0, |v| v.len())
             }
             MessagePart::Image {
@@ -401,6 +414,19 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 {
                     *resolved = true;
                 }
+            }
+        }
+        AgentEvent::AsyncQuestions {
+            message_id,
+            questions,
+        } => {
+            let id = format!("aq-{message_id}");
+            if !out.iter().any(|part| part.id() == id) {
+                out.push(MessagePart::AsyncQuestion {
+                    id,
+                    questions: questions.clone(),
+                    resolved: false,
+                });
             }
         }
         AgentEvent::Error { message } => {
@@ -684,6 +710,23 @@ pub fn join_continuations(entries: Vec<Vec<MessagePart>>) -> Vec<MessagePart> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn async_question_folds_once_without_becoming_pending_input() {
+        let event = AgentEvent::AsyncQuestions {
+            message_id: "call-1".into(),
+            questions: vec![zeron_proto::AsyncUserInputQuestion {
+                title: "Which option?".into(),
+                options: Some(vec!["A".into(), "B".into()]),
+            }],
+        };
+        let mut parts = Vec::new();
+        fold_event_into_parts(&mut parts, &event);
+        fold_event_into_parts(&mut parts, &event);
+        assert!(matches!(parts.as_slice(), [MessagePart::AsyncQuestion {
+            id, resolved: false, ..
+        }] if id == "aq-call-1"));
+    }
 
     fn text_delta(s: &str) -> AgentEvent {
         AgentEvent::TextDelta { text: s.into() }

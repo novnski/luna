@@ -15,7 +15,7 @@ use zeron_doc::{
 };
 use zeron_engine::{EngineCore, HarnessRegistry, RunJournal};
 use zeron_harness::mock::MockHarness;
-use zeron_harness::{Harness, HarnessError, RunControls};
+use zeron_harness::{Harness, HarnessError, RunControls, SteerAcceptance};
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SessionStatus, SteeringMode, ToolCall,
@@ -1823,6 +1823,353 @@ async fn unsupported_auto_never_runs_as_hidden_ask() {
         .expect_err("OpenCode Auto must not degrade to hidden Ask");
     assert!(error.to_string().contains("hidden Ask"), "{error}");
     assert!(core.sessions.session_status(CHAT).is_none());
+}
+
+/// Codex-style async questions are already complete provider tool calls:
+/// Skip only resolves the card, while a later answer uses normal prompt delivery.
+#[tokio::test(flavor = "multi_thread")]
+async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(
+        dir.path(),
+        Arc::new(ScriptedHarness {
+            script: vec![
+                AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: "synthetic".into(),
+                    tools: vec![],
+                    cwd: "/tmp".into(),
+                    session_id: "synthetic-session".into(),
+                    assistant_message_id: "assistant-1".into(),
+                },
+                AgentEvent::TextDelta {
+                    text: "Which option?".into(),
+                },
+                AgentEvent::AsyncQuestions {
+                    message_id: "call-1".into(),
+                    questions: vec![zeron_proto::AsyncUserInputQuestion {
+                        title: "Which option?".into(),
+                        options: Some(vec!["A".into(), "B".into()]),
+                    }],
+                },
+                done(DoneStatus::Completed),
+            ],
+            step_delay: Duration::from_millis(1),
+            hang_until_interrupt: false,
+        }),
+    );
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_viewer(
+        handle.doc(),
+        "async-run",
+        SessionCommandPayload::Run {
+            request: run_request("start"),
+            message_id: "start-message".into(),
+        },
+    );
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|e| {
+                e.parts.iter().any(|part|
+        matches!(part, MessagePart::AsyncQuestion { id, resolved: false, .. } if id == "aq-call-1")
+    )
+            })
+        },
+        "async card published",
+    )
+    .await;
+    wait_for(
+        || {
+            command_status(&core, "async-run")
+                .is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
+        },
+        "first run applied",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|e| {
+                e.status == Some(MessageStatus::Complete)
+                    && e.parts.iter().any(|part| {
+                        matches!(part,
+            MessagePart::AsyncQuestion { id, .. } if id == "aq-call-1")
+                    })
+            })
+        },
+        "async run settled",
+    )
+    .await;
+
+    queue_as_viewer(
+        handle.doc(),
+        "skip-call-1",
+        SessionCommandPayload::RespondAsyncQuestion {
+            message_id: "aq-call-1".into(),
+            answers: vec![],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "skip-call-1")
+                .is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
+        },
+        "skip applied",
+    )
+    .await;
+    assert!(entries(&core).iter().any(|e| {
+        e.parts.iter().any(|part|
+        matches!(part, MessagePart::AsyncQuestion { id, resolved: true, .. } if id == "aq-call-1")
+    )
+    }));
+    assert_eq!(
+        command_status(&core, "skip-call-1").unwrap().1.as_deref(),
+        Some("question skipped")
+    );
+
+    handle
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "later-async".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::AsyncQuestion {
+                id: "aq-call-2".into(),
+                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    title: "Choose a later option".into(),
+                    options: Some(vec!["A".into(), "B".into()]),
+                }],
+                resolved: false,
+            }],
+            created_at: chrono::Utc::now().timestamp_millis(),
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    queue_as_viewer(
+        handle.doc(),
+        "answer-call-2",
+        SessionCommandPayload::RespondAsyncQuestion {
+            message_id: "aq-call-2".into(),
+            answers: vec![zeron_proto::UserInputAnswer {
+                question_id: "0".into(),
+                labels: vec!["B".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "answer-call-2")
+                .is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
+        },
+        "late answer applied",
+    )
+    .await;
+    assert!(entries(&core).iter().any(|e| {
+        e.parts.iter().any(|part|
+        matches!(part, MessagePart::AsyncQuestion { id, resolved: true, .. } if id == "aq-call-2")
+    )
+    }));
+    assert!(entries(&core).iter().any(|e| {
+        e.role == MessageRole::User && e.parts.iter().any(|part|
+        matches!(part, MessagePart::Text { text, .. } if text.contains("Choose a later option: B"))
+    )
+    }));
+    queue_as_viewer(
+        handle.doc(),
+        "duplicate-answer-call-2",
+        SessionCommandPayload::RespondAsyncQuestion {
+            message_id: "aq-call-2".into(),
+            answers: vec![zeron_proto::UserInputAnswer {
+                question_id: "0".into(),
+                labels: vec!["B".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "duplicate-answer-call-2")
+                .is_some_and(|(status, _)| status == SessionCommandStatus::Rejected)
+        },
+        "duplicate answer rejected",
+    )
+    .await;
+    assert_eq!(
+        entries(&core)
+            .iter()
+            .filter(|e| {
+                e.role == MessageRole::User && e.parts.iter().any(|part|
+        matches!(part, MessagePart::Text { text, .. } if text.contains("Choose a later option: B"))
+    )
+            })
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
+    struct BoundaryHarness {
+        release_tool: Arc<tokio::sync::Notify>,
+        tool_was_interrupted: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait]
+    impl Harness for BoundaryHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Async boundary"
+        }
+        fn supports_steering(&self) -> bool {
+            true
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::StepBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            _request: RunRequest,
+            mut controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            let release = self.release_tool.clone();
+            let interrupted = self.tool_was_interrupted.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(AgentEvent::AsyncQuestions {
+                        message_id: "boundary-call".into(),
+                        questions: vec![zeron_proto::AsyncUserInputQuestion {
+                            title: "Which option?".into(),
+                            options: Some(vec!["A".into(), "B".into()]),
+                        }],
+                    }))
+                    .await;
+                let _ = tx
+                    .send(Ok(AgentEvent::ToolCall {
+                        id: "tool-in-flight".into(),
+                        call: ToolCall::WriteFile {
+                            path: "/tmp/synthetic-only".into(),
+                            content: None,
+                        },
+                    }))
+                    .await;
+                let Some(message) = controls.steering.recv().await else {
+                    return;
+                };
+                assert!(message.prompt.contains("Which option?: B"));
+                if let Some(acceptance) = message.acceptance {
+                    let _ = acceptance.send(SteerAcceptance::Accepted);
+                }
+                release.notified().await;
+                interrupted.store(
+                    controls.interrupt.is_cancelled(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                let _ = tx
+                    .send(Ok(AgentEvent::ToolResult {
+                        id: "tool-in-flight".into(),
+                        is_error: false,
+                        output: None,
+                        diff: None,
+                    }))
+                    .await;
+                let _ = tx
+                    .send(Ok(AgentEvent::Steered {
+                        assistant_message_id: None,
+                        next_assistant_message_id: None,
+                    }))
+                    .await;
+                let _ = tx
+                    .send(Ok(AgentEvent::TextDelta {
+                        text: "after tool boundary".into(),
+                    }))
+                    .await;
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+    let release_tool = Arc::new(tokio::sync::Notify::new());
+    let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(
+        dir.path(),
+        Arc::new(BoundaryHarness {
+            release_tool: release_tool.clone(),
+            tool_was_interrupted: interrupted.clone(),
+        }),
+    );
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_viewer(
+        handle.doc(),
+        "boundary-run",
+        SessionCommandPayload::Run {
+            request: run_request("start"),
+            message_id: "boundary-start".into(),
+        },
+    );
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(|part|
+        matches!(part, MessagePart::Tool { id, resolved: false, .. } if id == "tool-in-flight")
+    )
+            })
+        },
+        "in-flight tool published",
+    )
+    .await;
+    queue_as_viewer(
+        handle.doc(),
+        "boundary-answer",
+        SessionCommandPayload::RespondAsyncQuestion {
+            message_id: "aq-boundary-call".into(),
+            answers: vec![zeron_proto::UserInputAnswer {
+                question_id: "0".into(),
+                labels: vec!["B".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "boundary-answer")
+                .is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
+        },
+        "answer accepted while tool runs",
+    )
+    .await;
+    assert!(entries(&core).iter().any(|entry| {
+        entry.parts.iter().any(|part|
+        matches!(part, MessagePart::Tool { id, resolved: false, .. } if id == "tool-in-flight")
+    )
+    }));
+    assert!(!entries(&core).iter().any(|entry| {
+        entry.parts.iter().any(|part|
+        matches!(part, MessagePart::Text { text, .. } if text.contains("after tool boundary"))
+    )
+    }));
+    release_tool.notify_one();
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(|part|
+        matches!(part, MessagePart::Text { text, .. } if text.contains("after tool boundary"))
+    )
+            })
+        },
+        "answer consumed after tool boundary",
+    )
+    .await;
+    assert!(!interrupted.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 /// Resilience: a RespondInput whose id matches no pending request is REJECTED
