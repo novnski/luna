@@ -194,8 +194,11 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
             continuation_of: None,
         })?;
     core.doc_host.flush_all();
+    // The doc-host's last-message projection can land after the seed call.
+    // Keep this synthetic read marker ahead of that bounded startup race so
+    // the optional card is not mistaken for an unseen completed task.
     core.workspace
-        .mark_chat_seen(COMPLETE, chrono::Utc::now() + chrono::Duration::seconds(1))?;
+        .mark_chat_seen(COMPLETE, chrono::Utc::now() + chrono::Duration::hours(1))?;
     anyhow::ensure!(
         core.workspace
             .read_chats()?
