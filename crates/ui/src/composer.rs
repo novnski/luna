@@ -64,6 +64,31 @@ pub const ACTIONS_ROW_HEIGHT: f32 = 46.0;
 pub const PILL_BORDER_V: f32 = 2.0;
 /// Corner radius shared by the composer and the queue tray behind it.
 pub(crate) const COMPOSER_RADIUS: f32 = 26.0;
+fn composer_surface_radius(dock_amount: f32) -> f32 {
+    COMPOSER_RADIUS - 4.0 * dock_amount
+}
+
+/// The question wizard and the ordinary composer use the same pill chrome.
+fn composer_surface(theme: &Theme, radius: f32) -> gpui::Div {
+    // A translucent cool silver/slate edge sits more naturally on frost
+    // than the general-purpose white/black separator color.
+    let border = if theme.is_frost() {
+        match theme.appearance {
+            crate::theme::Appearance::Dark => gpui::hsla(210.0 / 360.0, 0.18, 0.78, 0.09),
+            crate::theme::Appearance::Light => gpui::hsla(210.0 / 360.0, 0.18, 0.32, 0.10),
+        }
+    } else {
+        theme.border
+    };
+    div()
+        .rounded(px(radius))
+        .border_1()
+        .border_color(border)
+        .when(theme.is_frost(), |el| el.bg(theme.composer_sidebar_tint()))
+        .when(!theme.is_frost(), |el| {
+            el.bg(theme.input_glass_bg()).shadow_lg()
+        })
+}
 /// Expanded composer bounds, border-box: 76 + 46 + 2 = 124 when empty (the
 /// new-chat canvas), 260 + 46 + 2 = 308 at the content cap.
 pub const COMPOSER_MIN_HEIGHT: f32 = TEXTAREA_MIN + ACTIONS_ROW_HEIGHT + PILL_BORDER_V;
@@ -8741,10 +8766,9 @@ impl Composer {
     // ---- render pieces ----
 
     /// The agent-asked-a-question panel (zeron question-panel.tsx), rendered in
-    /// place of the composer: the same floating-pill chrome (`rounded-[26px]
-    /// border-white/[0.08] bg-white/[0.03] shadow-xl`), uppercase header +
-    /// "1/3" counter chip, option rows with number kbd chips, a free-text
-    /// override over a hairline, and Back / Next-Submit footer.
+    /// place of the composer: the same theme-aware floating pill, uppercase
+    /// header + "1/3" counter chip, option rows with number kbd chips, a
+    /// composer-surface free-text override, and Back / Next-Submit footer.
     fn render_wizard(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::of(cx).clone();
         let Some(wizard) = self.wizard.clone() else {
@@ -8758,6 +8782,8 @@ impl Composer {
         let last = page + 1 >= wizard.questions.len();
         let typed_empty = self.input.read(cx).is_empty();
         let can_advance = wizard.page_has_pick() || !typed_empty;
+        let surface_radius =
+            composer_surface_radius(self.dock_frame.map_or(0.0, |frame| frame.amount));
 
         let options = question.options.iter().enumerate().map(|(ix, label)| {
             // Selection reads on the row only while no typed override exists
@@ -8830,17 +8856,12 @@ impl Composer {
                 })
         });
 
-        div()
+        let panel = composer_surface(&theme, surface_radius)
             .id("question-panel")
             .track_focus(&self.wizard_focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_wizard_key(event, window, cx)
             }))
-            .rounded(px(COMPOSER_RADIUS))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.input_glass_bg())
-            .when(!theme.is_frost(), |el| el.shadow_lg())
             .flex()
             .flex_col()
             .child(
@@ -8907,17 +8928,24 @@ impl Composer {
                             .gap(px(4.0))
                             .children(options),
                     )
-                    // Free-text override over a hairline (shares the composer
-                    // input entity).
+                    // Same compact pill surface and input-row geometry as the
+                    // ordinary composer; the input entity stays shared.
                     .child(
-                        div()
-                            .mt(px(12.0))
-                            .border_t_1()
-                            .border_color(crate::theme::hairline(0.06))
-                            .pt(px(12.0))
-                            .pb(px(4.0))
-                            .px(px(4.0))
-                            .child(self.input.clone()),
+                        div().mt(px(12.0)).pb(px(4.0)).px(px(4.0)).child(
+                            composer_surface(&theme, surface_radius)
+                                .id("wizard-answer-surface")
+                                .w_full()
+                                .h(px(COMPACT_TOTAL_HEIGHT))
+                                .child(
+                                    div()
+                                        .h(px(COMPACT_TOTAL_HEIGHT - PILL_BORDER_V))
+                                        .flex()
+                                        .items_center()
+                                        .min_w_0()
+                                        .px(px(8.0))
+                                        .child(self.input.clone()),
+                                ),
+                        ),
                     ),
             )
             .child(
@@ -8944,8 +8972,8 @@ impl Composer {
                             .when(!can_advance, |el| el.opacity(0.4))
                             .on_click(cx.listener(|this, _, _, cx| this.wizard_advance(cx))),
                     ),
-            )
-            .into_any_element()
+            );
+        crate::frost::frosted(surface_radius, 16.0, panel).into_any_element()
     }
 
     fn render_send_button(
@@ -9435,7 +9463,7 @@ impl Render for Composer {
                 morph_t
             };
         let text_pt = morph_text_pad(layout_morph_t);
-        let surface_radius = COMPOSER_RADIUS - 4.0 * dock_amount;
+        let surface_radius = composer_surface_radius(dock_amount);
         let route_to_single_line =
             self.dock_frame.is_some_and(|frame| frame.active) && !session_expanded;
         let textarea_height = (pill_height
@@ -9519,36 +9547,18 @@ impl Render for Composer {
         let appshot_strip = self.render_appshot_strip(&theme, window, cx);
         let comments_chip = self.render_comments_chip(&theme, cx);
 
-        // A translucent cool silver/slate edge sits more naturally on frost
-        // than the general-purpose white/black separator color.
-        let pill_border = if theme.is_frost() {
-            match theme.appearance {
-                crate::theme::Appearance::Dark => gpui::hsla(210.0 / 360.0, 0.18, 0.78, 0.09),
-                crate::theme::Appearance::Light => gpui::hsla(210.0 / 360.0, 0.18, 0.32, 0.10),
-            }
-        } else {
-            theme.border
-        };
         // Compensate for the transcript canvas beneath the frosted surface.
         // Keep the opaque fallback when frost is disabled or unsupported.
-        let pill = div()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    // Padding and action controls are part of the text composer.
-                    // Open menus keep their own keyboard/search focus.
-                    if !this.pickers.read(cx).is_open() {
-                        window.focus(&this.input.focus_handle(cx), cx);
-                    }
-                }),
-            )
-            .rounded(px(surface_radius))
-            .border_1()
-            .border_color(pill_border)
-            .when(theme.is_frost(), |el| el.bg(theme.composer_sidebar_tint()))
-            .when(!theme.is_frost(), |el| {
-                el.bg(theme.input_glass_bg()).shadow_lg()
-            });
+        let pill = composer_surface(&theme, surface_radius).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                // Padding and action controls are part of the text composer.
+                // Open menus keep their own keyboard/search focus.
+                if !this.pickers.read(cx).is_open() {
+                    window.focus(&this.input.focus_handle(cx), cx);
+                }
+            }),
+        );
         // The pill's bottom edge is stationary on screen (the composer sits at
         // the bottom of the shell column; growth moves the TOP edge), so the
         // controls pin to the bottom and only the text glides with the reveal
@@ -11672,6 +11682,12 @@ mod tests {
         // …while outside the window the same flip animates as usual.
         let armed = flip_morph_step(None, true, 49.0, 300.0, false, false).unwrap();
         assert_eq!(armed.from, 49.0);
+    }
+
+    #[test]
+    fn composer_surface_radius_tracks_the_dock_morph() {
+        assert_eq!(composer_surface_radius(0.0), COMPOSER_RADIUS);
+        assert_eq!(composer_surface_radius(1.0), COMPOSER_RADIUS - 4.0);
     }
 
     #[test]
