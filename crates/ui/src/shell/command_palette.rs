@@ -88,6 +88,17 @@ pub(super) enum Entry {
 }
 
 impl Entry {
+    fn is_ordinary_action(&self) -> bool {
+        matches!(
+            self,
+            Self::NewChat | Self::NewProject | Self::Settings | Self::Theme(_)
+        )
+    }
+
+    fn is_search_result(&self) -> bool {
+        matches!(self, Self::Chat { .. } | Self::History { .. })
+    }
+
     fn identity(&self) -> EntryIdentity {
         match self {
             Self::NewChat => EntryIdentity::NewChat,
@@ -346,6 +357,22 @@ impl Shell {
         }
     }
 
+    fn command_default_index(entries: &[Entry]) -> Option<usize> {
+        entries
+            .iter()
+            .position(Entry::is_ordinary_action)
+            .or_else(|| entries.iter().position(Entry::is_search_result))
+    }
+
+    fn command_selected_index(&self, entries: &[Entry]) -> Option<usize> {
+        let palette = self.command_palette.as_ref()?;
+        match &palette.selection {
+            PaletteSelection::Default => Self::command_default_index(entries),
+            PaletteSelection::Bound { .. } => Some(palette.active),
+            PaletteSelection::Cleared => None,
+        }
+    }
+
     fn reconcile_command_palette_selection(&mut self, entries: &[Entry]) {
         let Some(selection) = self
             .command_palette
@@ -355,7 +382,10 @@ impl Shell {
             return;
         };
         let resolution = match selection {
-            PaletteSelection::Default => None,
+            PaletteSelection::Default => Some((
+                Self::command_default_index(entries),
+                PaletteSelection::Default,
+            )),
             PaletteSelection::Cleared => Some((None, PaletteSelection::Cleared)),
             PaletteSelection::Bound {
                 identity,
@@ -393,8 +423,6 @@ impl Shell {
                 palette.active = index;
             }
             palette.selection = selection;
-        } else {
-            palette.active = palette.active.min(entries.len().saturating_sub(1));
         }
     }
 
@@ -591,23 +619,24 @@ impl Shell {
                 let entries = self.command_entries(cx);
                 self.reconcile_command_palette_selection(&entries);
                 if !entries.is_empty() {
-                    let next = self.command_palette.as_ref().map(|palette| {
-                        if palette.selection == PaletteSelection::Cleared {
+                    let next = self.command_selected_index(&entries).map_or_else(
+                        || {
                             if event.keystroke.key == "down" {
                                 0
                             } else {
                                 entries.len() - 1
                             }
-                        } else if event.keystroke.key == "down" {
-                            (palette.active + 1) % entries.len()
-                        } else {
-                            (palette.active + entries.len() - 1) % entries.len()
-                        }
-                    });
-                    let selection = next.map(|index| self.command_selection_for(&entries[index]));
-                    if let (Some(next), Some(selection), Some(palette)) =
-                        (next, selection, self.command_palette.as_mut())
-                    {
+                        },
+                        |active| {
+                            if event.keystroke.key == "down" {
+                                (active + 1) % entries.len()
+                            } else {
+                                (active + entries.len() - 1) % entries.len()
+                            }
+                        },
+                    );
+                    let selection = self.command_selection_for(&entries[next]);
+                    if let Some(palette) = self.command_palette.as_mut() {
                         palette.active = next;
                         palette.selection = selection;
                         palette.scroll.scroll_to_item(next);
@@ -624,10 +653,8 @@ impl Shell {
                     let entries = self.command_entries(cx);
                     self.reconcile_command_palette_selection(&entries);
                     if let Some(entry) = self
-                        .command_palette
-                        .as_ref()
-                        .filter(|palette| palette.selection != PaletteSelection::Cleared)
-                        .and_then(|palette| entries.get(palette.active))
+                        .command_selected_index(&entries)
+                        .and_then(|index| entries.get(index))
                         .cloned()
                     {
                         self.activate_command(entry, window, cx);
@@ -652,7 +679,11 @@ impl Shell {
         if std::mem::take(&mut palette.focus_pending) {
             window.focus(&palette.search.focus_handle(cx), cx);
         }
-        let active = (palette.selection != PaletteSelection::Cleared).then_some(palette.active);
+        let active = match &palette.selection {
+            PaletteSelection::Default => Self::command_default_index(&entries),
+            PaletteSelection::Bound { .. } => Some(palette.active),
+            PaletteSelection::Cleared => None,
+        };
         let search = palette.search.clone();
         let query = search.read(cx).text().to_string();
         let focus = palette.focus.clone();

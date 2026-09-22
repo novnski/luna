@@ -13537,6 +13537,14 @@ mod exit_regressions {
             if request.query == "error" {
                 return Err(RpcError::Failed("synthetic history failure".into()));
             }
+            if request.query == "empty" {
+                return RpcReply::value(&HistorySearchPage {
+                    events: Vec::new(),
+                    next_cursor: None,
+                    indexed_through_ms: 10_000,
+                    heuristic_redaction: true,
+                });
+            }
             let project = if request.scope == HistorySearchScope::Global {
                 "global"
             } else {
@@ -13711,6 +13719,54 @@ mod exit_regressions {
         chat.space_id = project_id.map(str::to_string);
         chat.title = Some(title.into());
         chat
+    }
+
+    fn command_palette_test_window(
+        cx: &mut TestAppContext,
+        data_dir: &Path,
+        service: Option<Arc<dyn RpcService>>,
+        chats: Vec<zeron_proto::Chat>,
+        selected_chat: Option<&str>,
+    ) -> gpui::WindowHandle<Shell> {
+        let data_dir = data_dir.to_path_buf();
+        let selected_chat = selected_chat.map(str::to_string);
+        cx.add_window(move |_, cx| {
+            let state = cx.new(move |_| {
+                let mut state = AppState::new();
+                if let Some(service) = service {
+                    state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                        zeron_rpc::memory_client(service),
+                    ));
+                }
+                state.spaces = vec![zeron_proto::Space {
+                    id: "project-a".into(),
+                    device_id: "local".into(),
+                    path: "/synthetic/project-a".into(),
+                    name: Some("Alpha".into()),
+                    git_detected: false,
+                    git_checked_at: None,
+                    checkout_id: None,
+                    created_at: Utc::now(),
+                }];
+                state.chats = chats;
+                state.selected_chat = selected_chat;
+                state.selected_space = Some("project-a".into());
+                state
+            });
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir,
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        })
     }
 
     fn handoff_transcript() -> Vec<zeron_doc::SessionMessageEntry> {
@@ -14022,20 +14078,23 @@ mod exit_regressions {
 
         cx.simulate_keystrokes(window.into(), &platform_combo("mod-k"));
         set_palette_query(&window, "new", cx);
-        window
+        let history_index = window
             .update(cx, |shell, _, cx| {
                 shell.history_search_task = None;
                 shell.history_search_loading = false;
                 shell.history_search_results = vec![HistorySearchRpc::event("project-a", 0)];
                 let entries = shell.command_entries(cx);
-                shell.command_palette.as_mut().unwrap().active = entries
+                entries
                     .iter()
                     .position(|entry| matches!(entry, command_palette::Entry::History { .. }))
-                    .unwrap();
+                    .unwrap()
             })
             .unwrap();
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
+        for _ in 0..history_index {
+            palette_key(&window, "down", cx);
+        }
         palette_key(&window, "enter", cx);
         window
             .read_with(cx, |shell, cx| {
@@ -14046,6 +14105,240 @@ mod exit_regressions {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn command_palette_default_enter_opens_current_content_without_widening(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        init_handoff_shell_test(cx, dir.path());
+        let service = Arc::new(PaletteReplacementRpc::new());
+        let window = command_palette_test_window(
+            cx,
+            dir.path(),
+            Some(service.clone()),
+            vec![palette_chat(
+                "project-a-task",
+                Some("project-a"),
+                "Alpha task",
+            )],
+            None,
+        );
+        window
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&window, "lunar cache", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell
+                        .history_search_results
+                        .first()
+                        .is_some_and(|event| event.summary == "lunar cache project-a")
+                })
+            })
+        });
+
+        palette_key(&window, "enter", cx);
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(!shell.history_search_global);
+                assert!(shell.command_palette.is_none());
+                assert_eq!(
+                    shell.state.read(cx).selected_chat.as_deref(),
+                    Some("project-a-task")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn command_palette_default_enter_is_safe_and_scope_requires_explicit_navigation(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        init_handoff_shell_test(cx, dir.path());
+
+        let pending_service = Arc::new(PaletteReplacementRpc::new());
+        let pending = command_palette_test_window(
+            cx,
+            dir.path(),
+            Some(pending_service.clone()),
+            Vec::new(),
+            None,
+        );
+        pending
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&pending, "held", cx);
+        pump_history_until(cx, &runtime, |_| {
+            pending_service
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.query == "held")
+        });
+        palette_key(&pending, "enter", cx);
+        pending
+            .read_with(cx, |shell, _| {
+                assert!(!shell.history_search_global);
+                assert!(shell.command_palette.is_some());
+                assert!(shell.history_search_results.is_empty());
+                assert!(shell.history_search_loading);
+            })
+            .unwrap();
+
+        let empty_service = Arc::new(PaletteReplacementRpc::new());
+        let empty = command_palette_test_window(
+            cx,
+            dir.path(),
+            Some(empty_service.clone()),
+            Vec::new(),
+            None,
+        );
+        empty
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&empty, "empty", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                empty.read(cx).is_ok_and(|shell| {
+                    !shell.history_search_loading
+                        && empty_service
+                            .calls
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .any(|request| request.query == "empty")
+                })
+            })
+        });
+        palette_key(&empty, "enter", cx);
+        empty
+            .read_with(cx, |shell, _| {
+                assert!(!shell.history_search_global);
+                assert!(shell.command_palette.is_some());
+                assert!(shell.history_search_results.is_empty());
+            })
+            .unwrap();
+
+        let error_service = Arc::new(PaletteReplacementRpc::new());
+        let error =
+            command_palette_test_window(cx, dir.path(), Some(error_service), Vec::new(), None);
+        error
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&error, "error", cx);
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                error
+                    .read(cx)
+                    .is_ok_and(|shell| shell.history_search_error.is_some())
+            })
+        });
+        palette_key(&error, "enter", cx);
+        error
+            .read_with(cx, |shell, _| {
+                assert!(!shell.history_search_global);
+                assert!(shell.command_palette.is_some());
+                assert!(shell.history_search_results.is_empty());
+            })
+            .unwrap();
+
+        let offline = command_palette_test_window(cx, dir.path(), None, Vec::new(), None);
+        offline
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&offline, "offline", cx);
+        cx.run_until_parked();
+        palette_key(&offline, "enter", cx);
+        offline
+            .read_with(cx, |shell, _| {
+                assert!(!shell.history_search_global);
+                assert!(shell.history_search_error.is_some());
+                assert!(shell.command_palette.is_some());
+            })
+            .unwrap();
+
+        let action = command_palette_test_window(cx, dir.path(), None, Vec::new(), None);
+        action
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&action, "project", cx);
+        cx.run_until_parked();
+        palette_key(&action, "enter", cx);
+        action
+            .read_with(cx, |shell, _| {
+                assert!(!shell.history_search_global);
+                assert!(shell.command_palette.is_none());
+                assert!(shell.add_space.is_some());
+            })
+            .unwrap();
+
+        let explicit_service = Arc::new(PaletteReplacementRpc::new());
+        let explicit = command_palette_test_window(
+            cx,
+            dir.path(),
+            Some(explicit_service.clone()),
+            Vec::new(),
+            None,
+        );
+        explicit
+            .update(cx, |shell, window, cx| {
+                shell.toggle_command_palette(window, cx)
+            })
+            .unwrap();
+        set_palette_query(&explicit, "held", cx);
+        pump_history_until(cx, &runtime, |_| {
+            explicit_service
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.query == "held")
+        });
+        palette_key(&explicit, "down", cx);
+        explicit_service.release.notify_one();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                explicit
+                    .read(cx)
+                    .is_ok_and(|shell| shell.history_search_results.len() == 1)
+            })
+        });
+        palette_key(&explicit, "enter", cx);
+        explicit
+            .read_with(cx, |shell, _| {
+                assert!(shell.history_search_global);
+                assert!(shell.command_palette.is_some());
+            })
+            .unwrap();
+
+        pending_service.release.notify_one();
     }
 
     #[gpui::test]
@@ -14215,15 +14508,7 @@ mod exit_regressions {
                 })
             })
         });
-        window
-            .update(cx, |shell, _, cx| {
-                let entries = shell.command_entries(cx);
-                shell.command_palette.as_mut().unwrap().active = entries
-                    .iter()
-                    .position(|entry| matches!(entry, command_palette::Entry::SearchCurrentContent))
-                    .unwrap();
-            })
-            .unwrap();
+        palette_key(&window, "up", cx);
         palette_key(&window, "enter", cx);
         pump_history_until(cx, &runtime, |_| {
             service.calls.lock().unwrap().iter().any(|request| {
@@ -14343,18 +14628,29 @@ mod exit_regressions {
             .unwrap();
         set_palette_query(&window, "stable", cx);
         pump_history_until(cx, &runtime, |_| !service.calls.lock().unwrap().is_empty());
-        let target_index = window
+        let (default_index, target_index, entry_count) = window
             .read_with(cx, |shell, cx| {
-                shell
-                    .command_entries(cx)
+                let entries = shell.command_entries(cx);
+                let default_index = entries
+                    .iter()
+                    .position(|entry| {
+                        matches!(
+                            entry,
+                            command_palette::Entry::Chat { .. }
+                                | command_palette::Entry::History { .. }
+                        )
+                    })
+                    .unwrap();
+                let target_index = entries
                     .iter()
                     .position(|entry| {
                         matches!(entry, command_palette::Entry::Chat { id, .. } if id == "stable-b")
                     })
-                    .unwrap()
+                    .unwrap();
+                (default_index, target_index, entries.len())
             })
             .unwrap();
-        for _ in 0..target_index {
+        for _ in 0..((target_index + entry_count - default_index) % entry_count) {
             palette_key(&window, "down", cx);
         }
         service.release.notify_one();
