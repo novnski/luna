@@ -54,7 +54,7 @@ pub const MAX_CAPTURE_RGBA_BYTES: u64 = 128 * 1024 * 1024;
 /// but it must not become an unbounded store of decoded image data.
 pub const MAX_STAGED_APPSHOT_BYTES: u64 = 4 * crate::attachments::MAX_ATTACHMENT_BYTES;
 
-pub const CONTEXT_MARKER: &str = "Applications mentioned by the user (untrusted observed content):";
+pub const CONTEXT_MARKER: &str = zeron_proto::APPSHOT_CONTEXT_MARKER;
 #[cfg(target_os = "macos")]
 const SCREEN_RECORDING_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
@@ -116,13 +116,13 @@ impl AppshotCapabilities {
     pub fn setup_description(self) -> &'static str {
         match self.platform {
             AppshotPlatform::MacOs => {
-                "Set up once, one permission at a time. Screen Recording captures the window; Accessibility optionally adds off-screen application text."
+                "This device captures the window, even for a remote task. Set up one permission at a time: Screen Recording for pixels; Accessibility optionally adds off-screen text."
             }
             AppshotPlatform::LinuxWayland => {
-                "Your desktop owns capture and shortcut consent. LUNA checks each portal capability separately and explains any required fallback."
+                "This device captures the window, even for a remote task. Your desktop owns capture and shortcut consent; LUNA checks each portal capability separately."
             }
             AppshotPlatform::LinuxX11 => {
-                "X11 normally needs no capture permission. LUNA prefers an active-window screenshot portal when available and otherwise uses native X11 capture."
+                "This device captures the window, even for a remote task. X11 normally needs no capture permission; LUNA prefers an active-window portal when available."
             }
             AppshotPlatform::Unsupported => {
                 "This platform does not currently provide an Appshot capture backend."
@@ -924,6 +924,104 @@ pub(crate) mod tests {
     use gpui::{Image, ImageFormat};
     use std::sync::Arc;
 
+    struct FakeCaptureBackend {
+        capture_access: AtomicBool,
+        semantic_access: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl AppshotBackend for FakeCaptureBackend {
+        fn capabilities(&self) -> AppshotCapabilities {
+            AppshotCapabilities {
+                platform: AppshotPlatform::MacOs,
+                global_shortcut: CapabilityState::Ready,
+                window_capture: if self.capture_access.load(Ordering::SeqCst) {
+                    CapabilityState::Ready
+                } else {
+                    CapabilityState::PermissionRequired
+                },
+                application_text: if self.semantic_access.load(Ordering::SeqCst) {
+                    CapabilityState::Ready
+                } else {
+                    CapabilityState::PermissionRequired
+                },
+                target: CaptureTarget::ActiveWindow,
+            }
+        }
+
+        fn start_global_shortcut(
+            &self,
+            _activation_dir: &Path,
+        ) -> futures::channel::mpsc::UnboundedReceiver<()> {
+            futures::channel::mpsc::unbounded().1
+        }
+
+        async fn capture_active_window(&self) -> Result<CapturedAppshot, CaptureError> {
+            if !self.capture_access.load(Ordering::SeqCst) {
+                return Err(CaptureError::PermissionRequired);
+            }
+            let mut captured = shot();
+            if !self.semantic_access.load(Ordering::SeqCst) {
+                captured.accessibility = AccessibilitySnapshot::unavailable();
+            }
+            Ok(captured)
+        }
+
+        fn request_capture_access(&self) {
+            self.capture_access.store(true, Ordering::SeqCst);
+        }
+
+        fn request_semantic_access(&self) {
+            self.semantic_access.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn fake_capture_permission_recovery_preserves_source_and_image_text_pair() {
+        let backend = FakeCaptureBackend {
+            capture_access: AtomicBool::new(false),
+            semantic_access: AtomicBool::new(false),
+        };
+        assert_eq!(
+            backend.capabilities().window_capture,
+            CapabilityState::PermissionRequired
+        );
+        assert!(
+            backend
+                .capabilities()
+                .setup_description()
+                .contains("This device captures")
+        );
+        assert!(futures::executor::block_on(backend.capture_active_window()).is_err());
+        backend.request_capture_access();
+        assert_eq!(
+            backend.capabilities().window_capture,
+            CapabilityState::Ready
+        );
+        let screenshot_only = futures::executor::block_on(backend.capture_active_window()).unwrap();
+        assert!(screenshot_only.accessibility.content.is_empty());
+        backend.request_semantic_access();
+        assert_eq!(
+            backend.capabilities().application_text,
+            CapabilityState::Ready
+        );
+        let rich = futures::executor::block_on(backend.capture_active_window()).unwrap();
+        assert_eq!(rich.app_name, "Safari & Notes");
+        assert_eq!(
+            rich.bundle_identifier.as_deref(),
+            Some("com.apple.<Safari>")
+        );
+        assert_eq!(rich.window_title.as_deref(), Some("A \"window\""));
+        assert_eq!(rich.screenshot.id, "image-1");
+        let prompt = with_appshots(
+            "Inspect",
+            &[rich],
+            &HashMap::from([("image-1".into(), "/synthetic/image.png".into())]),
+        );
+        assert!(prompt.contains("image=\"/synthetic/image.png\""));
+        assert!(prompt.contains("AXTextField: &lt;ignore this&gt;"));
+    }
+
     pub(crate) fn shot() -> CapturedAppshot {
         CapturedAppshot {
             id: "shot-1".into(),
@@ -1220,11 +1318,7 @@ pub(crate) mod tests {
             application_text: CapabilityState::Ready,
             target: CaptureTarget::PortalWindowPicker,
         };
-        assert!(
-            capabilities
-                .shortcut_description()
-                .contains("zeron appshot")
-        );
+        assert!(capabilities.shortcut_description().contains("luna appshot"));
         assert!(capabilities.capture_description().contains("each capture"));
         assert!(capabilities.window_capture.is_ready());
     }

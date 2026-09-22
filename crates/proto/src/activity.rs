@@ -10,6 +10,42 @@ use crate::{HarnessId, ReasoningLevel};
 
 pub const ACTIVITY_ENVELOPE_VERSION: u32 = 1;
 pub const ATTENTION_CONTRACT_VERSION: u32 = 1;
+/// Delimiter appended by Appshots to a user prompt before observed app data.
+/// Shared with history so extracted Accessibility text never enters search.
+pub const APPSHOT_CONTEXT_MARKER: &str =
+    "Applications mentioned by the user (untrusted observed content):";
+
+/// A device-local Appshot lifecycle fact. Screenshot bytes, Accessibility
+/// content, paths, and window titles stay in the existing draft/transcript
+/// owners; history only retains the pairing id and bounded source app name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppshotActivityKind {
+    Captured,
+    Staged,
+    Removed,
+    Queued,
+    Sent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppshotActivityRecord {
+    pub event_id: String,
+    pub draft_id: String,
+    pub task_id: Option<String>,
+    pub capture_id: String,
+    pub screenshot_attachment_id: String,
+    /// The headed viewer that actually captured the window.
+    pub capture_device_id: String,
+    /// Frozen owning task environment once the task is known.
+    pub target_environment_id: Option<String>,
+    pub kind: AppshotActivityKind,
+    pub timestamp_ms: i64,
+    pub app_name: String,
+    /// The accepted send's message id, when there is one.
+    pub message_id: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

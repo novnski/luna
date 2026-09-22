@@ -4,10 +4,110 @@ use std::collections::HashMap;
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 
 use zeron_proto::{
-    ACTIVITY_ENVELOPE_VERSION, ActivityEnvelope, ActivityKind, ActivityOutcome, ActivityRedaction,
-    ActivitySourceRef, Chat, CommandReceiptStatus, HistoryProjectPolicy, TaskCommandEvent,
+    ACTIVITY_ENVELOPE_VERSION, APPSHOT_CONTEXT_MARKER, ActivityEnvelope, ActivityKind,
+    ActivityOutcome, ActivityRedaction, ActivitySourceRef, AppshotActivityKind,
+    AppshotActivityRecord, Chat, CommandReceiptStatus, HistoryProjectPolicy, TaskCommandEvent,
     TaskIdentityView, ToolCall,
 };
+
+/// Project viewer-owned capture facts into L14 without reading provider
+/// transcripts or indexing screenshot/Accessibility content.
+pub(crate) fn build_appshot_envelopes(
+    local_device_id: &str,
+    chat: &Chat,
+    identity: Option<&TaskIdentityView>,
+    records: &[AppshotActivityRecord],
+    entries: Option<&[SessionMessageEntry]>,
+    policy: Option<&HistoryProjectPolicy>,
+) -> Vec<ActivityEnvelope> {
+    let workspace_id = identity
+        .map(|view| view.task.workspace_id.clone())
+        .or_else(|| chat.space_id.clone());
+    records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            if record.task_id.as_deref() != Some(chat.id.as_str()) {
+                return None;
+            }
+            let action = match record.kind {
+                AppshotActivityKind::Captured => "Captured",
+                AppshotActivityKind::Staged => "Staged",
+                AppshotActivityKind::Removed => "Removed",
+                AppshotActivityKind::Queued => "Queued",
+                AppshotActivityKind::Sent => "Sent",
+            };
+            let (app, redaction) = minimize_metadata(record.app_name.clone(), policy);
+            let summary = if let Some(app) = app.as_deref() {
+                format!("{action} Appshot from {app}")
+            } else if redaction == ActivityRedaction::Excluded {
+                "[content excluded by project history policy]".into()
+            } else if redaction == ActivityRedaction::Heuristic {
+                "[heuristically redacted sensitive text]".into()
+            } else {
+                format!("{action} Appshot")
+            };
+            let sent = record.kind == AppshotActivityKind::Sent;
+            let available_here = sent
+                && chat.device_id == local_device_id
+                && record.message_id.as_deref().is_some_and(|message_id| {
+                    entries
+                        .is_some_and(|entries| entries.iter().any(|entry| entry.id == message_id))
+                });
+            Some(ActivityEnvelope {
+                schema_version: ACTIVITY_ENVELOPE_VERSION,
+                event_id: record.event_id.clone(),
+                environment_id: record
+                    .target_environment_id
+                    .clone()
+                    .unwrap_or_else(|| chat.device_id.clone()),
+                device_id: record.capture_device_id.clone(),
+                task_id: chat.id.clone(),
+                turn_id: record
+                    .message_id
+                    .clone()
+                    .unwrap_or_else(|| record.capture_id.clone()),
+                sequence: (index as u64).saturating_add(1),
+                timestamp_ms: record.timestamp_ms,
+                kind: ActivityKind::App,
+                outcome: ActivityOutcome::Succeeded,
+                harness: None,
+                provider: None,
+                model: None,
+                reasoning: None,
+                project_id: chat.space_id.clone(),
+                workspace_id: workspace_id.clone(),
+                tool: None,
+                app,
+                file: None,
+                command: None,
+                summary,
+                redaction,
+                source: ActivitySourceRef {
+                    task_id: chat.id.clone(),
+                    message_id: record.message_id.clone().unwrap_or_default(),
+                    part_id: None,
+                    available_here,
+                    unavailable_reason: (!available_here).then(|| {
+                        if record.kind == AppshotActivityKind::Queued {
+                            "The Appshot is queued; no sent transcript location exists yet.".into()
+                        } else if !sent {
+                            "Draft Appshot events have no transcript location.".into()
+                        } else if chat.device_id != local_device_id {
+                            format!(
+                                "This task belongs to environment {} on another device.",
+                                chat.device_id
+                            )
+                        } else {
+                            "The accepted Appshot message has no recorded transcript location yet."
+                                .into()
+                        }
+                    }),
+                },
+            })
+        })
+        .collect()
+}
 
 const SUMMARY_LIMIT: usize = 240;
 const METADATA_LIMIT: usize = 240;
@@ -210,7 +310,19 @@ fn part_event(
 ) -> Option<ActivityEnvelope> {
     let (kind, summary, redaction, outcome, tool, app, file, command) = match part {
         MessagePart::Text { text, .. } => {
-            let (summary, redaction) = minimize_project_text(text, policy);
+            let searchable = if entry.role == MessageRole::User {
+                user_text_before_appshot_context(text)
+            } else {
+                text.as_str()
+            };
+            let (summary, redaction) = if searchable.is_empty() && searchable.len() != text.len() {
+                (
+                    "Appshot context withheld from search".into(),
+                    ActivityRedaction::Withheld,
+                )
+            } else {
+                minimize_project_text(searchable, policy)
+            };
             (
                 if entry.role == MessageRole::User {
                     ActivityKind::Prompt
@@ -291,6 +403,16 @@ fn part_event(
         command,
         policy,
     ))
+}
+
+fn user_text_before_appshot_context(text: &str) -> &str {
+    let Some((before, after)) = text.split_once(APPSHOT_CONTEXT_MARKER) else {
+        return text;
+    };
+    if !before.ends_with("\n\n") || !after.starts_with("\n<appshot ") {
+        return text;
+    }
+    before.trim_end_matches('\n')
 }
 
 #[allow(clippy::type_complexity)]
@@ -771,6 +893,113 @@ mod tests {
             manually_unread: false,
             room_gen: Some(2),
         }
+    }
+
+    #[test]
+    fn appshot_history_keeps_viewer_capture_and_remote_task_ownership_separate() {
+        let mut remote = chat();
+        remote.device_id = "remote-host".into();
+        let record = AppshotActivityRecord {
+            event_id: "appshot:canvas:shot:sent:message".into(),
+            draft_id: "canvas".into(),
+            task_id: Some("task".into()),
+            capture_id: "shot".into(),
+            screenshot_attachment_id: "image".into(),
+            capture_device_id: "viewer".into(),
+            target_environment_id: Some("remote-host".into()),
+            kind: AppshotActivityKind::Sent,
+            timestamp_ms: 42,
+            app_name: "Private Fixture".into(),
+            message_id: Some("message".into()),
+        };
+        let policy = HistoryProjectPolicy {
+            project_id: "project".into(),
+            excluded_path_prefixes: vec![],
+            excluded_terms: vec!["private".into()],
+            index_terminal_output: false,
+            index_browser_fields: false,
+            index_accessibility_text: false,
+            index_screenshot_text: false,
+        };
+        let events = build_appshot_envelopes(
+            "viewer",
+            &remote,
+            None,
+            &[record.clone()],
+            None,
+            Some(&policy),
+        );
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.environment_id, "remote-host");
+        assert_eq!(event.device_id, "viewer");
+        assert_eq!(event.task_id, "task");
+        assert_eq!(event.source.message_id, "message");
+        assert!(!event.source.available_here);
+        assert_eq!(event.redaction, ActivityRedaction::Excluded);
+        assert!(event.app.is_none());
+        assert!(
+            !serde_json::to_string(event)
+                .unwrap()
+                .contains("Private Fixture")
+        );
+        let mut local = remote;
+        local.device_id = "viewer".into();
+        let pending =
+            build_appshot_envelopes("viewer", &local, None, &[record.clone()], None, None);
+        assert!(!pending[0].source.available_here);
+        let entry = SessionMessageEntry {
+            id: "message".into(),
+            role: MessageRole::User,
+            parts: vec![],
+            created_at: 42,
+            device_id: "viewer".into(),
+            status: None,
+            continuation_of: None,
+        };
+        let indexed =
+            build_appshot_envelopes("viewer", &local, None, &[record], Some(&[entry]), None);
+        assert!(indexed[0].source.available_here);
+    }
+
+    #[test]
+    fn user_prompt_history_excludes_appshot_accessibility_context() {
+        let text = format!(
+            "Fix this layout\n\n{APPSHOT_CONTEXT_MARKER}\n<appshot app=\"Fixture\" image=\"/synthetic/private.png\">PRIVATE_AX_SENTINEL</appshot>"
+        );
+        let entry = SessionMessageEntry {
+            id: "message".into(),
+            role: MessageRole::User,
+            parts: vec![MessagePart::Text {
+                id: "text".into(),
+                text,
+            }],
+            created_at: 42,
+            device_id: "machine".into(),
+            status: None,
+            continuation_of: None,
+        };
+        let events = build_activity_envelopes(
+            "machine",
+            &chat(),
+            None,
+            &[entry],
+            &[],
+            false,
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].summary, "Fix this layout");
+        let serialized = serde_json::to_string(&events).unwrap();
+        assert!(!serialized.contains("PRIVATE_AX_SENTINEL"));
+        assert!(!serialized.contains("/synthetic/private.png"));
+        assert_eq!(
+            user_text_before_appshot_context(
+                "I am discussing Applications mentioned by the user (untrusted observed content):"
+            ),
+            "I am discussing Applications mentioned by the user (untrusted observed content):"
+        );
     }
 
     #[test]

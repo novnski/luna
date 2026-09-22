@@ -9,12 +9,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use zeron_proto::{
-    ActivityEnvelope, AttentionItem, AttentionKind, AttentionLifecycle, AttentionMutation,
-    AttentionTransition, AttentionTransitionKind, CommandReasonCode, CommandReceipt,
-    CommandReceiptReason, CommandReceiptStatus, ComposerDraft, ComposerDraftRead,
-    ComposerDraftSaveOutcome, DraftSubmission, DraftSubmissionState, HistoryCursor,
-    HistoryProjectPolicy, HistorySearchPage, HistorySearchRequest, HistorySearchScope,
-    TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
+    ActivityEnvelope, AppshotActivityKind, AppshotActivityRecord, AttentionItem, AttentionKind,
+    AttentionLifecycle, AttentionMutation, AttentionTransition, AttentionTransitionKind,
+    CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, ComposerDraft,
+    ComposerDraftRead, ComposerDraftSaveOutcome, DraftSubmission, DraftSubmissionState,
+    HistoryCursor, HistoryProjectPolicy, HistorySearchPage, HistorySearchRequest,
+    HistorySearchScope, TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
 };
 
 /// Errors surfaced by [`DocsStore`].
@@ -221,6 +221,17 @@ const MIGRATIONS: &[&str] = &[
         revision INTEGER NOT NULL,
         committed_at INTEGER NOT NULL
      ) STRICT;",
+    // v9 — minimal, device-local Appshot lifecycle facts. The attachment and
+    // semantic text remain owned by L08 drafts/transcripts, never this log.
+    "CREATE TABLE appshot_activity (
+        event_id TEXT PRIMARY KEY,
+        draft_id TEXT NOT NULL,
+        task_id TEXT,
+        capture_id TEXT NOT NULL,
+        target_environment_id TEXT,
+        record_json BLOB NOT NULL
+     ) STRICT;
+     CREATE INDEX appshot_activity_task ON appshot_activity(task_id);",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +339,78 @@ impl DocsStore {
             insert_activity_event(&tx, event)?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Refresh only Appshot rows after a local draft mutation. Transcript rows
+    /// are not read or replaced by the capture bridge.
+    pub fn replace_appshot_activity_events(
+        &self,
+        task_id: &str,
+        events: &[ActivityEnvelope],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM activity_events WHERE task_id=?1 AND event_id GLOB 'appshot:*'",
+            params![task_id],
+        )?;
+        for event in events {
+            insert_activity_event(&tx, event)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn appshot_activity_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<AppshotActivityRecord>, StoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT record_json,task_id,target_environment_id FROM appshot_activity WHERE task_id=?1 ORDER BY rowid",
+        )?;
+        let rows = stmt
+            .query_map(params![task_id], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(bytes, task_id, environment_id)| {
+                let mut record: AppshotActivityRecord = serde_json::from_slice(&bytes)?;
+                record.task_id = Some(task_id);
+                record.target_environment_id = environment_id;
+                Ok(record)
+            })
+            .collect()
+    }
+
+    pub fn has_appshot_activity_for_task(&self, task_id: &str) -> Result<bool, StoreError> {
+        self.conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM appshot_activity WHERE task_id=?1 LIMIT 1)",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::from)
+    }
+
+    /// Snapshot the task's host identity once. A later task move cannot
+    /// rewrite where an earlier capture was staged or sent.
+    pub fn bind_appshot_target_environment(
+        &self,
+        task_id: &str,
+        environment_id: &str,
+    ) -> Result<(), StoreError> {
+        self.conn().execute(
+            "UPDATE appshot_activity SET target_environment_id=?2
+             WHERE task_id=?1 AND target_environment_id IS NULL",
+            params![task_id, environment_id],
+        )?;
         Ok(())
     }
 
@@ -1060,6 +1143,10 @@ impl DocsStore {
                 |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, Vec<u8>>(1)?)),
             )
             .optional()?;
+        let previous = current
+            .as_ref()
+            .map(|(_, bytes)| serde_json::from_slice::<ComposerDraft>(bytes))
+            .transpose()?;
         if let Some((revision, current_bytes)) = current {
             if revision > draft.revision {
                 return Ok(ComposerDraftSaveOutcome::Stale {
@@ -1105,6 +1192,68 @@ impl DocsStore {
             &draft.draft_id,
             draft.saved_blob_paths(),
         )?;
+        let current_ids: HashSet<&str> =
+            draft.appshots.iter().map(|shot| shot.id.as_str()).collect();
+        let saved_ids: HashSet<&str> = draft
+            .attachments
+            .iter()
+            .filter(|blob| blob.state == zeron_proto::DraftBlobState::Saved)
+            .map(|blob| blob.attachment_id.as_str())
+            .collect();
+        for shot in &draft.appshots {
+            let base = format!("appshot:{}:{}", draft.draft_id, shot.id);
+            let captured = AppshotActivityRecord {
+                event_id: format!("{base}:captured"),
+                draft_id: draft.draft_id.clone(),
+                task_id: draft.task_id.clone(),
+                capture_id: shot.id.clone(),
+                screenshot_attachment_id: shot.screenshot_attachment_id.clone(),
+                capture_device_id: device_id.into(),
+                target_environment_id: None,
+                kind: AppshotActivityKind::Captured,
+                timestamp_ms: shot.captured_at_ms,
+                app_name: shot.app_name.chars().take(128).collect(),
+                message_id: None,
+            };
+            insert_appshot_activity_tx(&tx, &captured)?;
+            if saved_ids.contains(shot.screenshot_attachment_id.as_str()) {
+                insert_appshot_activity_tx(
+                    &tx,
+                    &AppshotActivityRecord {
+                        event_id: format!("{base}:staged"),
+                        kind: AppshotActivityKind::Staged,
+                        timestamp_ms: draft.updated_at_ms,
+                        ..captured
+                    },
+                )?;
+            }
+        }
+        if let Some(previous) = previous.as_ref() {
+            for shot in &previous.appshots {
+                if current_ids.contains(shot.id.as_str()) {
+                    continue;
+                }
+                insert_appshot_activity_tx(
+                    &tx,
+                    &AppshotActivityRecord {
+                        event_id: format!(
+                            "appshot:{}:{}:removed:{}",
+                            draft.draft_id, shot.id, draft.revision
+                        ),
+                        draft_id: draft.draft_id.clone(),
+                        task_id: draft.task_id.clone(),
+                        capture_id: shot.id.clone(),
+                        screenshot_attachment_id: shot.screenshot_attachment_id.clone(),
+                        capture_device_id: device_id.into(),
+                        target_environment_id: None,
+                        kind: AppshotActivityKind::Removed,
+                        timestamp_ms: draft.updated_at_ms,
+                        app_name: shot.app_name.chars().take(128).collect(),
+                        message_id: None,
+                    },
+                )?;
+            }
+        }
         tx.commit()?;
         Ok(ComposerDraftSaveOutcome::Saved)
     }
@@ -1262,6 +1411,22 @@ impl DocsStore {
         Ok(())
     }
 
+    pub fn draft_submission_task_id(
+        &self,
+        device_id: &str,
+        command_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        self.conn()
+            .query_row(
+                "SELECT task_id FROM composer_draft_submissions WHERE device_id=?1 AND command_id=?2",
+                params![device_id, command_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map(|task_id| task_id.flatten())
+            .map_err(StoreError::from)
+    }
+
     /// Accept one submission and clear only the exact draft revision it froze.
     /// A queue id transfers blob ownership in the same transaction.
     pub fn accept_draft_submission(
@@ -1272,19 +1437,58 @@ impl DocsStore {
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let row: Option<(String, u64, Vec<u8>)> = tx
+        let row: Option<(String, u64, Vec<u8>, Option<String>)> = tx
             .query_row(
-                "SELECT draft_id,draft_revision,record_json
+                "SELECT draft_id,draft_revision,record_json,task_id
                  FROM composer_draft_submissions
                  WHERE device_id=?1 AND command_id=?2",
                 params![device_id, command_id],
-                |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get::<_, i64>(1)? as u64,
+                        row.get(2)?,
+                        row.get(3)?,
+                    ))
+                },
             )
             .optional()?;
-        let Some((draft_id, submitted_revision, bytes)) = row else {
+        let Some((draft_id, submitted_revision, bytes, task_id)) = row else {
             return Ok(false);
         };
         let snapshot: ComposerDraft = serde_json::from_slice(&bytes)?;
+        if let Some(task_id) = task_id.as_deref() {
+            for shot in &snapshot.appshots {
+                tx.execute(
+                    "UPDATE appshot_activity SET task_id=?1
+                     WHERE draft_id=?2 AND capture_id=?3 AND task_id IS NULL",
+                    params![task_id, draft_id, shot.id],
+                )?;
+                insert_appshot_activity_tx(
+                    &tx,
+                    &AppshotActivityRecord {
+                        event_id: format!(
+                            "appshot:{}:{}:submission:{}",
+                            draft_id, shot.id, command_id
+                        ),
+                        draft_id: draft_id.clone(),
+                        task_id: Some(task_id.into()),
+                        capture_id: shot.id.clone(),
+                        screenshot_attachment_id: shot.screenshot_attachment_id.clone(),
+                        capture_device_id: device_id.into(),
+                        target_environment_id: None,
+                        kind: if queue_id.is_some() {
+                            AppshotActivityKind::Queued
+                        } else {
+                            AppshotActivityKind::Sent
+                        },
+                        timestamp_ms: now_ms(),
+                        app_name: shot.app_name.chars().take(128).collect(),
+                        message_id: Some(command_id.into()),
+                    },
+                )?;
+            }
+        }
         if let Some(queue_id) = queue_id {
             replace_attachment_owners_tx(
                 &tx,
@@ -2658,6 +2862,25 @@ fn prune_claimed_attention_transitions(tx: &rusqlite::Transaction<'_>) -> Result
     Ok(())
 }
 
+fn insert_appshot_activity_tx(
+    tx: &rusqlite::Transaction<'_>,
+    event: &AppshotActivityRecord,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT OR IGNORE INTO appshot_activity(event_id,draft_id,task_id,capture_id,target_environment_id,record_json)
+         VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            event.event_id,
+            event.draft_id,
+            event.task_id,
+            event.capture_id,
+            event.target_environment_id,
+            serde_json::to_vec(event)?,
+        ],
+    )?;
+    Ok(())
+}
+
 fn insert_activity_event(
     tx: &rusqlite::Transaction<'_>,
     event: &ActivityEnvelope,
@@ -3401,6 +3624,149 @@ mod publication_tests {
 #[cfg(test)]
 mod draft_tests {
     use super::*;
+
+    #[test]
+    fn appshot_lifecycle_is_paired_minimal_and_bound_to_accepted_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let mut canvas = draft(1, "unsent", "/synthetic/fixture.png");
+        canvas.draft_id = "canvas-a".into();
+        canvas.task_id = None;
+        store.save_composer_draft("viewer-a", &canvas).unwrap();
+        assert!(
+            store
+                .appshot_activity_for_task("host-task")
+                .unwrap()
+                .is_empty()
+        );
+        let raw: Vec<Vec<u8>> = store
+            .conn()
+            .prepare("SELECT record_json FROM appshot_activity")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(raw.len(), 2);
+        for bytes in &raw {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(!text.contains("synthetic captured context"));
+            assert!(!text.contains("Synthetic window"));
+            assert!(!text.contains("/synthetic/"));
+        }
+        store
+            .begin_draft_submission("viewer-a", "message-a", Some("host-task"), &canvas)
+            .unwrap();
+        store
+            .accept_draft_submission("viewer-a", "message-a", None)
+            .unwrap();
+        store
+            .bind_appshot_target_environment("host-task", "host-a")
+            .unwrap();
+        store
+            .bind_appshot_target_environment("host-task", "host-b")
+            .unwrap();
+        let records = store.appshot_activity_for_task("host-task").unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records.iter().map(|event| event.kind).collect::<Vec<_>>(),
+            vec![
+                AppshotActivityKind::Captured,
+                AppshotActivityKind::Staged,
+                AppshotActivityKind::Sent,
+            ]
+        );
+        assert!(
+            records
+                .iter()
+                .all(|event| event.capture_device_id == "viewer-a"
+                    && event.capture_id == "shot-a"
+                    && event.screenshot_attachment_id == "image-a"
+                    && event.target_environment_id.as_deref() == Some("host-a"))
+        );
+        assert_eq!(records[2].message_id.as_deref(), Some("message-a"));
+        store
+            .accept_draft_submission("viewer-a", "message-a", None)
+            .unwrap();
+        assert_eq!(
+            store.appshot_activity_for_task("host-task").unwrap().len(),
+            3
+        );
+    }
+
+    #[test]
+    fn appshot_removal_and_stale_save_do_not_recreate_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let first = draft(1, "draft", "/synthetic/fixture.png");
+        store.save_composer_draft("viewer-a", &first).unwrap();
+        let mut removed = draft(2, "draft", "/synthetic/fixture.png");
+        removed.appshots.clear();
+        removed.attachments.clear();
+        store.save_composer_draft("viewer-a", &removed).unwrap();
+        assert!(matches!(
+            store.save_composer_draft("viewer-a", &first).unwrap(),
+            ComposerDraftSaveOutcome::Stale { .. }
+        ));
+        let records = store.appshot_activity_for_task("task-a").unwrap();
+        assert_eq!(
+            records.iter().map(|event| event.kind).collect::<Vec<_>>(),
+            vec![
+                AppshotActivityKind::Captured,
+                AppshotActivityKind::Staged,
+                AppshotActivityKind::Removed,
+            ]
+        );
+    }
+
+    #[test]
+    fn appshot_staging_waits_for_saved_screenshot_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let mut waiting = draft(1, "draft", "/synthetic/fixture.png");
+        waiting.attachments[0].state = zeron_proto::DraftBlobState::WaitingForUpload;
+        waiting.attachments[0].path = None;
+        store.save_composer_draft("viewer-a", &waiting).unwrap();
+        assert_eq!(
+            store
+                .appshot_activity_for_task("task-a")
+                .unwrap()
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![AppshotActivityKind::Captured]
+        );
+        store
+            .save_composer_draft("viewer-a", &draft(2, "draft", "/synthetic/fixture.png"))
+            .unwrap();
+        assert_eq!(
+            store
+                .appshot_activity_for_task("task-a")
+                .unwrap()
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![AppshotActivityKind::Captured, AppshotActivityKind::Staged,]
+        );
+    }
+
+    #[test]
+    fn accepted_queue_is_not_recorded_as_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        let mut queued = draft(1, "queued", "/synthetic/fixture.png");
+        queued.draft_id = "task-queue".into();
+        queued.task_id = Some("task-queue".into());
+        store.save_composer_draft("viewer-a", &queued).unwrap();
+        store
+            .begin_draft_submission("viewer-a", "message-queue", Some("task-queue"), &queued)
+            .unwrap();
+        store
+            .accept_draft_submission("viewer-a", "message-queue", Some("queue-a"))
+            .unwrap();
+        let records = store.appshot_activity_for_task("task-queue").unwrap();
+        assert_eq!(records.last().unwrap().kind, AppshotActivityKind::Queued);
+    }
 
     fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
         ComposerDraft {

@@ -1302,6 +1302,27 @@ impl EngineRpc {
                 "composer draft metadata is too large".into(),
             ));
         }
+        let mut capture_ids = HashSet::new();
+        let mut screenshot_ids = HashSet::new();
+        for shot in &draft.appshots {
+            if shot.id.is_empty()
+                || shot.id.len() > 128
+                || shot.screenshot_attachment_id.is_empty()
+                || shot.screenshot_attachment_id.len() > 128
+                || !capture_ids.insert(shot.id.as_str())
+                || !screenshot_ids.insert(shot.screenshot_attachment_id.as_str())
+                || draft
+                    .attachments
+                    .iter()
+                    .filter(|blob| blob.attachment_id == shot.screenshot_attachment_id)
+                    .count()
+                    != 1
+            {
+                return Err(RpcError::BadParams(
+                    "Appshot screenshot and context must have one matching attachment".into(),
+                ));
+            }
+        }
         for blob in &draft.attachments {
             if blob.state != DraftBlobState::Saved {
                 continue;
@@ -1359,6 +1380,47 @@ impl EngineRpc {
             self.mark_unavailable_draft_blobs(&mut submission.snapshot);
         }
         Ok(read)
+    }
+
+    fn refresh_appshot_history_for_task(&self, task_id: &str) -> Result<(), RpcError> {
+        let Some(chat) = self
+            .workspace
+            .read_chats()
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .into_iter()
+            .find(|chat| chat.id == task_id)
+        else {
+            // A newly minted canvas task may not have published its chat row
+            // yet. Its canonical Appshot facts remain for the next task index.
+            return Ok(());
+        };
+        let _activity_guard = self.store.activity_index_guard();
+        self.store
+            .bind_appshot_target_environment(task_id, &chat.device_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let policy = chat
+            .space_id
+            .as_deref()
+            .map(|project_id| self.store.activity_project_policy(project_id))
+            .transpose()
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .flatten();
+        let records = self
+            .store
+            .appshot_activity_for_task(task_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let identity = self.task_identity.view(task_id);
+        let events = crate::activity_history::build_appshot_envelopes(
+            &self.engine_info.device_id,
+            &chat,
+            identity.as_ref(),
+            &records,
+            None,
+            policy.as_ref(),
+        );
+        self.store
+            .replace_appshot_activity_events(task_id, &events)
+            .map_err(|error| RpcError::Failed(error.to_string()))
     }
 
     /// Resolve a mention-search root from synced workspace rows. A client may
@@ -5357,6 +5419,9 @@ fn index_activity_task(
     entries: Vec<SessionMessageEntry>,
 ) -> Result<usize, String> {
     let _activity_guard = store.activity_index_guard();
+    store
+        .bind_appshot_target_environment(&chat.id, &chat.device_id)
+        .map_err(|error| error.to_string())?;
     let policy = chat
         .space_id
         .as_deref()
@@ -5368,7 +5433,7 @@ fn index_activity_task(
         task_command_history(store, &chat.id).map_err(|error| error.to_string())?;
     let task_identity = identity.view(&chat.id);
     let run_metadata = sessions.activity_run_metadata(&chat.id);
-    let events = crate::activity_history::build_activity_envelopes(
+    let mut events = crate::activity_history::build_activity_envelopes(
         local_device_id,
         chat,
         task_identity.as_ref(),
@@ -5378,6 +5443,17 @@ fn index_activity_task(
         &run_metadata,
         policy.as_ref(),
     );
+    let appshot_records = store
+        .appshot_activity_for_task(&chat.id)
+        .map_err(|error| error.to_string())?;
+    events.extend(crate::activity_history::build_appshot_envelopes(
+        local_device_id,
+        chat,
+        task_identity.as_ref(),
+        &appshot_records,
+        Some(&entries),
+        policy.as_ref(),
+    ));
     let count = events.len();
     store
         .replace_activity_events(&chat.id, &events)
@@ -5485,6 +5561,9 @@ impl RpcService for EngineRpc {
                 let _activity_guard = self.store.activity_index_guard();
                 let mut rebuilt = Vec::with_capacity(chats.len());
                 for chat in &chats {
+                    self.store
+                        .bind_appshot_target_environment(&chat.id, &chat.device_id)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
                     let handle = self
                         .doc_host
                         .open(&chat.id)
@@ -5505,7 +5584,7 @@ impl RpcService for EngineRpc {
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
                     let identity = self.task_identity.view(&chat.id);
                     let run_metadata = self.sessions.activity_run_metadata(&chat.id);
-                    let events = crate::activity_history::build_activity_envelopes(
+                    let mut events = crate::activity_history::build_activity_envelopes(
                         &self.engine_info.device_id,
                         chat,
                         identity.as_ref(),
@@ -5515,6 +5594,18 @@ impl RpcService for EngineRpc {
                         &run_metadata,
                         policy.as_ref(),
                     );
+                    let appshot_records = self
+                        .store
+                        .appshot_activity_for_task(&chat.id)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    events.extend(crate::activity_history::build_appshot_envelopes(
+                        &self.engine_info.device_id,
+                        chat,
+                        identity.as_ref(),
+                        &appshot_records,
+                        Some(&entries),
+                        policy.as_ref(),
+                    ));
                     rebuilt.push((chat.id.clone(), events));
                 }
                 let indexed_events = rebuilt.iter().map(|(_, events)| events.len() as u64).sum();
@@ -5712,6 +5803,21 @@ impl RpcService for EngineRpc {
                     .store
                     .save_composer_draft(&self.engine_info.device_id, &p.draft)
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
+                if outcome == zeron_proto::ComposerDraftSaveOutcome::Saved
+                    && let Some(task_id) = p.draft.task_id.as_deref()
+                {
+                    match self.store.has_appshot_activity_for_task(task_id) {
+                        Ok(true) => {
+                            if let Err(error) = self.refresh_appshot_history_for_task(task_id) {
+                                tracing::warn!(task_id, %error, "Appshot history projection deferred after durable draft save");
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            tracing::warn!(task_id, %error, "Appshot history lookup deferred after durable draft save")
+                        }
+                    }
+                }
                 RpcReply::value(&outcome)
             }
             methods::BEGIN_DRAFT_SUBMISSION => {
@@ -5739,6 +5845,10 @@ impl RpcService for EngineRpc {
                         )
                         .map_err(|error| RpcError::Failed(error.to_string()))?,
                     DraftSubmissionOutcome::Applied | DraftSubmissionOutcome::Recovered => {
+                        let task_id = self
+                            .store
+                            .draft_submission_task_id(&self.engine_info.device_id, &p.command_id)
+                            .map_err(|error| RpcError::Failed(error.to_string()))?;
                         self.store
                             .accept_draft_submission(
                                 &self.engine_info.device_id,
@@ -5746,6 +5856,11 @@ impl RpcService for EngineRpc {
                                 p.queue_id.as_deref(),
                             )
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
+                        if let Some(task_id) = task_id
+                            && let Err(error) = self.refresh_appshot_history_for_task(&task_id)
+                        {
+                            tracing::warn!(task_id, %error, "Appshot history projection deferred after accepted send");
+                        }
                     }
                 }
                 RpcReply::value(&serde_json::json!({ "ok": true }))

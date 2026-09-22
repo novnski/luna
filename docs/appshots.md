@@ -46,10 +46,23 @@ their rows are realized. Queue editing preserves the original Appshot context
 and attachment references on both clients.
 
 Capture and settings belong to the viewer's UI. Sending uses the existing
-attachment upload/host acknowledgement flow and prompt context; no RPC or
-persistent schema migration is introduced. Existing settings deserialize with
+attachment upload/host acknowledgement flow and prompt context; no new binary
+transport is introduced. Existing settings deserialize with
 backward-compatible defaults. Appshots setup controls support Tab/Shift-Tab,
 Enter/Space, accessible names and state, and visible keyboard focus.
+
+LUNA's device-local history now records capture, durable staging, removal, and
+accepted send or queue from the composer draft lifecycle. The viewer device
+remains the capture source; the task's owning device is the history
+environment, including when the task runs remotely. A new-session canvas
+capture is associated with the minted task only after its submission is
+accepted. The history record keeps
+the screenshot attachment identity paired with its capture, but does not copy
+the screenshot, Accessibility text, window title, or file path into the search
+index. History also strips the structured Appshot context appended to a sent
+prompt before indexing that prompt. Project history exclusions apply to the
+source application name. Draft events have no transcript link; a sent event
+gains one only after the message appears in the authoritative transcript.
 
 ## Verification and visual fixtures
 

@@ -7,10 +7,11 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use sha2::{Digest, Sha256};
+use zeron_doc::{MessagePart, MessageRole, SessionMessageEntry};
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_proto::{
-    ComposerDraft, ComposerDraftRead, DraftAppshot, DraftBlob, DraftBlobState, DraftContext,
-    HarnessId,
+    APPSHOT_CONTEXT_MARKER, ActivityKind, ComposerDraft, ComposerDraftRead, DraftAppshot,
+    DraftBlob, DraftBlobState, DraftContext, HarnessId, HistorySearchPage,
 };
 use zeron_rpc::methods;
 
@@ -81,6 +82,145 @@ fn rich_draft(path: String, bytes: &[u8]) -> ComposerDraft {
         }),
         updated_at_ms: 123,
     }
+}
+
+#[tokio::test]
+async fn appshot_draft_lifecycle_projects_into_owned_history_without_private_context() {
+    let bytes = BASE64
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let core = assemble(root.path());
+    core.workspace
+        .create_space(
+            "synthetic-project",
+            &core.device_id,
+            "/synthetic/project",
+            None,
+            false,
+        )
+        .unwrap();
+    core.workspace
+        .create_chat("task-l08", Some("synthetic-project"), None, None, None)
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    client
+        .call(
+            methods::UPLOAD_CHUNK,
+            serde_json::json!({
+                "uploadId":"synthetic-appshot", "data":BASE64.encode(&bytes), "seq":0,
+            }),
+        )
+        .await
+        .unwrap();
+    let uploaded = client
+        .call(
+            methods::UPLOAD_COMMIT,
+            serde_json::json!({
+                "uploadId":"synthetic-appshot", "fileName":"fixture.png",
+            }),
+        )
+        .await
+        .unwrap();
+    let draft = rich_draft(uploaded["path"].as_str().unwrap().into(), &bytes);
+    client
+        .call(
+            methods::SAVE_COMPOSER_DRAFT,
+            serde_json::json!({"draft":draft.clone()}),
+        )
+        .await
+        .unwrap();
+    let search = |query: &str| {
+        serde_json::json!({
+            "query":query, "scope":"selectedProject", "projectId":"synthetic-project",
+            "limit":20,
+        })
+    };
+    let stage: HistorySearchPage = client
+        .call_as(methods::SEARCH_SESSION_HISTORY, search("Synthetic App"))
+        .await
+        .unwrap();
+    assert_eq!(stage.events.len(), 2);
+    assert!(
+        stage
+            .events
+            .iter()
+            .all(|event| event.kind == ActivityKind::App
+                && event.task_id == "task-l08"
+                && event.environment_id == core.device_id
+                && event.device_id == core.device_id
+                && !event.source.available_here)
+    );
+    let index_path = root.path().join("data/orgs/l08-org/l08-user/docs.sqlite3");
+    let db = rusqlite::Connection::open(index_path).unwrap();
+    let indexed: String = db.query_row(
+        "SELECT group_concat(search_text || envelope_json) FROM activity_events WHERE task_id='task-l08'",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert!(!indexed.contains("full captured synthetic context"));
+    assert!(!indexed.contains("Synthetic Window"));
+    assert!(!indexed.contains(uploaded["path"].as_str().unwrap()));
+
+    client
+        .call(
+            methods::BEGIN_DRAFT_SUBMISSION,
+            serde_json::json!({
+                "commandId":"synthetic-message", "taskId":"task-l08", "snapshot":draft,
+            }),
+        )
+        .await
+        .unwrap();
+    client
+        .call(
+            methods::SETTLE_DRAFT_SUBMISSION,
+            serde_json::json!({
+                "commandId":"synthetic-message", "outcome":"applied",
+            }),
+        )
+        .await
+        .unwrap();
+    let sent: HistorySearchPage = client
+        .call_as(methods::SEARCH_SESSION_HISTORY, search("Sent Appshot"))
+        .await
+        .unwrap();
+    assert_eq!(sent.events.len(), 1);
+    assert!(!sent.events[0].source.available_here);
+    assert_eq!(sent.events[0].source.message_id, "synthetic-message");
+    core.doc_host.open("task-l08").unwrap().doc().push_message(&SessionMessageEntry {
+        id: "synthetic-message".into(),
+        role: MessageRole::User,
+        parts: vec![MessagePart::Text {
+            id: "text".into(),
+            text: format!(
+                "Fix the app\n\n{APPSHOT_CONTEXT_MARKER}\n<appshot app=\"Synthetic App\" image=\"/synthetic/private.png\">PRIVATE_AX_SENTINEL</appshot>"
+            ),
+        }],
+        created_at: 456,
+        device_id: core.device_id.clone(),
+        status: None,
+        continuation_of: None,
+    }).unwrap();
+    client
+        .call(
+            methods::REBUILD_SESSION_HISTORY,
+            serde_json::json!({
+                "taskIds":["task-l08"],
+            }),
+        )
+        .await
+        .unwrap();
+    let linked: HistorySearchPage = client
+        .call_as(methods::SEARCH_SESSION_HISTORY, search("Sent Appshot"))
+        .await
+        .unwrap();
+    assert_eq!(linked.events.len(), 1);
+    assert!(linked.events[0].source.available_here);
+    let indexed: String = db.query_row(
+        "SELECT group_concat(search_text || envelope_json) FROM activity_events WHERE task_id='task-l08'",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert!(!indexed.contains("PRIVATE_AX_SENTINEL"));
+    assert!(!indexed.contains("/synthetic/private.png"));
 }
 
 #[tokio::test]
