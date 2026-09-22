@@ -109,8 +109,14 @@ impl IsolatedRoot {
 pub struct RecoveryKey([u8; 32]);
 
 impl RecoveryKey {
-    pub fn injected(bytes: [u8; 32]) -> Self {
+    /// Accept bytes only after a higher-level owner/credential broker has
+    /// explicitly authorized them. No filesystem or Keychain lookup occurs.
+    pub fn from_authorized_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+
+    pub fn injected(bytes: [u8; 32]) -> Self {
+        Self::from_authorized_bytes(bytes)
     }
 }
 
@@ -156,7 +162,8 @@ pub struct BackupManifest {
     pub previous_backup_sha256: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BackupReceipt {
     pub archive: PathBuf,
     pub archive_sha256: String,
@@ -844,6 +851,12 @@ fn ensure_isolated_destination(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Read-only destination validation for the engine's explicit copy-isolated
+/// backup configuration. The marker is prepared outside this API.
+pub fn validate_isolated_destination(path: &Path) -> Result<()> {
+    ensure_isolated_destination(path)
+}
+
 /// Independently authenticated frames keep memory bounded and authenticate
 /// order, truncation, and the final frame. A random 64-bit nonce prefix plus
 /// frame counter is unique for each archive with overwhelming probability.
@@ -1139,14 +1152,46 @@ impl BackupService {
     /// SQLite schemas, reconcile authoritative counts and referenced blobs.
     /// The returned stage remains untouched until explicit activation.
     pub fn stage_restore(&self, archive: &Path) -> Result<StagedRestore> {
+        self.stage_restore_with_space(archive, None)
+    }
+
+    /// Hermetic preflight seam for low-space tests; production always queries
+    /// the actual staging filesystem before any new directory is created.
+    #[doc(hidden)]
+    pub fn stage_restore_with_available_bytes_for_tests(
+        &self,
+        archive: &Path,
+        available_bytes: u64,
+    ) -> Result<StagedRestore> {
+        self.stage_restore_with_space(archive, Some(available_bytes))
+    }
+
+    fn stage_restore_with_space(
+        &self,
+        archive: &Path,
+        available_override: Option<u64>,
+    ) -> Result<StagedRestore> {
         let _lock = self.root.lock()?;
         let preview = self.preview_restore(archive)?;
-        let baseline = replaceable_root_fingerprint(self.root.path())?;
         let parent = self
             .root
             .path()
             .parent()
             .ok_or_else(|| BackupError::Invalid("root has no parent".into()))?;
+        let required = preview
+            .required_bytes
+            .saturating_mul(2)
+            .saturating_add(64 * 1024 * 1024);
+        let available = match available_override {
+            Some(value) => value,
+            None => available_space(parent)?,
+        };
+        if available < required {
+            return Err(BackupError::Unsupported(format!(
+                "staged restore needs at least {required} free bytes; {available} available"
+            )));
+        }
+        let baseline = replaceable_root_fingerprint(self.root.path())?;
         let stage = parent.join(format!(".luna-l17-stage-{}", uuid::Uuid::new_v4()));
         create_private_dir(&stage)?;
         let extraction = (|| -> Result<()> {
@@ -1187,6 +1232,31 @@ impl BackupService {
     /// material. Both old and new roots retain an engine lock during the swap.
     /// A journal is left for explicit interruption recovery if the process dies.
     pub fn activate(&self, staged: StagedRestore) -> Result<RestoreReceipt> {
+        self.activate_with_readback(staged, |_| Ok(()))
+    }
+
+    /// Synthetic integration seam for post-activation readback. A failure
+    /// returns the exact prior isolated root and retains the failed new root.
+    #[doc(hidden)]
+    pub fn activate_with_readback_for_tests<F>(
+        &self,
+        staged: StagedRestore,
+        readback: F,
+    ) -> Result<RestoreReceipt>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        self.activate_with_readback(staged, readback)
+    }
+
+    fn activate_with_readback<F>(
+        &self,
+        staged: StagedRestore,
+        readback: F,
+    ) -> Result<RestoreReceipt>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
         if staged.target != self.root.path() || !staged.preview.unsupported.is_empty() {
             return Err(BackupError::Unsupported(
                 staged.preview.unsupported.join("; "),
@@ -1233,6 +1303,7 @@ impl BackupService {
         journal.phase = RestorePhase::NewActive;
         write_journal(&journal_path, &journal)?;
         let verified = verify_stage(self.root.path(), &staged.preview.manifest)
+            .and_then(|_| readback(self.root.path()))
             .and_then(|_| replaceable_root_fingerprint(self.root.path()));
         let active_fingerprint = match verified {
             Ok(value) => value,
@@ -1253,6 +1324,32 @@ impl BackupService {
             active_fingerprint,
             old_fingerprint: staged.baseline,
         })
+    }
+}
+
+fn available_space(path: &Path) -> Result<u64> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| BackupError::Invalid("NUL in staging path".into()))?;
+        let mut info = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: `path` is NUL-terminated and `info` points to writable
+        // storage for the full statvfs result. No borrowed Rust data escapes.
+        let rc = unsafe { libc::statvfs(path.as_ptr(), info.as_mut_ptr()) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let info = unsafe { info.assume_init() };
+        Ok(u64::from(info.f_bavail).saturating_mul(info.f_frsize))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err(BackupError::Unsupported(
+            "free-space preflight is unavailable on this platform".into(),
+        ))
     }
 }
 

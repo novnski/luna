@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
-use zeron_engine::backup::{BackupService, IsolatedRoot, RecoveryKey, inspect_archive};
+use zeron_engine::backup::{
+    BackupError, BackupService, IsolatedRoot, RecoveryKey, inspect_archive,
+};
 use zeron_sync::DocsStore;
 
 fn fixture() -> (TempDir, PathBuf, PathBuf) {
@@ -123,6 +125,22 @@ fn staged_restore_detects_change_then_activates_and_rolls_back() {
     let backup = service(&root)
         .export(&backups.join("original.lunabk"))
         .unwrap();
+    assert!(
+        service(&root)
+            .stage_restore_with_available_bytes_for_tests(&backup.archive, 0)
+            .is_err()
+    );
+    assert!(
+        !fs::read_dir(root.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".luna-l17-stage-")
+            })
+    );
     let attachment = root.join("profiles/local/uploads/synthetic.txt");
     fs::remove_file(&attachment).unwrap();
     fs::write(root.join("ui-settings.json"), r#"{"theme":"changed"}"#).unwrap();
@@ -174,4 +192,42 @@ fn restore_refuses_excluded_target_material_without_mutation() {
     assert!(!preview.unsupported.is_empty());
     assert!(service(&root).stage_restore(&backup.archive).is_err());
     assert_eq!(fs::read(&forbidden).unwrap(), b"fake-key-remains");
+}
+
+#[test]
+fn failed_post_activation_readback_rolls_back_synthetic_root() {
+    let (parent, root, backups) = fixture();
+    let backup = service(&root)
+        .export(&backups.join("original.lunabk"))
+        .unwrap();
+    fs::write(root.join("ui-settings.json"), b"changed after backup").unwrap();
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    let result = service(&root).activate_with_readback_for_tests(staged, |restored| {
+        let store = DocsStore::open(restored.join("profiles/local"))
+            .map_err(|error| BackupError::Invalid(error.to_string()))?;
+        assert!(store.load_snapshot("synthetic-doc").unwrap().is_some());
+        Err(BackupError::Invalid(
+            "synthetic post-start readback failed".into(),
+        ))
+    });
+    assert!(result.is_err());
+    assert_eq!(
+        fs::read(root.join("ui-settings.json")).unwrap(),
+        b"changed after backup"
+    );
+    let failed: Vec<_> = fs::read_dir(parent.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".luna-l17-failed-")
+        })
+        .collect();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(
+        fs::read(failed[0].path().join("ui-settings.json")).unwrap(),
+        br#"{"theme":"synthetic"}"#
+    );
 }

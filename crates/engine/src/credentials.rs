@@ -34,6 +34,7 @@ const NONCE_BYTES: usize = 12;
 #[serde(rename_all = "kebab-case")]
 pub enum CredentialClass {
     LunaSync,
+    Backup,
     Integration,
     ProjectRuntime,
 }
@@ -54,6 +55,16 @@ impl CredentialScope {
         Self {
             class: CredentialClass::LunaSync,
             owner: "luna-sync".into(),
+            project_id: None,
+        }
+    }
+
+    /// Recovery material for LUNA-owned encrypted backup archives. It is
+    /// separate from sync, provider, integration and project credentials.
+    pub fn luna_backup() -> Self {
+        Self {
+            class: CredentialClass::Backup,
+            owner: "luna-backup".into(),
             project_id: None,
         }
     }
@@ -665,6 +676,10 @@ impl fmt::Debug for SecretMaterial {
 }
 
 impl SecretMaterial {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
     pub(crate) fn as_utf8(&self) -> Result<&str, CredentialError> {
         std::str::from_utf8(&self.0).map_err(|_| CredentialError::VaultCorrupt)
     }

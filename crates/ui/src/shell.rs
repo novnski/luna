@@ -42,6 +42,7 @@ use crate::rail;
 use crate::settings::accounts::AccountsPage;
 use crate::settings::appearance::{AppearancePage, AppearanceSettingsEvent};
 use crate::settings::archived::ArchivedPage;
+use crate::settings::backup::BackupsPage;
 use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
@@ -427,6 +428,7 @@ pub enum SettingsSection {
     Agents,
     Appearance,
     Files,
+    Backups,
     Notifications,
     Shortcuts,
     Appshots,
@@ -434,12 +436,13 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
         SettingsSection::Devices,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
         SettingsSection::Appearance,
         SettingsSection::Files,
+        SettingsSection::Backups,
         SettingsSection::Notifications,
         SettingsSection::Shortcuts,
         SettingsSection::Appshots,
@@ -455,6 +458,7 @@ impl SettingsSection {
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
+            SettingsSection::Backups => "Backups",
             SettingsSection::Notifications => "Notifications",
             SettingsSection::Shortcuts => "Shortcuts",
             SettingsSection::Appshots => "Appshots",
@@ -1692,6 +1696,7 @@ pub struct Shell {
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
+    backups_page: Option<Entity<BackupsPage>>,
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
@@ -2083,6 +2088,7 @@ impl Shell {
             archived_page: None,
             appearance_page: None,
             files_settings_page: None,
+            backups_page: None,
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
@@ -3947,6 +3953,9 @@ impl Shell {
         if section == SettingsSection::Harnesses {
             self.harnesses_page = None;
         }
+        if section == SettingsSection::Backups {
+            self.backups_page = None;
+        }
         self.route = Route::Settings(section);
         self.nav.push(NavEntry::Settings(section));
         self.close_user_menu(cx);
@@ -4104,6 +4113,16 @@ impl Shell {
                     self.files_settings_page = Some(page);
                 }
                 match &self.files_settings_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
+            SettingsSection::Backups => {
+                if self.backups_page.is_none() {
+                    let state = self.state.clone();
+                    self.backups_page = Some(cx.new(|cx| BackupsPage::new(state, cx)));
+                }
+                match &self.backups_page {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
@@ -6410,6 +6429,7 @@ impl Shell {
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,
+            SettingsSection::Backups => icons::ARCHIVE_UP_MINIMALISTIC,
             SettingsSection::Notifications => icons::BELL,
             SettingsSection::Shortcuts => icons::KEYBOARD,
             SettingsSection::Appshots => icons::MONITOR,

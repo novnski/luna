@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub mod accounts;
 pub mod appearance;
 pub mod archived;
+pub mod backup;
 pub mod composer;
 pub mod devices;
 pub mod files;

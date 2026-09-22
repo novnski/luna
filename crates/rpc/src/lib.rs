@@ -33,6 +33,15 @@ pub use server::{serve_connection, serve_ws_listener};
 /// RPC method names — single source of truth for both ends.
 /// Full surface: docs/research/feature-inventory.md §2.
 pub mod methods {
+    /// L17 local-only backup control. Raw recovery material is accepted only
+    /// by the explicit key-configure call and never returned.
+    pub const GET_BACKUP_STATUS: &str = "GetBackupStatus";
+    pub const CONFIGURE_BACKUP: &str = "ConfigureBackup";
+    pub const CONFIGURE_BACKUP_KEY: &str = "ConfigureBackupKey";
+    pub const BACKUP_NOW: &str = "BackupNow";
+    pub const EXPORT_BACKUP: &str = "ExportBackup";
+    pub const INSPECT_BACKUP: &str = "InspectBackup";
+    pub const STAGE_BACKUP_RESTORE: &str = "StageBackupRestore";
     pub const WATCH_PREVIEWS: &str = "WatchPreviews";
     pub const LIST_HARNESSES: &str = "ListHarnesses";
     /// Flip a harness's enablement on the target device (Settings → Agents);

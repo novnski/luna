@@ -1,5 +1,7 @@
 # L17 backup/export/restore workstream
 
+This records the initial `8ce6c3f2` core. The later branch state and current limits are in [the L17 integration correction report](./luna-l17-integration-correction.md).
+
 Base: `b33548978ca942e4dba06410ef101b7dff0b2bbc` on `codex/l17-backup-restore` in this task's isolated worktree.
 
 ## Implemented core

@@ -5,6 +5,7 @@
 
 pub mod activity;
 pub mod agent;
+pub mod backup;
 pub mod context_control;
 pub mod draft;
 pub mod entities;
@@ -19,6 +20,7 @@ pub mod workspace;
 
 pub use activity::*;
 pub use agent::*;
+pub use backup::*;
 pub use context_control::*;
 pub use draft::*;
 pub use entities::*;
