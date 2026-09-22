@@ -753,6 +753,40 @@ impl SessionsEngine {
         Ok((replay, rx))
     }
 
+    /// Historical runtime metadata that was durably recorded by the harness.
+    /// The assistant message id is the authoritative join key; current task
+    /// configuration and provider-account selection are intentionally ignored.
+    pub(crate) fn activity_run_metadata(
+        &self,
+        chat_id: &str,
+    ) -> HashMap<String, crate::activity_history::ActivityRunMetadata> {
+        let events = match self.inner.journal.replay(chat_id, 0) {
+            Ok(events) => events,
+            Err(error) => {
+                tracing::warn!(chat = %chat_id, %error, "session history could not read recorded run metadata");
+                return HashMap::new();
+            }
+        };
+        events
+            .into_iter()
+            .filter_map(|(_, event)| match event {
+                AgentEvent::SessionStarted {
+                    harness,
+                    model,
+                    assistant_message_id,
+                    ..
+                } => Some((
+                    assistant_message_id,
+                    crate::activity_history::ActivityRunMetadata {
+                        harness: Some(harness),
+                        model: (!model.trim().is_empty()).then_some(model),
+                    },
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Start (or route) a run for `chat_id`.
     ///
     /// - The user message entry is written to the doc immediately (id = `message_id`).

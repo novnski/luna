@@ -11,6 +11,8 @@ APP="$OUT/LUNA L14 QA.app"
 EXECUTABLE="$APP/Contents/MacOS/session-history-fixture"
 BUILD_EXECUTABLE="$REPO_ROOT/target/debug/examples/session-history-fixture"
 BUNDLE_ID="com.novnski.luna.l14-qa"
+FIXTURE_ID="luna-l14-session-history-v1"
+EXPECTED_SAFETY="L14 synthetic fixture only. In-memory auth; native provider metadata and platform Keychain fallbacks disabled. No live provider/account/private store access."
 REFERENCE_ICNS="${LUNA_L14_REFERENCE_ICNS:-$REPO_ROOT/target/luna-l13-fixture/LUNA L13 QA.app/Contents/Resources/luna.icns}"
 PID_FILE=""
 LOG_FILE=""
@@ -20,7 +22,7 @@ fail() {
   exit 1
 }
 
-[[ -n "$REQUESTED_ROOT" ]] || fail "usage: scripts/run-macos-l14-fixture.sh /tmp/luna-l14-<fresh-root> [build|run|stop|status]"
+[[ -n "$REQUESTED_ROOT" ]] || fail "usage: scripts/run-macos-l14-fixture.sh /tmp/luna-l14-<root> [build|run|resume|resume-check|stop|status]"
 [[ "$REQUESTED_ROOT" == /* ]] || fail "synthetic root must be absolute"
 [[ -d "$REQUESTED_ROOT" ]] || fail "create a fresh root with mktemp -d /tmp/luna-l14-native-qa.XXXXXX"
 [[ ! -L "$REQUESTED_ROOT" ]] || fail "synthetic root must not be a symlink"
@@ -64,6 +66,56 @@ validate_bundle() {
   [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" == "$BUNDLE_ID" ]] || fail "wrong bundle identifier"
   [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")" == "session-history-fixture" ]] || fail "wrong executable"
   /usr/bin/codesign --verify --deep --strict "$APP" || fail "signature verification failed"
+}
+
+validate_saved_root() {
+  local fixture="$PROFILE/FIXTURE.json"
+  local safety="$PROFILE/SAFETY.txt"
+  local database="$PROFILE/engine/orgs/l14-fixture-org/l14-fixture-user/docs.sqlite3"
+  [[ -f "$fixture" && ! -L "$fixture" ]] || fail "saved root is missing its regular FIXTURE.json"
+  [[ -f "$safety" && ! -L "$safety" ]] || fail "saved root is missing its regular SAFETY.txt"
+  [[ "$(<"$safety")" == "$EXPECTED_SAFETY" ]] || fail "saved root safety statement does not match this fixture"
+  [[ -d "$PROFILE/engine" && ! -L "$PROFILE/engine" ]] || fail "saved root engine directory is missing or linked"
+  [[ -d "$PROFILE/ui" && ! -L "$PROFILE/ui" ]] || fail "saved root UI directory is missing or linked"
+  [[ -s "$database" && ! -L "$database" ]] || fail "saved root database is missing, empty, or linked"
+  /usr/bin/python3 -c '
+import json, os, sqlite3, sys
+fixture_path, expected_root, fixture_id, bundle_id, database = sys.argv[1:]
+with open(fixture_path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+assert data.get("schemaVersion") == 1
+assert data.get("fixtureId") == fixture_id
+assert data.get("bundleIdentifier") == bundle_id
+assert os.path.realpath(data.get("root", "")) == expected_root
+assert data.get("tasks") == [
+    "14141414-1414-4141-8141-141414141414",
+    "24242424-2424-4242-8242-242424242424",
+    "34343434-3434-4343-8343-343434343434",
+]
+for directory, names, files in os.walk(expected_root, followlinks=False):
+    for name in names + files:
+        assert not os.path.islink(os.path.join(directory, name))
+assert os.path.realpath(database).startswith(expected_root + os.sep)
+connection = sqlite3.connect(database)
+assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+' "$fixture" "$PROFILE" "$FIXTURE_ID" "$BUNDLE_ID" "$database" \
+    || fail "saved root identity or database validation failed"
+}
+
+launch_fixture() {
+  /usr/bin/open -n --env LUNA_DISABLE_SOUND=1 --env LUNA_DISABLE_NOTIFICATIONS=1 --stdout "$LOG_FILE" --stderr "$LOG_FILE" "$APP" --args "$PROFILE"
+  fixture_pid=""
+  for _ in {1..100}; do
+    fixture_pid="$(exact_pid || true)"
+    if [[ -n "$fixture_pid" ]] && validate_pid "$fixture_pid" && [[ -s "$PROFILE/SAFETY.txt" && -s "$PROFILE/FIXTURE.json" ]]; then
+      print -r -- "$fixture_pid" >"$PID_FILE"
+      print -- "pid=$fixture_pid bundle=$APP identifier=$BUNDLE_ID root=$PROFILE log=$LOG_FILE"
+      return 0
+    fi
+    /bin/sleep 0.1
+  done
+  [[ -z "$fixture_pid" ]] || /bin/kill "$fixture_pid"
+  fail "fixture did not reach exact-process safety readback"
 }
 
 build_bundle() {
@@ -113,19 +165,19 @@ case "$ACTION" in
     validate_bundle
     [[ -z "$(exact_pid || true)" ]] || fail "fixture is already running"
     [[ -z "$(/usr/bin/find "$PROFILE" -mindepth 1 -maxdepth 1 -print -quit)" ]] || fail "first run requires a fresh empty synthetic root"
-    /usr/bin/open -n --env LUNA_DISABLE_SOUND=1 --env LUNA_DISABLE_NOTIFICATIONS=1 --stdout "$LOG_FILE" --stderr "$LOG_FILE" "$APP" --args "$PROFILE"
-    fixture_pid=""
-    for _ in {1..100}; do
-      fixture_pid="$(exact_pid || true)"
-      if [[ -n "$fixture_pid" ]] && validate_pid "$fixture_pid" && [[ -s "$PROFILE/SAFETY.txt" && -s "$PROFILE/FIXTURE.json" ]]; then
-        print -r -- "$fixture_pid" >"$PID_FILE"
-        print -- "pid=$fixture_pid bundle=$APP identifier=$BUNDLE_ID root=$PROFILE log=$LOG_FILE"
-        exit 0
-      fi
-      /bin/sleep 0.1
-    done
-    [[ -z "$fixture_pid" ]] || /bin/kill "$fixture_pid"
-    fail "fixture did not reach exact-process safety readback"
+    launch_fixture
+    ;;
+  resume-check)
+    validate_bundle
+    [[ -z "$(exact_pid || true)" ]] || fail "fixture is already running"
+    validate_saved_root
+    print -- "resumable bundle=$APP identifier=$BUNDLE_ID root=$PROFILE"
+    ;;
+  resume)
+    validate_bundle
+    [[ -z "$(exact_pid || true)" ]] || fail "fixture is already running"
+    validate_saved_root
+    launch_fixture
     ;;
   stop)
     [[ -f "$PID_FILE" ]] || { print -- "not running"; exit 0; }

@@ -1,6 +1,8 @@
 //! L14 derived activity envelopes over authoritative transcript and receipt records.
 
+use std::collections::HashMap;
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+
 use zeron_proto::{
     ACTIVITY_ENVELOPE_VERSION, ActivityEnvelope, ActivityKind, ActivityOutcome, ActivityRedaction,
     ActivitySourceRef, Chat, CommandReceiptStatus, HistoryProjectPolicy, TaskCommandEvent,
@@ -8,7 +10,15 @@ use zeron_proto::{
 };
 
 const SUMMARY_LIMIT: usize = 240;
+const METADATA_LIMIT: usize = 240;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ActivityRunMetadata {
+    pub harness: Option<zeron_proto::HarnessId>,
+    pub model: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_activity_envelopes(
     local_device_id: &str,
     chat: &Chat,
@@ -16,12 +26,13 @@ pub(crate) fn build_activity_envelopes(
     entries: &[SessionMessageEntry],
     receipts: &[TaskCommandEvent],
     receipts_truncated: bool,
+    run_metadata: &HashMap<String, ActivityRunMetadata>,
     policy: Option<&HistoryProjectPolicy>,
 ) -> Vec<ActivityEnvelope> {
-    let binding = identity.and_then(|view| view.current_binding.as_ref());
-    let environment_id = binding
-        .map(|binding| binding.environment_id.clone())
-        .unwrap_or_else(|| chat.device_id.clone());
+    // A task's current config/binding is not historical evidence. Message events
+    // use journaled SessionStarted metadata when it exists; everything else stays
+    // unknown instead of rewriting old activity after a model/account switch.
+    let environment_id = chat.device_id.clone();
     let workspace_id = identity
         .map(|view| view.task.workspace_id.clone())
         .or_else(|| chat.space_id.clone());
@@ -40,7 +51,7 @@ pub(crate) fn build_activity_envelopes(
                 .saturating_add(part_index as u64);
             if let Some(event) = part_event(
                 chat,
-                binding.map(|binding| binding.provider_instance_id.as_str()),
+                run_metadata.get(&entry.id),
                 &environment_id,
                 workspace_id.as_deref(),
                 entry,
@@ -56,7 +67,7 @@ pub(crate) fn build_activity_envelopes(
         if entry.role == MessageRole::Assistant {
             events.push(base_event(
                 chat,
-                binding.map(|binding| binding.provider_instance_id.as_str()),
+                run_metadata.get(&entry.id),
                 &environment_id,
                 workspace_id.as_deref(),
                 entry,
@@ -70,6 +81,7 @@ pub(crate) fn build_activity_envelopes(
                 ActivityRedaction::None,
                 available_here,
                 unavailable_reason.clone(),
+                policy,
             ));
         }
     }
@@ -118,10 +130,10 @@ pub(crate) fn build_activity_envelopes(
             timestamp_ms: receipt.committed_at_ms.unwrap_or(receipt.observed_at_ms),
             kind: ActivityKind::Outcome,
             outcome: receipt_outcome(receipt.status),
-            harness: chat.config.as_ref().map(|config| config.harness),
-            provider: binding.map(|binding| binding.provider_instance_id.clone()),
-            model: chat.config.as_ref().and_then(|config| config.model.clone()),
-            reasoning: chat.config.as_ref().and_then(|config| config.reasoning),
+            harness: None,
+            provider: None,
+            model: None,
+            reasoning: None,
             project_id: chat.space_id.clone(),
             workspace_id: workspace_id.clone(),
             tool: None,
@@ -157,10 +169,10 @@ pub(crate) fn build_activity_envelopes(
             timestamp_ms,
             kind: ActivityKind::Withheld,
             outcome: ActivityOutcome::Unknown,
-            harness: chat.config.as_ref().map(|config| config.harness),
-            provider: binding.map(|binding| binding.provider_instance_id.clone()),
-            model: chat.config.as_ref().and_then(|config| config.model.clone()),
-            reasoning: chat.config.as_ref().and_then(|config| config.reasoning),
+            harness: None,
+            provider: None,
+            model: None,
+            reasoning: None,
             project_id: chat.space_id.clone(),
             workspace_id,
             tool: None,
@@ -186,7 +198,7 @@ pub(crate) fn build_activity_envelopes(
 #[allow(clippy::too_many_arguments)]
 fn part_event(
     chat: &Chat,
-    provider: Option<&str>,
+    run_metadata: Option<&ActivityRunMetadata>,
     environment_id: &str,
     workspace_id: Option<&str>,
     entry: &SessionMessageEntry,
@@ -216,16 +228,19 @@ fn part_event(
         }
         // Deliberately exclude model reasoning from the search index.
         MessagePart::Reasoning { .. } => return None,
-        MessagePart::Image { name, .. } => (
-            ActivityKind::Withheld,
-            format!("Image activity withheld ({})", safe_label(name)),
-            ActivityRedaction::Withheld,
-            message_outcome(entry.status),
-            None,
-            None,
-            None,
-            None,
-        ),
+        MessagePart::Image { name, .. } => {
+            let (summary, redaction) = image_summary(name, policy);
+            (
+                ActivityKind::Withheld,
+                summary,
+                redaction,
+                message_outcome(entry.status),
+                None,
+                None,
+                None,
+                None,
+            )
+        }
         MessagePart::Error { message, .. } => {
             let (summary, redaction) = minimize_project_text(message, policy);
             (
@@ -258,7 +273,7 @@ fn part_event(
     };
     Some(base_event_with_metadata(
         chat,
-        provider,
+        run_metadata,
         environment_id,
         workspace_id,
         entry,
@@ -274,6 +289,7 @@ fn part_event(
         app,
         file,
         command,
+        policy,
     ))
 }
 
@@ -397,35 +413,37 @@ fn tool_event(
             "File activity excluded by project history policy".into(),
             ActivityRedaction::Excluded,
             outcome,
-            Some(tool),
-            app,
+            None,
+            None,
             None,
             None,
         );
     }
-    let (summary, redaction) = minimize_project_text(&raw, policy);
-    let file = (redaction != ActivityRedaction::Heuristic)
-        .then_some(file)
-        .flatten();
-    let command = (redaction != ActivityRedaction::Heuristic)
-        .then_some(command)
-        .flatten();
-    (
-        kind,
-        summary,
-        redaction,
-        outcome,
-        Some(tool),
-        app,
-        file,
-        command,
-    )
+    let (mut summary, mut redaction) = minimize_project_text(&raw, policy);
+    let (tool, tool_redaction) = minimize_metadata(tool, policy);
+    let (app, app_redaction) = minimize_optional_metadata(app, policy);
+    let (file, file_redaction) = minimize_optional_metadata(file, policy);
+    let (command, command_redaction) = minimize_optional_metadata(command, policy);
+    for field_redaction in [
+        tool_redaction,
+        app_redaction,
+        file_redaction,
+        command_redaction,
+    ] {
+        redaction = strongest_redaction(redaction, field_redaction);
+    }
+    if redaction == ActivityRedaction::Excluded {
+        summary = "[content excluded by project history policy]".into();
+    } else if redaction == ActivityRedaction::Heuristic {
+        summary = "[heuristically redacted sensitive text]".into();
+    }
+    (kind, summary, redaction, outcome, tool, app, file, command)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn base_event(
     chat: &Chat,
-    provider: Option<&str>,
+    run_metadata: Option<&ActivityRunMetadata>,
     environment_id: &str,
     workspace_id: Option<&str>,
     entry: &SessionMessageEntry,
@@ -437,10 +455,11 @@ fn base_event(
     redaction: ActivityRedaction,
     available_here: bool,
     unavailable_reason: Option<String>,
+    policy: Option<&HistoryProjectPolicy>,
 ) -> ActivityEnvelope {
     base_event_with_metadata(
         chat,
-        provider,
+        run_metadata,
         environment_id,
         workspace_id,
         entry,
@@ -456,13 +475,14 @@ fn base_event(
         None,
         None,
         None,
+        policy,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn base_event_with_metadata(
     chat: &Chat,
-    provider: Option<&str>,
+    run_metadata: Option<&ActivityRunMetadata>,
     environment_id: &str,
     workspace_id: Option<&str>,
     entry: &SessionMessageEntry,
@@ -470,15 +490,26 @@ fn base_event_with_metadata(
     sequence: u64,
     kind: ActivityKind,
     outcome: ActivityOutcome,
-    summary: String,
-    redaction: ActivityRedaction,
+    mut summary: String,
+    mut redaction: ActivityRedaction,
     available_here: bool,
     unavailable_reason: Option<String>,
     tool: Option<String>,
     app: Option<String>,
     file: Option<String>,
     command: Option<String>,
+    policy: Option<&HistoryProjectPolicy>,
 ) -> ActivityEnvelope {
+    let (model, model_redaction) = minimize_optional_metadata(
+        run_metadata.and_then(|metadata| metadata.model.clone()),
+        policy,
+    );
+    redaction = strongest_redaction(redaction, model_redaction);
+    if redaction == ActivityRedaction::Excluded {
+        summary = "[content excluded by project history policy]".into();
+    } else if redaction == ActivityRedaction::Heuristic {
+        summary = "[heuristically redacted sensitive text]".into();
+    }
     ActivityEnvelope {
         schema_version: ACTIVITY_ENVELOPE_VERSION,
         event_id: format!(
@@ -497,10 +528,10 @@ fn base_event_with_metadata(
         timestamp_ms: entry.created_at,
         kind,
         outcome,
-        harness: chat.config.as_ref().map(|config| config.harness),
-        provider: provider.map(str::to_owned),
-        model: chat.config.as_ref().and_then(|config| config.model.clone()),
-        reasoning: chat.config.as_ref().and_then(|config| config.reasoning),
+        harness: run_metadata.and_then(|metadata| metadata.harness),
+        provider: None,
+        model,
+        reasoning: None,
         project_id: chat.space_id.clone(),
         workspace_id: workspace_id.map(str::to_owned),
         tool,
@@ -618,6 +649,40 @@ fn minimize_text(value: &str) -> (String, ActivityRedaction) {
     (summary, ActivityRedaction::None)
 }
 
+fn minimize_metadata(
+    value: String,
+    policy: Option<&HistoryProjectPolicy>,
+) -> (Option<String>, ActivityRedaction) {
+    let (value, redaction) = minimize_project_text(&value, policy);
+    if redaction != ActivityRedaction::None || value.is_empty() {
+        return (None, redaction);
+    }
+    let mut bounded = value.chars().take(METADATA_LIMIT).collect::<String>();
+    if value.chars().count() > METADATA_LIMIT {
+        bounded.push('…');
+    }
+    (Some(bounded), ActivityRedaction::None)
+}
+
+fn minimize_optional_metadata(
+    value: Option<String>,
+    policy: Option<&HistoryProjectPolicy>,
+) -> (Option<String>, ActivityRedaction) {
+    value
+        .map(|value| minimize_metadata(value, policy))
+        .unwrap_or((None, ActivityRedaction::None))
+}
+
+fn strongest_redaction(left: ActivityRedaction, right: ActivityRedaction) -> ActivityRedaction {
+    use ActivityRedaction::{Excluded, Heuristic, None, Withheld};
+    match (left, right) {
+        (Excluded, _) | (_, Excluded) => Excluded,
+        (Heuristic, _) | (_, Heuristic) => Heuristic,
+        (Withheld, _) | (_, Withheld) => Withheld,
+        _ => None,
+    }
+}
+
 fn minimize_project_text(
     value: &str,
     policy: Option<&HistoryProjectPolicy>,
@@ -637,12 +702,28 @@ fn minimize_project_text(
     minimize_text(value)
 }
 
-fn safe_label(value: &str) -> String {
-    let (summary, redaction) = minimize_text(value);
-    if redaction == ActivityRedaction::None {
-        summary
-    } else {
-        "redacted".into()
+fn image_summary(
+    value: &str,
+    policy: Option<&HistoryProjectPolicy>,
+) -> (String, ActivityRedaction) {
+    let (label, redaction) = minimize_project_text(value, policy);
+    match redaction {
+        ActivityRedaction::None => (
+            format!("Image activity withheld ({label})"),
+            ActivityRedaction::Withheld,
+        ),
+        ActivityRedaction::Excluded => (
+            "Image activity excluded by project history policy".into(),
+            ActivityRedaction::Excluded,
+        ),
+        ActivityRedaction::Heuristic => (
+            "Image activity withheld (redacted name)".into(),
+            ActivityRedaction::Heuristic,
+        ),
+        ActivityRedaction::Withheld => (
+            "Image activity withheld".into(),
+            ActivityRedaction::Withheld,
+        ),
     }
 }
 
@@ -725,7 +806,16 @@ mod tests {
             status: Some(MessageStatus::Complete),
             continuation_of: None,
         }];
-        let events = build_activity_envelopes("machine", &chat(), None, &entries, &[], false, None);
+        let events = build_activity_envelopes(
+            "machine",
+            &chat(),
+            None,
+            &entries,
+            &[],
+            false,
+            &HashMap::new(),
+            None,
+        );
         assert!(events.iter().any(|event| {
             event.redaction == ActivityRedaction::Heuristic
                 && !event.summary.contains("synthetic-secret")
@@ -738,7 +828,16 @@ mod tests {
                 .unwrap()
                 .contains("must never be indexed")
         );
-        let bounded = build_activity_envelopes("machine", &chat(), None, &entries, &[], true, None);
+        let bounded = build_activity_envelopes(
+            "machine",
+            &chat(),
+            None,
+            &entries,
+            &[],
+            true,
+            &HashMap::new(),
+            None,
+        );
         assert!(bounded.iter().any(|event| {
             event.kind == ActivityKind::Withheld
                 && event.summary.contains("bounded local index")

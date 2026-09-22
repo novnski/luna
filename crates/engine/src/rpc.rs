@@ -1071,6 +1071,7 @@ impl EngineRpc {
         let doc_host = self.doc_host.clone();
         let workspace = self.workspace.clone();
         let identity = self.task_identity.clone();
+        let sessions = self.sessions.clone();
         let local_device_id = self.engine_info.device_id.clone();
         let cancel = self.activity_cancel.clone();
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -1119,6 +1120,7 @@ impl EngineRpc {
                                 if let Err(error) = index_activity_task(
                                     &store,
                                     &identity,
+                                    &sessions,
                                     &local_device_id,
                                     &chat,
                                     entries,
@@ -5258,6 +5260,7 @@ fn task_command_history(
 fn index_activity_task(
     store: &DocsStore,
     identity: &crate::TaskIdentityService,
+    sessions: &SessionsEngine,
     local_device_id: &str,
     chat: &Chat,
     entries: Vec<SessionMessageEntry>,
@@ -5273,6 +5276,7 @@ fn index_activity_task(
     let (receipts, receipts_truncated) =
         task_command_history(store, &chat.id).map_err(|error| error.to_string())?;
     let task_identity = identity.view(&chat.id);
+    let run_metadata = sessions.activity_run_metadata(&chat.id);
     let events = crate::activity_history::build_activity_envelopes(
         local_device_id,
         chat,
@@ -5280,6 +5284,7 @@ fn index_activity_task(
         &entries,
         &receipts,
         receipts_truncated,
+        &run_metadata,
         policy.as_ref(),
     );
     let count = events.len();
@@ -5360,6 +5365,7 @@ impl RpcService for EngineRpc {
                         task_command_history(&self.store, &chat.id)
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
                     let identity = self.task_identity.view(&chat.id);
+                    let run_metadata = self.sessions.activity_run_metadata(&chat.id);
                     let events = crate::activity_history::build_activity_envelopes(
                         &self.engine_info.device_id,
                         chat,
@@ -5367,6 +5373,7 @@ impl RpcService for EngineRpc {
                         &entries,
                         &receipts,
                         receipts_truncated,
+                        &run_metadata,
                         policy.as_ref(),
                     );
                     rebuilt.push((chat.id.clone(), events));
@@ -5445,6 +5452,7 @@ impl RpcService for EngineRpc {
                     index_activity_task(
                         &self.store,
                         &self.task_identity,
+                        &self.sessions,
                         &self.engine_info.device_id,
                         &chat,
                         handle

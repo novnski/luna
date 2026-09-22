@@ -5,11 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
-use zeron_engine::{EngineCore, HarnessRegistry};
+use zeron_engine::{EngineCore, HarnessRegistry, RunJournal};
 use zeron_harness::mock::MockHarness;
 use zeron_proto::{
-    ActivityRedaction, ChatConfig, HarnessId, HistoryProjectPolicy, HistoryRebuildResult,
-    HistorySearchPage, HistorySearchRequest, PermissionMode, SandboxLevel, ToolCall,
+    ActivityRedaction, AgentEvent, ChatConfig, HarnessId, HistoryProjectPolicy,
+    HistoryRebuildResult, HistorySearchPage, HistorySearchRequest, PermissionMode, SandboxLevel,
+    ToolCall,
 };
 use zeron_rpc::methods;
 
@@ -66,6 +67,46 @@ fn assemble(path: &std::path::Path) -> EngineCore {
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(MockHarness { script: Vec::new() }));
     EngineCore::assemble(path, Arc::new(registry), HarnessId::Mock, None).unwrap()
+}
+
+fn profile_root(path: &std::path::Path) -> std::path::PathBuf {
+    path.join("orgs/dev-org/dev-user")
+}
+
+fn raw_activity_index(path: &std::path::Path) -> String {
+    let connection = rusqlite::Connection::open(profile_root(path).join("docs.sqlite3")).unwrap();
+    let mut statement = connection
+        .prepare("SELECT search_text, envelope_json FROM activity_events ORDER BY event_id")
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            let search: String = row.get(0)?;
+            let envelope: Vec<u8> = row.get(1)?;
+            Ok(format!("{search}\n{}", String::from_utf8_lossy(&envelope)))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .join("\n")
+}
+
+fn raw_activity_index_for_task(path: &std::path::Path, task_id: &str) -> String {
+    let connection = rusqlite::Connection::open(profile_root(path).join("docs.sqlite3")).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT search_text, envelope_json FROM activity_events WHERE task_id=?1 ORDER BY event_id",
+        )
+        .unwrap();
+    statement
+        .query_map([task_id], |row| {
+            let search: String = row.get(0)?;
+            let envelope: Vec<u8> = row.get(1)?;
+            Ok(format!("{search}\n{}", String::from_utf8_lossy(&envelope)))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .join("\n")
 }
 
 async fn search(
@@ -174,6 +215,32 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
                         input: Some(serde_json::json!({"secret": "not indexed"})),
                     },
                 ),
+                tool(
+                    "excluded-command-term",
+                    ToolCall::Exec {
+                        command: "echo PRIVATE_SENTINEL".into(),
+                    },
+                ),
+                tool(
+                    "excluded-file-term",
+                    ToolCall::ReadFile {
+                        path: "/synthetic/project-a/PRIVATE_SENTINEL.txt".into(),
+                    },
+                ),
+                tool(
+                    "excluded-app-tool-term",
+                    ToolCall::Mcp {
+                        server: "PRIVATE_SENTINEL-app".into(),
+                        tool: "PRIVATE_SENTINEL-tool".into(),
+                        input: None,
+                    },
+                ),
+                MessagePart::Image {
+                    id: "excluded-image-term".into(),
+                    path: "/synthetic/ignored-image.png".into(),
+                    name: "PRIVATE_SENTINEL.png".into(),
+                    mime_type: "image/png".into(),
+                },
             ],
             created_at: 20,
             device_id: core.device_id.clone(),
@@ -181,6 +248,22 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
             continuation_of: None,
         })
         .unwrap();
+
+    let journal = RunJournal::open(profile_root(dir.path()).join("journals")).unwrap();
+    journal
+        .append(
+            "task-a",
+            &AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "Recorded-History-Model".into(),
+                tools: Vec::new(),
+                cwd: "/synthetic/project-a".into(),
+                session_id: "recorded-session".into(),
+                assistant_message_id: "answer-a".into(),
+            },
+        )
+        .unwrap();
+    drop(journal);
     core.doc_host
         .open("task-b")
         .unwrap()
@@ -245,10 +328,15 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
         "linear",
         Some("project-a"),
         false,
-        serde_json::json!({"apps": ["linear"], "models": ["synthetic-history-model"]}),
+        serde_json::json!({"apps": ["linear"], "models": ["RECORDED-HISTORY-MODEL"]}),
     )
     .await;
     assert_eq!(app.events.len(), 1);
+    assert_eq!(
+        app.events[0].model.as_deref(),
+        Some("Recorded-History-Model")
+    );
+    assert_eq!(app.events[0].provider, None);
     assert!(!serde_json::to_string(&app).unwrap().contains("not indexed"));
     assert!(
         search(
@@ -291,7 +379,7 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
     let policy = HistoryProjectPolicy {
         project_id: "project-a".into(),
         excluded_path_prefixes: vec!["/synthetic/project-a/private".into()],
-        excluded_terms: vec!["alpha request".into()],
+        excluded_terms: vec!["alpha request".into(), "private_sentinel".into()],
         index_terminal_output: false,
         index_browser_fields: false,
         index_accessibility_text: false,
@@ -316,6 +404,11 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
         )
         .await
         .unwrap();
+    let minimized = raw_activity_index(dir.path()).to_lowercase();
+    assert!(
+        !minimized.contains("private_sentinel"),
+        "project exclusions must remove matching command/file/app/tool/image metadata from search_text and envelope_json"
+    );
     assert!(
         search(
             &client,
@@ -329,6 +422,91 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
         .is_empty()
     );
 
+    core.workspace
+        .create_space(
+            "project-policy-initial",
+            &core.device_id,
+            "/synthetic/project-policy-initial",
+            Some("Policy initial".into()),
+            false,
+        )
+        .unwrap();
+    client
+        .call(
+            methods::SET_SESSION_HISTORY_POLICY,
+            serde_json::to_value(&HistoryProjectPolicy {
+                project_id: "project-policy-initial".into(),
+                excluded_path_prefixes: Vec::new(),
+                excluded_terms: vec!["private_sentinel".into()],
+                index_terminal_output: false,
+                index_browser_fields: false,
+                index_accessibility_text: false,
+                index_screenshot_text: false,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    core.workspace
+        .create_chat(
+            "task-policy-initial",
+            Some("project-policy-initial"),
+            None,
+            Some(config()),
+            None,
+        )
+        .unwrap();
+    core.doc_host
+        .open("task-policy-initial")
+        .unwrap()
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "policy-initial-answer".into(),
+            role: MessageRole::Assistant,
+            parts: vec![
+                MessagePart::Text {
+                    id: "safe".into(),
+                    text: "initial policy index ready".into(),
+                },
+                tool(
+                    "private-command",
+                    ToolCall::Exec {
+                        command: "echo PRIVATE_SENTINEL".into(),
+                    },
+                ),
+            ],
+            created_at: 50,
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    core.workspace
+        .note_message("task-policy-initial", "initial policy index ready");
+    wait_for_search(
+        &client,
+        "initial policy index ready",
+        "project-policy-initial",
+    )
+    .await;
+    assert!(
+        !raw_activity_index_for_task(dir.path(), "task-policy-initial")
+            .to_lowercase()
+            .contains("private_sentinel")
+    );
+    client
+        .call(
+            methods::REBUILD_SESSION_HISTORY,
+            serde_json::json!({"taskIds": []}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !raw_activity_index_for_task(dir.path(), "task-policy-initial")
+            .to_lowercase()
+            .contains("private_sentinel")
+    );
+
     task_a
         .doc()
         .push_message(&entry(
@@ -338,12 +516,84 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
             40,
         ))
         .unwrap();
+    task_a
+        .doc()
+        .push_message(&SessionMessageEntry {
+            id: "incremental-private-metadata".into(),
+            role: MessageRole::Assistant,
+            parts: vec![
+                MessagePart::Text {
+                    id: "safe".into(),
+                    text: "incremental policy reconciliation completed".into(),
+                },
+                tool(
+                    "private-command",
+                    ToolCall::Exec {
+                        command: "echo PRIVATE_SENTINEL".into(),
+                    },
+                ),
+            ],
+            created_at: 41,
+            device_id: core.device_id.clone(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
     // The real producer updates workspace freshness after transcript persist;
     // the index reconciler consumes that metadata edge without search-time raw reads.
     core.workspace
         .note_message("task-a", "incremental sentinel");
     let incremental = wait_for_search(&client, "incremental sentinel", "project-a").await;
     assert_eq!(incremental.events[0].source.message_id, "incremental");
+    let incremental_policy =
+        wait_for_search(&client, "incremental policy reconciliation", "project-a").await;
+    assert_eq!(
+        incremental_policy.events[0].source.message_id,
+        "incremental-private-metadata"
+    );
+    assert!(
+        !raw_activity_index(dir.path())
+            .to_lowercase()
+            .contains("private_sentinel")
+    );
+
+    let mut changed_config = config();
+    changed_config.model = Some("current-task-model-must-not-rewrite-history".into());
+    core.workspace
+        .set_chat_config("task-a", &changed_config)
+        .unwrap();
+    client
+        .call(
+            methods::REBUILD_SESSION_HISTORY,
+            serde_json::json!({"taskIds": ["task-a"]}),
+        )
+        .await
+        .unwrap();
+    let recorded = search(
+        &client,
+        "linear",
+        Some("project-a"),
+        false,
+        serde_json::json!({"models": ["recorded-history-model"]}),
+    )
+    .await;
+    assert_eq!(recorded.events.len(), 1);
+    assert_eq!(
+        recorded.events[0].model.as_deref(),
+        Some("Recorded-History-Model")
+    );
+    assert!(
+        search(
+            &client,
+            "linear",
+            Some("project-a"),
+            false,
+            serde_json::json!({"models": ["current-task-model-must-not-rewrite-history"]}),
+        )
+        .await
+        .events
+        .is_empty()
+    );
 
     core.workspace.delete_chat("task-b").unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -366,6 +616,20 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
     let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
     let persisted = wait_for_search(&reopened_client, "incremental sentinel", "project-a").await;
     assert_eq!(persisted.events[0].task_id, "task-a");
+    assert!(
+        !raw_activity_index(dir.path())
+            .to_lowercase()
+            .contains("private_sentinel")
+    );
+    let persisted_recorded = search(
+        &reopened_client,
+        "linear",
+        Some("project-a"),
+        false,
+        serde_json::json!({"models": ["RECORDED-HISTORY-MODEL"]}),
+    )
+    .await;
+    assert_eq!(persisted_recorded.events.len(), 1);
     reopened.shutdown().await;
 }
 

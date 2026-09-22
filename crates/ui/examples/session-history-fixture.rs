@@ -23,6 +23,8 @@ const TASK_ALPHA: &str = "14141414-1414-4141-8141-141414141414";
 const TASK_COLLISION: &str = "24242424-2424-4242-8242-242424242424";
 const TASK_REMOTE: &str = "34343434-3434-4343-8343-343434343434";
 const REMOTE_DEVICE: &str = "l14-offline-fixture-machine";
+const FIXTURE_ID: &str = "luna-l14-session-history-v1";
+const BUNDLE_ID: &str = "com.novnski.luna.l14-qa";
 
 fn account_config(root: &Path) -> AgentAccountsConfig {
     AgentAccountsConfig {
@@ -97,7 +99,14 @@ fn tool(id: &str, call: ToolCall, failed: bool) -> MessagePart {
 }
 
 async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
-    if !core.workspace.read_chats()?.is_empty() {
+    let existing_chats = core.workspace.read_chats()?;
+    if !existing_chats.is_empty() {
+        for task_id in [TASK_ALPHA, TASK_COLLISION, TASK_REMOTE] {
+            anyhow::ensure!(
+                existing_chats.iter().any(|chat| chat.id == task_id),
+                "existing fixture root is missing required task {task_id}"
+            );
+        }
         return Ok(());
     }
     let alpha_root = root.join("workspaces/duplicate-alpha");
@@ -196,6 +205,41 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
                 },
                 false,
             ),
+            tool(
+                "excluded-command-term",
+                ToolCall::Exec {
+                    command: "echo private-fixture-term".into(),
+                },
+                false,
+            ),
+            tool(
+                "excluded-file-term",
+                ToolCall::ReadFile {
+                    path: alpha_root
+                        .join("private-fixture-term.txt")
+                        .to_string_lossy()
+                        .into_owned(),
+                },
+                false,
+            ),
+            tool(
+                "excluded-app-tool-term",
+                ToolCall::Mcp {
+                    server: "private-fixture-term-app".into(),
+                    tool: "private-fixture-term-tool".into(),
+                    input: None,
+                },
+                false,
+            ),
+            MessagePart::Image {
+                id: "excluded-image-term".into(),
+                path: alpha_root
+                    .join("synthetic-image.png")
+                    .to_string_lossy()
+                    .into_owned(),
+                name: "private-fixture-term.png".into(),
+                mime_type: "image/png".into(),
+            },
             MessagePart::Error {
                 id: "failure".into(),
                 message: "Synthetic retry failed once before recovery".into(),
@@ -213,6 +257,15 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
         &core.device_id,
         1_780_000_002_000,
     ))?;
+    for index in 0..55 {
+        alpha.doc().push_message(&text_entry(
+            &format!("paging-{index:02}"),
+            MessageRole::User,
+            &format!("paging-fixture result {index:02}"),
+            &core.device_id,
+            1_780_000_010_000 + index,
+        ))?;
+    }
 
     for (task_id, message_id, device_id, text, timestamp) in [
         (
@@ -264,10 +317,14 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
         root.join("FIXTURE.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "schemaVersion": 1,
+            "fixtureId": FIXTURE_ID,
+            "bundleIdentifier": BUNDLE_ID,
+            "root": root,
             "tasks": [TASK_ALPHA, TASK_COLLISION, TASK_REMOTE],
             "defaultProject": "fixture-project-alpha",
-            "queries": ["lunar cache", "tool:exec cargo", "app:synthetic-issues", "status:failed retry", "project:fixture-project-beta lunar"],
+            "queries": ["lunar cache", "tool:exec cargo", "app:synthetic-issues", "status:failed retry", "project:fixture-project-beta lunar", "paging-fixture"],
             "withheldQueries": ["private-fixture-term", ".env", "never indexed"],
+            "pagingMatches": 55,
             "remoteTask": TASK_REMOTE,
             "rebuiltEvents": rebuilt.indexed_events,
         }))?,

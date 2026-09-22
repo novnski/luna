@@ -2230,10 +2230,12 @@ fn activity_matches(
         return false;
     }
     if !filters.models.is_empty()
-        && !event
-            .model
-            .as_ref()
-            .is_some_and(|model| filters.models.contains(model))
+        && !event.model.as_ref().is_some_and(|model| {
+            filters
+                .models
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(model))
+        })
     {
         return false;
     }
