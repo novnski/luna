@@ -17,6 +17,7 @@ use zeron_sync::DocsStore;
 
 mod activity_history;
 pub mod agent_accounts;
+pub mod backup;
 mod attention;
 pub mod auth;
 pub mod change_requests;
