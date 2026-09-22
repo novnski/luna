@@ -1167,7 +1167,7 @@ impl Shell {
         let mut summaries = div()
             .id("usage-card-summaries")
             .min_w_0()
-            .max_h(px((self.viewport_height * 0.17).clamp(90.0, 145.0)))
+            .max_h(px((self.viewport_height * 0.21).clamp(100.0, 180.0)))
             .overflow_y_scroll()
             .flex()
             .flex_col()
