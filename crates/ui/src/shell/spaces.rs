@@ -410,6 +410,7 @@ impl Shell {
                 None => {}
             }
         }
+        self.reconcile_session_history_scope(false, cx);
         self.close_spaces_menu(cx);
         self.schedule_save(cx);
         cx.notify();

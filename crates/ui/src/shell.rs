@@ -2253,12 +2253,10 @@ impl Shell {
 
     // ---- splash ----
 
-    fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
-        let engine_generation = state.read(cx).engine_generation();
-        let engine_changed = history_engine_generation_changed(
-            &mut self.history_engine_generation,
-            engine_generation,
-        );
+    fn reconcile_session_history_scope(&mut self, engine_changed: bool, cx: &mut Context<Self>) {
+        // Session history follows the effective search scope rather than the
+        // open task's immutable project. The generation fence owns late pages
+        // whenever that scope changes.
         let current_scope = self
             .current_session_history_request(None, cx)
             .map(|request| HistorySearchScopeKey::from(&request));
@@ -2283,6 +2281,15 @@ impl Shell {
                 self.begin_session_history_search(cx);
             }
         }
+    }
+
+    fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        let engine_generation = state.read(cx).engine_generation();
+        let engine_changed = history_engine_generation_changed(
+            &mut self.history_engine_generation,
+            engine_generation,
+        );
+        self.reconcile_session_history_scope(engine_changed, cx);
         if let Some(notice) = state.update(cx, |state, _| state.take_deep_link_notice()) {
             self.sidebar_notice = Some(notice.into());
         }
@@ -2545,6 +2552,9 @@ impl Shell {
             self.settings.space_filter = None;
             self.schedule_save(cx);
         }
+        // Healing a persisted, deleted filter above changes the effective
+        // Project scope without changing AppState again.
+        self.reconcile_session_history_scope(false, cx);
         // Chat switch: restore THAT chat's panel state (per-session open flags;
         // snap, no tween — the panels belong to the destination chat).
         let selected = state.read(cx).selected_chat.clone().unwrap_or_default();
@@ -7069,8 +7079,17 @@ impl Shell {
         }
         let (selected_project, spaces, devices) = {
             let state = self.state.read(cx);
+            // An explicit sidebar project is the user's search selection even
+            // while an open task keeps its own project context. "All projects"
+            // falls back to that context; Personal maps to projectless. Global
+            // history remains a separate explicit toggle.
+            let selected_project = match self.settings.space_filter.as_deref() {
+                Some(crate::settings::PERSONAL_SPACE_FILTER) => None,
+                Some(space_id) => Some(space_id.to_string()),
+                None => state.selected_space.clone(),
+            };
             (
-                state.selected_space.clone(),
+                selected_project,
                 state.spaces.clone(),
                 state.devices.clone(),
             )
@@ -13581,7 +13600,11 @@ mod exit_regressions {
             let request: HistorySearchRequest = serde_json::from_value(params)
                 .map_err(|error| RpcError::BadParams(error.to_string()))?;
             self.calls.lock().unwrap().push(request.clone());
-            let project_id = request.project_id.as_deref().unwrap_or("global");
+            let project_id = if request.scope == HistorySearchScope::Global {
+                "global"
+            } else {
+                request.project_id.as_deref().unwrap_or("personal")
+            };
             if project_id == "project-a" {
                 self.release_project_a.notified().await;
             }
@@ -13840,6 +13863,7 @@ mod exit_regressions {
         mut done: impl FnMut(&mut TestAppContext) -> bool,
     ) {
         for _ in 0..250 {
+            cx.executor().advance_clock(Duration::from_millis(10));
             cx.run_until_parked();
             runtime.block_on(tokio::task::yield_now());
             if done(cx) {
@@ -13881,6 +13905,12 @@ mod exit_regressions {
                         created_at: Utc::now(),
                     })
                     .collect();
+                let mut alpha_chat = handoff_chat("alpha-chat");
+                alpha_chat.space_id = Some("project-a".into());
+                let mut beta_chat = handoff_chat("beta-chat");
+                beta_chat.space_id = Some("project-b".into());
+                state.chats = vec![alpha_chat, beta_chat];
+                state.selected_chat = Some("alpha-chat".into());
                 state.selected_space = Some("project-a".into());
                 state
             });
@@ -13904,10 +13934,6 @@ mod exit_regressions {
                 shell
                     .history_search_input
                     .update(cx, |input, cx| input.set_text("needle", cx));
-                shell.begin_session_history_search(cx);
-                shell.history_search_task = None;
-                let request = shell.current_session_history_request(None, cx).unwrap();
-                shell.request_session_history_page(request, true, false, cx);
             })
             .unwrap();
         pump_history_until(cx, &runtime, |_| {
@@ -13921,14 +13947,20 @@ mod exit_regressions {
 
         window
             .update(cx, |shell, _, cx| {
-                shell.state.update(cx, |state, cx| {
-                    state.select_space(Some("project-b".into()), cx)
-                });
-                shell.on_state_changed(&shell.state.clone(), cx);
+                shell.set_space_filter(Some("project-b".into()), cx);
+                assert_eq!(
+                    shell.state.read(cx).selected_chat.as_deref(),
+                    Some("alpha-chat"),
+                    "the project picker must not switch or close the open task"
+                );
+                assert_eq!(
+                    shell.state.read(cx).selected_space.as_deref(),
+                    Some("project-a"),
+                    "the open alpha task keeps its own project context"
+                );
+                assert_eq!(shell.settings.space_filter.as_deref(), Some("project-b"));
                 assert!(shell.history_search_results.is_empty());
-                shell.history_search_task = None;
-                let request = shell.current_session_history_request(None, cx).unwrap();
-                shell.request_session_history_page(request, true, false, cx);
+                assert!(shell.history_search_next_cursor.is_none());
             })
             .unwrap();
         pump_history_until(cx, &runtime, |cx| {
@@ -13949,7 +13981,7 @@ mod exit_regressions {
             assert!(shell.history_search_next_cursor.is_some());
         });
 
-        service.release_project_a.notify_waiters();
+        service.release_project_a.notify_one();
         pump_history_until(cx, &runtime, |_| service.calls.lock().unwrap().len() >= 2);
         cx.update(|cx| {
             let shell = window.read(cx).unwrap();
@@ -13962,6 +13994,95 @@ mod exit_regressions {
             );
         });
 
+        window
+            .update(cx, |shell, _, cx| {
+                shell.set_space_filter(Some("project-a".into()), cx);
+                assert!(shell.history_search_results.is_empty());
+                assert!(
+                    shell.history_search_next_cursor.is_none(),
+                    "a picker scope change resets the previous project's paging cursor"
+                );
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |_| service.calls.lock().unwrap().len() >= 3);
+        service.release_project_a.notify_one();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell.history_search_results.len() == 1
+                        && shell.history_search_results[0].project_id.as_deref()
+                            == Some("project-a")
+                })
+            })
+        });
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.history_search_global = true;
+                shell.begin_session_history_search(cx);
+                shell.history_search_task = None;
+                let request = shell.current_session_history_request(None, cx).unwrap();
+                shell.request_session_history_page(request, true, false, cx);
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |_| {
+            service
+                .calls
+                .lock()
+                .unwrap()
+                .last()
+                .is_some_and(|request| request.scope == HistorySearchScope::Global)
+        });
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window
+                    .read(cx)
+                    .is_ok_and(|shell| !shell.history_search_loading)
+            })
+        });
+        cx.update(|cx| {
+            let shell = window.read(cx).unwrap();
+            assert_eq!(shell.history_search_results.len(), 1);
+            assert_eq!(
+                shell.history_search_results[0].project_id.as_deref(),
+                Some("global")
+            );
+        });
+        let global_call_count = service.calls.lock().unwrap().len();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.set_space_filter(Some("project-b".into()), cx);
+                let request = shell.current_session_history_request(None, cx).unwrap();
+                assert_eq!(request.scope, HistorySearchScope::Global);
+                assert_eq!(shell.history_search_results.len(), 1);
+            })
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            service.calls.lock().unwrap().len(),
+            global_call_count,
+            "changing the project picker must not silently narrow explicit global history"
+        );
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.history_search_global = false;
+                shell.begin_session_history_search(cx);
+                shell.history_search_task = None;
+                let request = shell.current_session_history_request(None, cx).unwrap();
+                shell.request_session_history_page(request, true, false, cx);
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window
+                    .read(cx)
+                    .is_ok_and(|shell| shell.history_search_results.len() == 50)
+            })
+        });
         window
             .update(cx, |shell, _, cx| shell.load_more_session_history(cx))
             .unwrap();
@@ -13985,6 +14106,56 @@ mod exit_regressions {
                 60
             );
         });
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell.set_space_filter(None, cx);
+                let request = shell.current_session_history_request(None, cx).unwrap();
+                assert_eq!(request.scope, HistorySearchScope::SelectedProject);
+                assert_eq!(
+                    request.project_id.as_deref(),
+                    Some("project-a"),
+                    "All projects in the picker keeps Project search tied to the open task"
+                );
+            })
+            .unwrap();
+        pump_history_until(cx, &runtime, |_| service.calls.lock().unwrap().len() >= 7);
+        service.release_project_a.notify_one();
+        pump_history_until(cx, &runtime, |cx| {
+            cx.update(|cx| {
+                window.read(cx).is_ok_and(|shell| {
+                    shell.history_search_results.len() == 1
+                        && shell.history_search_results[0].project_id.as_deref()
+                            == Some("project-a")
+                })
+            })
+        });
+
+        window
+            .update(cx, |shell, _, cx| {
+                shell
+                    .history_search_input
+                    .update(cx, |input, cx| input.set_text("", cx));
+                shell.set_space_filter(Some(crate::settings::PERSONAL_SPACE_FILTER.into()), cx);
+                shell
+                    .history_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+                let request = shell.current_session_history_request(None, cx).unwrap();
+                assert_eq!(request.scope, HistorySearchScope::SelectedProject);
+                assert_eq!(
+                    request.project_id, None,
+                    "Personal/no project is a projectless scope, never an implicit global search"
+                );
+
+                shell.history_search_global = true;
+                shell.history_search_input.update(cx, |input, cx| {
+                    input.set_text("needle project:project-b", cx)
+                });
+                let request = shell.current_session_history_request(None, cx).unwrap();
+                assert_eq!(request.scope, HistorySearchScope::SelectedProject);
+                assert_eq!(request.project_id.as_deref(), Some("project-b"));
+            })
+            .unwrap();
     }
 
     fn shell_composer_snapshot(
