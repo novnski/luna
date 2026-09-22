@@ -50,6 +50,10 @@ pub struct GitActionReceipt {
     pub commit_sha: Option<String>,
     pub committed: bool,
     pub pushed: bool,
+    /// The push process ended without a trustworthy exit status; remote state
+    /// must be checked before another push attempt.
+    #[serde(default)]
+    pub push_uncertain: bool,
     pub error: Option<String>,
     pub preview: GitActionPreview,
 }

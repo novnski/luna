@@ -24,6 +24,7 @@ const FILE_COUNT_LIMIT: usize = 500;
 pub struct GitActions {
     repos: Repos,
     lanes: Arc<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>>,
+    push_timeout_seconds: u64,
 }
 
 impl GitActions {
@@ -31,6 +32,7 @@ impl GitActions {
         Self {
             repos,
             lanes: Arc::default(),
+            push_timeout_seconds: 120,
         }
     }
 
@@ -111,6 +113,7 @@ impl GitActions {
         };
         let mut committed = false;
         let mut pushed = false;
+        let mut push_uncertain = false;
         let mut commit_sha = None;
         let mut error = None;
         match request.kind {
@@ -145,7 +148,9 @@ impl GitActions {
                     vec!["restore".to_string(), "--staged".into(), "--".into()]
                 };
                 args.extend(request.paths.iter().map(|path| literal_path(path)));
-                git_mutation(&identity.root, &args, 30).await?;
+                git_mutation(&identity.root, &args, 30)
+                    .await
+                    .map_err(|error| error.to_string())?;
             }
             GitActionKind::Commit | GitActionKind::CommitAndPush => {
                 selected_staged(&before, &request.paths)?;
@@ -172,6 +177,7 @@ impl GitActions {
                             commit_sha: Some(after),
                             committed: false,
                             pushed: false,
+                            push_uncertain: false,
                             error: Some("Commit outcome is uncertain: HEAD changed while Git reported a failure. Inspect the commit before retrying.".into()),
                             preview,
                         });
@@ -188,6 +194,7 @@ impl GitActions {
                             commit_sha: None,
                             committed: true,
                             pushed: false,
+                            push_uncertain: false,
                             error: Some("Commit succeeded, but HEAD could not be read. Refresh before pushing.".into()),
                             preview: before,
                         });
@@ -204,6 +211,7 @@ impl GitActions {
                         commit_sha,
                         committed: true,
                         pushed: false,
+                        push_uncertain: false,
                         error: Some("Commit succeeded, but checkout status could not be refreshed. Refresh before pushing.".into()),
                         preview: before,
                     });
@@ -228,8 +236,16 @@ impl GitActions {
             } else {
                 let refspec = format!("HEAD:refs/heads/{}", before.branch);
                 let args = ["push", "--porcelain", "--", remote, &refspec];
-                match git_mutation(&identity.root, &args, 120).await {
+                match git_mutation(&identity.root, &args, self.push_timeout_seconds).await {
                     Ok(_) => pushed = true,
+                    Err(failure) if failure.push_outcome_uncertain() => {
+                        push_uncertain = true;
+                        error = Some(if committed {
+                            "Commit succeeded; push outcome is uncertain. Check the remote branch before retrying Push.".into()
+                        } else {
+                            "Push outcome is uncertain. Check the remote branch before retrying Push.".into()
+                        });
+                    }
                     Err(_) => {
                         error = Some(if committed {
                             "Commit succeeded; push failed. Retry Push without committing again."
@@ -256,6 +272,7 @@ impl GitActions {
             commit_sha,
             committed,
             pushed,
+            push_uncertain,
             error,
             preview,
         })
@@ -476,7 +493,29 @@ async fn git(root: &Path, args: &[impl AsRef<str>], seconds: u64) -> Result<Vec<
 
 /// Mutation success is the process exit status. Its output may be arbitrarily
 /// verbose and must never turn a completed commit or push into a false failure.
-async fn git_mutation(root: &Path, args: &[impl AsRef<str>], seconds: u64) -> Result<(), String> {
+#[derive(Debug, thiserror::Error)]
+enum GitMutationError {
+    #[error("Could not start Git")]
+    Spawn,
+    #[error("Git action timed out")]
+    TimedOut,
+    #[error("Git process ended without an exit status")]
+    Wait,
+    #[error("Git command failed")]
+    NonZeroExit,
+}
+
+impl GitMutationError {
+    fn push_outcome_uncertain(&self) -> bool {
+        matches!(self, Self::TimedOut | Self::Wait)
+    }
+}
+
+async fn git_mutation(
+    root: &Path,
+    args: &[impl AsRef<str>],
+    seconds: u64,
+) -> Result<(), GitMutationError> {
     let mut command = tokio::process::Command::new("git");
     command
         .arg("-C")
@@ -488,14 +527,15 @@ async fn git_mutation(root: &Path, args: &[impl AsRef<str>], seconds: u64) -> Re
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    let status = tokio::time::timeout(Duration::from_secs(seconds), command.status())
+    let mut child = command.spawn().map_err(|_| GitMutationError::Spawn)?;
+    let status = tokio::time::timeout(Duration::from_secs(seconds), child.wait())
         .await
-        .map_err(|_| "Git action timed out".to_string())?
-        .map_err(|_| "Could not run Git".to_string())?;
+        .map_err(|_| GitMutationError::TimedOut)?
+        .map_err(|_| GitMutationError::Wait)?;
     if status.success() {
         Ok(())
     } else {
-        Err("Git command failed".into())
+        Err(GitMutationError::NonZeroExit)
     }
 }
 
@@ -715,6 +755,7 @@ mod tests {
             .unwrap();
         assert!(receipt.committed);
         assert!(!receipt.pushed);
+        assert!(!receipt.push_uncertain);
         assert!(
             receipt
                 .error
@@ -729,7 +770,84 @@ mod tests {
             .unwrap();
         assert!(!retry.committed);
         assert!(!retry.pushed);
+        assert!(!retry.push_uncertain);
         assert_eq!(git_string(root, &["rev-parse", "HEAD"]).await.unwrap(), sha);
+    }
+
+    #[cfg(unix)]
+    fn install_slow_local_push_hook(root: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let hook = root.join(".git/hooks/pre-push");
+        std::fs::write(&hook, "#!/bin/sh\nsleep 3\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_push_reports_uncertain_remote_outcome() {
+        let (dir, mut service, cwd) = fixture();
+        let root = Path::new(&cwd);
+        let bare = dir.path().join("bare.git");
+        std::fs::create_dir(&bare).unwrap();
+        run(&bare, &["init", "-q", "--bare"]);
+        run(root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        install_slow_local_push_hook(root);
+        service.push_timeout_seconds = 1;
+        let preview = service.preview(&cwd).await.unwrap();
+        let receipt = service
+            .execute(request(&preview, GitActionKind::Push, &[]))
+            .await
+            .unwrap();
+        assert!(!receipt.committed);
+        assert!(!receipt.pushed);
+        assert!(receipt.push_uncertain);
+        assert!(
+            receipt
+                .error
+                .unwrap()
+                .contains("Check the remote branch before retrying")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_combined_push_preserves_commit_success_receipt() {
+        let (dir, mut service, cwd) = fixture();
+        let root = Path::new(&cwd);
+        let bare = dir.path().join("bare.git");
+        std::fs::create_dir(&bare).unwrap();
+        run(&bare, &["init", "-q", "--bare"]);
+        run(root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        install_slow_local_push_hook(root);
+        service.push_timeout_seconds = 1;
+        std::fs::write(root.join("selected.txt"), "selected\n").unwrap();
+        let before = service.preview(&cwd).await.unwrap();
+        let staged = service
+            .execute(request(&before, GitActionKind::Stage, &["selected.txt"]))
+            .await
+            .unwrap()
+            .preview;
+        let receipt = service
+            .execute(request(
+                &staged,
+                GitActionKind::CommitAndPush,
+                &["selected.txt"],
+            ))
+            .await
+            .unwrap();
+        assert!(receipt.committed);
+        assert!(!receipt.pushed);
+        assert!(receipt.push_uncertain);
+        assert_eq!(
+            receipt.commit_sha.as_deref(),
+            Some(receipt.preview.head.as_str())
+        );
+        assert!(
+            receipt
+                .error
+                .unwrap()
+                .contains("Commit succeeded; push outcome is uncertain")
+        );
     }
 
     #[tokio::test]
