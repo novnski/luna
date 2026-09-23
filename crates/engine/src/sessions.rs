@@ -2538,11 +2538,9 @@ impl SessionsEngine {
                     .into(),
             ));
         }
-        // Every accepted dispatched prompt is a turn — routed steer or fresh
-        // run alike. A single-flight rejection above is not a turn.
-        if let Some(checkpoints) = self.git_checkpoints() {
-            checkpoints.start(chat_id, &request.cwd).await;
-        }
+        // The Changes pane's latest-turn view remains an eager best-effort
+        // snapshot. Durable checkpoints start only after a fresh run is ready
+        // or a warm provider confirms its steer boundary.
         self.note_turn_start(chat_id, &request.cwd);
         if let Some((run_id, steerable, same_runtime, steer_tx, ledger)) = routed {
             let user_id = message_id.clone().unwrap_or_else(new_id);
@@ -2780,6 +2778,9 @@ impl SessionsEngine {
                 }),
         };
 
+        if let Some(checkpoints) = self.git_checkpoints() {
+            checkpoints.start(chat_id, &run_id, &request.cwd).await;
+        }
         lock(&self.inner.runs).insert(
             chat_id.to_string(),
             RunHandle {
@@ -6143,6 +6144,15 @@ async fn drive_run(
             if let Some(steer) = confirmed_steer
                 && let Some(host) = inner.doc_host()
             {
+                let turn_cwd = lock(&inner.last_requests)
+                    .get(&chat_id)
+                    .map(|request| request.cwd.clone());
+                if let Some(cwd) = turn_cwd.as_deref()
+                    && let Some(checkpoints) = inner.git_checkpoints.get()
+                {
+                    checkpoints.end(&chat_id, &run_id, "steered").await;
+                    checkpoints.start(&chat_id, &run_id, cwd).await;
+                }
                 if steer.delivery == zeron_harness::SteerDelivery::RequireActiveTurn {
                     let transcript_written = match host.open(&chat_id) {
                         Ok(handle) => handle
@@ -6167,18 +6177,11 @@ async fn drive_run(
                         }
                         continue;
                     }
-                    let turn_cwd = lock(&inner.last_requests)
-                        .get(&chat_id)
-                        .map(|request| request.cwd.clone());
-                    if let Some(cwd) = turn_cwd {
-                        if let Some(checkpoints) = inner.git_checkpoints.get() {
-                            checkpoints.end(&chat_id, "steered").await;
-                            checkpoints.start(&chat_id, &cwd).await;
-                        }
+                    if let Some(cwd) = turn_cwd.as_deref() {
                         SessionsEngine {
                             inner: inner.clone(),
                         }
-                        .note_turn_start(&chat_id, &cwd);
+                        .note_turn_start(&chat_id, cwd);
                     }
                     inner.note_message(&chat_id, &steer.prompt);
                 }
@@ -6471,7 +6474,7 @@ async fn drive_run(
                     DoneStatus::Interrupted => "interrupted",
                     DoneStatus::Errored => "errored",
                 };
-                checkpoints.end(&chat_id, outcome).await;
+                checkpoints.end(&chat_id, &run_id, outcome).await;
             }
             // A question still pending at turn end can never be legitimately
             // answered (its turn is over): drain the resolvers NOW, or a late
@@ -6773,6 +6776,61 @@ mod tests {
 
     struct HoldingJournalHarness {
         release_first_turn: Arc<tokio::sync::Notify>,
+        steer_boundary: Option<Arc<tokio::sync::Notify>>,
+        release_steered_turn: Option<Arc<tokio::sync::Notify>>,
+    }
+
+    async fn scripted_steer(
+        tx: &tokio::sync::mpsc::Sender<
+            Result<zeron_proto::AgentEvent, zeron_harness::HarnessError>,
+        >,
+        mut message: zeron_harness::SteerMessage,
+        token: &zeron_harness::CancellationToken,
+        boundary: Option<&Arc<tokio::sync::Notify>>,
+        release: Option<&Arc<tokio::sync::Notify>>,
+    ) -> bool {
+        if let Some(acceptance) = message.acceptance.take() {
+            let _ = acceptance.send(zeron_harness::SteerAcceptance::Accepted);
+        }
+        if let Some(boundary) = boundary {
+            tokio::select! {
+                _ = boundary.notified() => {}
+                _ = token.cancelled() => return false,
+            }
+        }
+        if tx
+            .send(Ok(zeron_proto::AgentEvent::Steered {
+                assistant_message_id: None,
+                next_assistant_message_id: None,
+            }))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        if tx
+            .send(Ok(zeron_proto::AgentEvent::TextDelta {
+                text: "steered".into(),
+            }))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        if let Some(release) = release {
+            tokio::select! {
+                _ = release.notified() => {}
+                _ = token.cancelled() => return false,
+            }
+        }
+        tx.send(Ok(zeron_proto::AgentEvent::Done {
+            status: zeron_proto::DoneStatus::Completed,
+            result: None,
+            error: None,
+            session_id: Some("synthetic-session".into()),
+        }))
+        .await
+        .is_ok()
     }
 
     #[async_trait::async_trait]
@@ -6808,6 +6866,8 @@ mod tests {
         > {
             let (tx, rx) = tokio::sync::mpsc::channel(16);
             let release = self.release_first_turn.clone();
+            let steer_boundary = self.steer_boundary.clone();
+            let release_steered = self.release_steered_turn.clone();
             let token = controls.interrupt.clone();
             let mut steering = controls.steering;
             tokio::spawn(async move {
@@ -6835,6 +6895,9 @@ mod tests {
                     _ = release.notified() => {
                         if tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Completed, result: None, error: None, session_id: Some("synthetic-session".into()) })).await.is_err() { return; }
                     }
+                    Some(message) = steering.recv() => {
+                        if !scripted_steer(&tx, message, &token, steer_boundary.as_ref(), release_steered.as_ref()).await { return; }
+                    }
                     _ = token.cancelled() => {
                         let _ = tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
                         return;
@@ -6846,10 +6909,8 @@ mod tests {
                             let _ = tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
                             break;
                         }
-                        Some(_) = steering.recv() => {
-                            if tx.send(Ok(zeron_proto::AgentEvent::Steered { assistant_message_id: None, next_assistant_message_id: None })).await.is_err() { break; }
-                            if tx.send(Ok(zeron_proto::AgentEvent::TextDelta { text: "steered".into() })).await.is_err() { break; }
-                            if tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Completed, result: None, error: None, session_id: Some("synthetic-session".into()) })).await.is_err() { break; }
+                        Some(message) = steering.recv() => {
+                            if !scripted_steer(&tx, message, &token, steer_boundary.as_ref(), release_steered.as_ref()).await { break; }
                         }
                     }
                 }
@@ -6865,9 +6926,20 @@ mod tests {
         root: &std::path::Path,
         release: Arc<tokio::sync::Notify>,
     ) -> crate::EngineCore {
+        hermetic_scripted_engine(root, release, None, None)
+    }
+
+    fn hermetic_scripted_engine(
+        root: &std::path::Path,
+        release: Arc<tokio::sync::Notify>,
+        steer_boundary: Option<Arc<tokio::sync::Notify>>,
+        release_steered_turn: Option<Arc<tokio::sync::Notify>>,
+    ) -> crate::EngineCore {
         let registry = Arc::new(crate::registry::HarnessRegistry::new());
         registry.register(Arc::new(HoldingJournalHarness {
             release_first_turn: release,
+            steer_boundary,
+            release_steered_turn,
         }));
         let data = root.join("synthetic-engine");
         let accounts = crate::agent_accounts::AgentAccountsConfig {
@@ -6911,6 +6983,336 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    fn fixture_git(root: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn checkpoint_repo(root: &std::path::Path) -> String {
+        let path = root.join("synthetic-workspace");
+        std::fs::create_dir_all(&path).unwrap();
+        fixture_git(&path, &["init", "-q", "-b", "main"]);
+        fixture_git(&path, &["config", "user.name", "LUNA Fixture"]);
+        fixture_git(&path, &["config", "user.email", "fixture@example.invalid"]);
+        std::fs::write(path.join("base.txt"), "base\n").unwrap();
+        fixture_git(&path, &["add", "base.txt"]);
+        fixture_git(&path, &["commit", "-q", "-m", "base"]);
+        path.to_string_lossy().into_owned()
+    }
+
+    async fn checkpoint_rows(
+        checkpoints: &crate::git_checkpoints::GitCheckpoints,
+        cwd: &str,
+        count: usize,
+        finished: usize,
+    ) -> Vec<zeron_proto::GitCheckpoint> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let rows = checkpoints
+                    .list("journal-chat", cwd, false)
+                    .await
+                    .unwrap()
+                    .checkpoints;
+                if rows.len() == count
+                    && rows.iter().filter(|row| row.after_available).count() == finished
+                {
+                    return rows;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn git_checkpoint_fresh_and_warm_turns_follow_confirmed_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = checkpoint_repo(root.path());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let boundary = Arc::new(tokio::sync::Notify::new());
+        let release_next = Arc::new(tokio::sync::Notify::new());
+        let core = hermetic_scripted_engine(
+            root.path(),
+            release_first.clone(),
+            Some(boundary.clone()),
+            Some(release_next.clone()),
+        );
+        let checkpoints = core.sessions.git_checkpoints().unwrap().clone();
+        let (_, mut live) = core.sessions.subscribe("journal-chat", 0).unwrap();
+        let first = core
+            .sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "first"),
+                None,
+            )
+            .await
+            .unwrap();
+        journal_event(
+            &mut live,
+            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+        )
+        .await;
+        std::fs::write(std::path::Path::new(&cwd).join("first.txt"), "first\n").unwrap();
+        release_first.notify_one();
+        journal_event(&mut live, |event| {
+            matches!(
+                event,
+                zeron_proto::AgentEvent::Done {
+                    status: zeron_proto::DoneStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .await;
+        let first_rows = checkpoint_rows(&checkpoints, &cwd, 1, 1).await;
+        assert_eq!(first_rows[0].outcome.as_deref(), Some("completed"));
+        let warm = core
+            .sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "warm"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(warm, first);
+        assert_eq!(
+            checkpoint_rows(&checkpoints, &cwd, 1, 1).await.len(),
+            1,
+            "mailbox acceptance must not create a pre-boundary checkpoint"
+        );
+        boundary.notify_one();
+        journal_event(&mut live, |event| {
+            matches!(event, zeron_proto::AgentEvent::Steered { .. })
+        })
+        .await;
+        let rows = checkpoint_rows(&checkpoints, &cwd, 2, 1).await;
+        assert!(
+            rows.iter()
+                .any(|row| row.outcome.as_deref() == Some("in progress"))
+        );
+        std::fs::write(std::path::Path::new(&cwd).join("warm.txt"), "warm\n").unwrap();
+        release_next.notify_one();
+        journal_event(&mut live, |event| {
+            matches!(
+                event,
+                zeron_proto::AgentEvent::Done {
+                    status: zeron_proto::DoneStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .await;
+        let rows = checkpoint_rows(&checkpoints, &cwd, 2, 2).await;
+        let first_diff = checkpoints
+            .diff("journal-chat", &cwd, &first_rows[0].turn_id)
+            .await
+            .unwrap();
+        let warm_row = rows
+            .iter()
+            .find(|row| row.turn_id != first_rows[0].turn_id)
+            .unwrap();
+        let warm_diff = checkpoints
+            .diff("journal-chat", &cwd, &warm_row.turn_id)
+            .await
+            .unwrap();
+        assert_eq!(first_diff.paths, ["first.txt"]);
+        assert_eq!(warm_diff.paths, ["warm.txt"]);
+        assert!(
+            rows.iter()
+                .all(|row| row.outcome.as_deref() == Some("completed") && row.error.is_none())
+        );
+        core.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn git_checkpoint_replacement_done_cannot_close_new_run() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = checkpoint_repo(root.path());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let core = hermetic_journal_engine(root.path(), release.clone());
+        let checkpoints = core.sessions.git_checkpoints().unwrap().clone();
+        let (_, mut live) = core.sessions.subscribe("journal-chat", 0).unwrap();
+        let old_run = core
+            .sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "old"),
+                None,
+            )
+            .await
+            .unwrap();
+        journal_event(
+            &mut live,
+            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+        )
+        .await;
+        std::fs::write(std::path::Path::new(&cwd).join("old.txt"), "old\n").unwrap();
+        let mut replacement = synthetic_journal_request(root.path(), "replacement");
+        replacement.model = Some("changed-model".into());
+        let new_run = core
+            .sessions
+            .dispatch("journal-chat", HarnessId::Mock, replacement, None)
+            .await
+            .unwrap();
+        assert_ne!(old_run, new_run);
+        let rows = checkpoint_rows(&checkpoints, &cwd, 2, 1).await;
+        let old = rows
+            .iter()
+            .find(|row| row.outcome.as_deref() == Some("interrupted"))
+            .unwrap();
+        assert!(old.before_available && old.after_available);
+        let new = rows
+            .iter()
+            .find(|row| row.outcome.as_deref() == Some("in progress"))
+            .unwrap();
+        assert!(new.before_available && !new.after_available);
+        std::fs::write(std::path::Path::new(&cwd).join("new.txt"), "new\n").unwrap();
+        release.notify_one();
+        journal_event(&mut live, |event| {
+            matches!(
+                event,
+                zeron_proto::AgentEvent::Done {
+                    status: zeron_proto::DoneStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .await;
+        let rows = checkpoint_rows(&checkpoints, &cwd, 2, 2).await;
+        let old_diff = checkpoints
+            .diff("journal-chat", &cwd, &old.turn_id)
+            .await
+            .unwrap();
+        let new_diff = checkpoints
+            .diff("journal-chat", &cwd, &new.turn_id)
+            .await
+            .unwrap();
+        assert_eq!(old_diff.paths, ["old.txt"]);
+        assert_eq!(new_diff.paths, ["new.txt"]);
+        assert!(
+            rows.iter().any(
+                |row| row.turn_id == new.turn_id && row.outcome.as_deref() == Some("completed")
+            )
+        );
+        core.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn git_checkpoint_explicit_steer_and_rejected_dispatch_keep_turns_distinct() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = checkpoint_repo(root.path());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let boundary = Arc::new(tokio::sync::Notify::new());
+        let release_next = Arc::new(tokio::sync::Notify::new());
+        let core = hermetic_scripted_engine(
+            root.path(),
+            release_first,
+            Some(boundary.clone()),
+            Some(release_next.clone()),
+        );
+        let checkpoints = core.sessions.git_checkpoints().unwrap().clone();
+        let (_, mut live) = core.sessions.subscribe("journal-chat", 0).unwrap();
+        core.sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "first"),
+                None,
+            )
+            .await
+            .unwrap();
+        journal_event(
+            &mut live,
+            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+        )
+        .await;
+        std::fs::write(std::path::Path::new(&cwd).join("pre.txt"), "pre\n").unwrap();
+        assert_eq!(
+            core.sessions
+                .steer("journal-chat", "explicit", None)
+                .await
+                .unwrap(),
+            super::SteerOutcome::Accepted
+        );
+        let rejected = core
+            .sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "rejected while steer pending"),
+                None,
+            )
+            .await;
+        assert!(rejected.is_err());
+        assert_eq!(checkpoint_rows(&checkpoints, &cwd, 1, 0).await.len(), 1);
+        boundary.notify_one();
+        journal_event(&mut live, |event| {
+            matches!(event, zeron_proto::AgentEvent::Steered { .. })
+        })
+        .await;
+        let rows = checkpoint_rows(&checkpoints, &cwd, 2, 1).await;
+        let prior = rows
+            .iter()
+            .find(|row| row.outcome.as_deref() == Some("steered"))
+            .unwrap();
+        let current = rows
+            .iter()
+            .find(|row| row.outcome.as_deref() == Some("in progress"))
+            .unwrap();
+        std::fs::write(
+            std::path::Path::new(&cwd).join("explicit.txt"),
+            "explicit\n",
+        )
+        .unwrap();
+        release_next.notify_one();
+        journal_event(&mut live, |event| {
+            matches!(
+                event,
+                zeron_proto::AgentEvent::Done {
+                    status: zeron_proto::DoneStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .await;
+        let rows = checkpoint_rows(&checkpoints, &cwd, 2, 2).await;
+        assert_eq!(
+            checkpoints
+                .diff("journal-chat", &cwd, &prior.turn_id)
+                .await
+                .unwrap()
+                .paths,
+            ["pre.txt"]
+        );
+        assert_eq!(
+            checkpoints
+                .diff("journal-chat", &cwd, &current.turn_id)
+                .await
+                .unwrap()
+                .paths,
+            ["explicit.txt"]
+        );
+        assert!(rows.iter().any(
+            |row| row.turn_id == current.turn_id && row.outcome.as_deref() == Some("completed")
+        ));
+        core.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

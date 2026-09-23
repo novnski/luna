@@ -1,7 +1,7 @@
 //! Git-backed file checkpoints for local tasks. Private refs contain observed
 //! worktree trees; the user's branch and index are never used as capture output.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ const MAX_PATHS: usize = 500;
 pub struct GitCheckpoints {
     repos: Repos,
     actions: GitActions,
-    active: Arc<Mutex<HashMap<String, ActiveTurn>>>,
+    active: Arc<Mutex<HashMap<(String, String), ActiveTurn>>>,
     failures: Arc<Mutex<HashMap<String, Vec<GitCheckpoint>>>>,
 }
 
@@ -60,27 +60,22 @@ impl GitCheckpoints {
         self.actions.clone()
     }
 
-    /// Called before handing an accepted turn to the provider. A capture
-    /// failure is recorded, never mistaken for a successful baseline.
-    pub async fn start(&self, chat_id: &str, cwd: &str) {
+    /// Called before a fresh run starts or when a warm provider confirms its
+    /// next turn boundary. A failed capture never becomes a baseline.
+    pub async fn start(&self, chat_id: &str, run_id: &str, cwd: &str) {
         let turn = ActiveTurn {
             cwd: cwd.into(),
             turn_id: format!("{:016x}{}", crate::now_ms(), uuid::Uuid::new_v4().simple()),
             started_at_ms: crate::now_ms(),
             start_error: None,
         };
-        let prior = self
-            .active
-            .lock()
-            .unwrap()
-            .insert(chat_id.into(), turn.clone());
-        if let Some(prior) = prior {
-            self.record_failure(
-                chat_id,
-                &prior,
-                "Turn ended without a completion checkpoint".into(),
-                None,
-            );
+        let key = (chat_id.to_owned(), run_id.to_owned());
+        {
+            let mut active = self.active.lock().unwrap();
+            if active.contains_key(&key) {
+                return; // a repeated boundary cannot replace the current run's baseline
+            }
+            active.insert(key.clone(), turn.clone());
         }
         if let Err(error) = self
             .capture(chat_id, &turn.turn_id, cwd, "before", "started")
@@ -88,7 +83,7 @@ impl GitCheckpoints {
         {
             let mut active = self.active.lock().unwrap();
             if let Some(current) = active
-                .get_mut(chat_id)
+                .get_mut(&key)
                 .filter(|current| current.turn_id == turn.turn_id)
             {
                 current.start_error = Some(error.clone());
@@ -101,8 +96,12 @@ impl GitCheckpoints {
 
     /// Authoritative Done, including interruption and error. No provider
     /// rewind or message mutation is coupled to this file snapshot.
-    pub async fn end(&self, chat_id: &str, outcome: &str) {
-        let turn = self.active.lock().unwrap().remove(chat_id);
+    pub async fn end(&self, chat_id: &str, run_id: &str, outcome: &str) {
+        let turn = self
+            .active
+            .lock()
+            .unwrap()
+            .remove(&(chat_id.to_owned(), run_id.to_owned()));
         let Some(turn) = turn else { return };
         if let Err(error) = self
             .capture(chat_id, &turn.turn_id, &turn.cwd, "after", outcome)
@@ -311,12 +310,14 @@ impl GitCheckpoints {
         let identity = self.identity(cwd).await?;
         let _guard = self.actions.lane(&identity.root).lock_owned().await;
         let refs = self.refs_locked(&identity.root, chat_id).await?;
-        let active_turn = self
+        let active_turns: HashSet<_> = self
             .active
             .lock()
             .unwrap()
-            .get(chat_id)
-            .map(|turn| turn.turn_id.clone());
+            .iter()
+            .filter(|((task, _), _)| task == chat_id)
+            .map(|(_, turn)| turn.turn_id.clone())
+            .collect();
         let mut rows = Vec::new();
         for (turn_id, (before, after)) in refs.into_iter().rev().take(MAX_TURNS) {
             let before = if before {
@@ -346,7 +347,7 @@ impl GitCheckpoints {
                     .and_then(|point| point.outcome.clone())
                     .or_else(|| {
                         Some(
-                            if active_turn.as_deref() == Some(turn_id.as_str()) {
+                            if active_turns.contains(&turn_id) {
                                 "in progress"
                             } else {
                                 "completion unavailable"
@@ -639,6 +640,12 @@ impl GitCheckpoints {
             .await
         {
             return Err(reason);
+        }
+        if self.identity(&request.cwd).await? != identity {
+            return Err(
+                "Checkout identity changed during restore preparation; no files were restored"
+                    .into(),
+            );
         }
         let fresh_work = self.current_tree(&identity).await?;
         let fresh_index = git_text(&identity.root, &["write-tree"], None).await?;
@@ -996,11 +1003,11 @@ mod tests {
         std::fs::write(worktree.join("unstaged.txt"), "before\n").unwrap();
         std::fs::write(worktree.join("untracked.txt"), "before\n").unwrap();
         let original_status = run(&worktree, &["status", "--porcelain"]);
-        service.start("task", cwd).await;
+        service.start("task", "fixture-run", cwd).await;
         assert_eq!(run(&worktree, &["status", "--porcelain"]), original_status);
         std::fs::write(worktree.join("unstaged.txt"), "after\n").unwrap();
         std::fs::write(worktree.join("untracked.txt"), "after\n").unwrap();
-        service.end("task", "interrupted").await;
+        service.end("task", "fixture-run", "interrupted").await;
         let list = service.list("task", cwd, false).await.unwrap();
         let row = &list.checkpoints[0];
         assert!(row.before_available && row.after_available, "{row:?}");
@@ -1159,8 +1166,8 @@ mod tests {
         let (_dir, service, _shared, worktree) = fixture();
         run(&worktree, &["config", "core.sparseCheckout", "true"]);
         let cwd = worktree.to_str().unwrap();
-        service.start("task", cwd).await;
-        service.end("task", "errored").await;
+        service.start("task", "fixture-run", cwd).await;
+        service.end("task", "fixture-run", "errored").await;
         let row = service
             .list("task", cwd, false)
             .await
@@ -1169,5 +1176,42 @@ mod tests {
             .remove(0);
         assert!(!row.before_available && !row.after_available);
         assert!(row.error.unwrap().contains("Sparse checkouts"));
+    }
+
+    #[tokio::test]
+    async fn late_done_only_closes_its_own_run() {
+        let (_dir, service, _shared, worktree) = fixture();
+        let cwd = worktree.to_str().unwrap();
+        service.start("task", "old-run", cwd).await;
+        std::fs::write(worktree.join("old.txt"), "old\n").unwrap();
+        service.start("task", "new-run", cwd).await;
+        service.end("task", "old-run", "interrupted").await;
+        let rows = service.list("task", cwd, false).await.unwrap().checkpoints;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.iter().filter(|row| row.after_available).count(), 1);
+        let new = rows
+            .iter()
+            .find(|row| row.outcome.as_deref() == Some("in progress"))
+            .unwrap();
+        assert!(new.before_available && !new.after_available);
+        std::fs::write(worktree.join("new.txt"), "new\n").unwrap();
+        service.end("task", "new-run", "completed").await;
+        let rows = service.list("task", cwd, false).await.unwrap().checkpoints;
+        let old = rows
+            .iter()
+            .find(|row| row.outcome.as_deref() == Some("interrupted"))
+            .unwrap();
+        let new = rows
+            .iter()
+            .find(|row| row.outcome.as_deref() == Some("completed"))
+            .unwrap();
+        assert_eq!(
+            service.diff("task", cwd, &old.turn_id).await.unwrap().paths,
+            ["old.txt"]
+        );
+        assert_eq!(
+            service.diff("task", cwd, &new.turn_id).await.unwrap().paths,
+            ["new.txt"]
+        );
     }
 }
