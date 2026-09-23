@@ -351,6 +351,26 @@ impl LocalImporter {
 
     /// What's importable right now (target-dedup applied).
     pub fn status(&self) -> Result<LocalImportStatus, EngineError> {
+        // This read can quarantine a corrupt marker and DocsStore::open can
+        // migrate the source SQLite schema. Hold admission through both and
+        // the target-dedup reads; a freeze must not interleave those writes.
+        let _permit = self
+            .inner
+            .write_handle
+            .as_ref()
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(|error| {
+                use zeron_sync::write_epoch::EpochError;
+                let detail = match error {
+                    EpochError::Busy => "backup snapshot in progress; retry after it finishes",
+                    EpochError::Retired => "engine writer retired; retry after engine restart",
+                    _ => "device writer unavailable; retry after engine restart",
+                };
+                EngineError::Other(format!(
+                    "local import status unavailable ({error:?}): {detail}"
+                ))
+            })?;
         let imported_before = self.imported_before();
         let Some((_, registry)) = self.open_source()? else {
             return Ok(LocalImportStatus {
@@ -544,8 +564,140 @@ impl LocalImporter {
 #[cfg(test)]
 mod tests {
     use super::{ImportEvent, LocalImporter};
-    use crate::{InstanceLock, device_write::DeviceWriteOwner};
+    use crate::{
+        InstanceLock,
+        device_write::DeviceWriteOwner,
+        uploads::Uploads,
+        workspace_host::{WorkspaceHost, WorkspaceHostConfig},
+    };
+    use std::sync::Arc;
     use std::time::Duration;
+    use zeron_sync::DocsStore;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_blocks_marker_quarantine_and_source_migration_until_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let source_root = root.path().join("profiles/local");
+        std::fs::create_dir_all(&source_root).unwrap();
+        let source_db = source_root.join("docs.sqlite3");
+        {
+            let connection = rusqlite::Connection::open(&source_db).unwrap();
+            connection
+                .execute_batch("CREATE TABLE seed (id INTEGER PRIMARY KEY) STRICT")
+                .unwrap();
+        }
+        let marker = root.path().join("local-import.json");
+        let corrupt_marker = b"{invalid synthetic marker";
+        std::fs::write(&marker, corrupt_marker).unwrap();
+        let marker_aside = root.path().join("local-import.json.corrupt");
+        let source_before = std::fs::read(&source_db).unwrap();
+        let source_files_before: Vec<_> = std::fs::read_dir(&source_root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+
+        let target_root = root.path().join("orgs/synthetic-org/synthetic-user");
+        let target_store = Arc::new(DocsStore::open(&target_root).unwrap());
+        let workspace = WorkspaceHost::open(
+            target_store.clone(),
+            WorkspaceHostConfig {
+                device_id: "synthetic-device".into(),
+                device_name: "Synthetic device".into(),
+                platform: "test".into(),
+                org_id: "synthetic-org".into(),
+                user_id: "synthetic-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let uploads = Uploads::from_root(&target_root.join("uploads"));
+        let target_journals = target_root.join("journals");
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let importer = LocalImporter::new_guarded(
+            root.path(),
+            "synthetic-device",
+            "synthetic-org",
+            "synthetic-user",
+            target_store.clone(),
+            target_journals.clone(),
+            workspace.clone(),
+            uploads.clone(),
+            owner.handle(),
+        );
+
+        let assert_source_unchanged = || {
+            assert_eq!(std::fs::read(&marker).unwrap(), corrupt_marker);
+            assert!(!marker_aside.exists());
+            assert_eq!(std::fs::read(&source_db).unwrap(), source_before);
+            let source_files: Vec<_> = std::fs::read_dir(&source_root)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(source_files, source_files_before);
+        };
+
+        let snapshot = owner
+            .epoch_for_tests()
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let busy = importer.status().unwrap_err().to_string();
+        assert!(busy.contains("Busy") && busy.contains("retry"), "{busy}");
+        assert_source_unchanged();
+        drop(snapshot);
+
+        owner.retire();
+        let retired = importer.status().unwrap_err().to_string();
+        assert!(
+            retired.contains("Retired") && retired.contains("retry"),
+            "{retired}"
+        );
+        assert_source_unchanged();
+        drop(owner);
+
+        let replacement =
+            DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+                .unwrap();
+        let restarted = LocalImporter::new_guarded(
+            root.path(),
+            "synthetic-device",
+            "synthetic-org",
+            "synthetic-user",
+            target_store,
+            target_journals,
+            workspace,
+            uploads,
+            replacement.handle(),
+        );
+        let replacement_snapshot = replacement
+            .epoch_for_tests()
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let busy = restarted.status().unwrap_err().to_string();
+        assert!(busy.contains("Busy") && busy.contains("retry"), "{busy}");
+        assert_source_unchanged();
+        drop(replacement_snapshot);
+
+        let status = restarted.status().unwrap();
+        assert_eq!(status.available_chats, 0);
+        assert_eq!(status.available_spaces, 0);
+        assert!(!status.imported_before);
+        assert!(!marker.exists());
+        assert_eq!(std::fs::read(&marker_aside).unwrap(), corrupt_marker);
+        let connection = rusqlite::Connection::open(&source_db).unwrap();
+        let migrations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(migrations > 0);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn journal_import_waits_for_same_freeze_and_retries_after_restart() {
