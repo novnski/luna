@@ -206,6 +206,32 @@ tid=$(rid "$turnline")
 
 case "$turnline" in
 
+*scenario:runtime-contract-resume*)
+  has "$thread_line" '"developerInstructions"' || { fail_turn "$tid" "LUNA instructions missing on resume"; exit 0; }
+  if has "$thread_line" '"dynamicTools"'; then fail_turn "$tid" "resume must not replace dynamic tools"; exit 0; fi
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-runtime-resume\"}}}"
+  emit '{"method":"turn/completed","params":{"threadId":"th-resumed","turn":{"id":"t-runtime-resume","status":"completed"}}}'
+  ;;
+
+*scenario:runtime-contract*)
+  [ "$LUNA_THREAD_ID" = 'thread-a' ] || { fail_turn "$tid" "LUNA thread environment missing"; exit 0; }
+  has "$thread_line" '"developerInstructions"' || { fail_turn "$tid" "LUNA instructions missing"; exit 0; }
+  has "$thread_line" '"dynamicTools"' || { fail_turn "$tid" "LUNA dynamic tools missing"; exit 0; }
+  has "$thread_line" '"name":"luna_status"' || { fail_turn "$tid" "status tool missing"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-runtime\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-runtime"}}}'
+  emit '{"method":"item/tool/call","id":59,"params":{"threadId":"foreign-thread","turnId":"t-runtime","callId":"call-foreign","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "foreign task tool call was not denied"; exit 0; }
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"dynamicToolCall","tool":"luna_status","arguments":{},"status":"inProgress"}}}'
+  emit '{"method":"item/tool/call","id":60,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-runtime","tool":"luna_status","arguments":{}}}'
+  read -r tool_response || exit 1
+  has "$tool_response" '"success":true' || { fail_turn "$tid" "LUNA status call failed"; exit 0; }
+  has "$tool_response" 'thread-a' || { fail_turn "$tid" "LUNA status response wrong"; exit 0; }
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"dynamicToolCall","tool":"luna_status","arguments":{},"status":"completed","success":true}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-runtime","status":"completed"}}}'
+  ;;
+
 *scenario:context-config-start*)
   cp "$CODEX_HOME/config.toml" "$CODEX_HOME/ordinary-start-config-observed"
   pwd > "$CODEX_HOME/ordinary-start-cwd"

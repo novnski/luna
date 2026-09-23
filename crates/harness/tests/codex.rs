@@ -85,6 +85,7 @@ fn controls(
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        invoke_luna_tool: None,
     };
     (controls, steer_tx, token)
 }
@@ -101,6 +102,157 @@ async fn run_to_end(
     )
     .await
     .expect("run finished in time")
+}
+
+fn synthetic_runtime_contract() -> zeron_proto::LunaAgentRuntimeContract {
+    use zeron_proto::{
+        LunaAgentRuntimeContract, RuntimeContext, RuntimeDelivery, RuntimeInstructionSection,
+        RuntimeInstructionSource, RuntimeToolDefinition,
+    };
+    LunaAgentRuntimeContract {
+        version: 1,
+        content_hash: "synthetic-contract-hash".into(),
+        context: RuntimeContext {
+            app_version: "test".into(),
+            protocol_version: 1,
+            thread_id: "thread-a".into(),
+            parent_thread_id: None,
+            source_thread_id: None,
+            project_id: None,
+            project_name: None,
+            environment_id: "environment-a".into(),
+            machine_id: "machine-a".into(),
+            machine_name: "machine-a".into(),
+            workspace_root: "/synthetic".into(),
+            worktree_id: None,
+            binding_generation: Some(1),
+            provider_profile_id: Some("synthetic-profile".into()),
+            branch: None,
+            harness: HarnessId::Codex,
+            model: None,
+            reasoning: None,
+            execution_route: "local".into(),
+            granted_scopes: Vec::new(),
+        },
+        environment: std::collections::BTreeMap::from([
+            ("LUNA_THREAD_ID".into(), "thread-a".into()),
+            ("LUNA_ENVIRONMENT_ID".into(), "environment-a".into()),
+            ("LUNA_MACHINE_ID".into(), "machine-a".into()),
+        ]),
+        local_endpoints: Vec::new(),
+        instructions: vec![RuntimeInstructionSection {
+            name: "LUNA core".into(),
+            source: RuntimeInstructionSource::LunaCore,
+            provenance: "synthetic fixture".into(),
+            text: "Run inside LUNA.".into(),
+        }],
+        tools: vec![RuntimeToolDefinition {
+            name: "luna_status".into(),
+            version: 1,
+            description: "Read this task's status.".into(),
+            input_schema: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+            output_schema: serde_json::json!({"type":"object"}),
+            required_scopes: Vec::new(),
+            deadline_ms: 2_000,
+            idempotency: "read-only".into(),
+            presentation: "status".into(),
+            activity_classification: "status".into(),
+        }],
+        omitted_tools: Vec::new(),
+        delivery: RuntimeDelivery::CodexDynamicTools,
+    }
+}
+
+#[tokio::test]
+async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
+    let home = tempfile::tempdir().unwrap();
+    let mut req = request("scenario:runtime-contract");
+    req.model_options.insert(
+        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        home.path().to_str().unwrap().into(),
+    );
+    req.model_options.insert(
+        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        serde_json::to_value(synthetic_runtime_contract()).unwrap(),
+    );
+    let (mut run_controls, _steer, _token) = controls("Yes");
+    run_controls.invoke_luna_tool = Some(Arc::new(|name, arguments| {
+        Box::pin(async move {
+            if name != "luna_status" || arguments != serde_json::json!({}) {
+                return Err(HarnessError::Protocol("unexpected tool request".into()));
+            }
+            Ok(serde_json::json!({"threadId":"thread-a"}))
+        })
+    }));
+    let events = run_to_end(&harness(), req, run_controls).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(event,
+            AgentEvent::ToolCall { id, call: ToolCall::Mcp { server, tool, .. } }
+            if id == "item-runtime" && server == "luna" && tool == "luna_status"
+        )),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(event,
+            AgentEvent::ToolResult { id, is_error: false, .. } if id == "item-runtime"
+        )),
+        "{events:?}"
+    );
+
+    let mut resume = request("scenario:runtime-contract-resume");
+    resume.resume = Some("synthetic-resume".into());
+    resume.model_options.insert(
+        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        home.path().to_str().unwrap().into(),
+    );
+    resume.model_options.insert(
+        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        serde_json::to_value(synthetic_runtime_contract()).unwrap(),
+    );
+    let (mut resume_controls, _steer, _token) = controls("Yes");
+    resume_controls.invoke_luna_tool = Some(Arc::new(|_, _| {
+        Box::pin(async { Ok(serde_json::json!({})) })
+    }));
+    let events = run_to_end(&harness(), resume, resume_controls).await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn declared_luna_tools_without_engine_handler_fail_before_provider_start() {
+    let home = tempfile::tempdir().unwrap();
+    let mut req = request("synthetic-no-handler");
+    req.model_options.insert(
+        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        home.path().to_str().unwrap().into(),
+    );
+    req.model_options.insert(
+        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        serde_json::to_value(synthetic_runtime_contract()).unwrap(),
+    );
+    let (controls, _steer, _token) = controls("Yes");
+    let result = harness().run(req, controls).await;
+    assert!(
+        matches!(result, Err(HarnessError::Protocol(message)) if message.contains("no matching engine executor"))
+    );
 }
 
 #[tokio::test]
@@ -1158,6 +1310,7 @@ async fn approvals_round_trip_as_input_requests() {
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        invoke_luna_tool: None,
     };
     let mut req = request("scenario:approve");
     req.auto_approve = false;

@@ -74,6 +74,7 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        invoke_luna_tool: None,
     };
     (controls, steer_tx, token)
 }
@@ -275,6 +276,7 @@ async fn permission_requests_require_typed_one_shot_approval() {
         }),
         steering: steer_rx,
         interrupt: token.clone(),
+        invoke_luna_tool: None,
     };
     let events = run_to_end(&harness(), request("scenario:permission"), controls).await;
     drop(steer_tx);

@@ -451,6 +451,84 @@ impl SessionsEngine {
             .map(|binding| binding.generation)
     }
 
+    pub fn runtime_contract_diagnostics(
+        &self,
+        chat_id: &str,
+        provider_session_id: &str,
+    ) -> Result<Option<zeron_proto::RuntimeContractDiagnostics>, EngineError> {
+        Ok(self
+            .inner
+            .journal
+            .runtime_contract(chat_id, provider_session_id)?)
+    }
+
+    pub(crate) fn runtime_context_for(
+        &self,
+        chat_id: &str,
+        harness: HarnessId,
+        request: &RunRequest,
+    ) -> Result<zeron_proto::RuntimeContext, EngineError> {
+        let workspace = self.inner.workspace().ok_or_else(|| {
+            EngineError::Other("LUNA runtime requires an authoritative workspace host".into())
+        })?;
+        let chat = workspace.chat(chat_id)?;
+        let space = chat
+            .as_ref()
+            .and_then(|chat| chat.space_id.as_deref())
+            .map(|id| workspace.space(id))
+            .transpose()?
+            .flatten();
+        let identity = self
+            .inner
+            .task_identity
+            .get()
+            .and_then(|service| service.view(chat_id));
+        let binding = identity
+            .as_ref()
+            .and_then(|view| view.current_binding.as_ref());
+        let machine_id = workspace.device_id().to_string();
+        let machine_name = workspace
+            .read_devices()?
+            .into_iter()
+            .find(|device| device.id == machine_id)
+            .map(|device| device.name)
+            .unwrap_or_else(|| machine_id.clone());
+        Ok(zeron_proto::RuntimeContext {
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            protocol_version: 1,
+            thread_id: chat_id.into(),
+            parent_thread_id: identity
+                .as_ref()
+                .and_then(|view| view.task.lineage.parent_task_id.clone()),
+            source_thread_id: identity
+                .as_ref()
+                .and_then(|view| view.task.lineage.source_task_id.clone()),
+            project_id: space.as_ref().map(|space| space.id.clone()),
+            project_name: space.as_ref().map(|space| space.display_name().to_string()),
+            environment_id: identity
+                .as_ref()
+                .map(|view| view.workspace.environment_id.clone())
+                .unwrap_or_else(|| machine_id.clone()),
+            machine_id,
+            machine_name,
+            workspace_root: space
+                .as_ref()
+                .map(|space| space.path.clone())
+                .unwrap_or_else(|| request.cwd.clone()),
+            worktree_id: binding.and_then(|binding| binding.worktree_id.clone()),
+            binding_generation: binding.map(|binding| binding.generation),
+            provider_profile_id: binding.and_then(|binding| binding.provider_profile_id.clone()),
+            branch: chat.and_then(|chat| chat.branch),
+            harness,
+            model: request.model.clone(),
+            reasoning: request.reasoning,
+            execution_route: "local".into(),
+            // L23 has no cross-task authorization grant issuance. L25 must
+            // populate this from verified caller scopes before adding tools.
+            granted_scopes: Vec::new(),
+        })
+    }
+
     /// Whether this harness takes a prompt *during* a turn, rather than only at
     /// the boundary between turns. The queue drain's central question: a
     /// mid-turn agent gets the message now, everything else holds it until the
@@ -828,6 +906,12 @@ impl SessionsEngine {
         let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
+        // Runtime contracts are host authority, never client-provided model
+        // options. Strip even a syntactically valid forged contract before any
+        // request snapshot, recovery record, or provider dispatch.
+        request
+            .model_options
+            .remove(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION);
         let context_control = self.doc_handle(chat_id)?.doc().context_control();
         if context_control.compact.blocks_new_turn() {
             return Err(EngineError::Other(
@@ -954,6 +1038,54 @@ impl SessionsEngine {
                 &request.cwd,
                 explicit_resume,
             )?;
+        }
+        if matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode)
+            && self.inner.task_identity.get().is_some()
+        {
+            let known_session_id = self
+                .inner
+                .task_identity
+                .get()
+                .and_then(|identity| identity.view(chat_id))
+                .and_then(|view| view.current_binding)
+                .and_then(|binding| {
+                    (!binding.provider_task_id.is_empty()).then_some(binding.provider_task_id)
+                })
+                .or_else(|| self.inner.resume_for(chat_id, &request.cwd));
+            let prior = known_session_id
+                .as_deref()
+                .map(|session_id| self.inner.journal.runtime_contract(chat_id, session_id))
+                .transpose()?
+                .flatten();
+            let context = self.runtime_context_for(chat_id, harness_id, &request)?;
+            let provider_delivery = self
+                .inner
+                .registry
+                .resolve(harness_id)?
+                .luna_runtime_delivery();
+            let compiled =
+                crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
+                    context,
+                    provider_delivery,
+                    user_instructions: Vec::new(),
+                    workspace_instructions: Vec::new(),
+                    resume: known_session_id.is_some(),
+                    acknowledged_contract: prior,
+                })?;
+            if compiled.must_reconstruct {
+                return Err(EngineError::Other(
+                    "LUNA runtime instructions or tools changed for this provider session; start a fresh provider binding at a safe boundary before continuing".into()
+                ));
+            }
+            if compiled.requires_safe_boundary && self.turn_in_flight(chat_id) {
+                return Err(EngineError::Other(
+                    "LUNA runtime instructions changed during the active provider turn; wait for it to settle before sending with the new contract".into()
+                ));
+            }
+            request.model_options.insert(
+                zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+                serde_json::to_value(&compiled.contract)?,
+            );
         }
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
             (
@@ -1089,6 +1221,27 @@ impl SessionsEngine {
         } else if request.resume.is_none() {
             request.resume = self.inner.resume_for(chat_id, &request.cwd);
         }
+        // The compiler's no-tools legacy resume decision is valid only for
+        // the exact provider session inspected before warm routing.
+        if let Some(contract) = request
+            .model_options
+            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .and_then(|value| {
+                serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+            })
+            && contract.delivery == zeron_proto::RuntimeDelivery::CodexDynamicTools
+            && request.resume.is_some()
+            && self
+                .inner
+                .journal
+                .runtime_contract(chat_id, request.resume.as_deref().unwrap())?
+                .is_none()
+        {
+            return Err(EngineError::Other(
+                "Codex resume has no verified LUNA tool contract; start a fresh provider binding"
+                    .into(),
+            ));
+        }
         if harness_id == HarnessId::Codex
             && let Some(workspace) = self.inner.workspace()
             && let Ok(Some(chat)) = workspace.chat(chat_id)
@@ -1146,6 +1299,32 @@ impl SessionsEngine {
             request_input,
             steering: steer_rx,
             interrupt: interrupt_token.clone(),
+            invoke_luna_tool: request
+                .model_options
+                .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+                .and_then(|value| {
+                    serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone())
+                        .ok()
+                })
+                .filter(|contract| !contract.tools.is_empty())
+                .map(|contract| {
+                    let cancel = interrupt_token.clone();
+                    std::sync::Arc::new(move |name: String, arguments: serde_json::Value| {
+                        let contract = contract.clone();
+                        let cancel = cancel.clone();
+                        Box::pin(async move {
+                            crate::runtime_contract::invoke(&contract, &name, arguments, &cancel)
+                                .await
+                                .map_err(|error| {
+                                    zeron_harness::HarnessError::Protocol(error.to_string())
+                                })
+                        })
+                            as futures::future::BoxFuture<
+                                'static,
+                                Result<serde_json::Value, zeron_harness::HarnessError>,
+                            >
+                    }) as zeron_harness::LunaToolExecutor
+                }),
         };
 
         lock(&self.inner.runs).insert(
@@ -3257,6 +3436,12 @@ async fn drive_run(
     let user_prompt = request.prompt.clone();
     let run_cwd = request.cwd.clone();
     let permission_policy = request.permission_policy.clone();
+    let runtime_contract = request
+        .model_options
+        .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+        .and_then(|value| {
+            serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+        });
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
     }
@@ -4242,6 +4427,14 @@ async fn drive_run(
                         tracing::warn!(chat = %chat_id, %recovery_error, "binding-failure recovery persistence failed");
                     }
                     return;
+                }
+                if let Some(contract) = runtime_contract.as_ref() {
+                    let mut receipt = contract.diagnostics(session_id);
+                    receipt.run_id = Some(run_id.clone());
+                    receipt.accepted_at_ms = Some(now_ms());
+                    if let Err(error) = inner.journal.record_runtime_contract(&receipt) {
+                        tracing::error!(chat = %chat_id, %error, "provider-acknowledged LUNA contract receipt could not be persisted");
+                    }
                 }
                 inner.remember_harness_session(&chat_id, session_id, cwd);
                 if let Some(host) = inner.doc_host() {

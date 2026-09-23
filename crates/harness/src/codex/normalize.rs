@@ -502,6 +502,37 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 diff: None,
             }],
         },
+        "dynamicToolCall" | "dynamic_tool_call" => match phase {
+            Phase::Started => {
+                let tool = str_field(item, &["tool"]);
+                if tool != "luna_status" {
+                    return Vec::new();
+                }
+                vec![AgentEvent::ToolCall {
+                    id,
+                    call: ToolCall::Mcp {
+                        server: "luna".into(),
+                        tool,
+                        input: item
+                            .get("arguments")
+                            .filter(|value| !value.is_null())
+                            .cloned(),
+                    },
+                }]
+            }
+            Phase::Completed if str_field(item, &["tool"]) == "luna_status" => {
+                vec![AgentEvent::ToolResult {
+                    id,
+                    is_error: status == "failed"
+                        || item.get("success").and_then(Value::as_bool) == Some(false),
+                    // Tool results are untrusted data. Record the outcome without
+                    // copying the body into the transcript or activity index.
+                    output: None,
+                    diff: None,
+                }]
+            }
+            Phase::Completed => Vec::new(),
+        },
         "webSearch" | "web_search" => tool_lifecycle(
             phase,
             id,

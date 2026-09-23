@@ -2629,6 +2629,7 @@ mod tests {
             }),
             steering: steering_rx,
             interrupt: zeron_harness::CancellationToken::new(),
+            invoke_luna_tool: None,
         };
         let request = RunRequest {
             prompt: "fixture control test".into(),

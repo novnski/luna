@@ -13,6 +13,21 @@ emit() { printf '%s\n' "$1"; }
 
 case "$first" in
 
+*scenario:runtime-instructions*)
+  [ "$LUNA_THREAD_ID" = 'thread-a' ] || exit 1
+  appended=false
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = '--append-system-prompt' ]; then
+      shift
+      case "$1" in *'Run inside LUNA.'*) appended=true ;; esac
+    fi
+    shift
+  done
+  [ "$appended" = true ] || exit 1
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":[],"cwd":"/synthetic","session_id":"sess-runtime"}'
+  emit '{"type":"result","subtype":"success","result":"ok","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-runtime"}'
+  ;;
+
 *scenario:title*)
   tools_off=false
   system_set=false

@@ -15,7 +15,9 @@
 //! wires don't have (decision record: docs/research/acp.md).
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 pub use tokio_util::sync::CancellationToken;
 
@@ -103,7 +105,16 @@ pub struct RunControls {
     /// interrupt, then escalates to SIGTERM/SIGKILL on the child after a grace
     /// period. The run's stream ends with `Done { status: Interrupted }`.
     pub interrupt: CancellationToken,
+    /// Engine-owned LUNA registry dispatch. `None` means the provider must not
+    /// advertise LUNA tools. Adapter code only translates the provider wire.
+    pub invoke_luna_tool: Option<LunaToolExecutor>,
 }
+
+pub type LunaToolExecutor = Arc<
+    dyn Fn(String, serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, HarnessError>>
+        + Send
+        + Sync,
+>;
 
 /// Provider-native compaction input. The operation targets an already-bound
 /// provider session; no transcript text is replayed through this contract.
@@ -117,6 +128,11 @@ pub struct ContextCompactRequest {
 #[async_trait]
 pub trait Harness: Send + Sync {
     fn id(&self) -> HarnessId;
+    /// Native LUNA runtime delivery this adapter can actually enforce.
+    /// Unsupported is the default until an adapter implements and tests it.
+    fn luna_runtime_delivery(&self) -> zeron_proto::RuntimeDelivery {
+        zeron_proto::RuntimeDelivery::Unsupported
+    }
     fn display_name(&self) -> &str;
     fn supports_steering(&self) -> bool;
     fn steering_mode(&self) -> SteeringMode;

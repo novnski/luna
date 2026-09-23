@@ -186,6 +186,42 @@ impl ClaudeHarness {
         if let Some(effort) = to_effort(request.reasoning, request.model.as_deref()) {
             cmd.args(["--effort", effort]);
         }
+        if let Some(contract) = request
+            .model_options
+            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .and_then(|value| {
+                serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+            })
+            .filter(|contract| {
+                contract.context.harness == HarnessId::ClaudeCode
+                    && contract.delivery == zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly
+            })
+        {
+            for (name, value) in &contract.environment {
+                if matches!(
+                    name.as_str(),
+                    "LUNA_THREAD_ID"
+                        | "LUNA_PROJECT_ID"
+                        | "LUNA_ENVIRONMENT_ID"
+                        | "LUNA_MACHINE_ID"
+                ) {
+                    cmd.env(name, value);
+                }
+            }
+            let sections = contract
+                .instructions
+                .iter()
+                .map(|section| {
+                    format!(
+                        "[LUNA {:?}: {} | {}]\n{}",
+                        section.source, section.name, section.provenance, section.text
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            cmd.arg("--append-system-prompt");
+            cmd.arg(sections);
+        }
         let effective_mode = request
             .permission_policy
             .as_ref()
@@ -346,6 +382,9 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
 
 #[async_trait]
 impl Harness for ClaudeHarness {
+    fn luna_runtime_delivery(&self) -> zeron_proto::RuntimeDelivery {
+        zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly
+    }
     fn id(&self) -> HarnessId {
         HarnessId::ClaudeCode
     }
@@ -427,6 +466,28 @@ impl ClaudeHarness {
         controls: RunControls,
         title_only: bool,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        if title_only {
+            request
+                .model_options
+                .remove(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION);
+        }
+        if let Some(value) = request
+            .model_options
+            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+        {
+            let contract: zeron_proto::LunaAgentRuntimeContract =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    HarnessError::Protocol(format!("invalid LUNA runtime contract: {error}"))
+                })?;
+            if contract.context.harness != HarnessId::ClaudeCode
+                || contract.delivery != zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly
+                || !contract.tools.is_empty()
+            {
+                return Err(HarnessError::Protocol(
+                    "Claude LUNA runtime contract advertises unsupported tools".into(),
+                ));
+            }
+        }
         request
             .model_options
             .remove(crate::LUNA_PROVIDER_AUTH_INSTANCE_OPTION);
@@ -679,6 +740,7 @@ async fn run_session(session: Session) {
         request_input,
         mut steering,
         interrupt,
+        ..
     } = controls;
     let request_input = Arc::new(request_input);
 

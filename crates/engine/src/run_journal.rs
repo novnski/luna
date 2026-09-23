@@ -18,7 +18,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
+use sha2::{Digest, Sha256};
 use zeron_proto::AgentEvent;
+use zeron_proto::RuntimeContractDiagnostics;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -70,6 +72,87 @@ impl RunJournal {
 
     fn attempts_path(&self, chat_id: &str) -> PathBuf {
         self.dir.join(format!("{}.resume", sanitize_id(chat_id)))
+    }
+
+    fn runtime_stem(&self, chat_id: &str, provider_session_id: &str) -> String {
+        // The provider session id is never used as a path component. Different
+        // provider sessions for one LUNA task retain independent contract proof.
+        let digest = Sha256::digest(provider_session_id.as_bytes());
+        format!("{}.runtime.{digest:x}", sanitize_id(chat_id))
+    }
+
+    fn runtime_path(&self, chat_id: &str, provider_session_id: &str) -> PathBuf {
+        self.dir.join(format!(
+            "{}.json",
+            self.runtime_stem(chat_id, provider_session_id)
+        ))
+    }
+
+    fn runtime_archive_path(&self, receipt: &RuntimeContractDiagnostics) -> PathBuf {
+        let key = receipt.run_id.as_deref().unwrap_or(&receipt.contract_hash);
+        self.dir.join(format!(
+            "{}.{}.json",
+            self.runtime_stem(&receipt.thread_id, &receipt.provider_session_id),
+            sanitize_id(key)
+        ))
+    }
+
+    /// Persist only the redacted, provider-acknowledged contract receipt.
+    pub fn record_runtime_contract(
+        &self,
+        receipt: &RuntimeContractDiagnostics,
+    ) -> Result<(), JournalError> {
+        // One immutable receipt per accepted run remains available for
+        // historical contract forensics; the latest pointer is for fast
+        // current-session dispatch and redacted RPC readback.
+        self.write_runtime_receipt(&self.runtime_archive_path(receipt), receipt)?;
+        self.write_runtime_receipt(
+            &self.runtime_path(&receipt.thread_id, &receipt.provider_session_id),
+            receipt,
+        )
+    }
+
+    fn write_runtime_receipt(
+        &self,
+        path: &Path,
+        receipt: &RuntimeContractDiagnostics,
+    ) -> Result<(), JournalError> {
+        let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            serde_json::to_writer(&mut file, receipt)?;
+            file.flush()?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, path)?;
+            Ok::<(), JournalError>(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
+    }
+
+    pub fn runtime_contract(
+        &self,
+        chat_id: &str,
+        provider_session_id: &str,
+    ) -> Result<Option<RuntimeContractDiagnostics>, JournalError> {
+        let path = self.runtime_path(chat_id, provider_session_id);
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let receipt: RuntimeContractDiagnostics = serde_json::from_reader(file)?;
+        if receipt.thread_id != chat_id || receipt.provider_session_id != provider_session_id {
+            return Err(JournalError::Io(std::io::Error::other(
+                "runtime contract receipt identity mismatch",
+            )));
+        }
+        Ok(Some(receipt))
     }
 
     /// Auto-resume revival budget (zeron `resumeAttempt`/`MAX_AUTO_RESUME`):
@@ -253,6 +336,33 @@ pub fn journal_paths(dir: &Path, chat_id: &str) -> (PathBuf, PathBuf) {
     )
 }
 
+/// Redacted runtime receipts belonging to a task, including historical run
+/// archives. Profile import copies these alongside the task's event journal.
+pub fn runtime_receipt_paths(dir: &Path, chat_id: &str) -> Result<Vec<PathBuf>, JournalError> {
+    let prefix = format!("{}.runtime.", sanitize_id(chat_id));
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with(&prefix) && name.ends_with(".json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
 /// Chat ids become file names; anything outside a conservative set is replaced so a
 /// hostile id cannot traverse paths. (Ids are uuids in practice.)
 fn sanitize_id(chat_id: &str) -> String {
@@ -284,6 +394,66 @@ mod tests {
             error: None,
             session_id: None,
         }
+    }
+
+    #[test]
+    fn redacted_runtime_receipts_are_session_scoped_and_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        let receipt = RuntimeContractDiagnostics {
+            thread_id: "task-a".into(),
+            provider_session_id: "provider-session-a".into(),
+            run_id: Some("run-a".into()),
+            accepted_at_ms: Some(1),
+            contract_version: 1,
+            contract_hash: "hash-a".into(),
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            instructions: vec![zeron_proto::RuntimeInstructionSummary {
+                name: "LUNA core".into(),
+                source: zeron_proto::RuntimeInstructionSource::LunaCore,
+                provenance: "LUNA runtime v1".into(),
+                character_count: 100,
+            }],
+            attached_tools: vec![zeron_proto::RuntimeToolSummary {
+                name: "luna_status".into(),
+                version: 1,
+                required_scopes: Vec::new(),
+            }],
+            omitted_tools: Vec::new(),
+            restart_required: false,
+        };
+        let journal = RunJournal::open(dir.path()).unwrap();
+        journal.record_runtime_contract(&receipt).unwrap();
+        drop(journal);
+        let journal = RunJournal::open(dir.path()).unwrap();
+        assert_eq!(
+            journal
+                .runtime_contract("task-a", "provider-session-a")
+                .unwrap(),
+            Some(receipt.clone())
+        );
+        assert!(
+            journal
+                .runtime_contract("task-a", "provider-session-b")
+                .unwrap()
+                .is_none()
+        );
+        let mut next = receipt.clone();
+        next.run_id = Some("run-b".into());
+        next.accepted_at_ms = Some(2);
+        next.contract_hash = "hash-b".into();
+        journal.record_runtime_contract(&next).unwrap();
+        assert!(journal.runtime_archive_path(&receipt).is_file());
+        assert!(journal.runtime_archive_path(&next).is_file());
+        assert_eq!(
+            journal
+                .runtime_contract("task-a", "provider-session-a")
+                .unwrap(),
+            Some(next)
+        );
+        assert_eq!(
+            runtime_receipt_paths(dir.path(), "task-a").unwrap().len(),
+            3
+        );
     }
 
     #[test]
