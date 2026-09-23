@@ -19,6 +19,8 @@ mod activity_history;
 pub mod agent_accounts;
 mod attention;
 pub mod auth;
+pub mod backup;
+pub mod backup_control;
 pub mod change_requests;
 pub mod chat2_host;
 pub mod context_controls;
@@ -169,6 +171,7 @@ impl std::fmt::Debug for EngineConfig {
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
+    backup_control: Option<backup_control::BackupControl>,
     pub store: Arc<DocsStore>,
     pub sessions: SessionsEngine,
     pub doc_host: DocHost,
@@ -474,7 +477,14 @@ impl EngineCore {
         }));
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
         task_identity.start_startup_reconciliation();
+        let backup_control = backup::IsolatedRoot::open(data_dir).ok().map(|root| {
+            backup_control::BackupControl::new(
+                root,
+                credentials::CredentialBroker::for_data_dir(data_dir),
+            )
+        });
         Ok(Self {
+            backup_control,
             store,
             sessions,
             doc_host,
@@ -503,6 +513,14 @@ impl EngineCore {
 
     pub fn workspace_scope(&self) -> WorkspaceScope {
         self.workspace_scope
+    }
+
+    /// Hermetic RPC fixture seam: replace the dormant default broker with an
+    /// explicitly in-memory one before exposing any backup method.
+    #[doc(hidden)]
+    pub fn with_backup_control_for_tests(mut self, control: backup_control::BackupControl) -> Self {
+        self.backup_control = Some(control);
+        self
     }
 
     /// Attach the auth service (before building the RPC service / relays).
@@ -604,10 +622,20 @@ impl EngineCore {
                 }
             }
         });
-        zeron_rpc::HostRelay::spawn(config, self.rpc_service(), on_nudge)
+        zeron_rpc::HostRelay::spawn(config, self.rpc_service_without_backup(), on_nudge)
     }
 
     pub fn rpc_service(&self) -> Arc<EngineRpc> {
+        self.rpc_service_with_local_backup(true)
+    }
+
+    /// Relay RPCs never expose backup configuration, key ingress, or archive
+    /// paths. Only the in-process/localhost service receives the control.
+    fn rpc_service_without_backup(&self) -> Arc<EngineRpc> {
+        self.rpc_service_with_local_backup(false)
+    }
+
+    fn rpc_service_with_local_backup(&self, include_backup: bool) -> Arc<EngineRpc> {
         let mut rpc = EngineRpc::new(
             self.store.clone(),
             self.sessions.clone(),
@@ -626,6 +654,9 @@ impl EngineCore {
         )
         .with_auth(self.auth())
         .with_previews(self.previews.clone());
+        if let Some(control) = self.backup_control.clone().filter(|_| include_backup) {
+            rpc = rpc.with_backup_control(control);
+        }
         if let Some(links) = self.links() {
             rpc = rpc.with_links(links);
         }

@@ -68,20 +68,22 @@ use zeron_doc::{
 use zeron_proto::{
     AttentionMutationRequest, AttentionMutationResult, AttentionProducerAvailability,
     AttentionReadRequest, AttentionSnapshot, AttentionTransitionBatch, AttentionTransitionClaim,
-    BindingOrigin, Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
-    CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead, ContextBoundary,
-    ContextBoundaryKind, ContextControlState, ContextHandoff, ContextOperationStatus,
-    ConversationForkBoundaryKind, DraftBlobState, EngineInfo, FollowUpBehavior, HarnessId,
-    HistoryCapabilityView, HistoryProjectPolicy, HistoryRebuildRequest, HistoryRebuildResult,
-    HistoryRecoveryView, HistorySearchRequest, ImportOwnership, PermissionMode,
-    ProviderForkCapability, ProviderForkRequest, TaskCommandEvent, TaskCommandSnapshot,
-    TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
+    BackupArchiveRequest, BackupAvailability, BackupConfigureRequest, BackupKeyConfigureRequest,
+    BackupStatus, BindingOrigin, Chat, ChatConfig, CommandReasonCode, CommandReceipt,
+    CommandReceiptReason, CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead,
+    ContextBoundary, ContextBoundaryKind, ContextControlState, ContextHandoff,
+    ContextOperationStatus, ConversationForkBoundaryKind, DraftBlobState, EngineInfo,
+    FollowUpBehavior, HarnessId, HistoryCapabilityView, HistoryProjectPolicy,
+    HistoryRebuildRequest, HistoryRebuildResult, HistoryRecoveryView, HistorySearchRequest,
+    ImportOwnership, PermissionMode, ProviderForkCapability, ProviderForkRequest, TaskCommandEvent,
+    TaskCommandSnapshot, TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
 use zeron_sync::DocsStore;
 
 use crate::agent_accounts::AgentAccounts;
 use crate::auth::Auth;
+use crate::backup_control::{BackupControl, BackupControlError};
 use crate::change_requests::CheckoutChangeRequests;
 use crate::diff_sync::CheckoutDiffSync;
 use crate::doc_host::DocHost;
@@ -988,6 +990,7 @@ enum MutateParams {
 }
 
 pub struct EngineRpc {
+    backup_control: Option<BackupControl>,
     store: std::sync::Arc<DocsStore>,
     sessions: SessionsEngine,
     doc_host: DocHost,
@@ -1040,6 +1043,7 @@ impl EngineRpc {
             capabilities: zeron_proto::capabilities::current(),
         };
         let rpc = Self {
+            backup_control: None,
             store,
             sessions,
             doc_host,
@@ -1162,6 +1166,34 @@ impl EngineRpc {
         self
     }
 
+    /// The scheduler reads only a separately marked copy-isolated source. A
+    /// normal LUNA root never constructs this control or starts a backup job.
+    pub fn with_backup_control(mut self, control: BackupControl) -> Self {
+        let scheduler = control.clone();
+        let cancel = self.activity_cancel.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => break,
+                        _ = interval.tick() => {
+                            let control = scheduler.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Err(error) = control.tick_automatic(crate::now_ms()) {
+                                    let message = error.to_string();
+                                    let _ = control.record_scheduler_error(message);
+                                }
+                            }).await;
+                        }
+                    }
+                }
+            });
+        }
+        self.backup_control = Some(control);
+        self
+    }
+
     /// Attach the peer link cache — enables `targetDeviceId` relay forwarding.
     pub fn with_links(mut self, links: std::sync::Arc<LinkCache>) -> Self {
         self.links = Some(links);
@@ -1184,6 +1216,12 @@ impl EngineRpc {
         self.auth
             .as_ref()
             .ok_or_else(|| RpcError::Failed("auth unavailable".into()))
+    }
+
+    fn backup_control(&self) -> Result<BackupControl, RpcError> {
+        self.backup_control.clone().ok_or_else(|| RpcError::Failed(
+            "Backup controls require an explicitly marked copy-isolated LUNA environment. Live profile backup is unavailable.".into()
+        ))
     }
 
     fn updater(&self) -> Result<&zeron_update::Updater, RpcError> {
@@ -5047,7 +5085,14 @@ fn forwardable(method: &str) -> bool {
 fn local_only_credential_method(method: &str) -> bool {
     matches!(
         method,
-        methods::LIST_CREDENTIAL_METADATA
+        methods::GET_BACKUP_STATUS
+            | methods::CONFIGURE_BACKUP
+            | methods::CONFIGURE_BACKUP_KEY
+            | methods::BACKUP_NOW
+            | methods::EXPORT_BACKUP
+            | methods::INSPECT_BACKUP
+            | methods::STAGE_BACKUP_RESTORE
+            | methods::LIST_CREDENTIAL_METADATA
             | methods::SIGN_IN
             | methods::SIGN_IN_HEADLESS
             | methods::COMPLETE_SIGN_IN
@@ -5387,6 +5432,18 @@ fn index_activity_task(
     Ok(count)
 }
 
+async fn backup_rpc_reply<T, F>(operation: F) -> Result<RpcReply, RpcError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce() -> Result<T, BackupControlError> + Send + 'static,
+{
+    let value = tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| RpcError::Failed(format!("backup worker stopped: {error}")))?
+        .map_err(|error| RpcError::Failed(error.to_string()))?;
+    RpcReply::value(&value)
+}
+
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
@@ -5418,6 +5475,56 @@ impl RpcService for EngineRpc {
         match method {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
+            methods::GET_BACKUP_STATUS => {
+                let Some(control) = self.backup_control.clone() else {
+                    return RpcReply::value(&BackupStatus {
+                        availability: BackupAvailability::Unavailable,
+                        reason: Some("Live-profile backup is unavailable; configure a separate copy-isolated source with an owner-held recovery key.".into()),
+                        source_root: None,
+                        destination_dir: None,
+                        automatic_enabled: false,
+                        key_configured: false,
+                        last_success: None,
+                        retention_candidates: 0,
+                        staged_restore: None,
+                        restore_activation_available: false,
+                        restore_reason: "Live restore is unavailable until staged verification and post-start rollback are complete.".into(),
+                    });
+                };
+                backup_rpc_reply(move || control.status()).await
+            }
+            methods::CONFIGURE_BACKUP => {
+                let request: BackupConfigureRequest = parse_params(params)?;
+                let control = self.backup_control()?;
+                backup_rpc_reply(move || control.configure(request)).await
+            }
+            methods::CONFIGURE_BACKUP_KEY => {
+                let request: BackupKeyConfigureRequest = parse_params(params)?;
+                let control = self.backup_control()?;
+                backup_rpc_reply(move || {
+                    control.configure_recovery_key_hex(request.recovery_key_hex)
+                })
+                .await
+            }
+            methods::BACKUP_NOW => {
+                let control = self.backup_control()?;
+                backup_rpc_reply(move || control.manual_backup()).await
+            }
+            methods::EXPORT_BACKUP => {
+                let request: BackupArchiveRequest = parse_params(params)?;
+                let control = self.backup_control()?;
+                backup_rpc_reply(move || control.export(request)).await
+            }
+            methods::INSPECT_BACKUP => {
+                let request: BackupArchiveRequest = parse_params(params)?;
+                let control = self.backup_control()?;
+                backup_rpc_reply(move || control.inspect(request)).await
+            }
+            methods::STAGE_BACKUP_RESTORE => {
+                let request: BackupArchiveRequest = parse_params(params)?;
+                let control = self.backup_control()?;
+                backup_rpc_reply(move || control.stage_restore(request)).await
+            }
             methods::GET_ATTENTION => {
                 let request: AttentionReadRequest = parse_params(params)?;
                 self.ensure_local_attention_target(&request.target_device_id)?;
