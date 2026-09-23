@@ -655,6 +655,9 @@ pub struct ChatDocHandle {
     /// post-commit installation. Queue mutations are built off-doc, so a
     /// failed SQLite transaction is never observable through this handle.
     queue_projection_lock: Mutex<()>,
+    /// A committed projection has not reached the live doc. Never let a
+    /// debounced snapshot of that older doc replace the committed bytes.
+    durable_projection_uninstalled: AtomicBool,
     /// An explicit user interrupt freezes automatic queue delivery. The next
     /// explicit prompt or queue send resumes it; incidental doc/status changes
     /// must not turn Cancel into "send the next row".
@@ -1678,6 +1681,14 @@ impl DocHost {
         {
             let mut handles = lock(&self.inner.handles);
             if let Some(handle) = handles.get(chat_id) {
+                if handle
+                    .durable_projection_uninstalled
+                    .load(Ordering::Acquire)
+                {
+                    return Err(EngineError::Other(
+                        "a committed document projection needs recovery after restart".into(),
+                    ));
+                }
                 let stale = registry_gen >= 2 && handle.room_gen < 2;
                 if (stale || handle.retired.load(Ordering::Relaxed)) && !self.pinned(handle) {
                     // A seed flipped this chat under a cached fat handle
@@ -1698,6 +1709,14 @@ impl DocHost {
         }
         let opening = lock(&self.inner.opening);
         if let Some(handle) = lock(&self.inner.handles).get(chat_id) {
+            if handle
+                .durable_projection_uninstalled
+                .load(Ordering::Acquire)
+            {
+                return Err(EngineError::Other(
+                    "a committed document projection needs recovery after restart".into(),
+                ));
+            }
             handle.touch();
             return Ok(handle.clone());
         }
@@ -1922,6 +1941,7 @@ impl DocHost {
             queue_tx,
             drain_lock: tokio::sync::Mutex::new(()),
             queue_projection_lock: Mutex::new(()),
+            durable_projection_uninstalled: AtomicBool::new(false),
             queue_paused: AtomicBool::new(recovered_queue_pending),
             mirror_dirty: AtomicBool::new(true),
             last_access: AtomicI64::new(now_ms()),
@@ -3119,6 +3139,102 @@ impl DocHost {
         self.nudge_remote_host(chat_id);
         self.spawn_command_delivery(chat_id, entry, transfers);
         Ok(())
+    }
+
+    /// Dormant B0a prerequisite: persist one exact Interrupt command ID as a
+    /// detached snapshot/outbox projection before making it visible locally.
+    /// This does not mint approval, a receipt, or source authority, and no
+    /// runtime path calls it yet. A repeated ID never appends another row.
+    #[allow(dead_code)]
+    pub(crate) fn persist_unwired_interrupt_with_id(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+    ) -> Result<bool, EngineError> {
+        self.persist_unwired_interrupt_with_id_after_commit(chat_id, command_id, || Ok(()))
+    }
+
+    fn persist_unwired_interrupt_with_id_after_commit(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+        after_commit: impl FnOnce() -> Result<(), EngineError>,
+    ) -> Result<bool, EngineError> {
+        if command_id.is_empty()
+            || command_id.len() > 128
+            || !command_id.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(EngineError::Other("invalid interrupt command id".into()));
+        }
+        let handle = self.open(chat_id)?;
+        let _projection = lock(&handle.queue_projection_lock);
+        if handle
+            .durable_projection_uninstalled
+            .load(Ordering::Acquire)
+        {
+            return Err(EngineError::Other(
+                "a committed document projection needs recovery after restart".into(),
+            ));
+        }
+        let prepared = self.prepare_queue_projection(&handle, command_id, |doc| {
+            let existing = doc
+                .read_commands()?
+                .into_iter()
+                .filter(|entry| entry.id == command_id)
+                .collect::<Vec<_>>();
+            if !existing.is_empty() {
+                if existing.len() != 1
+                    || !matches!(&existing[0].payload, SessionCommandPayload::Interrupt {})
+                {
+                    return Err(EngineError::Other(
+                        "interrupt command id belongs to a different payload".into(),
+                    ));
+                }
+                return Ok(false);
+            }
+            let now = now_ms();
+            let based_on = doc.read_entries()?.last().map(|entry| CommandBasedOn {
+                turn_id: Some(entry.id.clone()),
+                frontier: None,
+            });
+            doc.queue_command(&SessionCommandEntry {
+                id: command_id.to_string(),
+                payload: SessionCommandPayload::Interrupt {},
+                issued_by: self.inner.config.device_id.clone(),
+                issued_at: now,
+                based_on,
+                expires_at: Some(now + COMMAND_DEFAULT_TTL_MS),
+                status: SessionCommandStatus::Pending,
+                resolution: None,
+            })?;
+            Ok(true)
+        })?;
+        if !prepared.outcome {
+            return Ok(false);
+        }
+        let updates = prepared
+            .batch_id
+            .as_deref()
+            .map(|batch_id| vec![(batch_id, prepared.update.as_slice())])
+            .unwrap_or_default();
+        // A storage error can be ambiguous. Leave this handle unable to save
+        // its older live doc until a restart reloads the authoritative bytes.
+        handle
+            .durable_projection_uninstalled
+            .store(true, Ordering::Release);
+        self.inner.store.save_snapshot_with_updates(
+            &handle.chat_id,
+            &prepared.snapshot,
+            &updates,
+        )?;
+        after_commit()?;
+        let result = self.install_queue_projection(&handle, prepared);
+        if result.is_ok() {
+            handle
+                .durable_projection_uninstalled
+                .store(false, Ordering::Release);
+        }
+        result
     }
 
     /// A send revives an archived chat on every device (best-effort).
@@ -6553,6 +6669,15 @@ impl DocHost {
     }
 
     fn save_snapshot(&self, handle: &ChatDocHandle) {
+        let _projection = lock(&handle.queue_projection_lock);
+        if handle
+            .durable_projection_uninstalled
+            .load(Ordering::Acquire)
+        {
+            tracing::warn!(chat = %handle.chat_id,
+                "snapshot save skipped after an uninstalled durable projection");
+            return;
+        }
         if handle.retired.load(Ordering::Relaxed) {
             // A chat2 seed replaced this lineage on disk; persisting this
             // handle's fat doc would clobber the thin one. But retired with
@@ -7259,5 +7384,209 @@ mod publication_eviction_tests {
         );
         drop(handle);
         host.shutdown_workers().await;
+    }
+}
+
+#[cfg(test)]
+mod unwired_interrupt_projection_tests {
+    use super::*;
+
+    fn fixture() -> (
+        tempfile::TempDir,
+        Arc<DocsStore>,
+        DocHost,
+        Arc<ChatDocHandle>,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path()).unwrap());
+        let doc = SessionDoc::init("target").unwrap();
+        store
+            .save_snapshot("target", &doc.export_snapshot().unwrap())
+            .unwrap();
+        store.initialize_chat_outbox("target", &[]).unwrap();
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "synthetic-device".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let handle = host.open("target").unwrap();
+        (root, store, host, handle)
+    }
+
+    fn stored_commands(store: &DocsStore) -> Vec<SessionCommandEntry> {
+        SessionDoc::from_snapshot(&store.load_snapshot("target").unwrap().unwrap())
+            .unwrap()
+            .read_commands()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn unwired_interrupt_persists_one_exact_id_and_rejects_payload_collision() {
+        let (_root, store, host, handle) = fixture();
+        assert!(
+            host.persist_unwired_interrupt_with_id("target", "stop-a")
+                .unwrap()
+        );
+        let snapshot_after_first = store.load_snapshot("target").unwrap().unwrap();
+        let outbox_after_first = store.pending_chat_updates("target").unwrap();
+        assert!(
+            !host
+                .persist_unwired_interrupt_with_id("target", "stop-a")
+                .unwrap()
+        );
+        assert_eq!(
+            store.load_snapshot("target").unwrap().unwrap(),
+            snapshot_after_first
+        );
+        assert_eq!(
+            store.pending_chat_updates("target").unwrap(),
+            outbox_after_first
+        );
+        let commands = stored_commands(&store);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].id, "stop-a");
+        assert_eq!(commands[0].payload, SessionCommandPayload::Interrupt {});
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+
+        handle
+            .doc
+            .queue_command(&SessionCommandEntry {
+                id: "occupied-id".into(),
+                payload: SessionCommandPayload::Steer {
+                    prompt: "synthetic only".into(),
+                    message_id: None,
+                },
+                issued_by: "synthetic-device".into(),
+                issued_at: 1,
+                based_on: None,
+                expires_at: None,
+                status: SessionCommandStatus::Pending,
+                resolution: None,
+            })
+            .unwrap();
+        assert!(
+            host.persist_unwired_interrupt_with_id("target", "occupied-id")
+                .is_err()
+        );
+        assert_eq!(
+            handle
+                .doc
+                .read_commands()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.id == "occupied-id")
+                .count(),
+            1
+        );
+        assert!(
+            host.persist_unwired_interrupt_with_id("target", "")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn unwired_interrupt_storage_failure_publishes_no_row_or_outbox() {
+        for trigger in [
+            "CREATE TRIGGER fail_stop_snapshot BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='target'
+             BEGIN SELECT RAISE(ABORT, 'synthetic stop snapshot failure'); END;",
+            "CREATE TRIGGER fail_stop_outbox BEFORE INSERT ON chat_outbox
+             WHEN NEW.doc_id='target'
+             BEGIN SELECT RAISE(ABORT, 'synthetic stop outbox failure'); END;",
+        ] {
+            let (root, store, host, handle) = fixture();
+            let db = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
+            db.execute_batch(trigger).unwrap();
+            assert!(
+                host.persist_unwired_interrupt_with_id("target", "stop-failed")
+                    .is_err()
+            );
+            assert!(handle.doc.read_commands().unwrap().is_empty());
+            assert!(stored_commands(&store).is_empty());
+            assert!(store.pending_chat_updates("target").unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn unwired_interrupt_post_commit_failure_survives_restart_once() {
+        let (_root, store, host, handle) = fixture();
+        assert!(
+            host.persist_unwired_interrupt_with_id_after_commit("target", "stop-uncertain", || {
+                Err(EngineError::Other(
+                    "synthetic failure before live import".into(),
+                ))
+            })
+            .is_err()
+        );
+        assert!(handle.doc.read_commands().unwrap().is_empty());
+        assert_eq!(stored_commands(&store).len(), 1);
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+        host.save_snapshot(&handle);
+        assert_eq!(stored_commands(&store).len(), 1);
+        assert!(
+            host.open("target").is_err(),
+            "stale handle must fail closed"
+        );
+        drop(handle);
+        drop(host);
+
+        let restarted = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "synthetic-device".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let reopened = restarted.open("target").unwrap();
+        let commands = reopened.doc.read_commands().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].id, "stop-uncertain");
+        assert!(
+            !restarted
+                .persist_unwired_interrupt_with_id("target", "stop-uncertain")
+                .unwrap()
+        );
+        assert_eq!(stored_commands(&store).len(), 1);
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unwired_interrupt_commit_blocks_stale_snapshot_saver() {
+        let (_root, store, host, handle) = fixture();
+        let saver_host = host.clone();
+        let saver_handle = handle.clone();
+        let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let attempted_for_saver = attempted.clone();
+        let finished_for_saver = finished.clone();
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let saver = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            attempted_for_saver.store(true, Ordering::Release);
+            saver_host.save_snapshot(&saver_handle);
+            finished_for_saver.store(true, Ordering::Release);
+        });
+        assert!(
+            host.persist_unwired_interrupt_with_id_after_commit("target", "stop-race", || {
+                start_tx.send(()).unwrap();
+                while !attempted.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                assert!(!finished.load(Ordering::Acquire));
+                Ok(())
+            })
+            .unwrap()
+        );
+        saver.join().unwrap();
+        assert!(finished.load(Ordering::Acquire));
+        let commands = stored_commands(&store);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].id, "stop-race");
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
     }
 }
