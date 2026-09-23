@@ -1782,15 +1782,19 @@ impl SessionsEngine {
                 &interrupt,
             ) => result,
         };
-        let readback = tools
-            .control_command_receipt(
+        // Ignore source cancellation after a possible commit, but do not wait
+        // indefinitely for receipt readback. An unknown result is never replayed.
+        let readback = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tools.control_command_receipt(
                 &read_authority,
                 &evidence.target_task_id,
                 &command_id,
                 &CancellationToken::new(),
-            )
-            .await;
-        let Some(receipt) = readback.ok().flatten() else {
+            ),
+        )
+        .await;
+        let Some(receipt) = readback.ok().and_then(Result::ok).flatten() else {
             return Ok(LunaInterruptDispatchResult {
                 command_id,
                 status: LunaInterruptDispatchStatus::Unknown,
@@ -7691,6 +7695,7 @@ mod tests {
         CommitThenError,
         NoReceipt,
         ReadbackError,
+        ReadbackNever,
     }
 
     struct FakeControlEvidenceBackend {
@@ -7804,10 +7809,11 @@ mod tests {
         {
             self.receipt_reads.fetch_add(1, Ordering::SeqCst);
             *lock(&self.readback_command_id) = Some(command_id.into());
-            if matches!(
-                *lock(&self.interrupt_mode),
-                Some(FakeInterruptMode::ReadbackError)
-            ) {
+            let mode = *lock(&self.interrupt_mode);
+            if matches!(mode, Some(FakeInterruptMode::ReadbackNever)) {
+                std::future::pending().await
+            }
+            if matches!(mode, Some(FakeInterruptMode::ReadbackError)) {
                 return Err(crate::cross_task_tools::CrossTaskError::Backend(
                     "synthetic readback failure".into(),
                 ));
@@ -7841,9 +7847,9 @@ mod tests {
             let status = match mode {
                 FakeInterruptMode::Receipt(status) => status,
                 FakeInterruptMode::CommitThenError => zeron_proto::CommandReceiptStatus::Applied,
-                FakeInterruptMode::NoReceipt | FakeInterruptMode::ReadbackError => {
-                    zeron_proto::CommandReceiptStatus::Pending
-                }
+                FakeInterruptMode::NoReceipt
+                | FakeInterruptMode::ReadbackError
+                | FakeInterruptMode::ReadbackNever => zeron_proto::CommandReceiptStatus::Pending,
             };
             let receipt = zeron_proto::CommandReceipt {
                 command_id: request.command_id.clone(),
@@ -8201,6 +8207,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_dispatch_bounds_stuck_same_id_readback() {
+        use super::LunaInterruptDispatchStatus as Outcome;
+
+        let (_root, core, _source_task_id, backend, grant, _events) =
+            approved_interrupt_fixture().await;
+        *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::ReadbackNever);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            core.sessions.dispatch_luna_interrupt_grant_once(grant),
+        )
+        .await
+        .expect("receipt readback must be bounded")
+        .unwrap();
+        assert_eq!(result.status, Outcome::Unknown);
+        assert!(result.receipt.is_none());
+        assert!(!result.settled);
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            lock(&backend.submitted_request)
+                .as_ref()
+                .unwrap()
+                .command_id,
+            result.command_id
+        );
+        assert_eq!(
+            lock(&backend.readback_command_id).as_deref(),
+            Some(result.command_id.as_str())
+        );
     }
 
     #[tokio::test]
