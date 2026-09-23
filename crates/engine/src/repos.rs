@@ -126,7 +126,7 @@ pub struct Repos {
 
 fn registration_after_create_error(target: &Path, error: EngineError) -> EngineError {
     EngineError::Other(format!(
-        "Repository was created at {} but could not be registered: {error}. Use Add Repo with this path to finish registration.",
+        "Repository exists at {}. Its registry update could not be confirmed: {error}. Check List Repos; if the repository is absent, use Add Repo with this path.",
         target.display()
     ))
 }
@@ -213,13 +213,14 @@ impl Repos {
     }
 
     fn register(&self, path: &str) -> Result<(), EngineError> {
-        self.register_before_publish(path, || Ok(()))
+        self.register_with_hooks(path, || Ok(()), || Ok(()))
     }
 
-    fn register_before_publish(
+    fn register_with_hooks(
         &self,
         path: &str,
         before_publish: impl FnOnce() -> Result<(), EngineError>,
+        after_publish: impl FnOnce() -> Result<(), EngineError>,
     ) -> Result<(), EngineError> {
         // Admission precedes the registry mutex and every device-root write.
         let _permit = self
@@ -257,6 +258,7 @@ impl Repos {
             .into_temp_path()
             .persist(self.registry_path())
             .map_err(std::io::Error::from)?;
+        after_publish()?;
         #[cfg(unix)]
         std::fs::File::open(&self.inner.data_dir)?.sync_all()?;
         Ok(())
@@ -2268,11 +2270,15 @@ mod tests {
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
         let first_repos = repos.clone();
         let first = std::thread::spawn(move || {
-            first_repos.register_before_publish(&first_path, || {
-                ready_tx.send(()).unwrap();
-                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-                Ok(())
-            })
+            first_repos.register_with_hooks(
+                &first_path,
+                || {
+                    ready_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(())
+                },
+                || Ok(()),
+            )
         });
         ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let mut freezing = Box::pin(epoch.freeze(Duration::from_secs(5)));
@@ -2332,9 +2338,11 @@ mod tests {
         repos.register("base").unwrap();
         let original = std::fs::read(repos.registry_path()).unwrap();
         let error = repos
-            .register_before_publish("later", || {
-                Err(std::io::Error::other("injected prepublication I/O failure").into())
-            })
+            .register_with_hooks(
+                "later",
+                || Err(std::io::Error::other("injected prepublication I/O failure").into()),
+                || Ok(()),
+            )
             .unwrap_err();
         assert!(matches!(error, EngineError::Io(_)));
         assert_eq!(std::fs::read(repos.registry_path()).unwrap(), original);
@@ -2361,6 +2369,31 @@ mod tests {
                 .contains("malformed")
         );
         assert_eq!(std::fs::read(repos.registry_path()).unwrap(), b"[broken");
+    }
+
+    #[test]
+    fn postpublication_error_reports_uncertain_registry_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let (_owner, repos) = guarded_repos(&root);
+        let target = root.path().join("repos/synthetic");
+        std::fs::create_dir_all(&target).unwrap();
+        let path = target.to_string_lossy().to_string();
+
+        let error = repos
+            .register_with_hooks(
+                &path,
+                || Ok(()),
+                || Err(std::io::Error::other("injected postpublication I/O failure").into()),
+            )
+            .unwrap_err();
+        assert!(matches!(error, EngineError::Io(_)));
+        assert_eq!(repos.load_paths_strict().unwrap(), vec![path.clone()]);
+        let guidance = registration_after_create_error(&target, error).to_string();
+        assert!(guidance.contains(&path));
+        assert!(guidance.contains("registry update could not be confirmed"));
+        assert!(guidance.contains("injected postpublication I/O failure"));
+        assert!(guidance.contains("Check List Repos"));
+        assert!(guidance.contains("if the repository is absent, use Add Repo"));
     }
 
     #[test]
@@ -2401,6 +2434,7 @@ mod tests {
         assert!(target.join(".git").is_dir());
         assert!(!repos.registry_path().exists());
         assert!(error.contains(&target.to_string_lossy().to_string()));
+        assert!(error.contains("Check List Repos"));
         assert!(error.contains("Add Repo"));
 
         drop(snapshot);
