@@ -46,6 +46,7 @@ use crate::settings::archived::ArchivedPage;
 use crate::settings::backup::BackupsPage;
 use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
+use crate::settings::general::{GeneralEvent, GeneralPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{
     NotificationPreferences, NotificationTask, NotificationsEvent, NotificationsPage,
@@ -425,6 +426,7 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
+    General,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles).
     Harnesses,
@@ -441,24 +443,46 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 11] = [
-        SettingsSection::Devices,
+    pub const ALL: [SettingsSection; 12] = [
+        SettingsSection::General,
         SettingsSection::Harnesses,
         SettingsSection::Agents,
         SettingsSection::Appearance,
-        SettingsSection::Files,
-        SettingsSection::Backups,
         SettingsSection::Notifications,
         SettingsSection::Shortcuts,
+        SettingsSection::Files,
         SettingsSection::Appshots,
-        SettingsSection::Archived,
         SettingsSection::Usage,
+        SettingsSection::Devices,
+        SettingsSection::Backups,
+        SettingsSection::Archived,
     ];
+
+    pub const DEFAULT: Self = Self::General;
+
+    /// Fixture-only boot selector, not an OS or URL deep-link route.
+    fn from_fixture_route(route: &str) -> Option<Self> {
+        Some(match route {
+            "settings" | "settings/general" => Self::General,
+            "settings/devices" => Self::Devices,
+            "settings/harnesses" => Self::Harnesses,
+            // Historically `settings/agents` opened the Accounts page.
+            "settings/agents" => Self::Agents,
+            "settings/appearance" => Self::Appearance,
+            "settings/notifications" => Self::Notifications,
+            "settings/shortcuts" => Self::Shortcuts,
+            "settings/appshots" => Self::Appshots,
+            "settings/archived" => Self::Archived,
+            "settings/usage" => Self::Usage,
+            _ => return None,
+        })
+    }
 
     /// Sidebar + header label (zeron settings-sidebar.tsx SECTIONS / __root.tsx
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
+            SettingsSection::General => "General",
             SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Agents",
             SettingsSection::Agents => "Accounts",
@@ -1714,6 +1738,7 @@ pub struct Shell {
     usage_price_error: Option<String>,
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
+    general_page: Option<Entity<GeneralPage>>,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
@@ -1724,6 +1749,7 @@ pub struct Shell {
     accounts_page: Option<Entity<AccountsPage>>,
     harnesses_page: Option<Entity<HarnessesPage>>,
     shortcuts_sub: Option<Subscription>,
+    general_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     files_settings_sub: Option<Subscription>,
     appearance_settings_sub: Option<Subscription>,
@@ -2012,23 +2038,15 @@ impl Shell {
         // straight into a settings section — these pages have no deep link and
         // synthetic input can't reach them on headless compositors.
         let route = match std::env::var("ZERON_OPEN_ROUTE").ok().as_deref() {
-            Some("settings") | Some("settings/devices") => {
-                Route::Settings(SettingsSection::Devices)
-            }
-            Some("settings/agents") => Route::Settings(SettingsSection::Agents),
-            Some("settings/harnesses") => Route::Settings(SettingsSection::Harnesses),
-            Some("settings/appearance") => Route::Settings(SettingsSection::Appearance),
-            Some("settings/notifications") => Route::Settings(SettingsSection::Notifications),
-            Some("settings/shortcuts") => Route::Settings(SettingsSection::Shortcuts),
-            Some("settings/appshots") => Route::Settings(SettingsSection::Appshots),
-            Some("settings/archived") => Route::Settings(SettingsSection::Archived),
-            Some("settings/usage") => Route::Settings(SettingsSection::Usage),
             // `new` pins the new-chat canvas (suppresses boot auto-select).
             Some("new") => {
                 state.update(cx, |s, _| s.auto_selected = true);
                 Route::Chat
             }
-            _ => Route::Chat,
+            Some(route) => SettingsSection::from_fixture_route(route)
+                .map(Route::Settings)
+                .unwrap_or(Route::Chat),
+            None => Route::Chat,
         };
         // More capture knobs of the same kind: `ZERON_OPEN_DIALOG=rename|delete`
         // opens that dialog for the first chat once chats land; `=model` pops
@@ -2128,6 +2146,7 @@ impl Shell {
             .map(|placeholder| cx.new(|cx| ComposerInput::new(placeholder, cx))),
             usage_price_error: None,
             nav,
+            general_page: None,
             devices_page: None,
             archived_page: None,
             appearance_page: None,
@@ -2138,6 +2157,7 @@ impl Shell {
             accounts_page: None,
             harnesses_page: None,
             shortcuts_sub: None,
+            general_sub: None,
             notifications_sub: None,
             files_settings_sub: None,
             appearance_settings_sub: None,
@@ -4148,6 +4168,34 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match section {
+            SettingsSection::General => {
+                if self.general_page.is_none() {
+                    let behavior = self.settings.follow_up_behavior;
+                    let retries = self.settings.automatic_retries_enabled;
+                    let page = cx.new(|cx| GeneralPage::new(behavior, retries, cx));
+                    self.general_sub = Some(cx.subscribe(
+                        &page,
+                        |this: &mut Shell, _, event: &GeneralEvent, cx| {
+                            match event {
+                                GeneralEvent::FollowUpBehaviorChanged(behavior) => {
+                                    this.settings.follow_up_behavior = *behavior;
+                                }
+                                GeneralEvent::AutomaticRetriesChanged(enabled) => {
+                                    this.settings.automatic_retries_enabled = *enabled;
+                                }
+                            }
+                            this.schedule_save(cx);
+                            cx.notify();
+                        },
+                    ));
+                    self.general_page = Some(page);
+                }
+                self.general_page
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+                    .into_any_element()
+            }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     let state = self.state.clone();
@@ -4322,8 +4370,6 @@ impl Shell {
                     let keymap = self.settings.keymap.clone();
                     let escape_stops_active_agent = self.settings.escape_stops_active_agent;
                     let composer_send_behavior = self.settings.composer_send_behavior;
-                    let follow_up_behavior = self.settings.follow_up_behavior;
-                    let automatic_retries_enabled = self.settings.automatic_retries_enabled;
                     let appshots_enabled = self.settings.appshots_enabled;
                     let appshot_sound_enabled = self.settings.appshot_sound_enabled;
                     let appshot_destination = self.settings.appshot_destination;
@@ -4333,8 +4379,6 @@ impl Shell {
                             keymap,
                             escape_stops_active_agent,
                             composer_send_behavior,
-                            follow_up_behavior,
-                            automatic_retries_enabled,
                             appshots_enabled,
                             appshot_sound_enabled,
                             appshot_destination,
@@ -4354,12 +4398,6 @@ impl Shell {
                                 }
                                 ShortcutsEvent::ComposerSendBehaviorChanged(behavior) => {
                                     this.settings.composer_send_behavior = *behavior;
-                                }
-                                ShortcutsEvent::FollowUpBehaviorChanged(behavior) => {
-                                    this.settings.follow_up_behavior = *behavior;
-                                }
-                                ShortcutsEvent::AutomaticRetriesChanged(enabled) => {
-                                    this.settings.automatic_retries_enabled = *enabled;
                                 }
                                 ShortcutsEvent::AppshotsChanged {
                                     enabled,
@@ -6558,6 +6596,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
+            SettingsSection::General => icons::SETTINGS_MINIMALISTIC,
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
@@ -6610,6 +6649,13 @@ impl Shell {
                                             "settings-nav-{}",
                                             item.label()
                                         )))
+                                        .when(
+                                            matches!(
+                                                item,
+                                                SettingsSection::Files | SettingsSection::Archived
+                                            ),
+                                            |el| el.mt(px(Theme::SPACE_LG)),
+                                        )
                                         .flex()
                                         .flex_row()
                                         .items_center()
@@ -7866,7 +7912,7 @@ impl Shell {
                     popover::menu_row(theme, false, "user-menu-settings")
                         .id("user-menu-settings")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_settings(SettingsSection::Devices, cx)
+                            this.open_settings(SettingsSection::DEFAULT, cx)
                         }))
                         .child(
                             icon(icons::SETTINGS_MINIMALISTIC)
@@ -11808,7 +11854,7 @@ impl Render for Shell {
             // Native Settings menu item and the platform convention (Cmd+, on
             // macOS, Ctrl+, elsewhere) always land on the default section.
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
-                this.open_settings(SettingsSection::Devices, cx)
+                this.open_settings(SettingsSection::DEFAULT, cx)
             }))
             // Chat-scoped, unlike new-session — `cycle_session` holds the guard
             // and says why.
@@ -12202,6 +12248,32 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_entry_and_fixture_routes_keep_their_targets() {
+        assert_eq!(SettingsSection::ALL[0], SettingsSection::DEFAULT);
+        assert_eq!(SettingsSection::DEFAULT, SettingsSection::General);
+        assert_eq!(
+            SettingsSection::from_fixture_route("settings"),
+            Some(SettingsSection::General)
+        );
+        assert_eq!(
+            SettingsSection::from_fixture_route("settings/general"),
+            Some(SettingsSection::General)
+        );
+        assert_eq!(
+            SettingsSection::from_fixture_route("settings/devices"),
+            Some(SettingsSection::Devices)
+        );
+        assert_eq!(
+            SettingsSection::from_fixture_route("settings/agents"),
+            Some(SettingsSection::Agents)
+        );
+        assert_eq!(
+            SettingsSection::from_fixture_route("settings/harnesses"),
+            Some(SettingsSection::Harnesses)
+        );
+    }
 
     #[test]
     fn history_search_parses_all_supported_filters_and_requires_current_profile() {
