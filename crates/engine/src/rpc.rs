@@ -5631,6 +5631,96 @@ fn cross_task_summary(
     }
 }
 
+fn require_local_control_evidence_scope(
+    caller: &zeron_proto::CrossTaskSummary,
+    target: &zeron_proto::CrossTaskSummary,
+    task_id: &str,
+    authority: &CrossTaskAuthority,
+    local_device_id: &str,
+) -> Result<(), CrossTaskError> {
+    if authority.delivery != zeron_proto::RuntimeDelivery::CodexDynamicTools {
+        return Err(CrossTaskError::Unavailable);
+    }
+    if !authority.granted_scopes.contains("threads.read") {
+        return Err(CrossTaskError::Scope);
+    }
+    if caller.task_id != authority.caller_task_id || target.task_id != task_id {
+        return Err(CrossTaskError::InvalidBackendResult);
+    }
+    if task_id == authority.caller_task_id
+        || authority.local_environment_id != local_device_id
+        || caller.environment_id != local_device_id
+        || target.environment_id != local_device_id
+        || caller.project_id.is_none()
+        || target.project_id != caller.project_id
+        || !caller
+            .project_id
+            .as_ref()
+            .is_some_and(|project| authority.visible_project_ids.contains(project))
+    {
+        return Err(CrossTaskError::TargetScope);
+    }
+    Ok(())
+}
+
+fn validate_local_control_receipt(
+    receipt: &CommandReceipt,
+    task_id: &str,
+    command_id: &str,
+    authority: &CrossTaskAuthority,
+    local_device_id: &str,
+) -> Result<(), CrossTaskError> {
+    if receipt.command_id != command_id
+        || receipt.task_id != task_id
+        || receipt.snapshot.task_id != task_id
+        || receipt.execution_environment.as_deref() != Some(local_device_id)
+        || receipt.client_id != "luna-cross-task"
+        || receipt.actor_id != format!("luna-tool:{}", authority.caller_task_id)
+        || receipt.client_session_id != authority.caller_task_id
+        || !matches!(
+            receipt.intent.as_str(),
+            "createChat" | "stop" | "setArchived" | "moveProject"
+        )
+    {
+        return Err(CrossTaskError::InvalidBackendResult);
+    }
+    Ok(())
+}
+
+async fn local_control_evidence_target(
+    rpc: &EngineRpc,
+    task_id: &str,
+    authority: &CrossTaskAuthority,
+) -> Result<(), CrossTaskError> {
+    if task_id.is_empty() || task_id.len() > 128 {
+        return Err(CrossTaskError::Input);
+    }
+    if authority.delivery != zeron_proto::RuntimeDelivery::CodexDynamicTools {
+        return Err(CrossTaskError::Unavailable);
+    }
+    if !authority.granted_scopes.contains("threads.read") {
+        return Err(CrossTaskError::Scope);
+    }
+    if task_id == authority.caller_task_id
+        || authority.local_environment_id != rpc.engine_info.device_id
+    {
+        return Err(CrossTaskError::TargetScope);
+    }
+    let caller = CrossTaskBackend::task(rpc, &authority.caller_task_id)
+        .await?
+        .ok_or(CrossTaskError::TargetScope)?;
+    let target = CrossTaskBackend::task(rpc, task_id)
+        .await?
+        .ok_or(CrossTaskError::TargetScope)?;
+    require_local_control_evidence_scope(
+        &caller,
+        &target,
+        task_id,
+        authority,
+        &rpc.engine_info.device_id,
+    )
+}
+
 fn cross_task_queue_command(
     request: &zeron_proto::CrossTaskSendRequest,
     authority: &CrossTaskAuthority,
@@ -5736,6 +5826,54 @@ impl CrossTaskBackend for EngineRpc {
             &chat,
             sessions.iter().find(|session| session.chat_id == task_id),
         )))
+    }
+
+    async fn control_target_snapshot(
+        &self,
+        task_id: &str,
+        authority: &CrossTaskAuthority,
+    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+        local_control_evidence_target(self, task_id, authority).await?;
+        let _lane = self.doc_host.task_command_gate(task_id).await;
+        local_control_evidence_target(self, task_id, authority).await?;
+        let snapshot = self
+            .current_task_command_snapshot(task_id)
+            .map_err(|_| CrossTaskError::Backend("target snapshot lookup failed".into()))?;
+        if snapshot.task_id != task_id {
+            return Err(CrossTaskError::InvalidBackendResult);
+        }
+        Ok(snapshot)
+    }
+
+    async fn control_command_receipt(
+        &self,
+        task_id: &str,
+        command_id: &str,
+        authority: &CrossTaskAuthority,
+    ) -> Result<Option<CommandReceipt>, CrossTaskError> {
+        if command_id.is_empty()
+            || command_id.len() > 128
+            || !command_id.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(CrossTaskError::Input);
+        }
+        local_control_evidence_target(self, task_id, authority).await?;
+        let _lane = self.doc_host.task_command_gate(task_id).await;
+        local_control_evidence_target(self, task_id, authority).await?;
+        let receipt = self
+            .doc_host
+            .task_command_receipt(command_id)
+            .map_err(|_| CrossTaskError::Backend("command receipt lookup failed".into()))?;
+        if let Some(receipt) = &receipt {
+            validate_local_control_receipt(
+                receipt,
+                task_id,
+                command_id,
+                authority,
+                &self.engine_info.device_id,
+            )?;
+        }
+        Ok(receipt)
     }
 
     async fn list(
@@ -8209,6 +8347,237 @@ impl RpcService for EngineRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn control_evidence_backend_uses_only_local_synthetic_task_state() {
+        let root = tempfile::tempdir().unwrap();
+        let accounts = crate::agent_accounts::AgentAccountsConfig {
+            data_dir: root.path().join("synthetic-provider-state"),
+            claude_config_dir: root.path().join("synthetic-claude"),
+            claude_config_file: root.path().join("synthetic-claude.json"),
+            codex_home: root.path().join("synthetic-codex"),
+            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
+        };
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let core = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+            crate::EngineProfile::development(
+                &root.path().join("synthetic-engine"),
+                "synthetic-org",
+                "synthetic-user",
+            ),
+            Arc::new(crate::registry::HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+            accounts,
+        )
+        .unwrap();
+        let caller_id = uuid::Uuid::new_v4().to_string();
+        let target_id = uuid::Uuid::new_v4().to_string();
+        let foreign_id = uuid::Uuid::new_v4().to_string();
+        for project in ["project-a", "project-b"] {
+            let path = root.path().join(project);
+            std::fs::create_dir_all(&path).unwrap();
+            core.workspace
+                .create_space(
+                    project,
+                    &core.device_id,
+                    &path.display().to_string(),
+                    None,
+                    false,
+                )
+                .unwrap();
+        }
+        for (task_id, project) in [
+            (&caller_id, "project-a"),
+            (&target_id, "project-a"),
+            (&foreign_id, "project-b"),
+        ] {
+            core.workspace
+                .create_chat(task_id, Some(project), None, None, None)
+                .unwrap();
+            core.task_identity
+                .register_new_task(
+                    task_id,
+                    Some(project),
+                    None,
+                    root.path().join(project).to_str(),
+                    TaskLineage::default(),
+                )
+                .unwrap();
+        }
+        let rpc = core.rpc_service();
+        let authority = CrossTaskAuthority {
+            caller_task_id: caller_id,
+            local_environment_id: core.device_id.clone(),
+            visible_project_ids: HashSet::from(["project-a".into()]),
+            allow_projectless: false,
+            granted_scopes: HashSet::from(["threads.read".into()]),
+            explicit_user_request: false,
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+        };
+        let snapshot =
+            CrossTaskBackend::control_target_snapshot(rpc.as_ref(), &target_id, &authority)
+                .await
+                .unwrap();
+        assert_eq!(snapshot.task_id, target_id);
+        assert_eq!(
+            CrossTaskBackend::control_command_receipt(
+                rpc.as_ref(),
+                &target_id,
+                "synthetic-unknown",
+                &authority,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        for task_id in [&foreign_id, "missing-task"] {
+            assert_eq!(
+                CrossTaskBackend::control_target_snapshot(rpc.as_ref(), task_id, &authority).await,
+                Err(CrossTaskError::TargetScope)
+            );
+            assert_eq!(
+                CrossTaskBackend::control_command_receipt(
+                    rpc.as_ref(),
+                    task_id,
+                    "synthetic-unknown",
+                    &authority,
+                )
+                .await,
+                Err(CrossTaskError::TargetScope)
+            );
+        }
+        let mut wrong_environment = authority.clone();
+        wrong_environment.local_environment_id = "remote".into();
+        assert_eq!(
+            CrossTaskBackend::control_target_snapshot(
+                rpc.as_ref(),
+                &target_id,
+                &wrong_environment,
+            )
+            .await,
+            Err(CrossTaskError::TargetScope)
+        );
+        drop(rpc);
+        core.shutdown().await;
+    }
+
+    #[test]
+    fn control_evidence_scope_requires_same_local_managed_project() {
+        let authority = CrossTaskAuthority {
+            caller_task_id: "caller".into(),
+            local_environment_id: "local".into(),
+            visible_project_ids: HashSet::from(["project-a".into()]),
+            allow_projectless: false,
+            granted_scopes: HashSet::from(["threads.read".into()]),
+            explicit_user_request: false,
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+        };
+        let summary = |task_id: &str, project: Option<&str>, environment: &str| {
+            zeron_proto::CrossTaskSummary {
+                task_id: task_id.into(),
+                project_id: project.map(str::to_owned),
+                environment_id: environment.into(),
+                title: "Synthetic task".into(),
+                status: "idle".into(),
+                archived: false,
+                updated_at_ms: 1,
+            }
+        };
+        let caller = summary("caller", Some("project-a"), "local");
+        let target = summary("target", Some("project-a"), "local");
+        assert_eq!(
+            require_local_control_evidence_scope(&caller, &target, "target", &authority, "local"),
+            Ok(())
+        );
+        for foreign in [
+            summary("target", Some("project-b"), "local"),
+            summary("target", Some("project-a"), "remote"),
+            summary("target", None, "local"),
+        ] {
+            assert_eq!(
+                require_local_control_evidence_scope(
+                    &caller, &foreign, "target", &authority, "local"
+                ),
+                Err(CrossTaskError::TargetScope)
+            );
+        }
+        assert_eq!(
+            require_local_control_evidence_scope(
+                &caller,
+                &summary("wrong-id", Some("project-a"), "local"),
+                "target",
+                &authority,
+                "local"
+            ),
+            Err(CrossTaskError::InvalidBackendResult)
+        );
+        let mut no_read = authority.clone();
+        no_read.granted_scopes.clear();
+        assert_eq!(
+            require_local_control_evidence_scope(&caller, &target, "target", &no_read, "local"),
+            Err(CrossTaskError::Scope)
+        );
+    }
+
+    #[test]
+    fn control_receipt_readback_rejects_wrong_command_or_provenance() {
+        let authority = CrossTaskAuthority {
+            caller_task_id: "caller".into(),
+            local_environment_id: "local".into(),
+            visible_project_ids: HashSet::from(["project-a".into()]),
+            allow_projectless: false,
+            granted_scopes: HashSet::from(["threads.read".into()]),
+            explicit_user_request: false,
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+        };
+        let receipt = CommandReceipt {
+            command_id: "command-a".into(),
+            task_id: "target".into(),
+            intent: "stop".into(),
+            payload_hash: "synthetic-hash".into(),
+            status: CommandReceiptStatus::Pending,
+            snapshot: TaskCommandSnapshot {
+                task_id: "target".into(),
+                ..Default::default()
+            },
+            event_sequence: None,
+            actor_id: "luna-tool:caller".into(),
+            client_id: "luna-cross-task".into(),
+            client_session_id: "caller".into(),
+            execution_environment: Some("local".into()),
+            correlation_id: None,
+            reason: None,
+            recovery_action: None,
+            accepted_at_ms: 1,
+            committed_at_ms: None,
+            observed_at_ms: 1,
+        };
+        assert_eq!(
+            validate_local_control_receipt(&receipt, "target", "command-a", &authority, "local"),
+            Ok(())
+        );
+        for case in 0..8 {
+            let mut wrong = receipt.clone();
+            match case {
+                0 => wrong.command_id = "different".into(),
+                1 => wrong.task_id = "different".into(),
+                2 => wrong.snapshot.task_id = "different".into(),
+                3 => wrong.execution_environment = Some("remote".into()),
+                4 => wrong.client_id = "different".into(),
+                5 => wrong.actor_id = "luna-tool:different".into(),
+                6 => wrong.client_session_id = "different".into(),
+                7 => wrong.intent = "queueMessage".into(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                validate_local_control_receipt(&wrong, "target", "command-a", &authority, "local"),
+                Err(CrossTaskError::InvalidBackendResult),
+                "case {case}"
+            );
+        }
+    }
 
     #[test]
     fn cross_task_queue_uses_one_stable_id_and_waits_for_run_end() {
