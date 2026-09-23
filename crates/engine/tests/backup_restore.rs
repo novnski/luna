@@ -14,7 +14,7 @@ use zeron_engine::backup::{
 };
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, InstanceLock};
 use zeron_proto::HarnessId;
-use zeron_proto::{Chat, Space};
+use zeron_proto::{AppshotActivityKind, AppshotActivityRecord, Chat, Space};
 use zeron_sync::DocsStore;
 
 fn fixture() -> (TempDir, PathBuf, PathBuf) {
@@ -211,6 +211,65 @@ fn staged_activity_rebuild_survives_restart_and_detects_interrupted_readback() {
     fs::write(&staged_blob, b"synthetic attachment").unwrap();
     service(&root).verify_staged_for_tests(&retry).unwrap();
     assert!(service(&root).activate(retry).is_err());
+}
+
+#[test]
+fn staged_restore_rebuilds_appshot_history_from_v9_source_facts() {
+    let (_parent, root, backups) = fixture();
+    add_synthetic_task(&root, None);
+    let record = AppshotActivityRecord {
+        event_id: "appshot:synthetic-draft:synthetic-capture:staged".into(),
+        draft_id: "synthetic-draft".into(),
+        task_id: Some("synthetic-task".into()),
+        capture_id: "synthetic-capture".into(),
+        screenshot_attachment_id: "synthetic-image".into(),
+        capture_device_id: "synthetic-viewer".into(),
+        target_environment_id: Some("synthetic-device".into()),
+        kind: AppshotActivityKind::Staged,
+        timestamp_ms: 42,
+        app_name: "Synthetic App".into(),
+        message_id: None,
+    };
+    let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
+    conn.execute(
+        "INSERT INTO appshot_activity(event_id,draft_id,task_id,capture_id,target_environment_id,record_json)
+         VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            record.event_id,
+            record.draft_id,
+            record.task_id,
+            record.capture_id,
+            record.target_environment_id,
+            serde_json::to_vec(&record).unwrap(),
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let backup = service(&root)
+        .export(&backups.join("appshot-v9.lunabk"))
+        .unwrap();
+    assert_eq!(backup.manifest.databases[0].schema_version, 9);
+    assert_eq!(
+        backup.manifest.databases[0].activity_events_expected,
+        Some(2)
+    );
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    service(&root).verify_staged_for_tests(&staged).unwrap();
+    let conn = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();
+    let (environment, capture_device, summary): (String, String, String) = conn
+        .query_row(
+            "SELECT json_extract(envelope_json,'$.environmentId'),
+                    json_extract(envelope_json,'$.deviceId'),
+                    json_extract(envelope_json,'$.summary')
+             FROM activity_events WHERE event_id=?1",
+            [record.event_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(environment, "synthetic-device");
+    assert_eq!(capture_device, "synthetic-viewer");
+    assert_eq!(summary, "Staged Appshot from Synthetic App");
 }
 
 #[test]

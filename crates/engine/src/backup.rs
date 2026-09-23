@@ -34,7 +34,9 @@ const DESTINATION_VALUE: &str = "L17 synthetic or copy-isolated backup destinati
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 100_000;
 const CHUNK: usize = 64 * 1024;
-const CURRENT_SCHEMA: i64 = 8;
+// Keep this in step with the append-only DocsStore migrations. The v9
+// Appshot source records must be replayed into the derived activity index.
+const CURRENT_SCHEMA: i64 = 9;
 
 const EXCLUDED: &[&str] = &[
     "OS Keychain and LUNA credential vault",
@@ -940,7 +942,7 @@ fn derive_profile(
                 chat.id
             ));
         }
-        let events = crate::activity_history::build_activity_envelopes(
+        let mut events = crate::activity_history::build_activity_envelopes(
             device_id,
             &chat,
             identity,
@@ -950,6 +952,17 @@ fn derive_profile(
             &metadata,
             policy.as_ref(),
         );
+        let appshots = store
+            .appshot_activity_for_task(&chat.id)
+            .map_err(|e| BackupError::Invalid(format!("Appshot activity read failed: {e}")))?;
+        events.extend(crate::activity_history::build_appshot_envelopes(
+            device_id,
+            &chat,
+            identity,
+            &appshots,
+            Some(&entries),
+            policy.as_ref(),
+        ));
         projection.activity.push((chat.id, events));
     }
     Ok(projection)
