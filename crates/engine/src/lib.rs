@@ -33,6 +33,9 @@ pub mod git_actions;
 pub mod history_operations;
 mod http_error;
 pub mod instance_lock;
+// The owner-managed action seam is internal until an owner driver is verified.
+#[allow(dead_code)]
+pub(crate) mod integration_actions;
 pub mod integration_settings;
 pub mod local_import;
 #[cfg(target_os = "macos")]
