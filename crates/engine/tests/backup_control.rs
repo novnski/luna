@@ -90,6 +90,7 @@ fn owner_held_key_file_backs_up_without_keychain_or_root_overlap() {
         control.configure_recovery_key_file(inside.display().to_string()),
         Err(BackupControlError::OverlappingRoots)
     ));
+    fs::remove_file(&inside).unwrap();
     let receipt = control.manual_backup().unwrap();
     assert!(Path::new(&receipt.archive_path).is_file());
     let reopened = BackupControl::new(
@@ -97,6 +98,13 @@ fn owner_held_key_file_backs_up_without_keychain_or_root_overlap() {
         CredentialBroker::for_data_dir(&owner),
     );
     assert_eq!(reopened.status().unwrap().last_success.unwrap(), receipt);
+    let staged = reopened
+        .stage_restore(BackupArchiveRequest {
+            archive_path: receipt.archive_path.clone(),
+        })
+        .unwrap();
+    assert!(!staged.restore_activation_available);
+    assert_eq!(reopened.status().unwrap().staged_restore.unwrap(), staged);
     assert!(!owner.join("credentials").exists());
     assert!(matches!(
         reopened.configure_recovery_key_file(source.join("inside.key").display().to_string()),
