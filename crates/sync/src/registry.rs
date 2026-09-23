@@ -373,6 +373,16 @@ impl OfflineTasks {
         state.stopping = true;
         state.handle.take()
     }
+
+    /// Stop an actor-owned child without consuming its handle. The client or
+    /// pending connection must still be able to take and await that handle.
+    fn abort(&self) {
+        let mut state = lock(&self.0);
+        state.stopping = true;
+        if let Some(child) = &state.handle {
+            child.abort();
+        }
+    }
 }
 
 /// Aborts an actor if construction is canceled before it returns a client.
@@ -429,6 +439,40 @@ pub struct RegistryClient {
     stats: Arc<Stats>,
     task: Option<tokio::task::JoinHandle<()>>,
     offline: Arc<OfflineTasks>,
+}
+
+/// Handles returned by an immediate registry revocation. Keep this token until
+/// [`Self::join`] finishes so the actor and HTTPS child have actually exited.
+#[must_use = "await join() to finish draining the registry tasks"]
+pub struct RegistryDrain {
+    actor: Option<tokio::task::JoinHandle<()>>,
+    offline: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RegistryDrain {
+    /// Await both aborted tasks without holding the registry document lock.
+    /// If this future is canceled, `Drop` aborts whichever handle remains.
+    pub async fn join(mut self) {
+        if let Some(actor) = self.actor.as_mut() {
+            let _ = actor.await;
+        }
+        drop(self.actor.take());
+        if let Some(offline) = self.offline.as_mut() {
+            let _ = offline.await;
+        }
+        drop(self.offline.take());
+    }
+}
+
+impl Drop for RegistryDrain {
+    fn drop(&mut self) {
+        if let Some(actor) = self.actor.take() {
+            actor.abort();
+        }
+        if let Some(offline) = self.offline.take() {
+            offline.abort();
+        }
+    }
 }
 
 impl RegistryClient {
@@ -659,6 +703,24 @@ impl RegistryClient {
         }
     }
 
+    /// Revoke this membership synchronously and return its tasks for an async
+    /// drain. No new HTTPS child may start after `offline.stop()`; both existing
+    /// tasks are aborted before this returns. An already executing mutation may
+    /// finish, so callers must await the returned drain before their final
+    /// snapshot. Canceling an in-progress *connection* is a separate path.
+    pub fn begin_stop(mut self) -> RegistryDrain {
+        self.shutdown.send_replace(true);
+        let offline = self.offline.stop();
+        if let Some(child) = &offline {
+            child.abort();
+        }
+        let actor = self.task.take();
+        if let Some(task) = &actor {
+            task.abort();
+        }
+        RegistryDrain { actor, offline }
+    }
+
     /// Leave cleanly and stop the actor.
     pub async fn shutdown(mut self) {
         let child = self.offline.stop();
@@ -740,10 +802,7 @@ impl Actor {
     async fn run(self, ready: oneshot::Sender<Result<(), SyncError>>) {
         let offline = self.offline.clone();
         self.run_inner(ready).await;
-        if let Some(child) = offline.stop() {
-            child.abort();
-            let _ = child.await;
-        }
+        offline.abort();
     }
 
     async fn run_inner(mut self, ready: oneshot::Sender<Result<(), SyncError>>) {
@@ -1710,6 +1769,148 @@ mod admission_tests {
                 std::future::pending().await
             })
         }
+    }
+
+    struct HangingDial {
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl TextConnector for HangingDial {
+        fn connect(&self) -> BoxFuture<'static, Result<TextPipe, SyncError>> {
+            let started = lock(&self.started).take();
+            let dropped = self.dropped.clone();
+            Box::pin(async move {
+                let _guard = FetchDrop(dropped);
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                std::future::pending().await
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn begin_stop_revokes_fake_dial_and_https_child_before_async_join() {
+        for join in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+            let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+            let (dial_started_tx, dial_started_rx) = oneshot::channel();
+            let (fetch_started_tx, fetch_started_rx) = oneshot::channel();
+            let dial_dropped = Arc::new(AtomicBool::new(false));
+            let fetch_dropped = Arc::new(AtomicBool::new(false));
+            let client = RegistryClient::connect_with_transport_mode(
+                Arc::new(HangingDial {
+                    started: Mutex::new(Some(dial_started_tx)),
+                    dropped: dial_dropped.clone(),
+                }),
+                doc.clone(),
+                "device-a",
+                RegistryTuning::default(),
+                Some(Arc::new(HangingFetch {
+                    started: Mutex::new(Some(fetch_started_tx)),
+                    dropped: fetch_dropped.clone(),
+                })),
+                Some(admission(epoch)),
+            )
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), dial_started_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), fetch_started_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            let shutdown = client.shutdown.subscribe();
+            let offline = client.offline.clone();
+
+            let drain = client.begin_stop();
+            assert!(*shutdown.borrow());
+            assert!(lock(&offline.0).stopping);
+            assert!(drain.actor.is_some());
+            assert!(drain.offline.is_some());
+            if join {
+                tokio::time::timeout(Duration::from_secs(2), drain.join())
+                    .await
+                    .unwrap();
+            } else {
+                drop(drain);
+            }
+            wait_until(|| {
+                dial_dropped.load(Ordering::Acquire) && fetch_dropped.load(Ordering::Acquire)
+            })
+            .await;
+            assert_eq!(lock(&doc).cursor(), 0);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_unused_registry_drain_aborts_both_handles() {
+        let actor_dropped = Arc::new(AtomicBool::new(false));
+        let offline_dropped = Arc::new(AtomicBool::new(false));
+        let (actor_started_tx, actor_started_rx) = oneshot::channel();
+        let (offline_started_tx, offline_started_rx) = oneshot::channel();
+        let actor = tokio::spawn({
+            let dropped = actor_dropped.clone();
+            async move {
+                let _guard = FetchDrop(dropped);
+                let _ = actor_started_tx.send(());
+                std::future::pending::<()>().await;
+            }
+        });
+        let offline = tokio::spawn({
+            let dropped = offline_dropped.clone();
+            async move {
+                let _guard = FetchDrop(dropped);
+                let _ = offline_started_tx.send(());
+                std::future::pending::<()>().await;
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(2), actor_started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), offline_started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        drop(RegistryDrain {
+            actor: Some(actor),
+            offline: Some(offline),
+        });
+        wait_until(|| {
+            actor_dropped.load(Ordering::Acquire) && offline_dropped.load(Ordering::Acquire)
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn actor_exit_abort_keeps_https_handle_available_for_join() {
+        let offline = OfflineTasks::default();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = oneshot::channel();
+        let child = tokio::spawn({
+            let dropped = dropped.clone();
+            async move {
+                let _guard = FetchDrop(dropped);
+                let _ = started_tx.send(());
+                std::future::pending::<()>().await;
+            }
+        });
+        lock(&offline.0).handle = Some(child);
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        offline.abort();
+        let child = offline.stop().expect("actor exit retained child handle");
+        let _ = child.await;
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[tokio::test(flavor = "current_thread")]
