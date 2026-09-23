@@ -28,7 +28,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use zeron_doc::{DeletedSpace, REGISTRY_DOC_ID, RegistryDoc, WorkspaceDoc};
+use zeron_doc::{DeletedSpace, DocError, REGISTRY_DOC_ID, RegistryDoc, WorkspaceDoc};
 use zeron_proto::{
     Chat, ChatConfig, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, Device, Session,
     Space,
@@ -873,15 +873,41 @@ impl WorkspaceHost {
 
     // ── registry access helpers ─────────────────────────────────────────────
 
-    /// Run a mutation under the registry lock, then wake the publish/persist
-    /// task and push the write to the room.
-    fn mutate<R>(&self, f: impl FnOnce(&mut RegistryDoc) -> R) -> R {
+    /// Admit before taking the registry lock so a freeze also waits for a
+    /// writer queued behind another mutation. Keep the ticket through the
+    /// dirty wake and room nudge.
+    fn mutate<R>(
+        &self,
+        f: impl FnOnce(&mut RegistryDoc) -> Result<R, DocError>,
+    ) -> Result<R, EngineError> {
+        self.mutate_with_permit(None, f)
+    }
+
+    /// Local import already owns a ticket for its whole run. Validate and
+    /// reuse it instead of attempting a second admission during Quiescing.
+    fn mutate_with_permit<R>(
+        &self,
+        permit: Option<&DeviceWritePermit>,
+        f: impl FnOnce(&mut RegistryDoc) -> Result<R, DocError>,
+    ) -> Result<R, EngineError> {
+        let _admitted = match (&self.inner.snapshot_write_handle, permit) {
+            (Some(handle), Some(permit)) if handle.owns(permit) => None,
+            (Some(_), Some(_)) | (None, Some(_)) => {
+                return Err(EngineError::Other(
+                    "registry mutation permit does not belong to this device root".into(),
+                ));
+            }
+            (Some(handle), None) => Some(handle.try_admit().map_err(|error| {
+                EngineError::Other(format!("registry mutation admission denied ({error:?})"))
+            })?),
+            (None, None) => None,
+        };
         let result = f(&mut lock(&self.inner.reg));
         self.inner.bump_changed();
         if let Some(room) = lock(&self.inner.room).as_ref() {
             room.nudge();
         }
-        result
+        Ok(result?)
     }
 
     /// Apply a task metadata mutation and persist its registry projection in
@@ -1315,7 +1341,7 @@ impl WorkspaceHost {
             Some(cwd) => Some(self.space_for_path(cwd)?),
             None => None,
         };
-        self.mutate(|doc| doc.claim_chat(chat_id, cwd, space_id.as_deref(), Utc::now()));
+        self.mutate(|doc| doc.claim_chat(chat_id, cwd, space_id.as_deref(), Utc::now()))?;
         Ok(())
     }
 
@@ -1376,7 +1402,6 @@ impl WorkspaceHost {
         let preview: String = text.chars().take(120).collect();
         let result = self.claim_chat(chat_id, None).and_then(|_| {
             self.mutate(|doc| doc.set_chat_last_message(chat_id, &preview, Utc::now()))
-                .map_err(EngineError::from)
         });
         if let Err(err) = result {
             tracing::warn!(chat = %chat_id, error = %err, "registry last-message write failed");
@@ -1614,13 +1639,29 @@ impl WorkspaceHost {
     /// import). Same write path as every live mutation, so the row persists
     /// and pushes like any other; the caller fixes `room_gen` beforehand.
     pub fn import_chat_row(&self, chat: &Chat) -> Result<(), EngineError> {
-        Ok(self.mutate(|doc| doc.upsert_chat(chat))?)
+        self.mutate(|doc| doc.upsert_chat(chat))
+    }
+
+    pub(crate) fn import_chat_row_admitted(
+        &self,
+        chat: &Chat,
+        permit: &DeviceWritePermit,
+    ) -> Result<(), EngineError> {
+        self.mutate_with_permit(Some(permit), |doc| doc.upsert_chat(chat))
     }
 
     /// Upsert a space row copied verbatim from another profile (local→synced
     /// import).
     pub fn import_space_row(&self, space: &Space) -> Result<(), EngineError> {
-        Ok(self.mutate(|doc| doc.upsert_space(space))?)
+        self.mutate(|doc| doc.upsert_space(space))
+    }
+
+    pub(crate) fn import_space_row_admitted(
+        &self,
+        space: &Space,
+        permit: &DeviceWritePermit,
+    ) -> Result<(), EngineError> {
+        self.mutate_with_permit(Some(permit), |doc| doc.upsert_space(space))
     }
 
     /// Flip the chat's sync room generation (docs/chat2-sync.md M2) — the
@@ -1689,6 +1730,15 @@ impl WorkspaceHost {
     #[allow(dead_code)] // Internal seam for the future freeze flush phase.
     pub(crate) fn flush_checked(&self) -> Result<(), EngineError> {
         self.inner.save_snapshot_checked()
+    }
+
+    /// Flush under the import's existing ticket, including after the epoch
+    /// starts quiescing. The inner check rejects a ticket from another root.
+    pub(crate) fn flush_checked_admitted(
+        &self,
+        permit: &DeviceWritePermit,
+    ) -> Result<(), EngineError> {
+        self.inner.save_snapshot_with_permit(permit)
     }
 
     /// Permanently stop and await the host-owned tasks and any established
@@ -2317,6 +2367,147 @@ mod tests {
         )
         .unwrap();
         (owner, store, host)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_mutation_denial_leaves_registry_and_dirty_wake_unchanged() {
+        use super::*;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, host) = guarded_host(root.path());
+        let before = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let changed = *host.inner.changed_tx.borrow();
+
+        let snapshot = owner
+            .epoch_for_tests()
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let busy = host
+            .rename_device("synthetic-device", "Rejected during snapshot")
+            .unwrap_err()
+            .to_string();
+        assert!(busy.contains("admission denied (Busy)"), "{busy}");
+        let claim = host.claim_chat("rejected-chat", None).unwrap_err().to_string();
+        assert!(claim.contains("admission denied (Busy)"), "{claim}");
+        assert_eq!(*host.inner.changed_tx.borrow(), changed);
+        assert_eq!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(), before);
+        assert!(host.chat("rejected-chat").unwrap().is_none());
+        drop(snapshot);
+
+        owner.retire();
+        let retired = host
+            .rename_device("synthetic-device", "Rejected after retirement")
+            .unwrap_err()
+            .to_string();
+        assert!(retired.contains("admission denied (Retired)"), "{retired}");
+        assert_eq!(*host.inner.changed_tx.borrow(), changed);
+        assert_eq!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(), before);
+        let name = host
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "synthetic-device")
+            .unwrap()
+            .name;
+        assert_eq!(name, "Synthetic device");
+
+        let _ = host.drain_tasks_checked().await;
+        drop(host);
+        drop(store);
+        drop(owner);
+        let (_replacement, _store, reopened) = guarded_host(root.path());
+        assert!(reopened.chat("rejected-chat").unwrap().is_none());
+        let name = reopened
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "synthetic-device")
+            .unwrap()
+            .name;
+        assert_eq!(name, "Synthetic device");
+        reopened.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn admitted_mutation_drains_before_freeze_and_reopens_latest_row() {
+        use super::*;
+        use std::time::Duration;
+        use zeron_sync::write_epoch::Phase;
+
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, host) = guarded_host(root.path());
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let writer = host.clone();
+        let write = std::thread::spawn(move || {
+            writer.mutate(|doc| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                doc.rename_device("synthetic-device", "Admitted latest")
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let epoch = owner.epoch_for_tests();
+        let mut freeze = Box::pin(epoch.freeze(Duration::from_secs(5)));
+        assert!(matches!(futures::poll!(freeze.as_mut()), std::task::Poll::Pending));
+        assert_eq!(epoch.phase(), Phase::Quiescing);
+        release_tx.send(()).unwrap();
+        assert!(write.join().unwrap().unwrap());
+        let snapshot = freeze.await.unwrap().into_snapshot().unwrap();
+        assert_eq!(epoch.phase(), Phase::Snapshot);
+        drop(snapshot);
+        host.flush_checked().unwrap();
+        host.drain_tasks_checked().await.unwrap();
+        drop(host);
+        drop(store);
+        drop(owner);
+
+        let (_replacement, _store, reopened) = guarded_host(root.path());
+        let name = reopened
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "synthetic-device")
+            .unwrap()
+            .name;
+        assert_eq!(name, "Admitted latest");
+        reopened.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn import_row_rejects_ticket_from_another_device_root() {
+        use super::*;
+
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let (_owner, _store, host) = guarded_host(first.path());
+        let (foreign_owner, _foreign_store, foreign_host) = guarded_host(second.path());
+        let foreign_ticket = foreign_owner.handle().try_admit().unwrap();
+        let changed = *host.inner.changed_tx.borrow();
+        let space = Space {
+            id: "foreign-space".into(),
+            device_id: "synthetic-device".into(),
+            path: "/synthetic/foreign".into(),
+            name: None,
+            git_detected: false,
+            git_checked_at: None,
+            checkout_id: None,
+            created_at: Utc::now(),
+        };
+        let error = host
+            .import_space_row_admitted(&space, &foreign_ticket)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not belong to this device root"), "{error}");
+        assert!(host.space(&space.id).unwrap().is_none());
+        assert_eq!(*host.inner.changed_tx.borrow(), changed);
+        drop(foreign_ticket);
+        host.drain_tasks_checked().await.unwrap();
+        foreign_host.drain_tasks_checked().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
