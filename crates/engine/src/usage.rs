@@ -14,8 +14,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeron_proto::{
     CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, UsageBucket, UsageLimitSnapshot,
-    UsageProvider, UsageRequest, UsageSnapshot, UsageSource, UsageSourceStatus, UsageSummary,
-    UsageTokens,
+    UsagePriceRate, UsageProvider, UsageRequest, UsageSnapshot, UsageSource, UsageSourceStatus,
+    UsageSummary, UsageTokens,
 };
 
 const CACHE_VERSION: u32 = 2;
@@ -61,34 +61,12 @@ struct ScanCache {
     files: HashMap<String, CachedFile>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PriceRate {
-    input_per_million: f64,
-    cached_per_million: f64,
-    creation_per_million: f64,
-    output_per_million: f64,
-}
-
-impl PriceRate {
-    fn valid(&self) -> bool {
-        [
-            self.input_per_million,
-            self.cached_per_million,
-            self.creation_per_million,
-            self.output_per_million,
-        ]
-        .into_iter()
-        .all(|rate| rate.is_finite() && rate >= 0.0)
-    }
-
-    fn cost(&self, tokens: UsageTokens) -> f64 {
-        (tokens.uncached_input as f64 * self.input_per_million
-            + tokens.cached_input as f64 * self.cached_per_million
-            + tokens.cache_creation as f64 * self.creation_per_million
-            + tokens.output as f64 * self.output_per_million)
-            / 1_000_000.0
-    }
+fn price_cost(rate: UsagePriceRate, tokens: UsageTokens) -> f64 {
+    (tokens.uncached_input as f64 * rate.input_per_million
+        + tokens.cached_input as f64 * rate.cached_per_million
+        + tokens.cache_creation as f64 * rate.creation_per_million
+        + tokens.output as f64 * rate.output_per_million)
+        / 1_000_000.0
 }
 
 fn now_ms() -> i64 {
@@ -501,13 +479,14 @@ fn synthetic_file(variable: &str) -> Option<PathBuf> {
         .then_some(candidate)
 }
 
-fn prices() -> HashMap<String, PriceRate> {
+fn prices() -> HashMap<String, (UsagePriceRate, CostQuality)> {
     synthetic_file("LUNA_USAGE_SYNTHETIC_PRICES_JSON")
         .and_then(|path| fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice::<HashMap<String, PriceRate>>(&bytes).ok())
+        .and_then(|bytes| serde_json::from_slice::<HashMap<String, UsagePriceRate>>(&bytes).ok())
         .unwrap_or_default()
         .into_iter()
         .filter(|(model, rate)| !model.is_empty() && rate.valid())
+        .map(|(model, rate)| (model, (rate, CostQuality::ModelPriced)))
         .collect()
 }
 
@@ -688,7 +667,7 @@ fn aggregate_records(
     records: Vec<(UsageProvider, Record)>,
     sources: &[UsageSource],
     days: u32,
-    prices: &HashMap<String, PriceRate>,
+    prices: &HashMap<String, (UsagePriceRate, CostQuality)>,
 ) -> Vec<UsageBucket> {
     let mut seen = HashSet::new();
     let mut buckets: BTreeMap<(i64, u8, String), (UsageBucket, HashSet<String>)> = BTreeMap::new();
@@ -730,7 +709,7 @@ fn aggregate_records(
             .or_else(|| {
                 prices
                     .get(&record.model)
-                    .map(|price| (price.cost(record.tokens), CostQuality::ModelPriced))
+                    .map(|(price, quality)| (price_cost(*price, record.tokens), *quality))
             });
         if let Some((cost, quality)) = priced {
             if let Some(total) = &mut bucket.api_equivalent_cost_usd {
@@ -804,7 +783,13 @@ pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
     cache.version = CACHE_VERSION;
     save_cache(cache_file.as_deref(), &cache);
 
-    let buckets = aggregate_records(records, &sources, days, &prices());
+    let mut price_rates = prices();
+    for (model, rate) in request.price_overrides {
+        if !model.trim().is_empty() && model.len() <= 200 && rate.valid() {
+            price_rates.insert(model, (rate, CostQuality::UserOverride));
+        }
+    }
+    let buckets = aggregate_records(records, &sources, days, &price_rates);
     UsageSnapshot {
         summary: UsageSummary {
             contract_version: USAGE_CONTRACT_VERSION,
@@ -1009,12 +994,15 @@ mod tests {
         };
         let rates = HashMap::from([(
             "gpt-test".into(),
-            PriceRate {
-                input_per_million: 1.0,
-                cached_per_million: 1.0,
-                creation_per_million: 1.0,
-                output_per_million: 1.0,
-            },
+            (
+                UsagePriceRate {
+                    input_per_million: 1.0,
+                    cached_per_million: 1.0,
+                    creation_per_million: 1.0,
+                    output_per_million: 1.0,
+                },
+                CostQuality::ModelPriced,
+            ),
         )]);
         let buckets = aggregate_records(
             vec![
@@ -1058,5 +1046,74 @@ mod tests {
             .unwrap();
         assert_eq!(unknown.api_equivalent_cost_usd, None);
         assert_eq!(unknown.cost_quality, CostQuality::Unpriced);
+    }
+
+    #[test]
+    fn user_rate_prices_exact_model_but_provider_cost_wins() {
+        let tokens = UsageTokens {
+            uncached_input: 1_000_000,
+            ..UsageTokens::default()
+        };
+        let base = Record {
+            at_ms: 0,
+            model: "gpt-test".into(),
+            session: "one".into(),
+            tokens,
+            cost_usd: None,
+            dedupe: None,
+        };
+        let source = UsageSource {
+            provider: UsageProvider::Codex,
+            environment_id: "fixture".into(),
+            fingerprint: "fixture".into(),
+            status: UsageSourceStatus::Ready,
+            distinct_sessions: 1,
+            files_scanned: 1,
+            files_cached: 0,
+            failed_files: 0,
+            detail: None,
+        };
+        let rates = HashMap::from([(
+            "gpt-test".into(),
+            (
+                UsagePriceRate {
+                    input_per_million: 2.0,
+                    cached_per_million: 0.0,
+                    creation_per_million: 0.0,
+                    output_per_million: 0.0,
+                },
+                CostQuality::UserOverride,
+            ),
+        )]);
+        let buckets = aggregate_records(
+            vec![
+                (UsageProvider::Codex, base.clone()),
+                (
+                    UsageProvider::Codex,
+                    Record {
+                        at_ms: 3_600_000,
+                        cost_usd: Some(0.5),
+                        ..base.clone()
+                    },
+                ),
+                (
+                    UsageProvider::Codex,
+                    Record {
+                        at_ms: 7_200_000,
+                        model: "gpt-test-extra".into(),
+                        ..base
+                    },
+                ),
+            ],
+            &[source],
+            1,
+            &rates,
+        );
+        assert_eq!(buckets[0].api_equivalent_cost_usd, Some(2.0));
+        assert_eq!(buckets[0].cost_quality, CostQuality::UserOverride);
+        assert_eq!(buckets[1].api_equivalent_cost_usd, Some(0.5));
+        assert_eq!(buckets[1].cost_quality, CostQuality::ProviderReported);
+        assert_eq!(buckets[2].api_equivalent_cost_usd, None);
+        assert_eq!(buckets[2].cost_quality, CostQuality::Unpriced);
     }
 }

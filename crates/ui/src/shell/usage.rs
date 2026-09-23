@@ -5,11 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use zeron_proto::{
     CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, UsageBucket, UsageLimitSnapshot,
-    UsageProvider, UsageSnapshot, UsageSourceStatus,
+    UsagePriceRate, UsageProvider, UsageSnapshot, UsageSourceStatus,
 };
 use zeron_rpc::methods;
 
@@ -47,11 +47,98 @@ fn period_label(start_ms: i64, hourly: bool) -> String {
     let Some(at) = Utc.timestamp_millis_opt(start_ms).single() else {
         return "Unknown time".into();
     };
+    let local = at.with_timezone(&Local).fixed_offset();
     if hourly {
-        at.format("%b %-d, %-I %p UTC").to_string()
+        format_local_hour(local)
     } else {
-        at.format("%b %-d UTC").to_string()
+        format!(
+            "{} UTC · starts {} local",
+            at.format("%b %-d"),
+            format_local_hour(local)
+        )
     }
+}
+
+fn format_local_hour(at: DateTime<FixedOffset>) -> String {
+    at.format("%b %-d, %-I %p %:z").to_string()
+}
+
+fn period_detail(start_ms: i64, hourly: bool, tokens: u64, cost: Option<f64>) -> String {
+    let Some(start) = Utc.timestamp_millis_opt(start_ms).single() else {
+        return "Unknown bucket time".into();
+    };
+    let end = start + chrono::Duration::hours(if hourly { 1 } else { 24 });
+    format!(
+        "UTC bucket {} to {} · local {} to {} · {} tokens · {}",
+        start.format("%Y-%m-%d %H:%M"),
+        end.format("%Y-%m-%d %H:%M"),
+        format_local_hour(start.with_timezone(&Local).fixed_offset()),
+        format_local_hour(end.with_timezone(&Local).fixed_offset()),
+        count(tokens),
+        cost.map_or("cost unknown".into(), |cost| format!(
+            "{} API-equivalent",
+            money(cost)
+        ))
+    )
+}
+
+fn quota_pace(
+    limit: &UsageLimitSnapshot,
+    window: &zeron_proto::UsageLimitWindow,
+    now_ms: i64,
+) -> Option<String> {
+    if limit.availability != LimitAvailability::Ready {
+        return None;
+    }
+    let checked = limit.checked_at_ms?;
+    let duration_ms = i64::try_from(window.duration_minutes?)
+        .ok()?
+        .checked_mul(60_000)?;
+    let reset = window.resets_at_ms?;
+    let start = reset.checked_sub(duration_ms)?;
+    if duration_ms <= 0
+        || now_ms < checked
+        || now_ms.checked_sub(checked)? >= 5 * 60_000
+        || checked < start
+        || checked >= reset
+        || now_ms >= reset
+        || !window.used_percent.is_finite()
+        || !(0.0..=100.0).contains(&window.used_percent)
+    {
+        return None;
+    }
+    let elapsed = checked.checked_sub(start)? as f64 / duration_ms as f64 * 100.0;
+    let delta = window.used_percent as f64 - elapsed;
+    Some(format!(
+        "Even pace: {:.0}% of window elapsed at check · used {:.0} points {}",
+        elapsed,
+        delta.abs(),
+        if delta > 0.0 { "above" } else { "below" }
+    ))
+}
+
+fn parse_price_override(fields: [&str; 5]) -> Result<(String, UsagePriceRate), String> {
+    let model = fields[0].trim();
+    if model.is_empty() || model.len() > 200 {
+        return Err("Enter an exact model name (up to 200 characters)".into());
+    }
+    let mut values = [0.0; 4];
+    for (index, value) in values.iter_mut().enumerate() {
+        *value = fields[index + 1]
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "Enter all four prices in USD per million tokens".to_string())?;
+    }
+    let rate = UsagePriceRate {
+        input_per_million: values[0],
+        cached_per_million: values[1],
+        creation_per_million: values[2],
+        output_per_million: values[3],
+    };
+    if !rate.valid() || values.iter().all(|value| *value == 0.0) {
+        return Err("Prices must be finite, nonnegative, at most $1M per million, and include a positive rate".into());
+    }
+    Ok((model.into(), rate))
 }
 
 fn reset_label(at_ms: Option<i64>, now_ms: i64) -> String {
@@ -110,7 +197,7 @@ fn limit_window_row(
     let fresh = limit.availability == LimitAvailability::Ready
         && limit
             .checked_at_ms
-            .is_some_and(|at| now_ms - at < 5 * 60_000);
+            .is_some_and(|at| now_ms.checked_sub(at).is_some_and(|age| age < 5 * 60_000));
     div()
         .flex()
         .flex_col()
@@ -165,6 +252,16 @@ fn limit_window_row(
                     if fresh { "" } else { " · unverified now" }
                 )),
         )
+        .when(!compact, |row| {
+            row.child(
+                div()
+                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_color(theme.text_muted)
+                    .child(quota_pace(limit, window, now_ms).unwrap_or_else(|| {
+                        "Pace unavailable · quota window is unverified or incomplete".into()
+                    })),
+            )
+        })
         .into_any_element()
 }
 
@@ -377,6 +474,120 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> 
 }
 
 impl Shell {
+    fn save_usage_price_override(&mut self, cx: &mut Context<Self>) {
+        let fields: Vec<String> = self
+            .usage_price_inputs
+            .iter()
+            .map(|input| input.read(cx).text().to_string())
+            .collect();
+        match parse_price_override([&fields[0], &fields[1], &fields[2], &fields[3], &fields[4]]) {
+            Ok((model, rate)) => {
+                self.settings.usage_price_overrides.insert(model, rate);
+                self.usage_price_error = None;
+                self.schedule_save(cx);
+                self.refresh_usage(cx);
+            }
+            Err(error) => {
+                self.usage_price_error = Some(error);
+                cx.notify();
+            }
+        }
+    }
+
+    fn remove_usage_price_override(&mut self, model: &str, cx: &mut Context<Self>) {
+        self.settings.usage_price_overrides.remove(model);
+        self.usage_price_error = None;
+        self.schedule_save(cx);
+        self.refresh_usage(cx);
+    }
+
+    fn render_usage_price_editor(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut saved: Vec<_> = self.settings.usage_price_overrides.iter().collect();
+        saved.sort_by(|left, right| left.0.cmp(right.0));
+        let inputs = self.usage_price_inputs.clone();
+        let mut card = div()
+            .w_full()
+            .rounded(px(Theme::CONTROL_RADIUS))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.glass_hover().opacity(0.35))
+            .p(px(14.0))
+            .flex()
+            .flex_col()
+            .gap(px(9.0))
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(14.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child("Exact-model price overrides"),
+            )
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .child("Your USD per million token rates estimate API-equivalent cost for an exact model name. Provider-reported costs take precedence; unknown models stay unpriced."),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(7.0))
+                    .children(inputs.into_iter().enumerate().map(|(index, input)| {
+                        div()
+                            .w(px(if index == 0 { 190.0 } else { 105.0 }))
+                            .child(crate::popover::dialog_field(input.into_any_element()))
+                    })),
+            )
+            .child(
+                div()
+                    .id("usage-price-save")
+                    .cursor_pointer()
+                    .text_color(theme.accent)
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .on_click(cx.listener(|this, _, _, cx| this.save_usage_price_override(cx)))
+                    .child("Save exact-model rate"),
+            );
+        if let Some(error) = &self.usage_price_error {
+            card = card.child(
+                div()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.warning)
+                    .child(error.clone()),
+            );
+        }
+        for (index, (model, rate)) in saved.into_iter().enumerate() {
+            let model = model.clone();
+            card = card.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .child(format!(
+                        "{model} · input ${} · cached ${} · creation ${} · output ${} / 1M",
+                        rate.input_per_million,
+                        rate.cached_per_million,
+                        rate.creation_per_million,
+                        rate.output_per_million
+                    ))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("usage-price-remove-{index}")))
+                            .cursor_pointer()
+                            .text_color(theme.warning)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.remove_usage_price_override(&model, cx)
+                            }))
+                            .child("Remove"),
+                    ),
+            );
+        }
+        card.into_any_element()
+    }
+
     pub(super) fn toggle_usage_card(&mut self, cx: &mut Context<Self>) {
         self.usage_card_open = !self.usage_card_open;
         if self.usage_card_open {
@@ -504,6 +715,7 @@ impl Shell {
             }
         }
         let days = self.settings.usage_days;
+        let price_overrides = self.settings.usage_price_overrides.clone();
         self.usage_refreshing = true;
         self.usage_error = None;
         // RpcClient and tokio::time both require the Tokio reactor. A GPUI
@@ -512,12 +724,13 @@ impl Shell {
         let fetch = gpui_tokio::Tokio::spawn(cx, async move {
             futures::future::join_all(targets.into_iter().map(|device| {
                 let engine = engine.clone();
+                let price_overrides = price_overrides.clone();
                 async move {
                     tokio::time::timeout(
                         std::time::Duration::from_secs(8),
                         engine.client().call(
                             methods::GET_USAGE_SNAPSHOT,
-                            serde_json::json!({"days": days, "targetDeviceId": device}),
+                            serde_json::json!({"days": days, "targetDeviceId": device, "priceOverrides": price_overrides}),
                         ),
                     )
                     .await
@@ -922,6 +1135,8 @@ impl Shell {
                         cost_of(&buckets).map_or("Unknown cost".into(), money)
                     };
                     let cost_known = metric == "tokens" || cost_of(&buckets).is_some();
+                    let detail =
+                        period_detail(start, snapshot.summary.days == 1, tokens, cost_of(&buckets));
                     let segments: Vec<AnyElement> = [UsageProvider::Codex, UsageProvider::Claude]
                         .into_iter()
                         .filter_map(|provider| {
@@ -951,6 +1166,13 @@ impl Shell {
                         .collect();
                     content = content.child(
                         div()
+                            .id(SharedString::from(format!("usage-period-{start}")))
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| super::SurfaceTabTooltip {
+                                    text: detail.clone().into(),
+                                })
+                                .into()
+                            })
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
@@ -998,6 +1220,7 @@ impl Shell {
                     let provenance = match quality {
                         CostQuality::ProviderReported => "provider reported",
                         CostQuality::ModelPriced => "exact model price",
+                        CostQuality::UserOverride => "your exact-model rate",
                         CostQuality::Unpriced => "unpriced",
                         CostQuality::Mixed => "mixed provenance",
                     };
@@ -1151,7 +1374,10 @@ impl Shell {
                     .when_some(self.usage_error.clone(), |el, error| {
                         el.child(div().text_color(theme.warning).child(error))
                     })
-                    .child(content),
+                    .child(content)
+                    .when(metric == "cost", |page| {
+                        page.child(self.render_usage_price_editor(&theme, cx))
+                    }),
             )
             .into_any_element()
     }
@@ -1312,7 +1538,10 @@ impl Shell {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_limit_status, reset_label};
+    use super::{
+        compact_limit_status, format_local_hour, parse_price_override, quota_pace, reset_label,
+    };
+    use chrono::{FixedOffset, TimeZone};
     use zeron_proto::{LimitAvailability, UsageLimitSnapshot, UsageLimitWindow, UsageProvider};
 
     #[test]
@@ -1364,5 +1593,63 @@ mod tests {
             compact_limit_status(&limit, 6 * 60_000),
             Some("Quota unsupported")
         );
+    }
+
+    #[test]
+    fn pace_requires_a_fresh_verified_window() {
+        let mut limit = UsageLimitSnapshot {
+            provider: UsageProvider::Codex,
+            verified_account_id: Some("synthetic".into()),
+            account_label: None,
+            plan: None,
+            checked_at_ms: Some(150 * 60_000),
+            availability: LimitAvailability::Ready,
+            windows: vec![],
+            reset_credits: None,
+            detail: None,
+        };
+        let mut window = UsageLimitWindow {
+            id: "five-hour".into(),
+            label: "Five hours".into(),
+            used_percent: 40.0,
+            resets_at_ms: Some(300 * 60_000),
+            duration_minutes: Some(300),
+        };
+        assert!(
+            quota_pace(&limit, &window, 151 * 60_000)
+                .unwrap()
+                .contains("used 10 points below")
+        );
+        assert!(quota_pace(&limit, &window, 156 * 60_000).is_none());
+        limit.availability = LimitAvailability::ProbeFailed;
+        assert!(quota_pace(&limit, &window, 151 * 60_000).is_none());
+        limit.availability = LimitAvailability::Ready;
+        window.duration_minutes = None;
+        assert!(quota_pace(&limit, &window, 151 * 60_000).is_none());
+        window.duration_minutes = Some(300);
+        assert!(quota_pace(&limit, &window, 301 * 60_000).is_none());
+    }
+
+    #[test]
+    fn exact_model_rate_validation_rejects_unknown_as_zero() {
+        let (_, rate) = parse_price_override([" gpt-test ", "1", "0.5", "0", "2"]).unwrap();
+        assert_eq!(rate.input_per_million, 1.0);
+        assert!(parse_price_override(["gpt-test", "0", "0", "0", "0"]).is_err());
+        assert!(parse_price_override(["gpt-test", "NaN", "0", "0", "2"]).is_err());
+    }
+
+    #[test]
+    fn repeated_local_hour_displays_distinct_dst_offsets() {
+        let early = FixedOffset::east_opt(2 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(2026, 10, 25, 3, 0, 0)
+            .unwrap();
+        let late = FixedOffset::east_opt(3600)
+            .unwrap()
+            .with_ymd_and_hms(2026, 10, 25, 3, 0, 0)
+            .unwrap();
+        assert!(format_local_hour(early).contains("+02:00"));
+        assert!(format_local_hour(late).contains("+01:00"));
+        assert_ne!(format_local_hour(early), format_local_hour(late));
     }
 }

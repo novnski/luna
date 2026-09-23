@@ -2,6 +2,7 @@
 //! estimate, never a subscription charge. Based on T3 Code's MIT usage contract.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub const USAGE_CONTRACT_VERSION: u32 = 1;
 
@@ -54,6 +55,31 @@ impl UsageTokens {
 pub struct UsageRequest {
     /// Supported: 1, 7, 30, 90. One day uses hourly buckets.
     pub days: u32,
+    /// User supplied USD per million tokens, keyed by an exact model name.
+    #[serde(default)]
+    pub price_overrides: HashMap<String, UsagePriceRate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsagePriceRate {
+    pub input_per_million: f64,
+    pub cached_per_million: f64,
+    pub creation_per_million: f64,
+    pub output_per_million: f64,
+}
+
+impl UsagePriceRate {
+    pub fn valid(self) -> bool {
+        [
+            self.input_per_million,
+            self.cached_per_million,
+            self.creation_per_million,
+            self.output_per_million,
+        ]
+        .into_iter()
+        .all(|rate| rate.is_finite() && (0.0..=1_000_000.0).contains(&rate))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +101,7 @@ pub struct UsageBucket {
 pub enum CostQuality {
     ProviderReported,
     ModelPriced,
+    UserOverride,
     Unpriced,
     Mixed,
 }

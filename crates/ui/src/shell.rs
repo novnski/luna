@@ -1702,6 +1702,8 @@ pub struct Shell {
     usage_request_epoch: u64,
     usage_task: Option<Task<()>>,
     usage_action_focus: FocusHandle,
+    usage_price_inputs: [Entity<ComposerInput>; 5],
+    usage_price_error: Option<String>,
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
     devices_page: Option<Entity<DevicesPage>>,
@@ -2105,6 +2107,15 @@ impl Shell {
             usage_request_epoch: 0,
             usage_task: None,
             usage_action_focus: cx.focus_handle().tab_stop(true),
+            usage_price_inputs: [
+                "Exact model name",
+                "Input $/1M",
+                "Cached $/1M",
+                "Creation $/1M",
+                "Output $/1M",
+            ]
+            .map(|placeholder| cx.new(|cx| ComposerInput::new(placeholder, cx))),
+            usage_price_error: None,
             nav,
             devices_page: None,
             archived_page: None,

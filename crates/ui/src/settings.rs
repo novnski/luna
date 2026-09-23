@@ -674,6 +674,8 @@ pub struct UiSettings {
     pub usage_days: u32,
     pub usage_metric: String,
     pub usage_sidebar_hidden: bool,
+    /// Exact-model USD per million token estimates supplied by the user.
+    pub usage_price_overrides: std::collections::HashMap<String, zeron_proto::UsagePriceRate>,
     /// The last selected space — restored on boot when the row still exists;
     /// also the new-tab default when the sidebar filter is "All".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -813,6 +815,7 @@ impl Default for UiSettings {
             usage_days: 30,
             usage_metric: "cost".into(),
             usage_sidebar_hidden: false,
+            usage_price_overrides: std::collections::HashMap::new(),
             last_space_id: None,
             open_tabs: None,
             space_filter: None,
@@ -1369,6 +1372,19 @@ impl UiSettings {
         self.git_history_column_widths = self.git_history_column_widths.clamped();
         self.git_history_column_order = self.git_history_column_order.normalized();
         self.ui_font_size = self.ui_font_size.normalized();
+        self.usage_price_overrides.retain(|model, rate| {
+            !model.trim().is_empty()
+                && model.len() <= 200
+                && rate.valid()
+                && [
+                    rate.input_per_million,
+                    rate.cached_per_million,
+                    rate.creation_per_million,
+                    rate.output_per_million,
+                ]
+                .into_iter()
+                .any(|value| value > 0.0)
+        });
         self.keymap.heal_jump_slots();
         self.keymap.heal_reserved_composer_shortcuts();
         self
@@ -1998,6 +2014,15 @@ mod tests {
             usage_days: 7,
             usage_metric: "tokens".into(),
             usage_sidebar_hidden: true,
+            usage_price_overrides: std::collections::HashMap::from([(
+                "gpt-test".into(),
+                zeron_proto::UsagePriceRate {
+                    input_per_million: 1.0,
+                    cached_per_million: 0.5,
+                    creation_per_million: 0.0,
+                    output_per_million: 2.0,
+                },
+            )]),
             last_space_id: Some("space-1".into()),
             open_tabs: Some(vec!["b".to_string(), "a".to_string()]),
             space_filter: Some("space-1".into()),
@@ -2096,6 +2121,21 @@ mod tests {
         assert!(json.contains(r#""terminalFontSize": 15.0"#));
         assert!(json.contains(r#""codeFontFamily": "geist""#));
         assert!(json.contains(r#""codeFontSize": 11.0"#));
+    }
+
+    #[test]
+    fn invalid_saved_usage_rates_do_not_appear_as_active_overrides() {
+        let mut settings = UiSettings::default();
+        settings.usage_price_overrides.insert(
+            "unknown-model".into(),
+            zeron_proto::UsagePriceRate {
+                input_per_million: 0.0,
+                cached_per_million: 0.0,
+                creation_per_million: 0.0,
+                output_per_million: 0.0,
+            },
+        );
+        assert!(settings.clamped().usage_price_overrides.is_empty());
     }
 
     #[test]
