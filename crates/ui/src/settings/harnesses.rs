@@ -43,7 +43,16 @@ use crate::state::AppState;
 use crate::theme::Theme;
 
 fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
-    widgets::meta_line(theme, vec![div().child(value.into()).into_any_element()])
+    widgets::meta_line(
+        theme,
+        vec![
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(value.into())
+                .into_any_element(),
+        ],
+    )
 }
 
 /// One-line blurb per agent (the t3code models page pairs every toggle row
