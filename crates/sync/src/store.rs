@@ -2,9 +2,9 @@
 //! processed-command ledger (ARCHITECTURE §2 command plane: entries are marked
 //! processed BEFORE execution so a crash can never double-execute a command).
 
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -44,6 +44,8 @@ pub enum StoreError {
     AdmissionRequired,
     #[error("write permit does not belong to this guarded store")]
     AdmissionMismatch,
+    #[error("database is already open in a conflicting admission mode")]
+    DatabaseOpenConflict,
 }
 
 /// Ordered, append-only migrations. Each entry runs once inside a transaction;
@@ -290,6 +292,112 @@ pub struct AttentionMutationCommit {
     pub revision: u64,
 }
 
+// Reserve the canonical database path before SQLite can open or migrate it.
+// The mutex protects only map operations; an open may wait on SQLite without
+// delaying admission decisions for unrelated databases. This is process-local:
+// external SQLite/file writers and hard-link aliases are not covered.
+static OPEN_DATABASES: OnceLock<Mutex<HashMap<PathBuf, OpenDatabase>>> = OnceLock::new();
+
+enum OpenDatabase {
+    Unguarded(usize),
+    Guarded {
+        coordinator: WriteEpoch,
+        handles: usize,
+    },
+}
+
+fn open_databases() -> &'static Mutex<HashMap<PathBuf, OpenDatabase>> {
+    OPEN_DATABASES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn canonical_database_path(data_dir: &Path) -> Result<PathBuf, StoreError> {
+    let data_dir = data_dir.canonicalize()?;
+    let path = data_dir.join("docs.sqlite3");
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => Ok(path.canonicalize()?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path),
+        Err(error) => Err(error.into()),
+    }
+}
+
+struct OpenRegistration {
+    path: PathBuf,
+    guarded: bool,
+}
+
+impl OpenRegistration {
+    fn acquire(path: PathBuf, coordinator: Option<&WriteEpoch>) -> Result<Self, StoreError> {
+        let mut databases = open_databases()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match (databases.get_mut(&path), coordinator) {
+            (None, Some(coordinator)) => {
+                databases.insert(
+                    path.clone(),
+                    OpenDatabase::Guarded {
+                        coordinator: coordinator.clone(),
+                        handles: 1,
+                    },
+                );
+            }
+            (None, None) => {
+                databases.insert(path.clone(), OpenDatabase::Unguarded(1));
+            }
+            (Some(OpenDatabase::Unguarded(handles)), None) => {
+                *handles = handles
+                    .checked_add(1)
+                    .ok_or(StoreError::DatabaseOpenConflict)?;
+            }
+            (
+                Some(OpenDatabase::Guarded {
+                    coordinator: existing,
+                    handles,
+                }),
+                Some(coordinator),
+            ) if existing.same_coordinator(coordinator) => {
+                *handles = handles
+                    .checked_add(1)
+                    .ok_or(StoreError::DatabaseOpenConflict)?;
+            }
+            (Some(OpenDatabase::Guarded { .. }), Some(_)) => {
+                return Err(StoreError::AdmissionMismatch);
+            }
+            _ => return Err(StoreError::DatabaseOpenConflict),
+        }
+        Ok(Self {
+            path,
+            guarded: coordinator.is_some(),
+        })
+    }
+}
+
+impl Drop for OpenRegistration {
+    fn drop(&mut self) {
+        let mut databases = open_databases()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let remove = match databases.get_mut(&self.path) {
+            Some(OpenDatabase::Unguarded(handles)) if !self.guarded => {
+                debug_assert!(*handles > 0);
+                *handles -= 1;
+                *handles == 0
+            }
+            Some(OpenDatabase::Guarded { handles, .. }) if self.guarded => {
+                debug_assert!(*handles > 0);
+                *handles -= 1;
+                *handles == 0
+            }
+            _ => {
+                debug_assert!(false, "database open registration changed before drop");
+                return;
+            }
+        };
+        if remove {
+            databases.remove(&self.path);
+        }
+    }
+}
+
 /// SQLite-backed store under a data directory (`{data_dir}/docs.sqlite3`).
 ///
 /// Holds warm-open doc snapshots (the DO room is authoritative; these make
@@ -299,22 +407,28 @@ pub struct DocsStore {
     conn: Mutex<Connection>,
     activity_gate: Mutex<()>,
     failed_publications: Mutex<HashSet<String>>,
-    // This bounded seam gates only the three save_snapshot variants. Stage 3
-    // must close the bypass through other writers and a second DocsStore::open.
+    // This bounded seam gates only the three save_snapshot variants. Other
+    // mutation methods remain outside the barrier.
     write_epoch: Option<WriteEpoch>,
+    // Last field: release the process-local path reservation after conn closes.
+    _registration: OpenRegistration,
 }
 
 impl DocsStore {
     /// Open (creating directory, database, and schema as needed).
+    /// Refuses an active database held by any guarded handle in this process.
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
-        Self::open_inner(data_dir.as_ref(), None)
+        std::fs::create_dir_all(data_dir.as_ref())?;
+        let data_dir = data_dir.as_ref().canonicalize()?;
+        let registration = OpenRegistration::acquire(canonical_database_path(&data_dir)?, None)?;
+        Self::open_inner(&data_dir, None, registration)
     }
 
     /// Synthetic guard seam. The directory must already exist inside the
     /// coordinator's canonical device root. Validation happens before SQLite
     /// open, PRAGMA updates, and migrations, all of which may write.
-    /// Stage 3 must protect another handle opened with `Self::open` against
-    /// this same database before any live-root use is safe.
+    /// A process-local path reservation blocks overlapping unguarded handles
+    /// and permits another guarded handle only for this same coordinator.
     pub fn open_guarded(
         data_dir: impl AsRef<Path>,
         coordinator: WriteEpoch,
@@ -327,11 +441,19 @@ impl DocsStore {
         if !data_dir.is_dir() || !data_dir.starts_with(coordinator.root()) {
             return Err(StoreError::AdmissionMismatch);
         }
-        Self::open_inner(&data_dir, Some(coordinator))
+        let database = canonical_database_path(&data_dir)?;
+        if !database.starts_with(coordinator.root()) {
+            return Err(StoreError::AdmissionMismatch);
+        }
+        let registration = OpenRegistration::acquire(database, Some(&coordinator))?;
+        Self::open_inner(&data_dir, Some(coordinator), registration)
     }
 
-    fn open_inner(data_dir: &Path, write_epoch: Option<WriteEpoch>) -> Result<Self, StoreError> {
-        std::fs::create_dir_all(data_dir)?;
+    fn open_inner(
+        data_dir: &Path,
+        write_epoch: Option<WriteEpoch>,
+        registration: OpenRegistration,
+    ) -> Result<Self, StoreError> {
         let mut conn = Connection::open(data_dir.join("docs.sqlite3"))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -342,6 +464,7 @@ impl DocsStore {
             activity_gate: Mutex::new(()),
             failed_publications: Mutex::new(HashSet::new()),
             write_epoch,
+            _registration: registration,
         })
     }
 
@@ -3249,7 +3372,8 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use crate::write_epoch::Phase;
-    use std::sync::Arc;
+    use std::sync::{Arc, Barrier, mpsc};
+    use std::thread;
     use std::time::Duration;
     use zeron_proto::{
         ACTIVITY_ENVELOPE_VERSION, ATTENTION_CONTRACT_VERSION, ActivityKind, ActivityRedaction,
@@ -3676,6 +3800,153 @@ mod tests {
             .save_snapshot_admitted(&second, "doc", b"second")
             .unwrap();
         assert_eq!(store.load_snapshot("doc").unwrap().unwrap(), b"second");
+    }
+
+    #[test]
+    fn guarded_database_registration_covers_aliases_and_all_live_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("profile");
+        std::fs::create_dir(&data_dir).unwrap();
+        let coordinator = WriteEpoch::for_device_root(root.path()).unwrap();
+        let permit = coordinator.try_admit().unwrap();
+        let first = DocsStore::open_guarded(&data_dir, coordinator.clone(), &permit).unwrap();
+        first
+            .save_snapshot_admitted(&permit, "doc", b"unchanged")
+            .unwrap();
+
+        assert!(matches!(
+            DocsStore::open(&data_dir),
+            Err(StoreError::DatabaseOpenConflict)
+        ));
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("profile-alias");
+            std::os::unix::fs::symlink(&data_dir, &alias).unwrap();
+            assert!(matches!(
+                DocsStore::open(&alias),
+                Err(StoreError::DatabaseOpenConflict)
+            ));
+        }
+
+        let other_same_root = WriteEpoch::for_device_root(root.path()).unwrap();
+        let other_permit = other_same_root.try_admit().unwrap();
+        assert!(matches!(
+            DocsStore::open_guarded(&data_dir, other_same_root, &other_permit),
+            Err(StoreError::AdmissionMismatch)
+        ));
+        let wrong_root = tempfile::tempdir().unwrap();
+        let wrong_coordinator = WriteEpoch::for_device_root(wrong_root.path()).unwrap();
+        let wrong_permit = wrong_coordinator.try_admit().unwrap();
+        assert!(matches!(
+            DocsStore::open_guarded(&data_dir, wrong_coordinator, &wrong_permit),
+            Err(StoreError::AdmissionMismatch)
+        ));
+
+        let second = DocsStore::open_guarded(&data_dir, coordinator.clone(), &permit).unwrap();
+        assert_eq!(second.load_snapshot("doc").unwrap().unwrap(), b"unchanged");
+        drop(first);
+        assert!(matches!(
+            DocsStore::open(&data_dir),
+            Err(StoreError::DatabaseOpenConflict)
+        ));
+        drop(second);
+
+        let unguarded = DocsStore::open(&data_dir).unwrap();
+        assert_eq!(
+            unguarded.load_snapshot("doc").unwrap().unwrap(),
+            b"unchanged"
+        );
+        assert!(matches!(
+            DocsStore::open_guarded(&data_dir, coordinator.clone(), &permit),
+            Err(StoreError::DatabaseOpenConflict)
+        ));
+        drop(unguarded);
+        DocsStore::open_guarded(&data_dir, coordinator, &permit).unwrap();
+    }
+
+    #[test]
+    fn concurrent_open_modes_never_share_a_database() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("profile");
+        std::fs::create_dir(&data_dir).unwrap();
+        let coordinator = WriteEpoch::for_device_root(root.path()).unwrap();
+        let permit = coordinator.try_admit().unwrap();
+        const UNGUARDED: usize = 4;
+        let start = Arc::new(Barrier::new(UNGUARDED + 2));
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let (results_tx, results_rx) = mpsc::channel();
+        let mut threads = Vec::new();
+
+        {
+            let start = start.clone();
+            let release_rx = release_rx.clone();
+            let results_tx = results_tx.clone();
+            let data_dir = data_dir.clone();
+            threads.push(thread::spawn(move || {
+                start.wait();
+                let result = DocsStore::open_guarded(&data_dir, coordinator, &permit);
+                results_tx.send((true, result.is_ok())).unwrap();
+                let _ = release_rx.lock().unwrap().recv();
+                drop(result);
+            }));
+        }
+        for _ in 0..UNGUARDED {
+            let start = start.clone();
+            let release_rx = release_rx.clone();
+            let results_tx = results_tx.clone();
+            let data_dir = data_dir.clone();
+            threads.push(thread::spawn(move || {
+                start.wait();
+                let result = DocsStore::open(&data_dir);
+                results_tx.send((false, result.is_ok())).unwrap();
+                let _ = release_rx.lock().unwrap().recv();
+                drop(result);
+            }));
+        }
+        start.wait();
+        let results = (0..=UNGUARDED)
+            .map(|_| results_rx.recv_timeout(Duration::from_secs(5)).unwrap())
+            .collect::<Vec<_>>();
+        for _ in 0..=UNGUARDED {
+            release_tx.send(()).unwrap();
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let guarded_succeeded = results.iter().any(|(guarded, ok)| *guarded && *ok);
+        let unguarded_succeeded = results.iter().any(|(guarded, ok)| !*guarded && *ok);
+        assert!(guarded_succeeded || unguarded_succeeded);
+        assert!(!(guarded_succeeded && unguarded_succeeded));
+    }
+
+    #[test]
+    fn opening_reservation_blocks_before_sqlite_open() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("profile");
+        std::fs::create_dir(&data_dir).unwrap();
+        let coordinator = WriteEpoch::for_device_root(root.path()).unwrap();
+        let _permit = coordinator.try_admit().unwrap();
+        let reservation = OpenRegistration::acquire(
+            canonical_database_path(&data_dir).unwrap(),
+            Some(&coordinator),
+        )
+        .unwrap();
+        assert!(!data_dir.join("docs.sqlite3").exists());
+
+        let attempted = thread::spawn({
+            let data_dir = data_dir.clone();
+            move || {
+                matches!(
+                    DocsStore::open(&data_dir),
+                    Err(StoreError::DatabaseOpenConflict)
+                )
+            }
+        });
+        assert!(attempted.join().unwrap());
+        assert!(!data_dir.join("docs.sqlite3").exists());
+        drop(reservation);
+        DocsStore::open(&data_dir).unwrap();
     }
 
     #[test]
