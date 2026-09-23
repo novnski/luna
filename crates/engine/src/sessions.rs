@@ -237,6 +237,26 @@ struct LunaProspectiveInterruptGrant {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LunaInterruptDispatchStatus {
+    Applied,
+    Rejected,
+    Conflict,
+    Pending,
+    Unknown,
+}
+
+/// A private readback, not a model-visible tool result. Applied and settled
+/// remain separate, and Unknown never authorizes a new command ID or retry.
+#[derive(Debug)]
+#[allow(dead_code)]
+struct LunaInterruptDispatchResult {
+    command_id: String,
+    status: LunaInterruptDispatchStatus,
+    receipt: Option<zeron_proto::CommandReceipt>,
+    settled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LunaApprovalOutcome {
     AllowedOnce,
     Denied,
@@ -1670,6 +1690,152 @@ impl SessionsEngine {
             return LunaApprovalOutcome::RunEnded;
         }
         LunaApprovalOutcome::AllowedOnce
+    }
+
+    /// Fake-only, private one-shot proof. No provider callback, UI, or catalog
+    /// calls this stage. The grant is consumed by value and a failed/unknown
+    /// submission is never retried with this or a replacement command ID.
+    #[allow(dead_code)]
+    async fn dispatch_luna_interrupt_grant_once(
+        &self,
+        grant: LunaProspectiveInterruptGrant,
+    ) -> Result<LunaInterruptDispatchResult, crate::cross_task_tools::CrossTaskError> {
+        use crate::cross_task_tools::{CrossTaskControlGrant, CrossTaskError, CrossTaskTools};
+        use zeron_proto::{CommandReceiptStatus, CrossTaskControlAction, CrossTaskControlRequest};
+
+        let proposal = grant.proposal;
+        let evidence = &proposal.evidence;
+        if proposal.expires_at_ms <= now_ms()
+            || proposal.expires_at_ms > now_ms().saturating_add(30_000)
+        {
+            return Err(CrossTaskError::UserRequest);
+        }
+        if proposal.action != CrossTaskControlAction::Interrupt
+            || evidence.source_project_id.is_empty()
+            || evidence.source_environment_id != self.inner.device_id
+            || evidence.target_task_id == evidence.claim.source_task_id
+            || evidence.target_snapshot.task_id != evidence.target_task_id
+            || evidence
+                .target_snapshot
+                .active_turn_id
+                .as_deref()
+                .is_none_or(str::is_empty)
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let (interrupt, mut cancel) = self
+            .claimed_call_cancel_state(&evidence.claim)
+            .ok_or(CrossTaskError::Unavailable)?;
+        let backend = self
+            .cross_task_backend()
+            .ok_or(CrossTaskError::Unavailable)?;
+        let tools = CrossTaskTools::new(backend);
+        let read_authority = evidence.read_only_authority();
+        tokio::select! {
+            biased;
+            _ = interrupt.cancelled() => return Err(CrossTaskError::Cancelled),
+            _ = cancel.wait_for(|value| *value) => return Err(CrossTaskError::Cancelled),
+            result = tools.revalidate_control_target_snapshot(
+                &read_authority,
+                &evidence.target_task_id,
+                &evidence.target_snapshot,
+                &interrupt,
+            ) => result,
+        }?;
+        if !self.claimed_call_is_live(&evidence.claim) {
+            return Err(CrossTaskError::Unavailable);
+        }
+
+        let command_id = new_id();
+        let request = CrossTaskControlRequest {
+            action: CrossTaskControlAction::Interrupt,
+            task_id: evidence.target_task_id.clone(),
+            project_id: evidence.source_project_id.clone(),
+            environment_id: evidence.source_environment_id.clone(),
+            command_id: command_id.clone(),
+            destination_project_id: None,
+            expected_task_revision: Some(evidence.target_snapshot.task_revision),
+            expected_binding_generation: evidence.target_snapshot.binding_generation,
+            expected_turn_id: evidence.target_snapshot.active_turn_id.clone(),
+        };
+        let mut manage_authority = read_authority.clone();
+        manage_authority.granted_scopes = HashSet::from(["threads.manage".into()]);
+        manage_authority.explicit_user_request = true;
+        let control_grant = CrossTaskControlGrant {
+            caller_task_id: evidence.claim.source_task_id.clone(),
+            request: request.clone(),
+            expires_at_ms: proposal.expires_at_ms,
+        };
+        if !self.claimed_call_is_live(&evidence.claim) || proposal.expires_at_ms <= now_ms() {
+            return Err(CrossTaskError::Unavailable);
+        }
+        // Once this await begins, an error or cancellation may mean the
+        // backend committed. The only follow-up is same-ID readback.
+        let submitted = tokio::select! {
+            biased;
+            _ = interrupt.cancelled() => Err(CrossTaskError::Cancelled),
+            _ = cancel.wait_for(|value| *value) => Err(CrossTaskError::Cancelled),
+            result = tools.control(
+                &manage_authority,
+                &control_grant,
+                request,
+                &interrupt,
+            ) => result,
+        };
+        // Ignore source cancellation after a possible commit, but do not wait
+        // indefinitely for receipt readback. An unknown result is never replayed.
+        let readback = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tools.control_command_receipt(
+                &read_authority,
+                &evidence.target_task_id,
+                &command_id,
+                &CancellationToken::new(),
+            ),
+        )
+        .await;
+        let Some(receipt) = readback.ok().and_then(Result::ok).flatten() else {
+            return Ok(LunaInterruptDispatchResult {
+                command_id,
+                status: LunaInterruptDispatchStatus::Unknown,
+                receipt: None,
+                settled: false,
+            });
+        };
+        if receipt.intent != "stop"
+            || receipt.snapshot != evidence.target_snapshot
+            || submitted.as_ref().is_ok_and(|result| {
+                result.command.payload_hash != receipt.payload_hash
+                    || result.command.snapshot != receipt.snapshot
+            })
+        {
+            return Ok(LunaInterruptDispatchResult {
+                command_id,
+                status: LunaInterruptDispatchStatus::Unknown,
+                receipt: None,
+                settled: false,
+            });
+        }
+        let settled = submitted.as_ref().is_ok_and(|result| {
+            result.command.command_id == command_id
+                && result.command.payload_hash == receipt.payload_hash
+                && result.command.status == receipt.status
+                && result.settled
+        });
+        let status = match receipt.status {
+            CommandReceiptStatus::Applied => LunaInterruptDispatchStatus::Applied,
+            CommandReceiptStatus::Rejected
+            | CommandReceiptStatus::Superseded
+            | CommandReceiptStatus::Failed => LunaInterruptDispatchStatus::Rejected,
+            CommandReceiptStatus::Conflict => LunaInterruptDispatchStatus::Conflict,
+            CommandReceiptStatus::Pending => LunaInterruptDispatchStatus::Pending,
+        };
+        Ok(LunaInterruptDispatchResult {
+            command_id,
+            status,
+            receipt: Some(receipt),
+            settled,
+        })
     }
 
     pub fn task_binding_generation(&self, chat_id: &str) -> Option<u32> {
@@ -7523,6 +7689,15 @@ mod tests {
         );
     }
 
+    #[derive(Clone, Copy)]
+    enum FakeInterruptMode {
+        Receipt(zeron_proto::CommandReceiptStatus),
+        CommitThenError,
+        NoReceipt,
+        ReadbackError,
+        ReadbackNever,
+    }
+
     struct FakeControlEvidenceBackend {
         source_task_id: String,
         source_environment_id: String,
@@ -7534,6 +7709,10 @@ mod tests {
         release_snapshot: Option<Arc<tokio::sync::Notify>>,
         control_calls: AtomicUsize,
         receipt_reads: AtomicUsize,
+        interrupt_mode: Mutex<Option<FakeInterruptMode>>,
+        stored_receipt: Mutex<Option<zeron_proto::CommandReceipt>>,
+        submitted_request: Mutex<Option<zeron_proto::CrossTaskControlRequest>>,
+        readback_command_id: Mutex<Option<String>>,
     }
 
     #[async_trait::async_trait]
@@ -7624,23 +7803,88 @@ mod tests {
         async fn control_command_receipt(
             &self,
             _: &str,
-            _: &str,
+            command_id: &str,
             _: &crate::cross_task_tools::CrossTaskAuthority,
         ) -> Result<Option<zeron_proto::CommandReceipt>, crate::cross_task_tools::CrossTaskError>
         {
             self.receipt_reads.fetch_add(1, Ordering::SeqCst);
-            Ok(None)
+            *lock(&self.readback_command_id) = Some(command_id.into());
+            let mode = *lock(&self.interrupt_mode);
+            if matches!(mode, Some(FakeInterruptMode::ReadbackNever)) {
+                std::future::pending().await
+            }
+            if matches!(mode, Some(FakeInterruptMode::ReadbackError)) {
+                return Err(crate::cross_task_tools::CrossTaskError::Backend(
+                    "synthetic readback failure".into(),
+                ));
+            }
+            Ok(lock(&self.stored_receipt)
+                .as_ref()
+                .filter(|receipt| receipt.command_id == command_id)
+                .cloned())
         }
 
         async fn control(
             &self,
-            _: zeron_proto::CrossTaskControlRequest,
-            _: &crate::cross_task_tools::CrossTaskAuthority,
-            _: &crate::cross_task_tools::CrossTaskControlGrant,
+            request: zeron_proto::CrossTaskControlRequest,
+            authority: &crate::cross_task_tools::CrossTaskAuthority,
+            grant: &crate::cross_task_tools::CrossTaskControlGrant,
         ) -> Result<zeron_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError>
         {
             self.control_calls.fetch_add(1, Ordering::SeqCst);
-            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+            let Some(mode) = *lock(&self.interrupt_mode) else {
+                return Err(crate::cross_task_tools::CrossTaskError::Unsupported);
+            };
+            if request.action != zeron_proto::CrossTaskControlAction::Interrupt
+                || grant.request != request
+                || grant.caller_task_id != authority.caller_task_id
+                || !authority.explicit_user_request
+                || !authority.granted_scopes.contains("threads.manage")
+            {
+                return Err(crate::cross_task_tools::CrossTaskError::UserRequest);
+            }
+            *lock(&self.submitted_request) = Some(request.clone());
+            let status = match mode {
+                FakeInterruptMode::Receipt(status) => status,
+                FakeInterruptMode::CommitThenError => zeron_proto::CommandReceiptStatus::Applied,
+                FakeInterruptMode::NoReceipt
+                | FakeInterruptMode::ReadbackError
+                | FakeInterruptMode::ReadbackNever => zeron_proto::CommandReceiptStatus::Pending,
+            };
+            let receipt = zeron_proto::CommandReceipt {
+                command_id: request.command_id.clone(),
+                task_id: request.task_id.clone(),
+                intent: "stop".into(),
+                payload_hash: "synthetic-interrupt".into(),
+                status,
+                snapshot: lock(&self.snapshots).front().unwrap().clone(),
+                event_sequence: (status == zeron_proto::CommandReceiptStatus::Applied).then_some(1),
+                actor_id: format!("luna-tool:{}", authority.caller_task_id),
+                client_id: "luna-cross-task".into(),
+                client_session_id: authority.caller_task_id.clone(),
+                execution_environment: Some(authority.local_environment_id.clone()),
+                correlation_id: None,
+                reason: None,
+                recovery_action: None,
+                accepted_at_ms: 1,
+                committed_at_ms: (status == zeron_proto::CommandReceiptStatus::Applied)
+                    .then_some(2),
+                observed_at_ms: 2,
+            };
+            if !matches!(mode, FakeInterruptMode::NoReceipt) {
+                *lock(&self.stored_receipt) = Some(receipt.clone());
+            }
+            if matches!(mode, FakeInterruptMode::CommitThenError) {
+                return Err(crate::cross_task_tools::CrossTaskError::Backend(
+                    "synthetic committed but response lost".into(),
+                ));
+            }
+            Ok(zeron_proto::CrossTaskControlReceipt {
+                task_id: request.task_id,
+                command: receipt,
+                observed_status: "working".into(),
+                settled: false,
+            })
         }
     }
 
@@ -7689,6 +7933,10 @@ mod tests {
             release_snapshot: None,
             control_calls: AtomicUsize::new(0),
             receipt_reads: AtomicUsize::new(0),
+            interrupt_mode: Mutex::new(None),
+            stored_receipt: Mutex::new(None),
+            submitted_request: Mutex::new(None),
+            readback_command_id: Mutex::new(None),
         })
     }
 
@@ -7751,6 +7999,467 @@ mod tests {
             .unwrap()
             .engine_tx = engine_tx;
         (root, core, source_task_id, backend, evidence, events)
+    }
+
+    async fn approved_interrupt_fixture() -> (
+        tempfile::TempDir,
+        crate::EngineCore,
+        String,
+        Arc<FakeControlEvidenceBackend>,
+        super::LunaProspectiveInterruptGrant,
+        tokio::sync::mpsc::UnboundedReceiver<zeron_proto::AgentEvent>,
+    ) {
+        let (root, core, source_task_id, backend, evidence, mut events) =
+            prospective_interrupt_fixture().await;
+        let (request_id, answer, grant) = core
+            .sessions
+            .register_luna_prospective_interrupt(evidence)
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+        ));
+        assert_eq!(
+            core.sessions
+                .respond_luna_prospective_interrupt_local_ui(
+                    &source_task_id,
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .await,
+            LunaApprovalOutcome::AllowedOnce
+        );
+        assert_eq!(answer.await.unwrap()[0].labels, vec!["Allow once"]);
+        assert!(matches!(
+            events.try_recv(),
+            Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
+                if resolved == request_id
+        ));
+        let grant = grant.await.unwrap();
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+        (root, core, source_task_id, backend, grant, events)
+    }
+
+    async fn approved_gated_interrupt_fixture() -> (
+        tempfile::TempDir,
+        crate::EngineCore,
+        String,
+        Arc<FakeControlEvidenceBackend>,
+        super::LunaProspectiveInterruptGrant,
+        Arc<tokio::sync::Notify>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        let (root, core, source_task_id) = managed_codex_wait_fixture();
+        let claim = ready_control_evidence_claim(&root, &core, &source_task_id);
+        let mut backend = control_evidence_backend(&core, &source_task_id);
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let fake = Arc::get_mut(&mut backend).unwrap();
+        fake.gate_on_read = 5;
+        fake.entered_snapshot = Some(entered.clone());
+        fake.release_snapshot = Some(release.clone());
+        register_control_evidence_backend(&core, &backend);
+        let evidence = core
+            .sessions
+            .prepare_luna_control_evidence(
+                claim,
+                &control_evidence_authority(&core, &source_task_id),
+                "target-a",
+            )
+            .await
+            .unwrap();
+        let (engine_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+        lock(&core.sessions.inner.runs)
+            .get_mut(&source_task_id)
+            .unwrap()
+            .engine_tx = engine_tx;
+        let (request_id, answer, grant) = core
+            .sessions
+            .register_luna_prospective_interrupt(evidence)
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+        ));
+        assert_eq!(
+            core.sessions
+                .respond_luna_prospective_interrupt_local_ui(
+                    &source_task_id,
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .await,
+            LunaApprovalOutcome::AllowedOnce
+        );
+        assert_eq!(answer.await.unwrap()[0].labels, vec!["Allow once"]);
+        assert!(matches!(
+            events.try_recv(),
+            Ok(zeron_proto::AgentEvent::InputResolved { .. })
+        ));
+        (
+            root,
+            core,
+            source_task_id,
+            backend,
+            grant.await.unwrap(),
+            entered,
+            release,
+        )
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_dispatch_classifies_exact_durable_receipts() {
+        use super::LunaInterruptDispatchStatus as Outcome;
+        use zeron_proto::CommandReceiptStatus as Receipt;
+
+        for (receipt_status, expected) in [
+            (Receipt::Applied, Outcome::Applied),
+            (Receipt::Rejected, Outcome::Rejected),
+            (Receipt::Conflict, Outcome::Conflict),
+            (Receipt::Pending, Outcome::Pending),
+            (Receipt::Superseded, Outcome::Rejected),
+            (Receipt::Failed, Outcome::Rejected),
+        ] {
+            let (_root, core, source_task_id, backend, grant, _events) =
+                approved_interrupt_fixture().await;
+            *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(receipt_status));
+            let expected_snapshot = grant.proposal.evidence.target_snapshot.clone();
+            let result = core
+                .sessions
+                .dispatch_luna_interrupt_grant_once(grant)
+                .await
+                .unwrap();
+            assert_eq!(result.status, expected);
+            assert_eq!(result.receipt.as_ref().unwrap().status, receipt_status);
+            assert_eq!(result.receipt.as_ref().unwrap().snapshot, expected_snapshot);
+            assert!(!result.settled, "Applied is not target settlement");
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 1);
+            let request = lock(&backend.submitted_request).clone().unwrap();
+            assert_eq!(request.command_id, result.command_id);
+            assert_eq!(
+                request.action,
+                zeron_proto::CrossTaskControlAction::Interrupt
+            );
+            assert_eq!(request.task_id, "target-a");
+            assert_eq!(request.project_id, "project-a");
+            assert_eq!(request.environment_id, core.device_id);
+            assert_eq!(
+                request.expected_task_revision,
+                Some(expected_snapshot.task_revision)
+            );
+            assert_eq!(
+                request.expected_binding_generation,
+                expected_snapshot.binding_generation
+            );
+            assert_eq!(request.expected_turn_id, expected_snapshot.active_turn_id);
+            assert_eq!(
+                lock(&backend.readback_command_id).as_deref(),
+                Some(result.command_id.as_str())
+            );
+            assert_eq!(
+                source_task_id,
+                result.receipt.as_ref().unwrap().client_session_id
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_dispatch_uses_same_id_readback_without_replay() {
+        use super::LunaInterruptDispatchStatus as Outcome;
+
+        for (mode, expected) in [
+            (FakeInterruptMode::CommitThenError, Outcome::Applied),
+            (FakeInterruptMode::NoReceipt, Outcome::Unknown),
+            (FakeInterruptMode::ReadbackError, Outcome::Unknown),
+        ] {
+            let (_root, core, _source_task_id, backend, grant, _events) =
+                approved_interrupt_fixture().await;
+            *lock(&backend.interrupt_mode) = Some(mode);
+            let result = core
+                .sessions
+                .dispatch_luna_interrupt_grant_once(grant)
+                .await
+                .unwrap();
+            assert_eq!(result.status, expected);
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                lock(&backend.submitted_request)
+                    .as_ref()
+                    .unwrap()
+                    .command_id,
+                result.command_id
+            );
+            assert_eq!(
+                lock(&backend.readback_command_id).as_deref(),
+                Some(result.command_id.as_str())
+            );
+            if expected == Outcome::Unknown {
+                assert!(result.receipt.is_none());
+                assert!(!result.settled);
+            } else {
+                assert_eq!(
+                    result.receipt.as_ref().unwrap().status,
+                    zeron_proto::CommandReceiptStatus::Applied
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_dispatch_bounds_stuck_same_id_readback() {
+        use super::LunaInterruptDispatchStatus as Outcome;
+
+        let (_root, core, _source_task_id, backend, grant, _events) =
+            approved_interrupt_fixture().await;
+        *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::ReadbackNever);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            core.sessions.dispatch_luna_interrupt_grant_once(grant),
+        )
+        .await
+        .expect("receipt readback must be bounded")
+        .unwrap();
+        assert_eq!(result.status, Outcome::Unknown);
+        assert!(result.receipt.is_none());
+        assert!(!result.settled);
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            lock(&backend.submitted_request)
+                .as_ref()
+                .unwrap()
+                .command_id,
+            result.command_id
+        );
+        assert_eq!(
+            lock(&backend.readback_command_id).as_deref(),
+            Some(result.command_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_dispatch_rejects_expired_or_stale_source_before_submit() {
+        use crate::cross_task_tools::CrossTaskError;
+
+        for change in ["expiry", "rebind", "turn", "cancel", "run-drop"] {
+            let (_root, core, source_task_id, backend, mut grant, _events) =
+                approved_interrupt_fixture().await;
+            *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
+                zeron_proto::CommandReceiptStatus::Applied,
+            ));
+            match change {
+                "expiry" => grant.proposal.expires_at_ms = crate::now_ms() - 1,
+                "rebind" => {
+                    core.task_identity
+                        .advance_binding(
+                            &source_task_id,
+                            HarnessId::Codex,
+                            "provider-thread-b",
+                            zeron_proto::BindingOrigin::ContextReset,
+                            "synthetic rebind before dispatch",
+                        )
+                        .unwrap();
+                }
+                "turn" => assert!(core.sessions.inner.observe_codex_checkpoint(
+                    &source_task_id,
+                    "run-a",
+                    Some("provider-thread-a"),
+                    "turn-b",
+                )),
+                "cancel" => {
+                    lock(&core.sessions.inner.runs)
+                        .get(&source_task_id)
+                        .unwrap()
+                        .cancel
+                        .send_replace(true);
+                }
+                "run-drop" => core.sessions.inner.remove_run(&source_task_id, "run-a"),
+                _ => unreachable!(),
+            }
+            let result = core
+                .sessions
+                .dispatch_luna_interrupt_grant_once(grant)
+                .await;
+            assert_eq!(
+                result.unwrap_err(),
+                if change == "expiry" {
+                    CrossTaskError::UserRequest
+                } else {
+                    CrossTaskError::Unavailable
+                },
+                "{change}"
+            );
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_dispatch_rejects_changed_target_before_submit() {
+        use crate::cross_task_tools::CrossTaskError;
+
+        for change in [
+            "revision",
+            "sequence",
+            "binding-id",
+            "binding-generation",
+            "active-turn",
+            "project",
+            "environment",
+        ] {
+            let (_root, core, _source_task_id, backend, grant, _events) =
+                approved_interrupt_fixture().await;
+            *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
+                zeron_proto::CommandReceiptStatus::Applied,
+            ));
+            match change {
+                "project" => lock(&backend.target).project_id = Some("project-b".into()),
+                "environment" => lock(&backend.target).environment_id = "remote".into(),
+                _ => {
+                    let mut snapshot = lock(&backend.snapshots).front().unwrap().clone();
+                    match change {
+                        "revision" => snapshot.task_revision += 1,
+                        "sequence" => snapshot.task_sequence += 1,
+                        "binding-id" => snapshot.binding_id = Some("new-binding".into()),
+                        "binding-generation" => snapshot.binding_generation = Some(3),
+                        "active-turn" => snapshot.active_turn_id = Some("new-target-turn".into()),
+                        _ => unreachable!(),
+                    }
+                    *lock(&backend.snapshots) = VecDeque::from([snapshot]);
+                }
+            }
+            let result = core
+                .sessions
+                .dispatch_luna_interrupt_grant_once(grant)
+                .await;
+            assert_eq!(
+                result.unwrap_err(),
+                if matches!(change, "project" | "environment") {
+                    CrossTaskError::TargetScope
+                } else {
+                    CrossTaskError::StaleSnapshot
+                },
+                "{change}"
+            );
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_dispatch_rejects_source_or_target_change_during_read() {
+        use crate::cross_task_tools::CrossTaskError;
+
+        for change in ["rebind", "target-turn", "cancel", "run-drop"] {
+            let (_root, core, source_task_id, backend, grant, entered, release) =
+                approved_gated_interrupt_fixture().await;
+            *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
+                zeron_proto::CommandReceiptStatus::Applied,
+            ));
+            let sessions = core.sessions.clone();
+            let dispatching =
+                tokio::spawn(
+                    async move { sessions.dispatch_luna_interrupt_grant_once(grant).await },
+                );
+            tokio::time::timeout(Duration::from_secs(2), entered.notified())
+                .await
+                .expect("pre-dispatch target read entered");
+            match change {
+                "rebind" => {
+                    core.task_identity
+                        .advance_binding(
+                            &source_task_id,
+                            HarnessId::Codex,
+                            "provider-thread-b",
+                            zeron_proto::BindingOrigin::ContextReset,
+                            "synthetic rebind before submit",
+                        )
+                        .unwrap();
+                }
+                "target-turn" => {
+                    let mut snapshot = lock(&backend.snapshots).front().unwrap().clone();
+                    snapshot.active_turn_id = Some("new-target-turn".into());
+                    *lock(&backend.snapshots) = VecDeque::from([snapshot]);
+                }
+                "cancel" => {
+                    lock(&core.sessions.inner.runs)
+                        .get(&source_task_id)
+                        .unwrap()
+                        .cancel
+                        .send_replace(true);
+                }
+                "run-drop" => core.sessions.inner.remove_run(&source_task_id, "run-a"),
+                _ => unreachable!(),
+            }
+            release.notify_one();
+            let result = tokio::time::timeout(Duration::from_secs(2), dispatching)
+                .await
+                .expect("dispatch settled")
+                .unwrap();
+            assert_eq!(
+                result.unwrap_err(),
+                match change {
+                    "target-turn" => CrossTaskError::StaleSnapshot,
+                    "cancel" | "run-drop" => CrossTaskError::Cancelled,
+                    _ => CrossTaskError::Unavailable,
+                },
+                "{change}"
+            );
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn private_interrupt_grant_has_one_consumer_under_concurrency() {
+        let (_root, core, _source_task_id, backend, grant, _events) =
+            approved_interrupt_fixture().await;
+        *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
+            zeron_proto::CommandReceiptStatus::Pending,
+        ));
+        let grant = Arc::new(Mutex::new(Some(grant)));
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let consumers = (0..2)
+            .map(|_| {
+                let sessions = core.sessions.clone();
+                let grant = grant.clone();
+                let barrier = barrier.clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    let one = lock(&grant).take();
+                    match one {
+                        Some(grant) => {
+                            Some(sessions.dispatch_luna_interrupt_grant_once(grant).await)
+                        }
+                        None => None,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait().await;
+        let outcomes = futures::future::join_all(consumers).await;
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.as_ref().unwrap().is_some())
+                .count(),
+            1
+        );
+        assert!(
+            outcomes
+                .into_iter()
+                .map(Result::unwrap)
+                .flatten()
+                .next()
+                .unwrap()
+                .is_ok()
+        );
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
