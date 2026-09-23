@@ -85,7 +85,7 @@ struct PendingInput {
     resolver: oneshot::Sender<Vec<UserInputAnswer>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 enum PendingInputKind {
     Provider,
     // Only engine-owned registration may select this kind. The run binding is
@@ -93,7 +93,73 @@ enum PendingInputKind {
     #[allow(dead_code)]
     LunaCrossTask {
         run_id: String,
+        proposal: Option<Box<LunaSyntheticArchiveProposal>>,
+        grant_tx: Option<oneshot::Sender<LunaSyntheticArchiveGrant>>,
     },
+}
+
+/// Fake-backed proof payload only. No production run registers one yet, and
+/// its serialized question is never used as authority.
+#[derive(Debug)]
+#[allow(dead_code)]
+struct LunaSyntheticArchiveProposal {
+    request_id: String,
+    source_task_id: String,
+    source_project_id: String,
+    source_environment_id: String,
+    source_binding_generation: Option<u32>,
+    source_run_id: String,
+    source_turn_id: String,
+    source_call_id: String,
+    target_task_id: String,
+    target_project_id: String,
+    target_environment_id: String,
+    target_snapshot: zeron_proto::TaskCommandSnapshot,
+    request: zeron_proto::CrossTaskControlRequest,
+    request_digest: [u8; 32],
+    expires_at_ms: i64,
+}
+
+impl LunaSyntheticArchiveProposal {
+    fn request_digest(request: &zeron_proto::CrossTaskControlRequest) -> Option<[u8; 32]> {
+        use sha2::Digest as _;
+        let bytes = serde_json::to_vec(request).ok()?;
+        Some(sha2::Sha256::digest(bytes).into())
+    }
+
+    fn matches_pending(&self, chat_id: &str, run_id: &str, request_id: &str, expires: i64) -> bool {
+        self.request_id == request_id
+            && self.source_task_id == chat_id
+            && self.source_run_id == run_id
+            && self.expires_at_ms == expires
+            && !self.source_turn_id.is_empty()
+            && !self.source_call_id.is_empty()
+            && self.source_binding_generation.is_some()
+            && self.source_task_id != self.target_task_id
+            && self.source_project_id == self.target_project_id
+            && self.source_environment_id == self.target_environment_id
+            && self.request.action == zeron_proto::CrossTaskControlAction::Archive
+            && self.request.task_id == self.target_task_id
+            && self.request.project_id == self.target_project_id
+            && self.request.environment_id == self.target_environment_id
+            && self.request.expected_task_revision == Some(self.target_snapshot.task_revision)
+            && self.request.expected_binding_generation == self.target_snapshot.binding_generation
+            && self.request.expected_turn_id.is_none()
+            && self.request.destination_project_id.is_none()
+            && self.target_snapshot.task_id == self.target_task_id
+            && self.target_snapshot.binding_id.is_some()
+            && self.target_snapshot.binding_generation.is_some()
+            && self.target_snapshot.active_turn_id.is_none()
+            && Self::request_digest(&self.request) == Some(self.request_digest)
+    }
+}
+
+/// Moved through one private channel after a direct local UI AllowOnce. This
+/// cannot be cloned or serialized into provider/model arguments.
+#[derive(Debug)]
+struct LunaSyntheticArchiveGrant {
+    #[allow(dead_code)]
+    proposal: LunaSyntheticArchiveProposal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1690,7 +1756,7 @@ impl SessionsEngine {
             let Some(pending) = pending_inputs.get(request_id) else {
                 return LunaApprovalOutcome::Stale;
             };
-            if !matches!(&pending.kind, PendingInputKind::LunaCrossTask { run_id: bound } if bound == &handle.run_id)
+            if !matches!(&pending.kind, PendingInputKind::LunaCrossTask { run_id: bound, .. } if bound == &handle.run_id)
                 || pending.questions.len() != 1
             {
                 return LunaApprovalOutcome::Stale;
@@ -1699,6 +1765,22 @@ impl SessionsEngine {
                 return LunaApprovalOutcome::Stale;
             };
             if !approval.is_luna_cross_task() || approval.supports_task_allowance {
+                return LunaApprovalOutcome::Stale;
+            }
+            if let PendingInputKind::LunaCrossTask {
+                proposal, grant_tx, ..
+            } = &pending.kind
+                && (proposal.is_some() != grant_tx.is_some()
+                    || proposal.as_ref().is_some_and(|proposal| {
+                        !proposal.matches_pending(
+                            chat_id,
+                            &handle.run_id,
+                            request_id,
+                            approval.expires_at_ms,
+                        ) || approval.provider_request_id != proposal.source_call_id
+                            || approval.turn_id.as_deref() != Some(proposal.source_turn_id.as_str())
+                    }))
+            {
                 return LunaApprovalOutcome::Stale;
             }
             let now = now_ms();
@@ -1741,13 +1823,31 @@ impl SessionsEngine {
             let _ = pending.resolver.send(Vec::new());
             return LunaApprovalOutcome::RunEnded;
         }
-        if pending
-            .resolver
+        let PendingInput {
+            kind,
+            questions,
+            resolver,
+        } = pending;
+        if resolver
             .send(vec![UserInputAnswer {
-                question_id: pending.questions[0].id.clone(),
+                question_id: questions[0].id.clone(),
                 labels: vec![label.into()],
             }])
             .is_err()
+        {
+            return LunaApprovalOutcome::RunEnded;
+        }
+        if outcome == LunaApprovalOutcome::AllowedOnce
+            && let PendingInputKind::LunaCrossTask {
+                proposal: Some(proposal),
+                grant_tx: Some(grant_tx),
+                ..
+            } = kind
+            && grant_tx
+                .send(LunaSyntheticArchiveGrant {
+                    proposal: *proposal,
+                })
+                .is_err()
         {
             return LunaApprovalOutcome::RunEnded;
         }
@@ -5019,12 +5119,12 @@ async fn drive_run(
 #[cfg(test)]
 mod tests {
     use super::{
-        LunaApprovalOutcome, PendingInput, PendingInputKind, PendingInputs, RunHandle,
-        RuntimeConfig, SessionsEngine, approval_answer, expire_pending_approval, lock,
-        reduce_provider_context_compaction, reduce_provider_context_terminal, subagent_doc_id,
-        take_pending_ordinary_input,
+        LunaApprovalOutcome, LunaSyntheticArchiveGrant, LunaSyntheticArchiveProposal, PendingInput,
+        PendingInputKind, PendingInputs, RunHandle, RuntimeConfig, SessionsEngine, approval_answer,
+        expire_pending_approval, lock, reduce_provider_context_compaction,
+        reduce_provider_context_terminal, subagent_doc_id, take_pending_ordinary_input,
     };
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use zeron_proto::{
         ContextControlState, ContextOperationStatus, HarnessId, RecoveryAcceptance, RecoveryAction,
@@ -5228,6 +5328,8 @@ mod tests {
             PendingInput {
                 kind: PendingInputKind::LunaCrossTask {
                     run_id: "run-a".into(),
+                    proposal: None,
+                    grant_tx: None,
                 },
                 // Even a forged provider-looking serialized hint cannot
                 // override the server-owned pending kind.
@@ -5413,6 +5515,8 @@ mod tests {
             PendingInput {
                 kind: PendingInputKind::LunaCrossTask {
                     run_id: bound_run_id.into(),
+                    proposal: None,
+                    grant_tx: None,
                 },
                 questions: vec![zeron_proto::UserInputQuestion {
                     id: format!("question-{request_id}"),
@@ -5659,6 +5763,573 @@ mod tests {
             LunaApprovalOutcome::Stale
         );
         assert!(lock(&pending).contains_key("forged-marker"));
+    }
+
+    struct FakeArchiveBackend {
+        target: zeron_proto::CrossTaskSummary,
+        snapshot: zeron_proto::TaskCommandSnapshot,
+        live: Mutex<FakeLiveIdentity>,
+        calls: AtomicUsize,
+        suppress_readback: AtomicBool,
+        receipt: Mutex<Option<zeron_proto::CrossTaskControlReceipt>>,
+    }
+
+    impl FakeArchiveBackend {
+        fn readback(&self, command_id: &str) -> Option<zeron_proto::CrossTaskControlReceipt> {
+            if self.suppress_readback.load(Ordering::SeqCst) {
+                return None;
+            }
+            lock(&self.receipt)
+                .as_ref()
+                .filter(|receipt| receipt.command.command_id == command_id)
+                .cloned()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::cross_task_tools::CrossTaskBackend for FakeArchiveBackend {
+        fn capabilities(&self) -> crate::cross_task_tools::CrossTaskCapabilities {
+            crate::cross_task_tools::CrossTaskCapabilities {
+                list: false,
+                read: false,
+                durable_queue: false,
+                event_wait: false,
+            }
+        }
+
+        async fn task(
+            &self,
+            task_id: &str,
+        ) -> Result<Option<zeron_proto::CrossTaskSummary>, crate::cross_task_tools::CrossTaskError>
+        {
+            Ok((task_id == self.target.task_id).then(|| self.target.clone()))
+        }
+
+        async fn list(
+            &self,
+            _: zeron_proto::CrossTaskListRequest,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+        ) -> Result<zeron_proto::CrossTaskListPage, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn read(
+            &self,
+            _: zeron_proto::CrossTaskReadRequest,
+        ) -> Result<zeron_proto::CrossTaskReadPage, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn enqueue_queue(
+            &self,
+            _: zeron_proto::CrossTaskSendRequest,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+        ) -> Result<zeron_proto::CrossTaskSendReceipt, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn wait_event(
+            &self,
+            _: zeron_proto::CrossTaskWaitRequest,
+        ) -> Result<Option<zeron_proto::CrossTaskWaitEvent>, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn control(
+            &self,
+            request: zeron_proto::CrossTaskControlRequest,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+            _: &crate::cross_task_tools::CrossTaskControlGrant,
+        ) -> Result<zeron_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError>
+        {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let receipt = zeron_proto::CrossTaskControlReceipt {
+                task_id: request.task_id.clone(),
+                command: zeron_proto::CommandReceipt {
+                    command_id: request.command_id,
+                    task_id: request.task_id,
+                    intent: "setArchived".into(),
+                    payload_hash: "synthetic-archive".into(),
+                    status: zeron_proto::CommandReceiptStatus::Applied,
+                    snapshot: self.snapshot.clone(),
+                    event_sequence: Some(1),
+                    actor_id: "synthetic-luna".into(),
+                    client_id: "synthetic-local-ui".into(),
+                    client_session_id: "run-a".into(),
+                    execution_environment: Some("local".into()),
+                    correlation_id: None,
+                    reason: None,
+                    recovery_action: None,
+                    accepted_at_ms: 1,
+                    committed_at_ms: Some(1),
+                    observed_at_ms: 1,
+                },
+                observed_status: "idle".into(),
+                settled: true,
+            };
+            *lock(&self.receipt) = Some(receipt.clone());
+            Ok(receipt)
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeLiveIdentity {
+        source_task_id: String,
+        source_project_id: String,
+        source_environment_id: String,
+        source_binding_generation: Option<u32>,
+        source_run_id: String,
+        source_turn_id: String,
+        source_call_id: String,
+        target_task_id: String,
+        target_project_id: String,
+        target_environment_id: String,
+        target_snapshot: zeron_proto::TaskCommandSnapshot,
+    }
+
+    impl From<&LunaSyntheticArchiveProposal> for FakeLiveIdentity {
+        fn from(proposal: &LunaSyntheticArchiveProposal) -> Self {
+            Self {
+                source_task_id: proposal.source_task_id.clone(),
+                source_project_id: proposal.source_project_id.clone(),
+                source_environment_id: proposal.source_environment_id.clone(),
+                source_binding_generation: proposal.source_binding_generation,
+                source_run_id: proposal.source_run_id.clone(),
+                source_turn_id: proposal.source_turn_id.clone(),
+                source_call_id: proposal.source_call_id.clone(),
+                target_task_id: proposal.target_task_id.clone(),
+                target_project_id: proposal.target_project_id.clone(),
+                target_environment_id: proposal.target_environment_id.clone(),
+                target_snapshot: proposal.target_snapshot.clone(),
+            }
+        }
+    }
+
+    fn fake_archive_proposal(request_id: &str) -> LunaSyntheticArchiveProposal {
+        let snapshot = zeron_proto::TaskCommandSnapshot {
+            task_id: "task-a".into(),
+            task_revision: 7,
+            task_sequence: 12,
+            binding_id: Some("binding-a".into()),
+            binding_generation: Some(2),
+            active_turn_id: None,
+        };
+        let request = zeron_proto::CrossTaskControlRequest {
+            action: zeron_proto::CrossTaskControlAction::Archive,
+            task_id: "task-a".into(),
+            project_id: "project-a".into(),
+            environment_id: "local".into(),
+            command_id: format!("synthetic-{request_id}"),
+            destination_project_id: None,
+            expected_task_revision: Some(snapshot.task_revision),
+            expected_binding_generation: snapshot.binding_generation,
+            expected_turn_id: None,
+        };
+        LunaSyntheticArchiveProposal {
+            request_id: request_id.into(),
+            source_task_id: "chat-a".into(),
+            source_project_id: "project-a".into(),
+            source_environment_id: "local".into(),
+            source_binding_generation: Some(1),
+            source_run_id: "run-a".into(),
+            source_turn_id: "turn-a".into(),
+            source_call_id: "call-a".into(),
+            target_task_id: "task-a".into(),
+            target_project_id: "project-a".into(),
+            target_environment_id: "local".into(),
+            target_snapshot: snapshot,
+            request_digest: LunaSyntheticArchiveProposal::request_digest(&request).unwrap(),
+            request,
+            expires_at_ms: crate::now_ms() + 30_000,
+        }
+    }
+
+    fn inject_fake_archive_for_test(
+        pending: &PendingInputs,
+        proposal: LunaSyntheticArchiveProposal,
+    ) -> (
+        tokio::sync::oneshot::Receiver<Vec<zeron_proto::UserInputAnswer>>,
+        tokio::sync::oneshot::Receiver<LunaSyntheticArchiveGrant>,
+    ) {
+        let (resolver, answer) = tokio::sync::oneshot::channel();
+        let (grant_tx, grant) = tokio::sync::oneshot::channel();
+        let question = zeron_proto::UserInputQuestion {
+            id: format!("question-{}", proposal.request_id),
+            header: "LUNA approval".into(),
+            question: format!(
+                "Archive task {} in project {} on {} at revision {} and binding {:?} once?",
+                proposal.target_task_id,
+                proposal.target_project_id,
+                proposal.target_environment_id,
+                proposal.target_snapshot.task_revision,
+                proposal.target_snapshot.binding_generation,
+            ),
+            options: vec!["Deny".into(), "Allow once".into()],
+            multi_select: false,
+            approval: Some(zeron_proto::ApprovalRequest {
+                provider_request_id: proposal.source_call_id.clone(),
+                provider: HarnessId::Codex,
+                turn_id: Some(proposal.source_turn_id.clone()),
+                machine_name: "synthetic".into(),
+                action_kind: zeron_proto::ApprovalActionKind::LunaCrossTask,
+                summary: "Synthetic archive".into(),
+                requested_scope: zeron_proto::PermissionScope::Workspace,
+                expires_at_ms: proposal.expires_at_ms,
+                supports_task_allowance: false,
+            }),
+        };
+        lock(pending).insert(
+            proposal.request_id.clone(),
+            PendingInput {
+                kind: PendingInputKind::LunaCrossTask {
+                    run_id: proposal.source_run_id.clone(),
+                    proposal: Some(Box::new(proposal)),
+                    grant_tx: Some(grant_tx),
+                },
+                questions: vec![question],
+                resolver,
+            },
+        );
+        (answer, grant)
+    }
+
+    fn fake_archive_backend(proposal: &LunaSyntheticArchiveProposal) -> Arc<FakeArchiveBackend> {
+        Arc::new(FakeArchiveBackend {
+            target: zeron_proto::CrossTaskSummary {
+                task_id: "task-a".into(),
+                project_id: Some("project-a".into()),
+                environment_id: "local".into(),
+                title: "Synthetic target".into(),
+                status: "idle".into(),
+                archived: false,
+                updated_at_ms: 1,
+            },
+            snapshot: proposal.target_snapshot.clone(),
+            live: Mutex::new(FakeLiveIdentity::from(proposal)),
+            calls: AtomicUsize::new(0),
+            suppress_readback: AtomicBool::new(false),
+            receipt: Mutex::new(None),
+        })
+    }
+
+    async fn dispatch_fake_archive_once(
+        grant: LunaSyntheticArchiveGrant,
+        attempted: zeron_proto::CrossTaskControlRequest,
+        backend: Arc<FakeArchiveBackend>,
+        now_ms: i64,
+    ) -> Result<zeron_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError> {
+        use crate::cross_task_tools::{
+            CrossTaskAuthority, CrossTaskControlGrant, CrossTaskError, CrossTaskTools,
+        };
+        let proposal = grant.proposal;
+        let live = lock(&backend.live).clone();
+        if proposal.expires_at_ms <= now_ms
+            || attempted != proposal.request
+            || LunaSyntheticArchiveProposal::request_digest(&attempted)
+                != Some(proposal.request_digest)
+            || live.source_task_id != proposal.source_task_id
+            || live.source_project_id != proposal.source_project_id
+            || live.source_environment_id != proposal.source_environment_id
+            || live.source_binding_generation != proposal.source_binding_generation
+            || live.source_run_id != proposal.source_run_id
+            || live.source_turn_id != proposal.source_turn_id
+            || live.source_call_id != proposal.source_call_id
+            || live.target_task_id != proposal.target_task_id
+            || live.target_project_id != proposal.target_project_id
+            || live.target_environment_id != proposal.target_environment_id
+            || live.target_snapshot != proposal.target_snapshot
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let authority = CrossTaskAuthority {
+            caller_task_id: proposal.source_task_id.clone(),
+            local_environment_id: proposal.source_environment_id.clone(),
+            visible_project_ids: std::collections::HashSet::from([proposal
+                .source_project_id
+                .clone()]),
+            allow_projectless: false,
+            granted_scopes: std::collections::HashSet::from(["threads.manage".into()]),
+            explicit_user_request: true,
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+        };
+        let exact_grant = CrossTaskControlGrant {
+            caller_task_id: proposal.source_task_id,
+            request: proposal.request.clone(),
+            expires_at_ms: proposal.expires_at_ms,
+        };
+        let receipt = CrossTaskTools::new(backend.clone())
+            .control(
+                &authority,
+                &exact_grant,
+                attempted,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await?;
+        if receipt.command.snapshot != proposal.target_snapshot
+            || backend.readback(&proposal.request.command_id) != Some(receipt.clone())
+        {
+            return Err(CrossTaskError::InvalidBackendResult);
+        }
+        Ok(receipt)
+    }
+
+    #[tokio::test]
+    async fn synthetic_archive_allow_once_dispatches_exactly_once_with_receipt_readback() {
+        let (_root, sessions, pending, _events) = local_luna_test_run();
+        let proposal = fake_archive_proposal("approved");
+        let attempted = proposal.request.clone();
+        let backend = fake_archive_backend(&proposal);
+        let (answer, grant) = inject_fake_archive_for_test(&pending, proposal);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let calls = (0..2)
+            .map(|_| {
+                let sessions = sessions.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    sessions.respond_luna_local_ui_approval(
+                        "chat-a",
+                        "approved",
+                        zeron_proto::ApprovalDecision::AllowOnce,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let outcomes = calls
+            .into_iter()
+            .map(|call| call.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == LunaApprovalOutcome::AllowedOnce)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == LunaApprovalOutcome::Stale)
+                .count(),
+            1
+        );
+        assert_eq!(answer.await.unwrap()[0].labels, vec!["Allow once"]);
+        let receipt = dispatch_fake_archive_once(
+            grant.await.unwrap(),
+            attempted,
+            backend.clone(),
+            crate::now_ms(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            receipt.command.status,
+            zeron_proto::CommandReceiptStatus::Applied
+        );
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.readback(&receipt.command.command_id), Some(receipt));
+        assert_eq!(
+            sessions.respond_luna_local_ui_approval(
+                "chat-a",
+                "approved",
+                zeron_proto::ApprovalDecision::AllowOnce,
+            ),
+            LunaApprovalOutcome::Stale
+        );
+    }
+
+    #[tokio::test]
+    async fn synthetic_archive_uncertain_receipt_is_never_replayed() {
+        let (_root, sessions, pending, _events) = local_luna_test_run();
+        let proposal = fake_archive_proposal("uncertain");
+        let attempted = proposal.request.clone();
+        let backend = fake_archive_backend(&proposal);
+        backend.suppress_readback.store(true, Ordering::SeqCst);
+        let (_answer, grant) = inject_fake_archive_for_test(&pending, proposal);
+        assert_eq!(
+            sessions.respond_luna_local_ui_approval(
+                "chat-a",
+                "uncertain",
+                zeron_proto::ApprovalDecision::AllowOnce,
+            ),
+            LunaApprovalOutcome::AllowedOnce
+        );
+        assert!(matches!(
+            dispatch_fake_archive_once(
+                grant.await.unwrap(),
+                attempted,
+                backend.clone(),
+                crate::now_ms()
+            )
+            .await,
+            Err(crate::cross_task_tools::CrossTaskError::InvalidBackendResult)
+        ));
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            sessions.respond_luna_local_ui_approval(
+                "chat-a",
+                "uncertain",
+                zeron_proto::ApprovalDecision::AllowOnce,
+            ),
+            LunaApprovalOutcome::Stale
+        );
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn synthetic_archive_never_dispatches_changed_stale_or_remote_grants() {
+        let (_root, sessions, pending, _events) = local_luna_test_run();
+        for case in 0..18 {
+            let request_id = format!("changed-{case}");
+            let proposal = fake_archive_proposal(&request_id);
+            let mut attempted = proposal.request.clone();
+            let backend = fake_archive_backend(&proposal);
+            let expires_at_ms = proposal.expires_at_ms;
+            let (_answer, grant) = inject_fake_archive_for_test(&pending, proposal);
+            assert_eq!(
+                sessions.respond_luna_local_ui_approval(
+                    "chat-a",
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                ),
+                LunaApprovalOutcome::AllowedOnce
+            );
+            let mut fake_now = crate::now_ms();
+            match case {
+                0 => attempted.action = zeron_proto::CrossTaskControlAction::Unarchive,
+                1 => attempted.command_id.push_str("-changed"),
+                2 => attempted.project_id = "project-b".into(),
+                3 => lock(&backend.live).source_task_id = "another-caller".into(),
+                4 => lock(&backend.live).source_binding_generation = Some(9),
+                5 => lock(&backend.live).source_run_id = "another-run".into(),
+                6 => lock(&backend.live).source_turn_id = "another-turn".into(),
+                7 => lock(&backend.live).source_call_id = "another-call".into(),
+                8 => lock(&backend.live).target_task_id = "other-task".into(),
+                9 => lock(&backend.live).target_project_id = "project-b".into(),
+                10 => lock(&backend.live).target_environment_id = "remote".into(),
+                11 => lock(&backend.live).target_snapshot.task_revision += 1,
+                12 => lock(&backend.live).target_snapshot.binding_generation = Some(9),
+                13 => fake_now = expires_at_ms + 1,
+                14 => attempted.expected_task_revision = Some(8),
+                15 => attempted.expected_binding_generation = Some(9),
+                16 => attempted.environment_id = "remote".into(),
+                17 => attempted.task_id = "other-task".into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                dispatch_fake_archive_once(
+                    grant.await.unwrap(),
+                    attempted,
+                    backend.clone(),
+                    fake_now
+                )
+                .await
+                .is_err(),
+                "case {case} must reject before the fake backend"
+            );
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0, "case {case}");
+            assert!(
+                backend
+                    .readback(&format!("synthetic-{request_id}"))
+                    .is_none()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn synthetic_archive_denial_expiry_replacement_and_lost_resolver_mint_no_grant() {
+        let (_root, sessions, pending, _events) = local_luna_test_run();
+        for (case, decision) in [
+            ("deny", zeron_proto::ApprovalDecision::Deny),
+            ("cancel", zeron_proto::ApprovalDecision::Cancel),
+            ("allow-task", zeron_proto::ApprovalDecision::AllowTask),
+        ] {
+            let proposal = fake_archive_proposal(case);
+            let backend = fake_archive_backend(&proposal);
+            let (_answer, grant) = inject_fake_archive_for_test(&pending, proposal);
+            assert_eq!(
+                sessions.respond_luna_local_ui_approval("chat-a", case, decision),
+                LunaApprovalOutcome::Denied
+            );
+            assert!(grant.await.is_err());
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        }
+
+        let mut expired = fake_archive_proposal("expired-fake");
+        expired.expires_at_ms = crate::now_ms() - 1;
+        let backend = fake_archive_backend(&expired);
+        let (_answer, grant) = inject_fake_archive_for_test(&pending, expired);
+        assert_eq!(
+            sessions.respond_luna_local_ui_approval(
+                "chat-a",
+                "expired-fake",
+                zeron_proto::ApprovalDecision::AllowOnce,
+            ),
+            LunaApprovalOutcome::Expired
+        );
+        assert!(grant.await.is_err());
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+
+        let proposal = fake_archive_proposal("replaced-fake");
+        let backend = fake_archive_backend(&proposal);
+        let (_answer, mut grant) = inject_fake_archive_for_test(&pending, proposal);
+        lock(&sessions.inner.runs).get_mut("chat-a").unwrap().run_id = "replacement-run".into();
+        assert_eq!(
+            sessions.respond_luna_local_ui_approval(
+                "chat-a",
+                "replaced-fake",
+                zeron_proto::ApprovalDecision::AllowOnce,
+            ),
+            LunaApprovalOutcome::Stale
+        );
+        assert!(matches!(
+            grant.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+
+        let (_root, sessions, pending, _events) = local_luna_test_run();
+        let proposal = fake_archive_proposal("lost-fake");
+        let backend = fake_archive_backend(&proposal);
+        let (answer, grant) = inject_fake_archive_for_test(&pending, proposal);
+        drop(answer);
+        assert_eq!(
+            sessions.respond_luna_local_ui_approval(
+                "chat-a",
+                "lost-fake",
+                zeron_proto::ApprovalDecision::AllowOnce,
+            ),
+            LunaApprovalOutcome::RunEnded
+        );
+        assert!(grant.await.is_err());
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+
+        for (project, environment) in [("project-b", "local"), ("project-a", "remote")] {
+            let request_id = format!("scope-{project}-{environment}");
+            let mut proposal = fake_archive_proposal(&request_id);
+            proposal.target_project_id = project.into();
+            proposal.target_environment_id = environment.into();
+            let backend = fake_archive_backend(&proposal);
+            let (_answer, mut grant) = inject_fake_archive_for_test(&pending, proposal);
+            assert_eq!(
+                sessions.respond_luna_local_ui_approval(
+                    "chat-a",
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                ),
+                LunaApprovalOutcome::Stale
+            );
+            assert!(matches!(
+                grant.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ));
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]

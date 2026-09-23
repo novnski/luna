@@ -144,6 +144,26 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         delivery: RuntimeDelivery::CodexDynamicTools,
     };
     let tools = CrossTaskTools::new(rpc);
+    let (attached, omitted) = tools.catalog(&authority);
+    let attached_names = attached
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        attached_names,
+        HashSet::from(["list_threads", "read_thread", "wait_threads"])
+    );
+    assert!(
+        attached
+            .iter()
+            .all(|tool| tool.required_scopes == ["threads.read"])
+    );
+    assert!(
+        omitted
+            .iter()
+            .any(|tool| tool.name == "send_message_to_thread")
+    );
+    assert!(omitted.iter().any(|tool| tool.name == "archive_thread"));
     let cancel = CancellationToken::new();
     let listed = tools
         .list(
