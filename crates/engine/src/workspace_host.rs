@@ -158,6 +158,12 @@ struct WorkspaceHostInner {
     store: Arc<DocsStore>,
     config: WorkspaceHostConfig,
     reg: Arc<Mutex<RegistryDoc>>,
+    /// Serialize every registry snapshot's byte capture through SQLite
+    /// commit, including task projections and the delayed worker. Otherwise
+    /// an older capture can commit after an explicit flush.
+    snapshot_persist: Mutex<()>,
+    #[cfg(test)]
+    snapshot_after_capture: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     chats_tx: watch::Sender<Vec<Chat>>,
     devices_tx: watch::Sender<Vec<Device>>,
     sessions_tx: watch::Sender<Vec<Session>>,
@@ -303,6 +309,9 @@ impl WorkspaceHost {
                 store,
                 config,
                 reg: Arc::new(Mutex::new(doc)),
+                snapshot_persist: Mutex::new(()),
+                #[cfg(test)]
+                snapshot_after_capture: Mutex::new(None),
                 chats_tx,
                 devices_tx,
                 sessions_tx,
@@ -664,6 +673,7 @@ impl WorkspaceHost {
         recovery: &TaskRecoveryTransition,
         mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
     ) -> Result<(R, CommandReceipt), TaskProjectionError> {
+        let _persist = lock(&self.inner.snapshot_persist);
         let mut reg = lock(&self.inner.reg);
         let before = reg.to_bytes().map_err(|error| {
             TaskProjectionError::Commit(EngineError::Other(format!(
@@ -755,6 +765,7 @@ impl WorkspaceHost {
         deleted_chat_snapshot: Option<&str>,
         mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
     ) -> Result<(R, CommandReceipt), TaskProjectionError> {
+        let _persist = lock(&self.inner.snapshot_persist);
         let mut reg = lock(&self.inner.reg);
         let before = reg.to_bytes().map_err(|error| {
             TaskProjectionError::Commit(EngineError::Other(format!(
@@ -853,6 +864,7 @@ impl WorkspaceHost {
         recovery: Option<&TaskRecoveryTransition>,
         mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
     ) -> Result<(R, CommandReceipt), TaskProjectionError> {
+        let _persist = lock(&self.inner.snapshot_persist);
         let mut reg = lock(&self.inner.reg);
         let before = reg.to_bytes().map_err(|error| {
             TaskProjectionError::Commit(EngineError::Other(format!(
@@ -1425,6 +1437,14 @@ impl WorkspaceHost {
         self.inner.save_snapshot();
     }
 
+    /// Persist the current registry or report an export/SQLite failure.
+    /// Future snapshot coordination must call this only after draining its
+    /// writers; this method does not itself admit or drain them.
+    #[allow(dead_code)] // Internal seam for the future freeze flush phase.
+    pub(crate) fn flush_checked(&self) -> Result<(), EngineError> {
+        self.inner.save_snapshot_checked()
+    }
+
     /// Shutdown: stamp our `lastSeenAt` (the only periodic-ish row write besides
     /// boot) and flush the snapshot.
     pub fn shutdown(&self) {
@@ -1573,17 +1593,29 @@ impl WorkspaceHostInner {
     }
 
     fn save_snapshot(&self) {
-        let bytes = lock(&self.reg).to_bytes();
-        match bytes {
-            Ok(bytes) => {
-                if let Err(err) = self.store.save_snapshot(REGISTRY_DOC_ID, &bytes) {
-                    tracing::warn!(error = %err, "registry snapshot save failed");
-                }
-            }
-            Err(err) => {
+        match self.save_snapshot_checked() {
+            Ok(()) => {}
+            Err(EngineError::Doc(err)) => {
                 tracing::warn!(error = %err, "registry snapshot export failed");
             }
+            Err(err) => {
+                tracing::warn!(error = %err, "registry snapshot save failed");
+            }
         }
+    }
+
+    fn save_snapshot_checked(&self) -> Result<(), EngineError> {
+        // Lock before serialization, not only at the SQLite call: a worker
+        // that captured older bytes must commit before a newer flush captures
+        // its bytes. No registry lock is held while SQLite commits.
+        let _persist = lock(&self.snapshot_persist);
+        let bytes = lock(&self.reg).to_bytes()?;
+        #[cfg(test)]
+        if let Some(hook) = lock(&self.snapshot_after_capture).clone() {
+            hook();
+        }
+        self.store.save_snapshot(REGISTRY_DOC_ID, &bytes)?;
+        Ok(())
     }
 
     /// Presence heartbeat — a memory-only frame on the room, never a row write.
@@ -1906,6 +1938,103 @@ impl zeron_sync::RegistryTransport for WsDerivedRegistryTransport {
 #[cfg(test)]
 mod tests {
     use super::{device_name_on_boot, linked_worktree_root};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_worker_cannot_overwrite_newer_checked_flush() {
+        use super::*;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path()).unwrap());
+        let host = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first_capture = Mutex::new(Some((captured_tx, release_rx)));
+        *lock(&host.inner.snapshot_after_capture) = Some(Arc::new(move || {
+            if let Some((captured_tx, release_rx)) = lock(&first_capture).take() {
+                captured_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        }));
+
+        assert!(host.rename_device("test-device", "Older").unwrap());
+        tokio::task::spawn_blocking(move || captured_rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        // The actual debounced worker captured Older and is paused before
+        // SQLite. Persistence must remain locked across that whole interval.
+        assert!(host.inner.snapshot_persist.try_lock().is_err());
+
+        assert!(host.rename_device("test-device", "Newer").unwrap());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let flushing = host.clone();
+        let flush_task = tokio::task::spawn_blocking(move || {
+            let _ = started_tx.send(());
+            flushing.flush_checked()
+        });
+        started_rx.await.unwrap();
+        release_tx.send(()).unwrap();
+        flush_task.await.unwrap().unwrap();
+
+        let bytes = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let saved = RegistryDoc::from_bytes(&bytes, "test-device").unwrap();
+        let device = saved
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "test-device")
+            .unwrap();
+        assert_eq!(device.name, "Newer");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn checked_flush_reports_sqlite_failure_without_publishing_new_bytes() {
+        use super::*;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path()).unwrap());
+        let host = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let before = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let connection = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_registry_snapshot BEFORE UPDATE ON snapshots
+                 WHEN NEW.doc_id = 'registry1'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic snapshot failure'); END;",
+            )
+            .unwrap();
+
+        assert!(host.rename_device("test-device", "Unsaved").unwrap());
+        let error = host.flush_checked().unwrap_err().to_string();
+        assert!(error.contains("synthetic snapshot failure"), "{error}");
+        assert_eq!(
+            store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
+            before
+        );
+    }
 
     #[tokio::test]
     async fn registry_http_sync_retains_dns_cause() {
