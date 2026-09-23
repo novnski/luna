@@ -33,8 +33,10 @@ use zeron_proto::{
     Chat, ChatConfig, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, Device, Session,
     Space,
 };
+use zeron_sync::registry::{RegistryAdmission, RegistryWritePermit};
 use zeron_sync::{DocsStore, RegistryClient, RegistryTuning, TaskRecoveryTransition};
 
+use crate::device_write::DeviceWriteHandle;
 use crate::doc_host::EdgeConfig;
 use crate::http_error::describe_http_error;
 use crate::{EngineError, now_ms};
@@ -163,6 +165,7 @@ pub struct WorkspaceHostConfig {
 struct WorkspaceHostInner {
     store: Arc<DocsStore>,
     config: WorkspaceHostConfig,
+    registry_admission: Option<RegistryAdmission>,
     reg: Arc<Mutex<RegistryDoc>>,
     /// Serialize every registry snapshot's byte capture through SQLite
     /// commit, including task projections and the delayed worker. Otherwise
@@ -273,6 +276,31 @@ impl WorkspaceHost {
     /// Load (or migrate, or init) the registry, upsert this device's row, start
     /// the change-driven task, and join the edge registry room when configured.
     pub fn open(store: Arc<DocsStore>, config: WorkspaceHostConfig) -> Result<Self, EngineError> {
+        Self::open_registry_mode(store, config, None)
+    }
+
+    /// Guard only RegistryClient-owned mutations with the engine's device-root
+    /// lease. Boot, local registry, and DocsStore writes still need admission
+    /// before this can become a complete product freeze boundary.
+    #[allow(dead_code)] // Product constructor wiring follows the guarded seam.
+    pub(crate) fn open_with_registry_write_handle(
+        store: Arc<DocsStore>,
+        config: WorkspaceHostConfig,
+        handle: DeviceWriteHandle,
+    ) -> Result<Self, EngineError> {
+        let admission: RegistryAdmission = Arc::new(move || {
+            handle
+                .try_admit()
+                .map(|permit| Box::new(permit) as RegistryWritePermit)
+        });
+        Self::open_registry_mode(store, config, Some(admission))
+    }
+
+    fn open_registry_mode(
+        store: Arc<DocsStore>,
+        config: WorkspaceHostConfig,
+        registry_admission: Option<RegistryAdmission>,
+    ) -> Result<Self, EngineError> {
         let mut doc = match store.load_snapshot(REGISTRY_DOC_ID)? {
             Some(bytes) => RegistryDoc::from_bytes(&bytes, &config.device_id)
                 .map_err(|e| EngineError::Other(format!("registry snapshot load failed: {e}")))?,
@@ -360,6 +388,7 @@ impl WorkspaceHost {
             inner: Arc::new(WorkspaceHostInner {
                 store,
                 config,
+                registry_admission,
                 reg: Arc::new(Mutex::new(doc)),
                 snapshot_persist: Mutex::new(()),
                 #[cfg(test)]
@@ -434,6 +463,8 @@ impl WorkspaceHost {
         let org_id = self.inner.config.org_id.clone();
         let reg = self.inner.reg.clone();
         let device_id = self.inner.config.device_id.clone();
+        let admission = self.inner.registry_admission.clone();
+        let guarded = admission.is_some();
         let weak = Arc::downgrade(&self.inner);
         let previous = {
             let mut lifecycle = lock(&self.inner.lifecycle);
@@ -451,6 +482,7 @@ impl WorkspaceHost {
             let join_stop = CancellationToken::new();
             lifecycle.current_join = Some(join_stop.clone());
             let previous = self.inner.take_room_for_stop(&mut lifecycle);
+            let outer_stop = join_stop.clone();
             let task = async move {
                 let mut wake = zeron_sync::wake::subscribe();
                 let mut online = zeron_sync::wake::subscribe_online();
@@ -461,8 +493,8 @@ impl WorkspaceHost {
                 // join on a capped, jittered backoff so a transient blip self-heals.
                 let mut backoff = JOIN_RETRY_BASE;
                 loop {
-                    if weak.upgrade().is_none() {
-                        return; // host dropped
+                    if join_stop.is_cancelled() || weak.upgrade().is_none() {
+                        return; // join revoked or host dropped
                     }
                     let tuning = RegistryTuning {
                         probe_quiet: REGISTRY_PROBE_QUIET,
@@ -472,7 +504,32 @@ impl WorkspaceHost {
                     // from the same URL provider bootstraps the doc in ~1 RTT
                     // and keeps syncing at backoff cadence when the socket can't
                     // connect (airplane-wifi networks strip WS upgrades).
-                    let result = if token.is_some() {
+                    let result = if let Some(admission) = admission.clone() {
+                        if token.is_some() {
+                            let stop = join_stop.clone();
+                            RegistryClient::connect_via_transport_guarded_until(
+                                url.clone(),
+                                reg.clone(),
+                                &device_id,
+                                tuning,
+                                Arc::new(WsDerivedRegistryTransport::new(url.clone())),
+                                admission,
+                                async move { stop.cancelled().await },
+                            )
+                            .await
+                        } else {
+                            let stop = join_stop.clone();
+                            RegistryClient::connect_via_tuned_guarded_until(
+                                url.clone(),
+                                reg.clone(),
+                                &device_id,
+                                tuning,
+                                admission,
+                                async move { stop.cancelled().await },
+                            )
+                            .await
+                        }
+                    } else if token.is_some() {
                         RegistryClient::connect_via_transport(
                             url.clone(),
                             reg.clone(),
@@ -494,10 +551,19 @@ impl WorkspaceHost {
                         Ok(client) => {
                             client.set_presence(now_ms());
                             let mut events = client.events();
-                            if token_revoked(&token).await {
+                            let revoked = tokio::select! {
+                                biased;
+                                _ = join_stop.cancelled() => true,
+                                revoked = token_revoked(&token) => revoked,
+                            };
+                            if revoked {
+                                client.begin_stop().join().await;
                                 return;
                             }
-                            let Some(inner) = weak.upgrade() else { return };
+                            let Some(inner) = weak.upgrade() else {
+                                client.begin_stop().join().await;
+                                return;
+                            };
                             let mut client = Some(client);
                             let (installed, previous) = {
                                 let mut lifecycle = lock(&inner.lifecycle);
@@ -517,10 +583,14 @@ impl WorkspaceHost {
                                 }
                             };
                             inner.stop_room_client(previous);
-                            drop(client);
                             if !installed {
+                                drop(inner);
+                                if let Some(client) = client {
+                                    client.begin_stop().join().await;
+                                }
                                 return;
                             }
+                            drop(client);
                             tracing::info!(org = %org_id, "registry room joined");
                             drop(inner);
                             // The slot is the sole owner. Synchronous revocation
@@ -530,6 +600,8 @@ impl WorkspaceHost {
                             // client is dropped at host teardown.
                             loop {
                                 tokio::select! {
+                                    biased;
+                                    _ = join_stop.cancelled() => break,
                                     event = events.recv() => match event {
                                         Ok(zeron_sync::RegistryEvent::Connected) => {
                                             let Some(inner) = weak.upgrade() else { return };
@@ -554,7 +626,12 @@ impl WorkspaceHost {
                                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                                     },
                                     _ = token_changed(&mut token_changes) => {
-                                        if token_revoked(&token).await {
+                                        let revoked = tokio::select! {
+                                            biased;
+                                            _ = join_stop.cancelled() => true,
+                                            revoked = token_revoked(&token) => revoked,
+                                        };
+                                        if revoked {
                                             tracing::info!(org = %org_id,
                                                 "registry credentials removed; leaving room");
                                             break;
@@ -576,6 +653,9 @@ impl WorkspaceHost {
                             return;
                         }
                         Err(err) => {
+                            if join_stop.is_cancelled() {
+                                return;
+                            }
                             tracing::warn!(org = %org_id, error = %err, backoff_ms = backoff.as_millis() as u64,
                             "registry room join failed; retrying");
                         }
@@ -584,6 +664,8 @@ impl WorkspaceHost {
                     // wait cut it short (our own failed dial doesn't count).
                     while online.try_recv().is_ok() {}
                     tokio::select! {
+                        biased;
+                        _ = join_stop.cancelled() => return,
                         _ = tokio::time::sleep(backoff + join_retry_jitter()) => {
                             backoff = (backoff * 2).min(JOIN_RETRY_CAP);
                         }
@@ -594,7 +676,12 @@ impl WorkspaceHost {
                             backoff = JOIN_RETRY_BASE;
                         }
                         _ = token_changed(&mut token_changes) => {
-                            if token_revoked(&token).await {
+                            let revoked = tokio::select! {
+                                biased;
+                                _ = join_stop.cancelled() => true,
+                                revoked = token_revoked(&token) => revoked,
+                            };
+                            if revoked {
                                 return;
                             }
                             backoff = JOIN_RETRY_BASE;
@@ -602,12 +689,18 @@ impl WorkspaceHost {
                     }
                 }
             };
-            lifecycle.tasks.spawn(async move {
-                tokio::select! {
-                    _ = join_stop.cancelled() => {}
-                    _ = task => {}
-                }
-            });
+            if guarded {
+                // B2 must finish its own awaited cancellation. An outer select
+                // would drop the pending constructor and lose that guarantee.
+                lifecycle.tasks.spawn(task);
+            } else {
+                lifecycle.tasks.spawn(async move {
+                    tokio::select! {
+                        _ = outer_stop.cancelled() => {}
+                        _ = task => {}
+                    }
+                });
+            }
             previous
         };
         self.inner.stop_room_client(previous);
@@ -1582,8 +1675,9 @@ impl WorkspaceHost {
     /// registry clients after callers have stopped producing mutations. Wait
     /// for synchronous revoke handoffs before closing the tracker so a client
     /// cannot be taken from the room and omitted from the final drain. A failed
-    /// final save remains retryable by calling this method again. Pending
-    /// initial connections still use the abort-only legacy cancellation path.
+    /// final save remains retryable by calling this method again. Guarded
+    /// initial joins await their own cancellation; legacy joins retain the
+    /// abort-only path.
     #[allow(dead_code)] // Product shutdown wiring follows the lifecycle seam.
     pub(crate) async fn drain_tasks_checked(&self) -> Result<(), EngineError> {
         self.disconnect_edge();
@@ -2578,6 +2672,110 @@ mod tests {
         assert!(!host.connected());
         host.spawn_join(Arc::new(NeverCalledUrl), None, None);
         assert_eq!(lock(&host.inner.lifecycle).join_generation, generation);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_join_drain_awaits_pending_url_and_owner_permit_holds_lock() {
+        use super::*;
+        use crate::InstanceLock;
+        use crate::device_write::DeviceWriteOwner;
+        use std::time::Duration;
+        use tokio::sync::oneshot;
+        use zeron_sync::write_epoch::EpochError;
+
+        struct DropSignal(Option<oneshot::Sender<()>>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(done) = self.0.take() {
+                    let _ = done.send(());
+                }
+            }
+        }
+        struct PendingUrl {
+            started: Mutex<Option<oneshot::Sender<()>>>,
+            dropped: Mutex<Option<oneshot::Sender<()>>>,
+        }
+        impl zeron_sync::UrlProvider for PendingUrl {
+            fn url(
+                &self,
+            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            {
+                let started = lock(&self.started).take();
+                let dropped = lock(&self.dropped).take();
+                Box::pin(async move {
+                    let _drop = DropSignal(dropped);
+                    if let Some(started) = started {
+                        let _ = started.send(());
+                    }
+                    std::future::pending().await
+                })
+            }
+        }
+
+        struct NeverCalledUrl;
+        impl zeron_sync::UrlProvider for NeverCalledUrl {
+            fn url(
+                &self,
+            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            {
+                panic!("guarded join spawned after edge revocation")
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let instance_lock = InstanceLock::acquire(root.path()).unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), instance_lock).unwrap();
+        let host = WorkspaceHost::open_with_registry_write_handle(
+            Arc::new(DocsStore::open(root.path().join("store")).unwrap()),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+            owner.handle(),
+        )
+        .unwrap();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (dropped_tx, mut dropped_rx) = oneshot::channel();
+        host.spawn_join(
+            Arc::new(PendingUrl {
+                started: Mutex::new(Some(started_tx)),
+                dropped: Mutex::new(Some(dropped_tx)),
+            }),
+            None,
+            None,
+        );
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let generation = lock(&host.inner.lifecycle).join_generation;
+
+        host.disconnect_edge();
+        tokio::time::timeout(Duration::from_secs(2), host.drain_tasks_checked())
+            .await
+            .unwrap()
+            .unwrap();
+        // The guarded B2 constructor has completed its stop join when the
+        // host tracker returns, so no pending URL future survives the drain.
+        dropped_rx.try_recv().unwrap();
+        assert!(!host.connected());
+        host.spawn_join(Arc::new(NeverCalledUrl), None, None);
+        assert_eq!(lock(&host.inner.lifecycle).join_generation, generation);
+
+        let admission = host.inner.registry_admission.as_ref().unwrap();
+        let permit = admission().unwrap();
+        drop(owner);
+        assert!(matches!(admission(), Err(EpochError::Retired)));
+        // The boxed permit owns the original InstanceLock lease after the
+        // owner retires, exactly as an admitted registry mutation would.
+        assert!(InstanceLock::acquire(root.path()).is_err());
+        drop(permit);
+        let replacement = InstanceLock::acquire(root.path()).unwrap();
+        drop(replacement);
     }
 
     #[tokio::test(flavor = "current_thread")]
