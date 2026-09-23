@@ -3,7 +3,7 @@
 //! This client never opens rollout files or Codex databases. Every operation
 //! goes through the installed app-server contract and an explicit `CODEX_HOME`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -78,6 +78,21 @@ pub struct CodexThreadObservation {
     pub ephemeral: bool,
 }
 
+/// Bounded, provider-reported catalog entry. A skill being enabled in this
+/// response does not prove that an existing thread has loaded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexSkillCatalogEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexMcpConfigEntry {
+    pub name: String,
+    pub enabled: bool,
+}
+
 /// Short-lived supported-API client scoped to one provider home.
 #[derive(Debug, Clone)]
 pub struct CodexNativeClient {
@@ -87,6 +102,45 @@ pub struct CodexNativeClient {
 }
 
 impl CodexNativeClient {
+    /// Read the provider's native catalog for one explicit workspace and home.
+    /// No thread is started or resumed. The result never asserts attachment.
+    pub async fn read_skill_catalog(
+        &self,
+        cwd: &Path,
+    ) -> Result<Vec<CodexSkillCatalogEntry>, HarnessError> {
+        let canonical_cwd = cwd.canonicalize().map_err(HarnessError::Io)?;
+        let cwd = canonical_cwd
+            .to_str()
+            .ok_or_else(|| HarnessError::Protocol("Codex skill workspace is not UTF-8".into()))?;
+        let mut connection = self.connect(Some(cwd)).await?;
+        let response = connection
+            .client
+            .request("skills/list", json!({"cwds": [cwd]}))
+            .await;
+        connection.close().await;
+        parse_skill_catalog(&response?, cwd)
+    }
+
+    /// Read provider MCP configuration for an explicit workspace. Codex reads
+    /// project config relative to the app-server process cwd; `config/read`
+    /// has no separate cwd parameter in this adapter's validated contract.
+    /// Commands, environment and auth fields never leave this method.
+    pub async fn read_mcp_config(
+        &self,
+        cwd: &Path,
+    ) -> Result<Vec<CodexMcpConfigEntry>, HarnessError> {
+        let canonical_cwd = cwd.canonicalize().map_err(HarnessError::Io)?;
+        let cwd = canonical_cwd
+            .to_str()
+            .ok_or_else(|| HarnessError::Protocol("Codex MCP workspace is not UTF-8".into()))?;
+        let mut connection = self.connect(Some(cwd)).await?;
+        let response = connection
+            .client
+            .request("config/read", json!({"includeLayers": false}))
+            .await;
+        connection.close().await;
+        parse_mcp_config(&response?)
+    }
     pub fn new(codex_home: impl Into<PathBuf>) -> Self {
         Self {
             codex_home: codex_home.into(),
@@ -508,6 +562,106 @@ impl CodexNativeClient {
             notifications: notification_rx,
         })
     }
+}
+
+fn parse_skill_catalog(
+    response: &Value,
+    cwd: &str,
+) -> Result<Vec<CodexSkillCatalogEntry>, HarnessError> {
+    let groups = response
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| HarnessError::Protocol("Codex skills/list has no data array".into()))?;
+    if groups.len() > 64 {
+        return Err(HarnessError::Protocol(
+            "Codex skills/list exceeds group limit".into(),
+        ));
+    }
+    let group = groups
+        .iter()
+        .find(|group| group.get("cwd").and_then(Value::as_str) == Some(cwd))
+        .ok_or_else(|| HarnessError::Protocol("Codex skills/list omitted requested cwd".into()))?;
+    let skills = group
+        .get("skills")
+        .and_then(Value::as_array)
+        .ok_or_else(|| HarnessError::Protocol("Codex skills/list has no skills array".into()))?;
+    if skills.len() > 256 {
+        return Err(HarnessError::Protocol(
+            "Codex skills/list exceeds skill limit".into(),
+        ));
+    }
+    let mut entries = Vec::new();
+    for skill in skills {
+        let (Some(name), Some(path), Some(enabled)) = (
+            skill.get("name").and_then(Value::as_str),
+            skill.get("path").and_then(Value::as_str),
+            skill.get("enabled").and_then(Value::as_bool),
+        ) else {
+            return Err(HarnessError::Protocol(
+                "Codex skill entry lacks identity or enabled state".into(),
+            ));
+        };
+        if name.is_empty()
+            || name.len() > 128
+            || !name.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
+            })
+            || path.len() > 2048
+            || !Path::new(path).is_absolute()
+        {
+            return Err(HarnessError::Protocol(
+                "Codex skill entry has invalid identity".into(),
+            ));
+        }
+        entries.push(CodexSkillCatalogEntry {
+            name: name.into(),
+            path: path.into(),
+            enabled,
+        });
+    }
+    Ok(entries)
+}
+
+fn parse_mcp_config(response: &Value) -> Result<Vec<CodexMcpConfigEntry>, HarnessError> {
+    let config = response
+        .get("config")
+        .and_then(Value::as_object)
+        .ok_or_else(|| HarnessError::Protocol("Codex config/read has no config object".into()))?;
+    let Some(servers) = config.get("mcp_servers") else {
+        return Ok(Vec::new());
+    };
+    let servers = servers
+        .as_object()
+        .ok_or_else(|| HarnessError::Protocol("Codex MCP configuration is malformed".into()))?;
+    if servers.len() > 256 {
+        return Err(HarnessError::Protocol(
+            "Codex MCP configuration exceeds server limit".into(),
+        ));
+    }
+    let mut entries = Vec::with_capacity(servers.len());
+    for (name, value) in servers {
+        if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+            return Err(HarnessError::Protocol(
+                "Codex MCP server has invalid name".into(),
+            ));
+        }
+        let enabled = value
+            .as_object()
+            .ok_or_else(|| HarnessError::Protocol("Codex MCP server entry is malformed".into()))?
+            .get("enabled")
+            .map(|enabled| {
+                enabled.as_bool().ok_or_else(|| {
+                    HarnessError::Protocol("Codex MCP server enabled flag is malformed".into())
+                })
+            })
+            .transpose()?
+            .unwrap_or(true);
+        entries.push(CodexMcpConfigEntry {
+            name: name.clone(),
+            enabled,
+        });
+    }
+    Ok(entries)
 }
 
 fn fork_params(request: &ProviderForkRequest) -> serde_json::Map<String, Value> {

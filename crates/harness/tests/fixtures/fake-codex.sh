@@ -115,11 +115,37 @@ if has "$line" '"method":"thread/archive"' || has "$line" '"method":"thread/unar
   exec sleep 30
 fi
 if has "$line" '"method":"config/read"'; then
-  emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"test\":{\"enabled\":true}}}}}"
+  if [ -f "$CODEX_HOME/mcp-config-trace" ]; then
+    pwd > "$CODEX_HOME/mcp-config-last-cwd"
+    printf '%s\n' "$line" > "$CODEX_HOME/mcp-config-last-request"
+  fi
+  if [ -f "$CODEX_HOME/mcp-config-fail" ]; then
+    emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32603,\"message\":\"synthetic MCP config failure\"}}"
+    exec sleep 30
+  fi
+  if [ -f './.luna-mcp-project-a' ]; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"project-a\":{\"enabled\":true}}}}}"
+    exec sleep 30
+  fi
+  if [ -f './.luna-mcp-project-b' ]; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"project-b\":{\"enabled\":true}}}}}"
+    exec sleep 30
+  fi
+  emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"test\":{\"enabled\":true,\"command\":\"SECRET_COMMAND_SENTINEL\"},\"off\":{\"enabled\":false,\"env\":{\"TOKEN\":\"SECRET_TOKEN_SENTINEL\"}}}}}}"
   read -r line || exit 1
 fi
 thread_line="$line"
 if has "$line" '"method":"skills/list"'; then
+  if has "$line" '"cwds":'; then
+    # Native L24 catalog read: the caller supplies an isolated home and cwd.
+    if [ -f "$CODEX_HOME/skill-catalog-fail" ]; then
+      emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32603,\"message\":\"synthetic catalog failure\"}}"
+      exec sleep 30
+    fi
+    cwd=$(pwd)
+    emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"cwd\":\"$cwd\",\"skills\":[{\"name\":\"imagegen\",\"path\":\"$cwd/.agents/skills/imagegen/SKILL.md\",\"enabled\":true},{\"name\":\"disabled\",\"path\":\"$cwd/.agents/skills/disabled/SKILL.md\",\"enabled\":false}]}]}}"
+    exec sleep 30
+  fi
   # Command discovery probe: answer with two cwd groups sharing one skill
   # (dedupe by name) and settle; no thread ever starts.
   emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"cwd\":\"/w\",\"skills\":[{\"name\":\"imagegen\",\"description\":\"Model-facing paragraph about images.\",\"interface\":{\"displayName\":\"Image Gen\",\"shortDescription\":\"Generate or edit images\"}},{\"name\":\"bare\",\"description\":\"No interface block\"}]},{\"cwd\":\"/x\",\"skills\":[{\"name\":\"imagegen\",\"description\":\"dupe\",\"interface\":{\"shortDescription\":\"dupe\"}}]}]}}"

@@ -2148,6 +2148,90 @@ async fn skill_observations_keep_duplicate_names_in_separate_cwd_groups() {
     );
 }
 
+#[tokio::test]
+async fn native_skill_catalog_uses_isolated_home_and_exact_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("codex-home");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let client = CodexNativeClient::new(&home).with_executable(fixture_path());
+    let entries = client.read_skill_catalog(&workspace).await.unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].name, "imagegen");
+    assert!(entries[0].enabled);
+    assert_eq!(
+        entries[0].path,
+        workspace
+            .canonicalize()
+            .unwrap()
+            .join(".agents/skills/imagegen/SKILL.md")
+    );
+    assert!(!entries[1].enabled);
+
+    std::fs::write(home.join("skill-catalog-fail"), "").unwrap();
+    assert!(client.read_skill_catalog(&workspace).await.is_err());
+}
+
+#[tokio::test]
+async fn native_mcp_config_keeps_commands_and_tokens_out_of_inventory() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("codex-home");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let client = CodexNativeClient::new(&home).with_executable(fixture_path());
+    let entries = client.read_mcp_config(&workspace).await.unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .find(|entry| entry.name == "test")
+            .unwrap()
+            .enabled
+    );
+    assert!(
+        !entries
+            .iter()
+            .find(|entry| entry.name == "off")
+            .unwrap()
+            .enabled
+    );
+    let debug = format!("{entries:?}");
+    assert!(!debug.contains("SECRET_COMMAND_SENTINEL"));
+    assert!(!debug.contains("SECRET_TOKEN_SENTINEL"));
+
+    std::fs::write(home.join("mcp-config-fail"), "").unwrap();
+    assert!(client.read_mcp_config(&workspace).await.is_err());
+}
+
+#[tokio::test]
+async fn native_mcp_config_uses_each_selected_project_cwd() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("codex-home");
+    let project_a = root.path().join("project-a");
+    let project_b = root.path().join("project-b");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&project_a).unwrap();
+    std::fs::create_dir_all(&project_b).unwrap();
+    std::fs::write(home.join("mcp-config-trace"), "").unwrap();
+    std::fs::write(project_a.join(".luna-mcp-project-a"), "").unwrap();
+    std::fs::write(project_b.join(".luna-mcp-project-b"), "").unwrap();
+    let client = CodexNativeClient::new(&home).with_executable(fixture_path());
+    for (project, expected) in [(&project_a, "project-a"), (&project_b, "project-b")] {
+        let entries = client.read_mcp_config(project).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, expected);
+        assert_eq!(
+            std::fs::read_to_string(home.join("mcp-config-last-cwd"))
+                .unwrap()
+                .trim(),
+            project.canonicalize().unwrap().to_str().unwrap()
+        );
+        let request = std::fs::read_to_string(home.join("mcp-config-last-request")).unwrap();
+        assert!(request.contains("\"method\":\"config/read\""));
+        assert!(request.contains("\"includeLayers\":false"));
+    }
+}
+
 #[test]
 fn skill_observation_parser_ignores_unknown_and_malformed_payloads() {
     use zeron_harness::codex::observe_skill_discovery;

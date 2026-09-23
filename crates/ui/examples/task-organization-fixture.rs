@@ -3,8 +3,8 @@
 //! The only accepted argument is an explicit synthetic root. Engine, UI,
 //! provider homes, repository folders, credentials, and temporary files stay
 //! below that root. Auth uses an in-memory credential broker; Codex native
-//! metadata access and every platform-Keychain fallback are disabled. No
-//! provider process or live account is used.
+//! metadata access and every platform-Keychain fallback are disabled. Only
+//! the opt-in L24 path may start the pinned repository fake Codex process.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,19 +26,65 @@ const TASK_REMOTE: &str = "56565656-5656-4565-8565-565656565656";
 const TASK_NON_GIT: &str = "67676767-6767-4676-8676-676767676767";
 const TASK_L20_SHARED: &str = "78787878-7878-4787-8787-787878787878";
 const TASK_L20_ISOLATED: &str = "89898989-8989-4898-8898-898989898989";
+const TASK_L24_OTHER: &str = "90909090-9090-4090-8090-909090909090";
 const L20_OPT_IN: &str = "LUNA_L20_CHECKPOINT_QA";
+const L24_OPT_IN: &str = "LUNA_L24_INTEGRATION_QA";
 const REMOTE_DEVICE: &str = "fixture-offline-machine";
+const L24_GLOBAL_INSTRUCTIONS: &str =
+    "L24 QA global: identify the selected synthetic task before reporting integration evidence.";
+const L24_APP_INSTRUCTIONS: &str =
+    "L24 QA Fieldnotes Desktop: this is the synthetic project A instruction.";
+const L24_OTHER_INSTRUCTIONS: &str =
+    "L24 QA Unrelated checkout: this is the synthetic project B instruction.";
+const FAKE_CODEX_BYTES: &[u8] = include_bytes!("../../harness/tests/fixtures/fake-codex.sh");
 
-fn validate_l20_root(root: &Path) -> anyhow::Result<()> {
+fn validate_opt_in_root(root: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
         root.parent() == Some(Path::new("/private/tmp"))
             && root
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("luna-l12-")),
-        "L20 fixture requires an explicit canonical /private/tmp/luna-l12-* root"
+        "opt-in fixture requires an explicit canonical /private/tmp/luna-l12-* root"
     );
     Ok(())
+}
+
+fn validate_l24_fake_codex() -> anyhow::Result<PathBuf> {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../harness/tests/fixtures/fake-codex.sh");
+    anyhow::ensure!(
+        std::fs::symlink_metadata(&source)?.file_type().is_file(),
+        "L24 fake Codex must be a regular, non-symlink repository file"
+    );
+    let expected = source.canonicalize()?;
+    let supplied = PathBuf::from(std::env::var_os("CODEX_EXECUTABLE").ok_or_else(|| {
+        anyhow::anyhow!("L24 requires the explicit repository fake CODEX_EXECUTABLE")
+    })?);
+    anyhow::ensure!(
+        supplied.is_absolute()
+            && !std::fs::symlink_metadata(&supplied)?
+                .file_type()
+                .is_symlink(),
+        "L24 CODEX_EXECUTABLE must be the absolute, non-symlink repository fake"
+    );
+    anyhow::ensure!(
+        supplied.canonicalize()? == expected,
+        "L24 CODEX_EXECUTABLE differs from the audited repository fake"
+    );
+    anyhow::ensure!(
+        std::fs::read(&expected)? == FAKE_CODEX_BYTES,
+        "L24 fake Codex changed after this fixture was built; rebuild before QA"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        anyhow::ensure!(
+            std::fs::metadata(&expected)?.permissions().mode() & 0o111 != 0,
+            "L24 repository fake Codex is not executable"
+        );
+    }
+    Ok(expected)
 }
 
 fn account_config(root: &Path) -> AgentAccountsConfig {
@@ -142,7 +188,7 @@ async fn seed_l20_with_services(
     repos: &Repos,
     checkpoints: &GitCheckpoints,
 ) -> anyhow::Result<L20Seed> {
-    validate_l20_root(root)?;
+    validate_opt_in_root(root)?;
     let shared = root.join("l20/shared");
     let shared_row = core.workspace.chat(TASK_L20_SHARED)?;
     let isolated_row = core.workspace.chat(TASK_L20_ISOLATED)?;
@@ -507,10 +553,187 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn seed_l24(core: &EngineCore, root: &Path) -> anyhow::Result<bool> {
+    let marker = root.join("L24-FIXTURE.txt");
+    if marker.exists() {
+        anyhow::ensure!(
+            core.workspace.chat(TASK_L24_OTHER)?.is_some(),
+            "partial L24 seed found; use a fresh synthetic root"
+        );
+        return Ok(false);
+    }
+    anyhow::ensure!(
+        core.workspace.chat(TASK_L24_OTHER)?.is_none(),
+        "partial L24 task seed found; use a fresh synthetic root"
+    );
+    let app = root.join("workspaces/fieldnotes/apps/desktop");
+    let other = root.join("workspaces/unrelated");
+    let files = [
+        (
+            root.join("synthetic-codex/skills/l24-global/SKILL.md"),
+            "# L24 synthetic global skill\n",
+        ),
+        (
+            root.join("synthetic-codex/config.toml"),
+            "[mcp_servers.l24-global]\ncommand = '/usr/bin/false'\nenabled = true\n",
+        ),
+        (
+            app.join(".agents/skills/imagegen/SKILL.md"),
+            "# L24 synthetic project A skill\n",
+        ),
+        (
+            other.join(".agents/skills/imagegen/SKILL.md"),
+            "# L24 synthetic project B skill\n",
+        ),
+        (
+            app.join(".luna-mcp-project-a"),
+            "synthetic fake Codex project A\n",
+        ),
+        (
+            other.join(".luna-mcp-project-b"),
+            "synthetic fake Codex project B\n",
+        ),
+    ];
+    anyhow::ensure!(
+        files.iter().all(|(path, _)| !path.exists()),
+        "partial L24 file seed found; use a fresh synthetic root"
+    );
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let empty: zeron_proto::InstructionSettingsView = client
+        .call_as(methods::GET_INSTRUCTION_SETTINGS, serde_json::json!({}))
+        .await?;
+    anyhow::ensure!(
+        empty.revision == 0 && empty.global.is_empty(),
+        "existing instruction settings found; L24 requires a fresh synthetic root"
+    );
+    for (path, content) in files {
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(path, content)?;
+    }
+    core.workspace.create_chat(
+        TASK_L24_OTHER,
+        Some("fixture-other"),
+        Some(&core.device_id),
+        Some(task_config()),
+        Some(other.to_string_lossy().into_owned()),
+    )?;
+    core.workspace
+        .rename_chat(TASK_L24_OTHER, "L24 Other project task")?;
+    let global: zeron_proto::InstructionSettingsView = client
+        .call_as(
+            methods::SET_INSTRUCTION_SETTINGS,
+            serde_json::json!({"text": L24_GLOBAL_INSTRUCTIONS, "expectedRevision": empty.revision}),
+        )
+        .await?;
+    let app_view: zeron_proto::InstructionSettingsView = client
+        .call_as(
+            methods::SET_INSTRUCTION_SETTINGS,
+            serde_json::json!({"projectId": "fixture-app", "text": L24_APP_INSTRUCTIONS, "expectedRevision": global.revision}),
+        )
+        .await?;
+    let _: zeron_proto::InstructionSettingsView = client
+        .call_as(
+            methods::SET_INSTRUCTION_SETTINGS,
+            serde_json::json!({"projectId": "fixture-other", "text": L24_OTHER_INSTRUCTIONS, "expectedRevision": app_view.revision}),
+        )
+        .await?;
+    std::fs::write(
+        marker,
+        format!(
+            "Synthetic L24 integrations only. CODEX_EXECUTABLE is the pinned repository fake; no real provider or MCP server is started.\nproject_a=fixture-app / Fieldnotes Desktop\nproject_b=fixture-other / Unrelated checkout\ntask_a={TASK_PINNED_A}\ntask_b={TASK_L24_OTHER}\nglobal_instructions={L24_GLOBAL_INSTRUCTIONS}\nproject_a_instructions={L24_APP_INSTRUCTIONS}\nproject_b_instructions={L24_OTHER_INSTRUCTIONS}\nexpected_project_mcp=project-a,project-b (fake config/read)\nexpected_project_skill=imagegen (fake skills/list)\n"
+        ),
+    )?;
+    Ok(true)
+}
+
+async fn preflight_l24(core: &EngineCore, newly_seeded: bool) -> anyhow::Result<()> {
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    for (project_id, task_id, mcp_name, expected_project_text) in [
+        (
+            "fixture-app",
+            TASK_PINNED_A,
+            "project-a",
+            L24_APP_INSTRUCTIONS,
+        ),
+        (
+            "fixture-other",
+            TASK_L24_OTHER,
+            "project-b",
+            L24_OTHER_INSTRUCTIONS,
+        ),
+    ] {
+        let instructions: zeron_proto::InstructionSettingsView = client
+            .call_as(
+                methods::GET_INSTRUCTION_SETTINGS,
+                serde_json::json!({"projectId": project_id}),
+            )
+            .await?;
+        anyhow::ensure!(
+            instructions.project_id.as_deref() == Some(project_id),
+            "L24 instruction readback selected the wrong project"
+        );
+        if newly_seeded {
+            anyhow::ensure!(
+                instructions.global == L24_GLOBAL_INSTRUCTIONS
+                    && instructions.project == expected_project_text,
+                "L24 instruction seed did not persist through the product RPC"
+            );
+        }
+        let inventory: zeron_proto::IntegrationInventoryView = client
+            .call_as(
+                methods::GET_INTEGRATION_INVENTORY,
+                serde_json::json!({"provider": "codex", "projectId": project_id, "probeProvider": true}),
+            )
+            .await?;
+        anyhow::ensure!(
+            inventory.unavailable_reason.is_none()
+                && inventory.items.iter().any(|item| {
+                    item.name == "imagegen"
+                        && item.scope == "project"
+                        && item.available == Some(true)
+                        && item.attached.is_none()
+                        && item
+                            .reason
+                            .as_deref()
+                            .is_some_and(|reason| reason.contains("skills/list"))
+                })
+                && inventory.items.iter().any(|item| {
+                    item.name == mcp_name
+                        && item.source == "Codex app-server / config/read"
+                        && item.scope == "selected workspace"
+                        && item.attached.is_none()
+                })
+                && inventory.items.iter().any(|item| {
+                    item.name == "l24-global" && item.source == "Codex home / config.toml"
+                }),
+            "L24 fake provider inventory failed for {project_id}: {:?}",
+            inventory.unavailable_reason
+        );
+        let diagnostics: zeron_proto::RuntimeContractView = client
+            .call_as(
+                methods::GET_RUNTIME_CONTRACT,
+                serde_json::json!({"taskId": task_id}),
+            )
+            .await?;
+        anyhow::ensure!(
+            diagnostics.task_id == task_id && diagnostics.effective.is_none(),
+            "L24 selected task diagnostics are not honest for {task_id}"
+        );
+        println!("l24_preflight=ok project={project_id} task={task_id} fake_mcp={mcp_name}");
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated fixture root"));
-    let seed_only = std::env::args().nth(2).as_deref() == Some("--l20-seed-only");
+    let seed_action = std::env::args().nth(2);
+    let l20_seed_only = seed_action.as_deref() == Some("--l20-seed-only");
+    let l24_seed_only = seed_action.as_deref() == Some("--l24-seed-only");
+    anyhow::ensure!(
+        seed_action.is_none() || l20_seed_only || l24_seed_only,
+        "unknown fixture seed-only action"
+    );
     anyhow::ensure!(root.is_absolute(), "fixture root must be absolute");
     let l20 = match std::env::var(L20_OPT_IN) {
         Ok(value) if value == "1" => true,
@@ -518,22 +741,48 @@ fn main() -> anyhow::Result<()> {
         Err(std::env::VarError::NotPresent) => false,
         Err(error) => return Err(error.into()),
     };
-    anyhow::ensure!(!seed_only || l20, "--l20-seed-only requires {L20_OPT_IN}=1");
-    if l20 {
+    let l24 = match std::env::var(L24_OPT_IN) {
+        Ok(value) if value == "1" => true,
+        Ok(value) => anyhow::bail!("{L24_OPT_IN} must be 1 when set, got {value:?}"),
+        Err(std::env::VarError::NotPresent) => false,
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        !l20_seed_only || l20,
+        "--l20-seed-only requires {L20_OPT_IN}=1"
+    );
+    anyhow::ensure!(
+        !l24_seed_only || l24,
+        "--l24-seed-only requires {L24_OPT_IN}=1"
+    );
+    if l20 || l24 {
         anyhow::ensure!(
             root.is_dir() && !std::fs::symlink_metadata(&root)?.file_type().is_symlink(),
-            "L20 opt-in requires a pre-existing, non-symlink synthetic root"
+            "opt-in fixture requires a pre-existing, non-symlink synthetic root"
         );
     } else {
         std::fs::create_dir_all(&root)?;
     }
     let root = root.canonicalize()?;
+    if l20 || l24 {
+        validate_opt_in_root(&root)?;
+    }
     if l20 {
-        validate_l20_root(&root)?;
         // EngineCore and its RPC service must resolve the same managed root.
         unsafe {
             std::env::set_var("LUNA_WORKTREES_DIR", root.join("l20-worktrees"));
         }
+    }
+    let codex_executable = if l24 {
+        validate_l24_fake_codex()?
+    } else {
+        // A manual Check provider in the ordinary L12/L20 fixture must not
+        // fall through to the user's installed Codex binary.
+        root.join("synthetic-codex/no-provider-executable")
+    };
+    unsafe {
+        std::env::set_var("CODEX_HOME", root.join("synthetic-codex"));
+        std::env::set_var("CODEX_EXECUTABLE", codex_executable);
     }
     let engine_data = root.join("engine");
     let ui_data = root.join("ui");
@@ -566,15 +815,30 @@ fn main() -> anyhow::Result<()> {
     if l20 {
         runtime.block_on(seed_l20(&core, &root))?;
     }
+    let l24_newly_seeded = if l24 {
+        runtime.block_on(seed_l24(&core, &root))?
+    } else {
+        false
+    };
+    if l24 && (l24_newly_seeded || l24_seed_only) {
+        runtime.block_on(preflight_l24(&core, l24_newly_seeded))?;
+    }
+    let safety = if l20 {
+        "L12 + opt-in L20 synthetic fixture only. Git checkpoints and restore targets stay under this root. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n"
+    } else {
+        "L12 synthetic fixture only. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n"
+    };
     std::fs::write(
         root.join("SAFETY.txt"),
-        if l20 {
-            "L12 + opt-in L20 synthetic fixture only. Git checkpoints and restore targets stay under this root. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n"
+        if l24 {
+            format!(
+                "{safety}L24 opt-in uses the pinned repository fake Codex executable, synthetic CODEX_HOME and two synthetic local projects. No real Codex, Keychain, login, MCP server or remote edge is used.\n"
+            )
         } else {
-            "L12 synthetic fixture only. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n"
+            safety.to_owned()
         },
     )?;
-    if seed_only {
+    if l20_seed_only || l24_seed_only {
         runtime.block_on(core.shutdown());
         return Ok(());
     }
@@ -718,7 +982,7 @@ mod tests {
             .tempdir_in("/private/tmp")
             .unwrap();
         let root = temp.path().canonicalize().unwrap();
-        validate_l20_root(&root).unwrap();
+        validate_opt_in_root(&root).unwrap();
         let accounts = account_config(&root);
         accounts.disable_claude_keychain_fallback().unwrap();
         let core =

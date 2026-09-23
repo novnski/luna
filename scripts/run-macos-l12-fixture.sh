@@ -4,6 +4,10 @@
 # The bundle has a unique LaunchServices identity and receives one explicit,
 # canonical /private/tmp/luna-l12-* profile root. The fixture itself owns the
 # in-memory auth and provider-store isolation controls.
+# L24 native QA: create a fresh /tmp/luna-l12-* root, then run this script with
+# LUNA_L24_INTEGRATION_QA=1 and actions build, preflight-l24, run, status, stop.
+# preflight-l24 seeds and checks fake-provider RPCs without opening a window;
+# expected project/task rows and instruction text are in root/L24-FIXTURE.txt.
 
 set -euo pipefail
 
@@ -17,7 +21,12 @@ BUILD_EXECUTABLE="$ROOT/target/debug/examples/task-organization-fixture"
 BUNDLE_ID="com.novnski.luna.l12-qa"
 DISPLAY_NAME="LUNA L12 QA"
 REFERENCE_ICNS="${LUNA_L12_REFERENCE_ICNS:-$ROOT/target/luna-l11-fixture/LUNA L11 QA.app/Contents/Resources/luna.icns}"
+if [[ -z "${LUNA_L12_REFERENCE_ICNS:-}" && ! -s "$REFERENCE_ICNS" ]]; then
+  REFERENCE_ICNS="$ROOT/target/luna-settings-fixture-v1/LUNA Settings QA.app/Contents/Resources/luna.icns"
+fi
 L20_OPT_IN="${LUNA_L20_CHECKPOINT_QA:-}"
+L24_OPT_IN="${LUNA_L24_INTEGRATION_QA:-}"
+FAKE_CODEX="$ROOT/crates/harness/tests/fixtures/fake-codex.sh"
 STAGE_ROOT=""
 BACKUP_ROOT=""
 REPLACEMENT_PENDING=false
@@ -28,8 +37,9 @@ fail() {
   exit 1
 }
 
-[[ -n "$REQUESTED_PROFILE" ]] || fail "usage: scripts/run-macos-l12-fixture.sh /tmp/luna-l12-<fresh-root> [build|run|stop|status]"
+[[ -n "$REQUESTED_PROFILE" ]] || fail "usage: scripts/run-macos-l12-fixture.sh /tmp/luna-l12-<fresh-root> [build|preflight-l24|run|stop|status]"
 [[ -z "$L20_OPT_IN" || "$L20_OPT_IN" == "1" ]] || fail "LUNA_L20_CHECKPOINT_QA must be 1 when set"
+[[ -z "$L24_OPT_IN" || "$L24_OPT_IN" == "1" ]] || fail "LUNA_L24_INTEGRATION_QA must be 1 when set"
 [[ "$REQUESTED_PROFILE" == /* ]] || fail "synthetic root must be absolute"
 [[ -d "$REQUESTED_PROFILE" ]] || fail "synthetic root must already exist (create it with mktemp -d /tmp/luna-l12-native-qa.XXXXXX)"
 [[ ! -L "$REQUESTED_PROFILE" ]] || fail "synthetic root must not be a symlink"
@@ -47,6 +57,23 @@ ROOT_OWNER="$(/usr/bin/stat -f '%Su' "$PROFILE")"
 PID_FILE="$PROFILE/task-organization-fixture.pid"
 LOG_FILE="$PROFILE/task-organization-fixture.log"
 ROOT_MARKER="$PROFILE/.luna-l12-qa-root"
+
+verify_l24_fake() {
+  [[ "$L24_OPT_IN" == "1" ]] || return 0
+  [[ -f "$FAKE_CODEX" && ! -L "$FAKE_CODEX" && -x "$FAKE_CODEX" ]] || fail "L24 requires the executable repository fake Codex"
+  [[ "$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$FAKE_CODEX")" == "$FAKE_CODEX" ]] || fail "L24 fake Codex path is not canonical"
+  [[ -z "${CODEX_EXECUTABLE:-}" || "$CODEX_EXECUTABLE" == "$FAKE_CODEX" ]] || fail "L24 refuses a different CODEX_EXECUTABLE"
+}
+
+prepare_profile_root() {
+  if [[ -e "$ROOT_MARKER" ]]; then
+    [[ "$(<"$ROOT_MARKER")" == "$BUNDLE_ID" ]] || fail "synthetic root belongs to another fixture identity"
+  else
+    [[ -z "$(/usr/bin/find "$PROFILE" -mindepth 1 -maxdepth 1 -print -quit)" ]] || fail "first run requires a fresh empty synthetic root"
+    print -r -- "$BUNDLE_ID" >"$ROOT_MARKER"
+  fi
+  /bin/mkdir -p "$PROFILE/provider-state" "$PROFILE/synthetic-auth" "$PROFILE/synthetic-codex" "$PROFILE/synthetic-claude" "$PROFILE/tmp"
+}
 
 remove_generated_tree() {
   local path="$1"
@@ -164,6 +191,7 @@ refuse_any_running_bundle() {
 
 build_bundle() {
   refuse_any_running_bundle
+  verify_l24_fake
   [[ -s "$REFERENCE_ICNS" ]] || fail "validated read-only icon is unavailable at $REFERENCE_ICNS"
   /usr/bin/file "$REFERENCE_ICNS" | /usr/bin/grep -Fq "Mac OS X icon" || fail "reference icon is not a macOS icon container"
 
@@ -217,7 +245,22 @@ case "$ACTION" in
   build)
     build_bundle
     ;;
+  preflight-l24)
+    [[ "$L24_OPT_IN" == "1" ]] || fail "preflight-l24 requires LUNA_L24_INTEGRATION_QA=1"
+    verify_l24_fake
+    validate_bundle "$APP"
+    refuse_any_running_bundle
+    prepare_profile_root
+    LUNA_L24_INTEGRATION_QA=1 CODEX_EXECUTABLE="$FAKE_CODEX" CODEX_HOME="$PROFILE/synthetic-codex" \
+      LUNA_DISABLE_SOUND=1 LUNA_DISABLE_NOTIFICATIONS=1 \
+      "$EXECUTABLE" "$PROFILE" --l24-seed-only
+    [[ -s "$PROFILE/SAFETY.txt" && -s "$PROFILE/L24-FIXTURE.txt" ]] || fail "L24 seed-only preflight did not persist safety readback"
+    print -- "l24_preflight=passed root=$PROFILE fake_codex=$FAKE_CODEX"
+    print -- "qa_readback=$PROFILE/L24-FIXTURE.txt"
+    print -- "fake_codex_sha256=$(/usr/bin/shasum -a 256 "$FAKE_CODEX" | /usr/bin/awk '{print $1}')"
+    ;;
   run)
+    verify_l24_fake
     validate_bundle "$APP"
     if [[ -f "$PID_FILE" ]]; then
       fixture_pid="$(<"$PID_FILE")"
@@ -232,18 +275,15 @@ case "$ACTION" in
       lookup_exit=$?
       [[ "$lookup_exit" == "1" ]] || fail "cannot inventory processes safely"
     fi
-    if [[ -e "$ROOT_MARKER" ]]; then
-      [[ "$(<"$ROOT_MARKER")" == "$BUNDLE_ID" ]] || fail "synthetic root belongs to another fixture identity"
-    else
-      [[ -z "$(/usr/bin/find "$PROFILE" -mindepth 1 -maxdepth 1 -print -quit)" ]] || fail "first run requires a fresh empty synthetic root"
-      print -r -- "$BUNDLE_ID" >"$ROOT_MARKER"
-    fi
-    /bin/mkdir -p "$PROFILE/provider-state" "$PROFILE/synthetic-auth" "$PROFILE/synthetic-codex" "$PROFILE/synthetic-claude" "$PROFILE/tmp"
+    prepare_profile_root
     # Launch through LaunchServices so native CUA receives the bundle identity.
     # `open` returns after launch; status/stop track only the exact app process.
     launch_env=(--env LUNA_DISABLE_SOUND=1 --env LUNA_DISABLE_NOTIFICATIONS=1)
     if [[ "$L20_OPT_IN" == "1" ]]; then
       launch_env+=(--env LUNA_L20_CHECKPOINT_QA=1)
+    fi
+    if [[ "$L24_OPT_IN" == "1" ]]; then
+      launch_env+=(--env LUNA_L24_INTEGRATION_QA=1 --env "CODEX_EXECUTABLE=$FAKE_CODEX" --env "CODEX_HOME=$PROFILE/synthetic-codex")
     fi
     /usr/bin/open -n "${launch_env[@]}" \
       --stdout "$LOG_FILE" \

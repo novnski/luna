@@ -20,8 +20,8 @@
 //! self-corrects from the RPC reply.
 
 use gpui::{
-    AnyElement, Context, Entity, IntoElement, Render, SharedString, Task, Window, div, prelude::*,
-    px,
+    AnyElement, Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window,
+    div, prelude::*, px,
 };
 
 use crate::composer::ComposerInput;
@@ -53,6 +53,14 @@ fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
                 .into_any_element(),
         ],
     )
+}
+
+fn matches_selected_contract(
+    view: &RuntimeContractView,
+    selected_task: Option<&str>,
+    target_device: Option<&str>,
+) -> bool {
+    target_device.is_none() && selected_task == Some(view.task_id.as_str())
 }
 
 /// One-line blurb per agent (the t3code models page pairs every toggle row
@@ -120,11 +128,14 @@ pub struct HarnessesPage {
     instruction_project_id: Option<String>,
     global_input: Entity<ComposerInput>,
     project_input: Entity<ComposerInput>,
-    instruction_task: Option<Task<()>>,
+    instruction_load_task: Option<Task<()>>,
+    instruction_save_task: Option<Task<()>>,
     inventory_task: Option<Task<()>>,
     instruction_saving: bool,
     runtime_contract: Loadable<RuntimeContractView>,
     runtime_task: Option<Task<()>>,
+    runtime_task_id: Option<String>,
+    _state_observer: Subscription,
 }
 
 struct SignIn {
@@ -178,6 +189,26 @@ impl HarnessesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let global_input = cx.new(|cx| ComposerInput::new("Instructions for every LUNA task", cx));
         let project_input = cx.new(|cx| ComposerInput::new("Instructions for this project", cx));
+        let state_observer = cx.observe(&state, |page, _, cx| {
+            if page.target_device.is_some() {
+                return;
+            }
+            let task_id = page.state.read(cx).selected_chat.clone();
+            if task_id != page.runtime_task_id {
+                page.load_runtime_contract(cx);
+                cx.notify();
+            }
+            let project_id = page
+                .state
+                .read(cx)
+                .selected_space_row()
+                .map(|space| space.id.clone());
+            if project_id != page.instruction_project_id {
+                page.load_instructions(cx);
+                page.load_inventory(false, cx);
+                cx.notify();
+            }
+        });
         let mut page = Self {
             title_settings: Loadable::Idle,
             title_models: Loadable::Idle,
@@ -202,11 +233,14 @@ impl HarnessesPage {
             instruction_project_id: None,
             global_input,
             project_input,
-            instruction_task: None,
+            instruction_load_task: None,
+            instruction_save_task: None,
             inventory_task: None,
             instruction_saving: false,
             runtime_contract: Loadable::Idle,
             runtime_task: None,
+            runtime_task_id: None,
+            _state_observer: state_observer,
         };
         page.load(cx);
         page
@@ -241,6 +275,7 @@ impl HarnessesPage {
         self.instructions = Loadable::Idle;
         self.inventory = Loadable::Idle;
         self.runtime_contract = Loadable::Idle;
+        self.runtime_task_id = None;
         self.load(cx);
         cx.notify();
     }
@@ -255,7 +290,7 @@ impl HarnessesPage {
         self.load_titles(None, cx);
         if self.target_device.is_none() {
             self.load_instructions(cx);
-            self.load_inventory(cx);
+            self.load_inventory(false, cx);
             self.load_runtime_contract(cx);
         }
         self.harnesses = Loadable::Loading;
@@ -366,7 +401,7 @@ impl HarnessesPage {
             .map(|space| space.id.clone());
         self.instruction_project_id = project_id.clone();
         self.instructions = Loadable::Loading;
-        self.instruction_task = Some(cx.spawn(async move |this, cx| {
+        self.instruction_load_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(
@@ -380,6 +415,16 @@ impl HarnessesPage {
                         .map_err(|e| e.to_string())
                 });
             this.update(cx, |page, cx| {
+                if page.target_device.is_some()
+                    || page
+                        .state
+                        .read(cx)
+                        .selected_space_row()
+                        .map(|space| space.id.clone())
+                        != project_id
+                {
+                    return;
+                }
                 page.instructions = match result {
                     Ok(view) => {
                         page.global_input
@@ -421,8 +466,9 @@ impl HarnessesPage {
         }
         .to_string();
         let revision = view.revision;
+        let display_project_id = self.instruction_project_id.clone();
         self.instruction_saving = true;
-        self.instruction_task = Some(cx.spawn(async move |this, cx| {
+        self.instruction_save_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(
                 methods::SET_INSTRUCTION_SETTINGS,
                 serde_json::json!({"projectId": project_id, "text": text, "expectedRevision": revision}),
@@ -430,22 +476,51 @@ impl HarnessesPage {
                 serde_json::from_value::<InstructionSettingsView>(value).map_err(|e| e.to_string())
             });
             this.update(cx, |page, cx| {
-                page.instruction_saving = false;
-                match result {
-                    Ok(view) => {
-                        page.instructions = Loadable::Ready(view);
-                        page.error = None;
-                        page.load_runtime_contract(cx);
-                    }
-                    Err(error) => page.error = Some(error),
-                }
-                cx.notify();
+                page.finish_instruction_save(result, display_project_id, cx);
             }).ok();
         }));
         cx.notify();
     }
 
-    fn load_inventory(&mut self, cx: &mut Context<Self>) {
+    fn finish_instruction_save(
+        &mut self,
+        result: Result<InstructionSettingsView, String>,
+        origin_project_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.instruction_saving = false;
+        let current_project_id = self
+            .state
+            .read(cx)
+            .selected_space_row()
+            .map(|space| space.id.clone());
+        let same_scope = self.target_device.is_none()
+            && self.instruction_project_id == origin_project_id
+            && current_project_id == origin_project_id;
+        match result {
+            Ok(_) => {
+                // A global write returns a global-only view. Reload the
+                // selected project and its new revision instead of installing
+                // that response over the project's editor.
+                self.error = None;
+                if self.target_device.is_none() {
+                    self.load_instructions(cx);
+                    self.load_runtime_contract(cx);
+                }
+            }
+            Err(error) => {
+                self.error = Some(error);
+                // Keep unsaved input for a same-scope retry. A changed scope
+                // must show the newly selected project's own content.
+                if !same_scope && self.target_device.is_none() {
+                    self.load_instructions(cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn load_inventory(&mut self, probe_provider: bool, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -461,7 +536,7 @@ impl HarnessesPage {
                 .client()
                 .call(
                     methods::GET_INTEGRATION_INVENTORY,
-                    serde_json::json!({"provider": provider, "projectId": project_id}),
+                    serde_json::json!({"provider": provider, "projectId": project_id, "probeProvider": probe_provider}),
                 )
                 .await
                 .map_err(|e| e.to_string())
@@ -470,6 +545,17 @@ impl HarnessesPage {
                         .map_err(|e| e.to_string())
                 });
             this.update(cx, |page, cx| {
+                if page.target_device.is_some()
+                    || page.integration_provider != provider
+                    || page
+                        .state
+                        .read(cx)
+                        .selected_space_row()
+                        .map(|space| space.id.clone())
+                        != project_id
+                {
+                    return;
+                }
                 page.inventory = match result {
                     Ok(view) => Loadable::Ready(view),
                     Err(error) => Loadable::Error(error),
@@ -485,8 +571,12 @@ impl HarnessesPage {
             return;
         };
         let Some(task_id) = self.state.read(cx).selected_chat.clone() else {
+            self.runtime_task_id = None;
+            self.runtime_task = None;
+            self.runtime_contract = Loadable::Idle;
             return;
         };
+        self.runtime_task_id = Some(task_id.clone());
         self.runtime_contract = Loadable::Loading;
         self.runtime_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
@@ -501,6 +591,11 @@ impl HarnessesPage {
                     serde_json::from_value::<RuntimeContractView>(value).map_err(|e| e.to_string())
                 });
             this.update(cx, |page, cx| {
+                if page.target_device.is_some()
+                    || page.state.read(cx).selected_chat.as_deref() != Some(task_id.as_str())
+                {
+                    return;
+                }
                 page.runtime_contract = match result {
                     Ok(view) => Loadable::Ready(view),
                     Err(error) => Loadable::Error(error),
@@ -511,13 +606,31 @@ impl HarnessesPage {
         }));
     }
 
-    fn render_runtime_contract(&self, theme: &Theme) -> AnyElement {
+    fn render_runtime_contract(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
             .child(widgets::row_title(theme, "Effective session"))
             .child(widgets::page_subtitle(theme,
-                "Redacted readback for the selected task. Instruction text and provider credentials are never shown here."));
+                "Redacted readback for the selected task. Instruction text and provider credentials are never shown here."))
+            .child(widgets::ghost_action(theme).id("refresh-effective-session")
+                .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
+                .on_click(cx.listener(|page, _, _, cx| { page.load_runtime_contract(cx); cx.notify(); }))
+                .child("Refresh"));
+        let selected_task = self.state.read(cx).selected_chat.clone();
         match &self.runtime_contract {
+            Loadable::Ready(view)
+                if !matches_selected_contract(
+                    view,
+                    selected_task.as_deref(),
+                    self.target_device.as_deref(),
+                ) =>
+            {
+                card = card.child(meta_text(
+                    theme,
+                    "The selected task changed. Refreshing session evidence…",
+                ));
+            }
             Loadable::Ready(view) => {
+                card = card.child(meta_text(theme, format!("Task: {}", view.task_id)));
                 if let Some(effective) = &view.effective {
                     card = card.child(meta_text(
                         theme,
@@ -581,11 +694,11 @@ impl HarnessesPage {
         let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
             .child(widgets::row_title(theme, "Skills and MCP"))
             .child(widgets::page_subtitle(theme,
-                "Provider-owned configuration on this device. Configured, available, and attached are separate checks; unknown is shown when the provider has no session readback."))
+                "Provider-owned configuration on this device. Check provider reads Codex's native catalog; availability and selected-session attachment remain separate checks."))
             .child(widgets::ghost_action(theme).id("refresh-integrations")
                 .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
-                .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(cx); cx.notify(); }))
-                .child("Refresh"));
+                .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(true, cx); cx.notify(); }))
+                .child("Check provider"));
         if let Loadable::Ready(harnesses) = &self.harnesses {
             let mut picker = div()
                 .mt(px(10.0))
@@ -603,7 +716,7 @@ impl HarnessesPage {
                         .hover(|s| widgets::ghost_hover(theme, s))
                         .on_click(cx.listener(move |page, _, _, cx| {
                             page.integration_provider = id;
-                            page.load_inventory(cx);
+                            page.load_inventory(false, cx);
                             cx.notify();
                         }))
                         .child(harness.name.clone()),
@@ -645,6 +758,9 @@ impl HarnessesPage {
                                 ),
                             ))
                             .when_some(item.reason.clone(), |el, reason| {
+                                el.child(meta_text(theme, reason))
+                            })
+                            .when_some(item.actions.reason.clone(), |el, reason| {
                                 el.child(meta_text(theme, reason))
                             }),
                     );
@@ -1485,7 +1601,7 @@ impl Render for HarnessesPage {
             (
                 self.render_integrations(&theme, cx),
                 self.render_instructions(&theme, cx),
-                self.render_runtime_contract(&theme),
+                self.render_runtime_contract(&theme, cx),
             )
         });
         let scrollbar = popover::rail(self, "harnesses-page-scrollbar", &theme, cx);
@@ -1536,7 +1652,152 @@ impl Render for HarnessesPage {
 
 #[cfg(test)]
 mod tests {
-    use super::SignInPhase;
+    use super::{HarnessesPage, SignInPhase, matches_selected_contract};
+    use crate::popover::Loadable;
+    use crate::state::AppState;
+    use crate::theme::Theme;
+    use gpui::AppContext;
+    use zeron_proto::{InstructionSettingsView, RuntimeContractView, RuntimeDelivery, Space};
+
+    fn project(id: &str) -> Space {
+        Space {
+            id: id.into(),
+            device_id: "local".into(),
+            path: format!("/synthetic/{id}"),
+            name: None,
+            git_detected: false,
+            git_checked_at: None,
+            checkout_id: None,
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+        }
+    }
+
+    fn instruction_view(
+        project_id: Option<&str>,
+        global: &str,
+        project: &str,
+    ) -> InstructionSettingsView {
+        InstructionSettingsView {
+            revision: 2,
+            global: global.into(),
+            project_id: project_id.map(str::to_owned),
+            project: project.into(),
+        }
+    }
+
+    #[gpui::test]
+    fn delayed_save_survives_project_and_device_switch(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.spaces = vec![project("p1"), project("p2")];
+            state.selected_space = Some("p1".into());
+            state
+        });
+        let window = cx.add_window(|_, cx| HarnessesPage::new(state.clone(), cx));
+        let (sender, receiver) = futures::channel::oneshot::channel::<InstructionSettingsView>();
+        window
+            .update(cx, |page, _, cx| {
+                page.instruction_project_id = Some("p1".into());
+                page.instructions = Loadable::Ready(instruction_view(Some("p1"), "old", "p1 text"));
+                page.instruction_saving = true;
+                page.instruction_save_task = Some(cx.spawn(async move |this, cx| {
+                    let result = receiver.await.unwrap();
+                    this.update(cx, |page, cx| {
+                        page.finish_instruction_save(Ok(result), Some("p1".into()), cx);
+                    })
+                    .ok();
+                }));
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        state.update(cx, |state, cx| {
+            state.selected_space = Some("p2".into());
+            cx.notify();
+        });
+        window
+            .update(cx, |page, _, cx| {
+                page.instruction_project_id = Some("p2".into());
+                // A new load replaces only the load task. The pending save must
+                // retain its receiver through this and the device switch.
+                page.instruction_load_task = Some(cx.spawn(async move |_, _| {
+                    std::future::pending::<()>().await;
+                }));
+                page.set_target_device(Some("remote".into()), cx);
+                assert!(page.instruction_saving);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        sender
+            .send(instruction_view(Some("p1"), "new", "old project"))
+            .expect("pending save was not canceled by a load or device switch");
+        cx.run_until_parked();
+        window
+            .update(cx, |page, _, _| {
+                assert!(!page.instruction_saving);
+                assert!(matches!(page.instructions, Loadable::Idle));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn global_save_keeps_project_editor_scoped_until_reload(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.spaces = vec![project("p1")];
+            state.selected_space = Some("p1".into());
+            state
+        });
+        let window = cx.add_window(|_, cx| HarnessesPage::new(state, cx));
+        window
+            .update(cx, |page, _, cx| {
+                page.instruction_project_id = Some("p1".into());
+                page.instructions =
+                    Loadable::Ready(instruction_view(Some("p1"), "old", "project text"));
+                page.instruction_saving = true;
+                page.finish_instruction_save(
+                    Ok(instruction_view(None, "new global", "")),
+                    Some("p1".into()),
+                    cx,
+                );
+                assert!(!page.instruction_saving);
+                let Loadable::Ready(view) = &page.instructions else {
+                    panic!("project view replaced")
+                };
+                assert_eq!(view.project_id.as_deref(), Some("p1"));
+                assert_eq!(view.project, "project text");
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn selected_session_evidence_never_follows_a_different_task_or_device() {
+        let view = RuntimeContractView {
+            task_id: "task-a".into(),
+            provider: None,
+            provider_delivery: RuntimeDelivery::Unsupported,
+            effective: None,
+            unavailable_reason: None,
+        };
+        assert!(matches_selected_contract(&view, Some("task-a"), None));
+        assert!(!matches_selected_contract(&view, Some("task-b"), None));
+        assert!(!matches_selected_contract(&view, None, None));
+        assert!(!matches_selected_contract(
+            &view,
+            Some("task-a"),
+            Some("other-device")
+        ));
+    }
 
     #[test]
     fn antigravity_setup_copy_matches_each_phase() {
