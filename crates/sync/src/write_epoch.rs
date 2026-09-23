@@ -25,6 +25,7 @@ pub enum Phase {
     Quiescing,
     Flushing,
     Snapshot,
+    Retired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,7 @@ pub enum EpochError {
     TimedOut,
     Exhausted,
     Stale,
+    Retired,
 }
 
 struct State {
@@ -113,10 +115,23 @@ impl WriteEpoch {
         self.inner.lock().phase
     }
 
+    /// Permanently close admission for this coordinator. In-flight writer
+    /// permits may finish, but a dropped freeze guard cannot reopen it.
+    pub fn retire(&self) {
+        let mut state = self.inner.lock();
+        if state.phase != Phase::Retired {
+            state.phase = Phase::Retired;
+            self.inner.notify(&mut state);
+        }
+    }
+
     /// Never waits: safe at a synchronous outer write boundary, including on
     /// a single-thread async runtime. Busy must be retried from outside locks.
     pub fn try_admit(&self) -> Result<WritePermit, EpochError> {
         let mut state = self.inner.lock();
+        if state.phase == Phase::Retired {
+            return Err(EpochError::Retired);
+        }
         if state.phase != Phase::Open {
             return Err(EpochError::Busy);
         }
@@ -163,6 +178,9 @@ impl WriteEpoch {
         let mut changed = self.inner.changed.subscribe();
         let mut attempt = {
             let mut state = self.inner.lock();
+            if state.phase == Phase::Retired {
+                return Err(EpochError::Retired);
+            }
             if state.phase != Phase::Open {
                 return Err(EpochError::Busy);
             }
@@ -198,7 +216,8 @@ impl WriteEpoch {
             return false;
         }
         let state = self.inner.lock();
-        state.epoch == permit.epoch && matches!(state.phase, Phase::Open | Phase::Quiescing)
+        state.epoch == permit.epoch
+            && matches!(state.phase, Phase::Open | Phase::Quiescing | Phase::Retired)
     }
 
     pub(crate) fn same_coordinator(&self, other: &Self) -> bool {
@@ -248,6 +267,9 @@ struct FreezeAttempt {
 impl FreezeAttempt {
     fn enter_flush(&mut self) -> Result<Option<FlushGuard>, EpochError> {
         let mut state = self.inner.lock();
+        if state.phase == Phase::Retired {
+            return Err(EpochError::Retired);
+        }
         if state.epoch != self.epoch || state.phase != Phase::Quiescing {
             return Err(EpochError::Stale);
         }
@@ -305,6 +327,9 @@ impl FlushGuard {
     pub fn into_snapshot(mut self) -> Result<SnapshotGuard, EpochError> {
         {
             let mut state = self.inner.lock();
+            if state.phase == Phase::Retired {
+                return Err(EpochError::Retired);
+            }
             if state.epoch != self.epoch || state.phase != Phase::Flushing {
                 return Err(EpochError::Stale);
             }
@@ -457,5 +482,75 @@ mod tests {
         drop(flush);
         assert_eq!(epoch.phase(), Phase::Open);
         assert_eq!(epoch.try_admit().unwrap().epoch(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retirement_wakes_waiter_and_cancelled_freeze_stays_retired() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let first = epoch.try_admit().unwrap();
+        let mut freezing = Box::pin(epoch.freeze(Duration::from_secs(2)));
+        assert!(matches!(
+            futures::poll!(freezing.as_mut()),
+            std::task::Poll::Pending
+        ));
+        assert_eq!(epoch.phase(), Phase::Quiescing);
+        let mut waiting = Box::pin(epoch.admit_async(Duration::from_secs(2)));
+        assert!(matches!(
+            futures::poll!(waiting.as_mut()),
+            std::task::Poll::Pending
+        ));
+
+        epoch.retire();
+        assert_eq!(waiting.await.err(), Some(EpochError::Retired));
+        drop(freezing);
+        drop(first);
+        assert_eq!(epoch.phase(), Phase::Retired);
+        assert_eq!(epoch.try_admit().err(), Some(EpochError::Retired));
+        assert!(matches!(
+            epoch.freeze(Duration::ZERO).await,
+            Err(EpochError::Retired)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropped_exclusive_guards_cannot_reopen_retired_epoch() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let flush = epoch.freeze(Duration::from_secs(1)).await.unwrap();
+        epoch.retire();
+        assert!(matches!(flush.into_snapshot(), Err(EpochError::Retired)));
+        assert_eq!(epoch.phase(), Phase::Retired);
+
+        let other_root = tempfile::tempdir().unwrap();
+        let other = WriteEpoch::for_device_root(other_root.path()).unwrap();
+        let snapshot = other
+            .freeze(Duration::from_secs(1))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        other.retire();
+        drop(snapshot);
+        assert_eq!(other.phase(), Phase::Retired);
+        assert_eq!(other.try_admit().err(), Some(EpochError::Retired));
+    }
+
+    #[test]
+    fn previously_admitted_writer_can_finish_after_retirement() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("profile");
+        std::fs::create_dir(&profile).unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let ticket = epoch.try_admit().unwrap();
+        let store = crate::DocsStore::open_guarded(&profile, epoch.clone(), &ticket).unwrap();
+
+        epoch.retire();
+        store
+            .save_snapshot_admitted(&ticket, "task", b"finished")
+            .unwrap();
+        assert_eq!(store.load_snapshot("task").unwrap().unwrap(), b"finished");
+        drop(ticket);
+        assert_eq!(epoch.try_admit().err(), Some(EpochError::Retired));
     }
 }
