@@ -5,9 +5,13 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
+use zeron_doc::{
+    MessagePart, MessageRole, MessageStatus, RegistryDoc, SessionDoc, SessionMessageEntry,
+};
 use zeron_engine::backup::{
     BackupError, BackupService, IsolatedRoot, RecoveryKey, inspect_archive,
 };
+use zeron_proto::{Chat, Space};
 use zeron_sync::DocsStore;
 
 fn fixture() -> (TempDir, PathBuf, PathBuf) {
@@ -53,6 +57,170 @@ fn service(root: &Path) -> BackupService {
         IsolatedRoot::open(root).unwrap(),
         RecoveryKey::injected([17; 32]),
     )
+}
+
+fn add_synthetic_task(root: &Path, room_gen: Option<u32>) {
+    let profile = root.join("profiles/local");
+    let store = DocsStore::open(&profile).unwrap();
+    let now = chrono::Utc::now();
+    let mut registry = RegistryDoc::new("synthetic-device");
+    registry
+        .upsert_space(&Space {
+            id: "synthetic-project".into(),
+            device_id: "synthetic-device".into(),
+            path: root.display().to_string(),
+            name: Some("Synthetic project".into()),
+            git_detected: false,
+            git_checked_at: None,
+            checkout_id: None,
+            created_at: now,
+        })
+        .unwrap();
+    registry
+        .upsert_chat(&Chat {
+            id: "synthetic-task".into(),
+            device_id: "synthetic-device".into(),
+            title: Some("Synthetic task".into()),
+            archived: false,
+            pinned_order: None,
+            cwd: None,
+            branch: None,
+            checkout_id: None,
+            source_context: None,
+            config: None,
+            last_message_preview: None,
+            last_message_at: Some(now),
+            created_at: now,
+            harness_session_id: None,
+            harness_session_cwd: None,
+            space_id: Some("synthetic-project".into()),
+            last_seen_at: None,
+            manually_unread: false,
+            room_gen,
+        })
+        .unwrap();
+    store
+        .save_snapshot("registry1", &registry.to_bytes().unwrap())
+        .unwrap();
+    let transcript = SessionDoc::init("synthetic-task").unwrap();
+    transcript
+        .push_message(&SessionMessageEntry {
+            id: "synthetic-message".into(),
+            role: MessageRole::User,
+            parts: vec![MessagePart::Text {
+                id: "synthetic-part".into(),
+                text: "synthetic prompt".into(),
+            }],
+            created_at: now.timestamp_millis(),
+            device_id: "synthetic-device".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    store
+        .save_snapshot("synthetic-task", &transcript.export_snapshot().unwrap())
+        .unwrap();
+}
+
+#[test]
+fn staged_activity_rebuild_survives_restart_and_detects_interrupted_readback() {
+    let (_parent, root, backups) = fixture();
+    add_synthetic_task(&root, None);
+    let backup = service(&root)
+        .export(&backups.join("activity.lunabk"))
+        .unwrap();
+    let counts = &backup.manifest.databases[0];
+    assert_eq!(
+        (counts.projects, counts.tasks, counts.attachment_blobs),
+        (Some(1), Some(1), Some(1))
+    );
+    assert_eq!(counts.activity_events_expected, Some(1));
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    assert!(
+        staged
+            .preview
+            .unsupported
+            .iter()
+            .any(|reason| reason.contains("usage cache"))
+    );
+    let db = staged.path.join("profiles/local/docs.sqlite3");
+    let conn = Connection::open(&db).unwrap();
+    let indexed: i64 = conn
+        .query_row("SELECT count(*) FROM activity_events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(indexed, 1);
+    conn.execute("UPDATE activity_events SET envelope_json = X'7b7d'", [])
+        .unwrap();
+    drop(conn);
+
+    // A fresh service stands in for a restarted owner. It rejects the
+    // interrupted/changed stage, then a clean retry rebuilds and reads back.
+    assert!(service(&root).verify_staged_for_tests(&staged).is_err());
+    fs::remove_dir_all(&staged.path).unwrap();
+    let retry = service(&root).stage_restore(&backup.archive).unwrap();
+    service(&root).verify_staged_for_tests(&retry).unwrap();
+    let staged_blob = retry.path.join("profiles/local/uploads/synthetic.txt");
+    fs::write(&staged_blob, b"damaged synthetic attachment").unwrap();
+    assert!(service(&root).verify_staged_for_tests(&retry).is_err());
+    fs::write(&staged_blob, b"synthetic attachment").unwrap();
+    service(&root).verify_staged_for_tests(&retry).unwrap();
+    assert!(service(&root).activate(retry).is_err());
+}
+
+#[test]
+fn chat2_snapshot_requires_full_engine_replay_before_activation() {
+    let (_parent, root, backups) = fixture();
+    add_synthetic_task(&root, Some(2));
+    let backup = service(&root)
+        .export(&backups.join("chat2.lunabk"))
+        .unwrap();
+    assert_eq!(backup.manifest.databases[0].tasks, Some(1));
+    assert!(
+        backup.manifest.databases[0]
+            .activity_events_expected
+            .is_none()
+    );
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    assert!(
+        staged
+            .preview
+            .unsupported
+            .iter()
+            .any(|reason| reason.contains("chat2"))
+    );
+    assert!(service(&root).activate(staged).is_err());
+}
+
+#[test]
+fn malformed_registry_row_cannot_be_silently_counted_as_absent() {
+    let (_parent, root, backups) = fixture();
+    add_synthetic_task(&root, None);
+    let profile = root.join("profiles/local");
+    let store = DocsStore::open(&profile).unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&store.load_snapshot("registry1").unwrap().unwrap()).unwrap();
+    for batch in raw["pending"].as_array_mut().unwrap() {
+        for op in batch["ops"].as_array_mut().unwrap() {
+            if op["kind"] == "chats" {
+                op["set"].as_object_mut().unwrap().remove("id");
+            }
+        }
+    }
+    store
+        .save_snapshot("registry1", &serde_json::to_vec(&raw).unwrap())
+        .unwrap();
+    drop(store);
+    let backup = service(&root)
+        .export(&backups.join("malformed-registry.lunabk"))
+        .unwrap();
+    assert!(
+        backup.manifest.databases[0]
+            .derived_rebuild_blocker
+            .as_deref()
+            .unwrap()
+            .contains("malformed project or task rows")
+    );
+    assert!(service(&root).stage_restore(&backup.archive).is_err());
 }
 
 #[test]

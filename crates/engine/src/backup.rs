@@ -2,7 +2,7 @@
 //! marked synthetic or copy-isolated root. The production engine/Keychain/RPC
 //! integration must supply a separate authority boundary before using this.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -17,8 +17,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, TempDir};
 use zeroize::Zeroize;
+use zeron_doc::{
+    KIND_CHATS, KIND_SPACES, PendingBatch, REGISTRY_DOC_ID, RegistryDoc, RegistryRow, SessionDoc,
+    apply_op,
+};
+use zeron_proto::{ActivityEnvelope, AgentEvent, TaskCommandEvent};
 
 use crate::instance_lock::InstanceLock;
+use crate::run_journal::journal_paths;
 
 const MAGIC: &[u8; 8] = b"LUNABK01";
 const ISOLATION_MARKER: &str = ".luna-l17-isolated-root";
@@ -145,6 +151,16 @@ pub struct DatabaseCounts {
     pub draft_records: i64,
     pub attachment_owners: i64,
     pub derived_events_discarded: i64,
+    #[serde(default)]
+    pub projects: Option<i64>,
+    #[serde(default)]
+    pub tasks: Option<i64>,
+    #[serde(default)]
+    pub attachment_blobs: Option<i64>,
+    #[serde(default)]
+    pub activity_events_expected: Option<i64>,
+    #[serde(default)]
+    pub derived_rebuild_blocker: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -356,7 +372,7 @@ impl BackupService {
             None
         };
         let manifest = BackupManifest {
-            format_version: 1,
+            format_version: 2,
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
             created_at_ms,
             source_environment_id,
@@ -457,9 +473,11 @@ fn collect_profile(
         )));
     }
     ensure_real_file(&db)?;
-    let snapshot = snapshots
+    let snapshot_profile = snapshots
         .path()
-        .join(format!("{}.sqlite3", databases.len()));
+        .join(format!("profile-{}", databases.len()));
+    fs::create_dir(&snapshot_profile)?;
+    let snapshot = snapshot_profile.join("docs.sqlite3");
     let source = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     source.execute(
         "VACUUM INTO ?1",
@@ -478,7 +496,23 @@ fn collect_profile(
     counts.derived_events_discarded = discarded_events;
     verify_database(&copy)?;
     drop(copy);
-    databases.push(counts);
+    let local_device_id = read_device_id(root)?;
+    match derive_profile(&snapshot_profile, profile, local_device_id.as_deref()) {
+        Ok(projection) => {
+            counts.projects = Some(projection.projects);
+            counts.tasks = Some(projection.tasks);
+            counts.activity_events_expected = projection.activity_count();
+            counts.derived_rebuild_blocker = projection.blocker;
+            if projection.tasks == 0
+                && (counts.task_events > 0 || counts.derived_events_discarded > 0)
+            {
+                counts.activity_events_expected = None;
+                counts.derived_rebuild_blocker =
+                    Some("activity or command rows have no authoritative registry task".into());
+            }
+        }
+        Err(error) => counts.derived_rebuild_blocker = Some(error.to_string()),
+    }
     add_file(root, &db, &snapshot, "database", entries)?;
     let journals = profile.join("journals");
     if journals.exists() {
@@ -488,6 +522,15 @@ fn collect_profile(
     if uploads.exists() {
         collect_tree(root, &uploads, "attachment", entries, false)?;
     }
+    counts.attachment_blobs = Some(
+        entries
+            .iter()
+            .filter(|entry| {
+                entry.manifest.category == "attachment" && entry.source.starts_with(&uploads)
+            })
+            .count() as i64,
+    );
+    databases.push(counts);
     Ok(())
 }
 
@@ -640,7 +683,299 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         draft_records: count_table(conn, "composer_drafts")?,
         attachment_owners: count_table(conn, "attachment_owners")?,
         derived_events_discarded: 0,
+        projects: None,
+        tasks: None,
+        attachment_blobs: None,
+        activity_events_expected: None,
+        derived_rebuild_blocker: None,
     })
+}
+
+fn read_device_id(root: &Path) -> Result<Option<String>> {
+    let path = root.join("device-id");
+    if !path.exists() {
+        return Ok(None);
+    }
+    ensure_real_file(&path)?;
+    Ok(Some(fs::read_to_string(path)?.trim().to_owned()))
+}
+
+struct ProfileProjection {
+    projects: i64,
+    tasks: i64,
+    activity: Vec<(String, Vec<ActivityEnvelope>)>,
+    blocker: Option<String>,
+}
+
+impl ProfileProjection {
+    fn activity_count(&self) -> Option<i64> {
+        self.blocker.is_none().then(|| {
+            self.activity
+                .iter()
+                .map(|(_, events)| events.len() as i64)
+                .sum()
+        })
+    }
+}
+
+/// Reconstruct only the L14 path whose full inputs are in this backup. The
+/// profile argument supplies the matching journal copy; no provider home or
+/// credential source is opened. Unknown lineage is an activation blocker.
+fn derive_profile(
+    database_profile: &Path,
+    journal_profile: &Path,
+    local_device_id: Option<&str>,
+) -> Result<ProfileProjection> {
+    let store = zeron_sync::DocsStore::open(database_profile)
+        .map_err(|e| BackupError::Invalid(format!("staged database open failed: {e}")))?;
+    let registry_bytes = store
+        .load_snapshot(REGISTRY_DOC_ID)
+        .map_err(|e| BackupError::Invalid(format!("registry read failed: {e}")))?;
+    let Some(registry_bytes) = registry_bytes else {
+        let legacy = store
+            .load_snapshot("workspace2")
+            .map_err(|e| BackupError::Invalid(format!("legacy registry read failed: {e}")))?
+            .is_some();
+        let identity = store
+            .load_snapshot("luna-task-identity-events-v1")
+            .map_err(|e| BackupError::Invalid(format!("task identity read failed: {e}")))?
+            .is_some();
+        let journals = journal_profile.join("journals");
+        let journal_records = if journals.exists() {
+            ensure_real_dir(&journals)?;
+            sorted_children(&journals)?
+                .iter()
+                .any(|path| path.extension().and_then(|s| s.to_str()) == Some("jsonl"))
+        } else {
+            false
+        };
+        return Ok(ProfileProjection {
+            projects: 0,
+            tasks: 0,
+            activity: Vec::new(),
+            blocker: if legacy || identity || journal_records {
+                Some(
+                    "registry is absent while workspace, task identity, or journal records exist"
+                        .into(),
+                )
+            } else {
+                None
+            },
+        });
+    };
+    let registry = RegistryDoc::from_bytes(&registry_bytes, local_device_id.unwrap_or("backup"))
+        .map_err(|e| BackupError::Invalid(format!("registry snapshot invalid: {e}")))?;
+    let spaces = registry
+        .read_spaces()
+        .map_err(|e| BackupError::Invalid(format!("project rows invalid: {e}")))?;
+    let chats = registry
+        .read_chats()
+        .map_err(|e| BackupError::Invalid(format!("task rows invalid: {e}")))?;
+    let (raw_projects, raw_tasks) = raw_registry_counts(&registry_bytes)?;
+    if spaces.len() != raw_projects || chats.len() != raw_tasks {
+        return Err(BackupError::Unsupported(
+            "registry skipped malformed project or task rows".into(),
+        ));
+    }
+    let mut projection = ProfileProjection {
+        projects: spaces.len() as i64,
+        tasks: chats.len() as i64,
+        activity: Vec::new(),
+        blocker: None,
+    };
+    if chats.is_empty() {
+        return Ok(projection);
+    }
+    let Some(device_id) = local_device_id.filter(|id| !id.is_empty()) else {
+        projection.blocker = Some("source device identity is missing for activity rebuild".into());
+        return Ok(projection);
+    };
+    if store
+        .load_snapshot("luna-task-identity-events-v1")
+        .map_err(|e| BackupError::Invalid(format!("task identity read failed: {e}")))?
+        .is_some()
+    {
+        projection.blocker = Some(
+            "task identity projection needs its engine-owned replay before activity rebuild".into(),
+        );
+        return Ok(projection);
+    }
+    let journal_dir = journal_profile.join("journals");
+    if journal_dir.exists() {
+        ensure_real_dir(&journal_dir)?;
+    }
+    for chat in chats {
+        let snapshot = store
+            .load_snapshot_with_cursor(&chat.id)
+            .map_err(|e| BackupError::Invalid(format!("task snapshot read failed: {e}")))?;
+        let Some((bytes, cursor, epoch)) = snapshot else {
+            projection.blocker = Some(format!(
+                "task {} has no staged transcript snapshot",
+                chat.id
+            ));
+            break;
+        };
+        if chat.on_chat2() || cursor != 0 || epoch >= 2 {
+            projection.blocker = Some(format!(
+                "task {} requires chat2 checkpoint and update replay before activity rebuild",
+                chat.id
+            ));
+            break;
+        }
+        let doc = SessionDoc::from_snapshot(&bytes)
+            .map_err(|e| BackupError::Invalid(format!("task transcript invalid: {e}")))?;
+        let entries = doc
+            .read_entries()
+            .map_err(|e| BackupError::Invalid(format!("task entries invalid: {e}")))?;
+        if entries.len() != doc.doc().get_list("messages").len() {
+            projection.blocker = Some(format!(
+                "task {} has unsalvageable transcript entries",
+                chat.id
+            ));
+            break;
+        }
+        let (receipts, truncated) = staged_command_history(&store, &chat.id)?;
+        if truncated {
+            projection.blocker = Some(format!("task {} has incomplete command history", chat.id));
+            break;
+        }
+        let policy = chat
+            .space_id
+            .as_deref()
+            .map(|id| store.activity_project_policy(id))
+            .transpose()
+            .map_err(|e| BackupError::Invalid(format!("project policy read failed: {e}")))?
+            .flatten();
+        let metadata = if journal_dir.exists() {
+            let (journal_path, _) = journal_paths(&journal_dir, &chat.id);
+            read_journal_metadata(&journal_path)?
+        } else {
+            HashMap::new()
+        };
+        let events = crate::activity_history::build_activity_envelopes(
+            device_id,
+            &chat,
+            None,
+            &entries,
+            &receipts,
+            false,
+            &metadata,
+            policy.as_ref(),
+        );
+        projection.activity.push((chat.id, events));
+    }
+    Ok(projection)
+}
+
+#[derive(Deserialize)]
+struct BackupRegistryRecords {
+    rows: Vec<RegistryRow>,
+    pending: Vec<PendingBatch>,
+}
+
+fn raw_registry_counts(bytes: &[u8]) -> Result<(usize, usize)> {
+    let records: BackupRegistryRecords = serde_json::from_slice(bytes)?;
+    let mut rows = HashMap::new();
+    for row in records.rows {
+        rows.insert((row.kind.clone(), row.id.clone()), row);
+    }
+    for batch in records.pending {
+        for op in batch.ops {
+            let key = (op.kind.clone(), op.id.clone());
+            let (next, _) = apply_op(rows.get(&key), &op);
+            if let Some(next) = next {
+                rows.insert(key, next);
+            }
+        }
+    }
+    Ok((
+        rows.values()
+            .filter(|row| row.kind == KIND_SPACES && !row.deleted)
+            .count(),
+        rows.values()
+            .filter(|row| row.kind == KIND_CHATS && !row.deleted)
+            .count(),
+    ))
+}
+
+#[derive(Deserialize)]
+struct BackupJournalLine {
+    seq: u64,
+    event: AgentEvent,
+}
+
+fn read_journal_metadata(
+    path: &Path,
+) -> Result<HashMap<String, crate::activity_history::ActivityRunMetadata>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    ensure_real_file(path)?;
+    let bytes = fs::read(path)?;
+    if !bytes.is_empty() && bytes.last() != Some(&b'\n') {
+        return Err(BackupError::Unsupported(format!(
+            "journal has an interrupted tail: {}",
+            path.display()
+        )));
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| BackupError::Unsupported("journal is not UTF-8".into()))?;
+    let mut prior = 0u64;
+    let mut metadata = HashMap::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let record: BackupJournalLine = serde_json::from_str(line)
+            .map_err(|_| BackupError::Unsupported("journal has a malformed record".into()))?;
+        if record.seq <= prior || record.seq == 0 {
+            return Err(BackupError::Unsupported(
+                "journal sequence is not increasing".into(),
+            ));
+        }
+        prior = record.seq;
+        if let AgentEvent::SessionStarted {
+            harness,
+            model,
+            assistant_message_id,
+            ..
+        } = record.event
+        {
+            metadata.insert(
+                assistant_message_id,
+                crate::activity_history::ActivityRunMetadata {
+                    harness: Some(harness),
+                    model: (!model.trim().is_empty()).then_some(model),
+                },
+            );
+        }
+    }
+    Ok(metadata)
+}
+
+fn staged_command_history(
+    store: &zeron_sync::DocsStore,
+    task_id: &str,
+) -> Result<(Vec<TaskCommandEvent>, bool)> {
+    let mut cursor = 0;
+    let mut events = Vec::new();
+    loop {
+        let page = store
+            .read_task_commands(task_id, cursor, 100)
+            .map_err(|e| BackupError::Invalid(format!("command history invalid: {e}")))?;
+        if page.reload_required {
+            return Ok((events, true));
+        }
+        events.extend(page.events);
+        if events.len() >= 10_000 {
+            events.truncate(10_000);
+            return Ok((events, page.has_more));
+        }
+        if !page.has_more {
+            return Ok((events, false));
+        }
+        let Some(next) = page.next_task_sequence else {
+            return Ok((events, true));
+        };
+        cursor = next;
+    }
 }
 
 fn verify_database(conn: &Connection) -> Result<()> {
@@ -707,7 +1042,7 @@ fn validate_entry_path(path: &str, category: &str) -> Result<()> {
 }
 
 fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
-    if manifest.format_version != 1
+    if !matches!(manifest.format_version, 1 | 2)
         || manifest.entries.len() > MAX_ENTRIES
         || manifest.databases.is_empty()
     {
@@ -751,6 +1086,18 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
             || db.draft_records < 0
             || db.attachment_owners < 0
             || db.derived_events_discarded < 0
+            || [
+                db.projects,
+                db.tasks,
+                db.attachment_blobs,
+                db.activity_events_expected,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| value < 0)
+            || (manifest.format_version == 2
+                && (db.projects.is_none() || db.tasks.is_none() || db.attachment_blobs.is_none())
+                && db.derived_rebuild_blocker.is_none())
             || !db_paths.insert(&db.path)
         {
             return Err(BackupError::Invalid(
@@ -1130,15 +1477,24 @@ impl BackupService {
         if let Err(e) = replaceable_root_fingerprint(self.root.path()) {
             unsupported.push(e.to_string());
         }
-        if manifest
-            .databases
-            .iter()
-            .any(|db| db.derived_events_discarded > 0)
-        {
-            unsupported.push(
-                "derived activity/search rows require a verified engine rebuild before activation"
-                    .into(),
-            );
+        if manifest.format_version < 2 {
+            unsupported.push("legacy manifest lacks authoritative restore count claims".into());
+        }
+        if manifest.source_environment_id != read_device_id(self.root.path())? {
+            unsupported.push("source and target device identities differ".into());
+        }
+        for db in &manifest.databases {
+            if let Some(reason) = &db.derived_rebuild_blocker {
+                unsupported.push(format!("{}: {reason}", db.path));
+            } else if db.activity_events_expected.is_none() {
+                unsupported.push(format!("{}: activity event count is unavailable", db.path));
+            }
+            if db.tasks.unwrap_or_default() > 0 {
+                unsupported.push(format!(
+                    "{}: L16 usage cache has no staged-record rebuild contract on this branch",
+                    db.path
+                ));
+            }
         }
         Ok(RestorePreview {
             required_bytes: manifest.total_bytes,
@@ -1153,6 +1509,15 @@ impl BackupService {
     /// The returned stage remains untouched until explicit activation.
     pub fn stage_restore(&self, archive: &Path) -> Result<StagedRestore> {
         self.stage_restore_with_space(archive, None)
+    }
+
+    /// Hermetic restart/readback seam for a previously staged isolated copy.
+    #[doc(hidden)]
+    pub fn verify_staged_for_tests(&self, staged: &StagedRestore) -> Result<()> {
+        if staged.target != self.root.path() {
+            return Err(BackupError::UnauthorizedRoot);
+        }
+        verify_stage(&staged.path, &staged.preview.manifest)
     }
 
     /// Hermetic preflight seam for low-space tests; production always queries
@@ -1209,7 +1574,9 @@ impl BackupService {
                 ensure_real_file(&device_id)?;
                 fs::copy(&device_id, stage.join("device-id"))?;
             }
-            verify_stage(&stage, &preview.manifest)?;
+            verify_stage_base(&stage, &preview.manifest)?;
+            rebuild_stage_activity(&stage, &preview.manifest)?;
+            verify_stage_derived(&stage, &preview.manifest)?;
             replaceable_root_fingerprint(&stage)?;
             sync_parent(&stage)?;
             Ok(())
@@ -1443,6 +1810,11 @@ fn create_private_file(path: &Path) -> Result<File> {
 }
 
 fn verify_stage(stage: &Path, manifest: &BackupManifest) -> Result<()> {
+    verify_stage_base(stage, manifest)?;
+    verify_stage_derived(stage, manifest)
+}
+
+fn verify_stage_base(stage: &Path, manifest: &BackupManifest) -> Result<()> {
     for entry in &manifest.entries {
         let path = stage.join(&entry.path);
         ensure_real_file(&path)?;
@@ -1480,6 +1852,133 @@ fn verify_stage(stage: &Path, manifest: &BackupManifest) -> Result<()> {
             )));
         }
         verify_attachment_refs(&conn, stage, &manifest.source_root)?;
+        if let Some(expected_blobs) = expected.attachment_blobs {
+            let parent = Path::new(&expected.path).parent().ok_or_else(|| {
+                BackupError::Invalid("database path has no profile prefix".into())
+            })?;
+            let actual_blobs = manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.category == "attachment"
+                        && Path::new(&entry.path).starts_with(parent.join("uploads"))
+                })
+                .count() as i64;
+            if actual_blobs != expected_blobs {
+                return Err(BackupError::Invalid(format!(
+                    "attachment blob count differs: {}",
+                    expected.path
+                )));
+            }
+        }
+    }
+    // Open a deterministic sample again after database/reference checks. The
+    // extraction pass authenticated every blob; this later readback catches a
+    // changed or unreadable staged attachment before activation.
+    let attachments: Vec<_> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.category == "attachment")
+        .collect();
+    for index in [
+        0,
+        attachments.len() / 2,
+        attachments.len().saturating_sub(1),
+    ] {
+        if let Some(entry) = attachments.get(index) {
+            let (size, digest) = measure_file(&stage.join(&entry.path))?;
+            if size != entry.size || digest != entry.sha256 {
+                return Err(BackupError::Invalid(format!(
+                    "staged attachment sample differs: {}",
+                    entry.path
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rebuild_stage_activity(stage: &Path, manifest: &BackupManifest) -> Result<()> {
+    for expected in &manifest.databases {
+        if expected.derived_rebuild_blocker.is_some() || expected.activity_events_expected.is_none()
+        {
+            continue;
+        }
+        let profile = stage.join(&expected.path).parent().unwrap().to_path_buf();
+        let projection = derive_profile(&profile, &profile, read_device_id(stage)?.as_deref())?;
+        if let Some(reason) = projection.blocker {
+            return Err(BackupError::Unsupported(format!(
+                "staged activity rebuild became unavailable: {reason}"
+            )));
+        }
+        if projection.projects != expected.projects.unwrap_or(-1)
+            || projection.tasks != expected.tasks.unwrap_or(-1)
+            || projection.activity_count() != expected.activity_events_expected
+        {
+            return Err(BackupError::Invalid(format!(
+                "project/task/activity counts differ before rebuild: {}",
+                expected.path
+            )));
+        }
+        let store = zeron_sync::DocsStore::open(&profile)
+            .map_err(|e| BackupError::Invalid(format!("staged index open failed: {e}")))?;
+        store
+            .rebuild_activity_events(&projection.activity)
+            .map_err(|e| BackupError::Invalid(format!("staged index rebuild failed: {e}")))?;
+    }
+    Ok(())
+}
+
+fn verify_stage_derived(stage: &Path, manifest: &BackupManifest) -> Result<()> {
+    for expected in &manifest.databases {
+        let profile = stage.join(&expected.path).parent().unwrap().to_path_buf();
+        let projection = derive_profile(&profile, &profile, read_device_id(stage)?.as_deref())?;
+        if expected
+            .projects
+            .is_some_and(|count| projection.projects != count)
+            || expected
+                .tasks
+                .is_some_and(|count| projection.tasks != count)
+        {
+            return Err(BackupError::Invalid(format!(
+                "staged project/task count differs: {}",
+                expected.path
+            )));
+        }
+        if let Some(expected_events) = expected.activity_events_expected {
+            if projection.blocker.is_some() || projection.activity_count() != Some(expected_events)
+            {
+                return Err(BackupError::Invalid(format!(
+                    "staged activity source count differs: {}",
+                    expected.path
+                )));
+            }
+            let conn = Connection::open(profile.join("docs.sqlite3"))?;
+            if count_table(&conn, "activity_events")? != expected_events {
+                return Err(BackupError::Invalid(format!(
+                    "staged activity index readback differs: {}",
+                    expected.path
+                )));
+            }
+            let expected_rows = projection
+                .activity
+                .iter()
+                .flat_map(|(_, events)| events)
+                .map(|event| Ok((event.event_id.clone(), serde_json::to_vec(event)?)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let mut stmt = conn.prepare("SELECT event_id,envelope_json FROM activity_events")?;
+            let actual_rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })?
+                .collect::<std::result::Result<BTreeMap<_, _>, _>>()?;
+            if actual_rows != expected_rows {
+                return Err(BackupError::Invalid(format!(
+                    "staged activity envelopes differ: {}",
+                    expected.path
+                )));
+            }
+        }
     }
     Ok(())
 }
