@@ -4461,13 +4461,79 @@ impl Shell {
             cx.notify();
             return;
         };
+        let deleting = intent.get("kind").and_then(|kind| kind.as_str()) == Some("delete");
+        let target_device = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == task_id)
+            .map(|chat| chat.device_id.clone());
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
-            if let Err(err) = crate::task_commands::execute(&engine, &task_id, intent).await {
+            let result = crate::task_commands::execute(&engine, &task_id, intent).await;
+            if let Err(err) = &result {
                 this.update(cx, |shell, cx| {
                     shell.sidebar_notice = Some(format!("{err}").into());
                     cx.notify();
                 })
                 .ok();
+            } else if deleting
+                && result.as_ref().is_ok_and(|receipt| {
+                    receipt.status == zeron_proto::CommandReceiptStatus::Applied
+                })
+            {
+                this.update(cx, |shell, cx| {
+                    if let Some(tabs) = shell.right_tabs.get(&task_id) {
+                        for surface in tabs {
+                            if let RightSurface::Browser(id) = surface {
+                                if let Some(browser) = shell.browsers.remove(id) {
+                                    browser.update(cx, |browser, cx| browser.close(cx));
+                                }
+                                shell.browser_subs.remove(id);
+                            }
+                        }
+                    }
+                    if shell.state.read(cx).selected_chat.as_deref() == Some(task_id.as_str()) {
+                        shell
+                            .state
+                            .update(cx, |state, cx| state.select_chat(None, cx));
+                    }
+                    shell
+                        .composer
+                        .update(cx, |composer, cx| composer.purge_chat(&task_id, cx));
+                    cx.notify();
+                })
+                .ok();
+                let mut params = serde_json::json!({ "taskId": task_id });
+                if let Some(device) = target_device {
+                    params["targetDeviceId"] = device.into();
+                }
+                let status = engine
+                    .client()
+                    .call(methods::GET_TASK_CLEANUP, params)
+                    .await;
+                let notice = match status {
+                    Ok(value) if value.is_null() => {
+                        Some("Deletion committed; cleanup status is missing.".to_string())
+                    }
+                    Ok(value) => value
+                        .get("detail")
+                        .and_then(|detail| detail.as_str())
+                        .filter(|_| {
+                            value.get("state").and_then(|state| state.as_str()) != Some("completed")
+                        })
+                        .map(str::to_owned),
+                    Err(error) => Some(format!(
+                        "Deletion committed; cleanup status is unavailable: {error}"
+                    )),
+                };
+                if let Some(notice) = notice {
+                    this.update(cx, |shell, cx| {
+                        shell.sidebar_notice = Some(notice.into());
+                        cx.notify();
+                    })
+                    .ok();
+                }
             }
         }));
     }
@@ -4566,6 +4632,14 @@ impl Shell {
             cx.notify();
             return;
         };
+        let deleted_project = (params.get("op").and_then(|op| op.as_str()) == Some("deleteSpace"))
+            .then(|| {
+                params
+                    .get("spaceId")
+                    .and_then(|id| id.as_str())
+                    .map(str::to_owned)
+            })
+            .flatten();
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
             if let Err(err) = engine.client().call(methods::MUTATE, params).await {
                 this.update(cx, |shell, cx| {
@@ -4573,6 +4647,36 @@ impl Shell {
                     cx.notify();
                 })
                 .ok();
+            } else if let Some(project_id) = deleted_project {
+                let status = engine
+                    .client()
+                    .call(
+                        methods::GET_PROJECT_CLEANUP,
+                        serde_json::json!({ "projectId": project_id }),
+                    )
+                    .await;
+                let notice = match status {
+                    Ok(value) if value.is_null() => {
+                        Some("Project deletion committed; cleanup status is missing.".to_string())
+                    }
+                    Ok(value) => value
+                        .get("detail")
+                        .and_then(|detail| detail.as_str())
+                        .filter(|_| {
+                            value.get("state").and_then(|state| state.as_str()) != Some("completed")
+                        })
+                        .map(str::to_owned),
+                    Err(error) => Some(format!(
+                        "Project deleted; cleanup status is unavailable: {error}"
+                    )),
+                };
+                if let Some(notice) = notice {
+                    this.update(cx, |shell, cx| {
+                        shell.sidebar_notice = Some(notice.into());
+                        cx.notify();
+                    })
+                    .ok();
+                }
             }
         }));
     }
@@ -5301,23 +5405,7 @@ impl Shell {
 
     fn delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
         self.delete_confirm = None;
-        if let Some(tabs) = self.right_tabs.get(&chat_id) {
-            for surface in tabs {
-                if let RightSurface::Browser(id) = surface {
-                    if let Some(browser) = self.browsers.remove(id) {
-                        browser.update(cx, |browser, cx| browser.close(cx));
-                    }
-                    self.browser_subs.remove(id);
-                }
-            }
-        }
-        if self.state.read(cx).selected_chat.as_deref() == Some(chat_id.as_str()) {
-            self.state.update(cx, |s, cx| s.select_chat(None, cx));
-        }
-        self.composer
-            .update(cx, |composer, cx| composer.purge_chat(&chat_id, cx));
-        let task_id = chat_id;
-        self.mutate_task(task_id, serde_json::json!({ "kind": "delete" }), cx);
+        self.mutate_task(chat_id, serde_json::json!({ "kind": "delete" }), cx);
         cx.notify();
     }
 
@@ -9356,11 +9444,11 @@ impl Shell {
                 .child(popover::dialog_title(&theme, "Delete session?"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(
                     &theme,
-                    format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
+                    format!("\u{201C}{title}\u{201D} and its LUNA-owned local records will be permanently deleted. This can\u{2019}t be undone."),
                 )))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(
                     &theme,
-                    "LUNA terminals owned by this session will stop, and their saved output will be removed.",
+                    "LUNA-managed execution will stop. LUNA removes its local transcript snapshot, unsent draft, terminal history and verified unshared draft uploads. Independent forks, project files, shared attachments, synced copies and provider-private data remain. Provider cleanup is unsupported.",
                 )))
                 .child(
                     div()

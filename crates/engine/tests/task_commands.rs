@@ -397,7 +397,7 @@ fn assemble_with_steering(
         hold,
         steering,
     }));
-    EngineCore::assemble_with_profile_and_agent_accounts_config(
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
         EngineProfile::development(&root.join("data"), "l07-org", "l07-user"),
         Arc::new(registry),
         HarnessId::Mock,
@@ -1045,6 +1045,32 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     core.doc_host.flush_all();
     drop(handle);
     assert!(snapshot_row_exists(&db_path, &task_id));
+    let blob = core.uploads.dir().join("l18-private-fixture.png");
+    std::fs::create_dir_all(core.uploads.dir()).unwrap();
+    std::fs::write(&blob, b"synthetic").unwrap();
+    let mut local_draft = composer_draft(&task_id, "unsent fixture");
+    local_draft.attachments.push(zeron_proto::DraftBlob {
+        attachment_id: "l18-private-fixture".into(),
+        name: "l18-private-fixture.png".into(),
+        path: Some(blob.to_string_lossy().to_string()),
+        sha256: None,
+        size: Some(9),
+        state: zeron_proto::DraftBlobState::Saved,
+        error: None,
+    });
+    core.store
+        .save_composer_draft(&core.device_id, &local_draft)
+        .unwrap();
+    core.store
+        .prepare_task_cleanup(&core.device_id, &task_id)
+        .unwrap();
+    let second_service = zeron_rpc::memory_client(core.rpc_service());
+    assert_eq!(
+        core.store.task_cleanup_state(&task_id).unwrap().unwrap().0,
+        "pending",
+        "another RPC service must not abort an in-flight delete preparation"
+    );
+    drop(second_service);
 
     let before_delete = snapshot(&client, &task_id).await;
     let delete = envelope(
@@ -1074,6 +1100,11 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
         "failed delete must not tombstone a surviving task"
     );
     assert!(snapshot_row_exists(&db_path, &task_id));
+    assert!(blob.exists(), "failed delete retains an unsent blob");
+    assert!(
+        core.store.task_cleanup_state(&task_id).unwrap().is_none(),
+        "failed registry commit reopens the surviving task for draft writes"
+    );
     let failed_delete_read = snapshot(&client, &task_id).await;
     assert_eq!(
         failed_delete_read.snapshot.task_revision,
@@ -1094,7 +1125,12 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     assert!(!core.task_identity.view(&task_id).unwrap().task.tombstoned);
     assert!(snapshot_row_exists(&db_path, &task_id));
     let deleted = execute(&client, delete).await;
-    assert_eq!(deleted.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        deleted.status,
+        CommandReceiptStatus::Applied,
+        "{:?}",
+        deleted.reason
+    );
     assert_eq!(
         deleted.snapshot.task_revision,
         before_delete.snapshot.task_revision + 1
@@ -1107,6 +1143,15 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
         !snapshot_row_exists(&db_path, &task_id),
         "local chat snapshot cleanup commits before the applied receipt returns"
     );
+    assert!(!blob.exists(), "unshared LUNA-owned draft blob is removed");
+    let cleanup: serde_json::Value = client
+        .call_as(
+            methods::GET_TASK_CLEANUP,
+            serde_json::json!({ "taskId": task_id }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleanup["state"], "completed");
 
     // A process loss after the durable commit has no remaining persistent
     // cleanup step to strand: registry, identity, chat doc, and receipt agree.
@@ -1140,6 +1185,303 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     );
     assert!(final_read.snapshot.binding_id.is_none());
     final_core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_delete_requires_exact_children_and_preserves_workspace_files() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let unrelated = root.path().join("unrelated");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&unrelated).unwrap();
+    let live_file = project.join("keep.txt");
+    std::fs::write(&live_file, b"workspace-owned").unwrap();
+    let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), false);
+    core.workspace
+        .create_space(
+            "project-a",
+            &core.device_id,
+            project.to_str().unwrap(),
+            Some("Project A".into()),
+            false,
+        )
+        .unwrap();
+    core.workspace
+        .create_space(
+            "project-b",
+            &core.device_id,
+            unrelated.to_str().unwrap(),
+            Some("Project B".into()),
+            false,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task_in_space(&client, "delete-a", "project-a", &project).await;
+    create_task_in_space(&client, "keep-b", "project-b", &unrelated).await;
+    core.workspace.set_chat_archived("delete-a", true).unwrap();
+    core.store
+        .save_activity_project_policy(&zeron_proto::HistoryProjectPolicy {
+            project_id: "project-a".into(),
+            excluded_path_prefixes: vec!["private".into()],
+            excluded_terms: Vec::new(),
+            index_terminal_output: false,
+            index_browser_fields: false,
+            index_accessibility_text: false,
+            index_screenshot_text: false,
+        })
+        .unwrap();
+
+    let stale = client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "deleteSpace", "spaceId": "project-a", "expectedChatIds": []
+            }),
+        )
+        .await;
+    assert!(stale.is_err());
+    assert!(core.workspace.space("project-a").unwrap().is_some());
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "deleteSpace", "spaceId": "project-a", "expectedChatIds": ["delete-a"]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(core.workspace.space("project-a").unwrap().is_none());
+    assert!(core.workspace.chat("delete-a").unwrap().is_none());
+    assert!(core.workspace.chat("keep-b").unwrap().is_some());
+    assert!(
+        live_file.exists(),
+        "live project file must never be removed"
+    );
+    let cleanup: serde_json::Value = client
+        .call_as(
+            methods::GET_TASK_CLEANUP,
+            serde_json::json!({ "taskId": "delete-a" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleanup["state"], "completed");
+    let project_cleanup: serde_json::Value = client
+        .call_as(
+            methods::GET_PROJECT_CLEANUP,
+            serde_json::json!({ "projectId": "project-a" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(project_cleanup["state"], "completed");
+    assert!(
+        core.store
+            .activity_project_policy("project-a")
+            .unwrap()
+            .is_none()
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_cleanup_failure_resumes_from_durable_child_list() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("workspace");
+    std::fs::create_dir_all(&project).unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let core = assemble(root.path(), runs.clone(), false);
+    core.workspace
+        .create_space(
+            "recover-project",
+            &core.device_id,
+            project.to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task_in_space(&client, "recover-project-task", "recover-project", &project).await;
+    let candidate = core.uploads.dir().join("project-retry.png");
+    std::fs::create_dir_all(&candidate).unwrap();
+    let mut draft = composer_draft("recover-project-task", "unsent");
+    draft.attachments.push(zeron_proto::DraftBlob {
+        attachment_id: "project-retry".into(),
+        name: "project-retry.png".into(),
+        path: Some(candidate.to_string_lossy().to_string()),
+        sha256: None,
+        size: None,
+        state: zeron_proto::DraftBlobState::Saved,
+        error: None,
+    });
+    core.store
+        .save_composer_draft(&core.device_id, &draft)
+        .unwrap();
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "deleteSpace", "spaceId": "recover-project",
+                "expectedChatIds": ["recover-project-task"]
+            }),
+        )
+        .await
+        .unwrap();
+    let failed: serde_json::Value = client
+        .call_as(
+            methods::GET_PROJECT_CLEANUP,
+            serde_json::json!({ "projectId": "recover-project" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed["state"], "failed");
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+    std::fs::remove_dir(&candidate).unwrap();
+    std::fs::write(&candidate, b"synthetic").unwrap();
+
+    let reopened = assemble(root.path(), runs, false);
+    assert!(
+        reopened
+            .workspace
+            .space("recover-project")
+            .unwrap()
+            .is_none(),
+        "committed project tombstone must survive reopening"
+    );
+    assert!(
+        reopened.workspace.registry_synced(),
+        "registry must be authoritative in this fixture"
+    );
+    assert!(
+        reopened
+            .uploads
+            .owned_blob_path(candidate.to_str().unwrap())
+            .is_some(),
+        "upload root {:?}, candidate {:?}",
+        reopened.uploads.dir(),
+        candidate
+    );
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let completed: serde_json::Value = client
+        .call_as(
+            methods::GET_PROJECT_CLEANUP,
+            serde_json::json!({ "projectId": "recover-project" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed["state"], "completed", "{completed}");
+    assert!(!candidate.exists());
+    assert!(project.exists());
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_settles_a_held_synthetic_run_before_tombstoning() {
+    let root = tempfile::tempdir().unwrap();
+    let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), true);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_configured_task(&client, "held-delete", &core.device_id).await;
+    let start = execute(
+        &client,
+        envelope(
+            "held-delete-run",
+            "held-delete",
+            Some(&snapshot(&client, "held-delete").await),
+            serde_json::json!({ "kind": "session", "command": {
+                "kind": "run", "request": request("hold for delete"),
+                "messageId": "held-delete-message"
+            }}),
+        ),
+    )
+    .await;
+    assert!(matches!(
+        start.status,
+        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+    ));
+    wait_for_receipt(&client, "held-delete-run", CommandReceiptStatus::Applied).await;
+    assert!(core.sessions.has_live_run("held-delete"));
+    let deleted = execute(
+        &client,
+        envelope(
+            "held-delete-command",
+            "held-delete",
+            Some(&snapshot(&client, "held-delete").await),
+            serde_json::json!({ "kind": "delete" }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        deleted.status,
+        CommandReceiptStatus::Applied,
+        "{:?}",
+        deleted.reason
+    );
+    assert!(!core.sessions.has_live_run("held-delete"));
+    assert!(core.workspace.chat("held-delete").unwrap().is_none());
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deletion_cleanup_failure_is_reported_and_resumes_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_configured_task(&client, "retry-delete", &core.device_id).await;
+    let candidate = core.uploads.dir().join("retry-fixture.png");
+    std::fs::create_dir_all(&candidate).unwrap(); // cannot be unlinked as a regular blob
+    let mut draft = composer_draft("retry-delete", "unsent fixture");
+    draft.attachments.push(zeron_proto::DraftBlob {
+        attachment_id: "retry-fixture".into(),
+        name: "retry-fixture.png".into(),
+        path: Some(candidate.to_string_lossy().to_string()),
+        sha256: None,
+        size: None,
+        state: zeron_proto::DraftBlobState::Saved,
+        error: None,
+    });
+    core.store
+        .save_composer_draft(&core.device_id, &draft)
+        .unwrap();
+    let receipt = execute(
+        &client,
+        envelope(
+            "retry-delete-command",
+            "retry-delete",
+            Some(&snapshot(&client, "retry-delete").await),
+            serde_json::json!({ "kind": "delete" }),
+        ),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+    let failed: serde_json::Value = client
+        .call_as(
+            methods::GET_TASK_CLEANUP,
+            serde_json::json!({ "taskId": "retry-delete" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed["state"], "failed");
+    assert!(candidate.is_dir());
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+    std::fs::remove_dir(&candidate).unwrap();
+    std::fs::write(&candidate, b"synthetic").unwrap();
+
+    let reopened = assemble(root.path(), runs, false);
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let completed: serde_json::Value = client
+        .call_as(
+            methods::GET_TASK_CLEANUP,
+            serde_json::json!({ "taskId": "retry-delete" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed["state"], "completed");
+    assert!(!candidate.exists());
+    assert!(reopened.workspace.chat("retry-delete").unwrap().is_none());
+    reopened.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

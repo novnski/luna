@@ -577,7 +577,6 @@ impl TaskCommandIntent {
                 | Self::ForkTask { .. }
                 | Self::EditEarlierMessage { .. }
                 | Self::RestoreHistoryRecovery { .. }
-                | Self::Delete {}
                 | Self::SetBranch { .. }
                 | Self::SetCwd { .. }
                 | Self::SetHost { .. }
@@ -993,10 +992,13 @@ enum MutateParams {
         #[serde(default)]
         name: Option<String>,
     },
-    /// Hard delete: cascades to every chat (and session row) in the space.
-    /// Live runs hosted here are interrupted best-effort.
+    /// Permanent local deletion; the UI supplies the exact reviewed child set.
     #[serde(rename_all = "camelCase")]
-    DeleteSpace { space_id: String },
+    DeleteSpace {
+        space_id: String,
+        #[serde(default)]
+        expected_chat_ids: Option<Vec<String>>,
+    },
     #[serde(rename_all = "camelCase")]
     RenameChat { chat_id: String, title: String },
     /// Set the chat's checkout branch label — the sidebar's
@@ -1312,8 +1314,192 @@ impl EngineRpc {
             engine_info,
             activity_cancel: CancellationToken::new(),
         };
+        rpc.resume_pending_task_cleanups();
+        rpc.resume_pending_project_cleanups();
         rpc.spawn_activity_bootstrap();
         rpc
+    }
+
+    /// Resume at most one small batch after a clean engine open. A pending
+    /// record without an identity tombstone is left pending: a failed registry
+    /// commit must never be interpreted as permission to delete live data.
+    fn resume_pending_task_cleanups(&self) {
+        match self.store.pending_task_cleanups(16) {
+            Ok(tasks) => {
+                for task_id in tasks {
+                    if self.sessions.has_live_run(&task_id) {
+                        continue;
+                    }
+                    let tombstoned = self
+                        .task_identity
+                        .view(&task_id)
+                        .is_some_and(|view| view.task.tombstoned);
+                    let committed_delete = self
+                        .store
+                        .has_applied_task_delete(&task_id)
+                        .unwrap_or(false);
+                    if tombstoned || committed_delete {
+                        self.cleanup_deleted_task(
+                            &task_id,
+                            self.task_identity
+                                .view(&task_id)
+                                .is_some_and(|view| view.current_binding.is_some()),
+                        );
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(%error, "task cleanup resume scan failed"),
+        }
+    }
+
+    fn cleanup_deleted_task(&self, task_id: &str, provider_bound: bool) {
+        let result = (|| -> Result<(), String> {
+            self.doc_host.evict_chat(task_id);
+            self.store
+                .retire_task_local_records(&self.engine_info.device_id, task_id)
+                .map_err(|error| error.to_string())?;
+            self.terminals
+                .delete_task(task_id)
+                .map_err(|error| error.to_string())?;
+            for path in self
+                .store
+                .task_cleanup_paths(task_id)
+                .map_err(|error| error.to_string())?
+            {
+                let metadata = match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.to_string()),
+                };
+                if !metadata.file_type().is_file() || self.uploads.owned_blob_path(&path).is_none()
+                {
+                    return Err(format!(
+                        "draft blob is outside the verified LUNA upload root: {path}"
+                    ));
+                }
+                self.store
+                    .remove_unowned_attachment(&path)
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        })();
+        let (state, detail) = match result {
+            Ok(()) if provider_bound => ("provider-pending", "LUNA data was removed. Provider-native data remains; automatic provider deletion is unsupported.".to_string()),
+            Ok(()) => ("completed", "LUNA-owned local cleanup completed.".to_string()),
+            Err(error) => ("failed", format!("Local cleanup failed: {error}")),
+        };
+        if let Err(error) = self.store.set_task_cleanup_state(task_id, state, &detail) {
+            tracing::warn!(task = %task_id, %error, "task cleanup state could not be persisted");
+        }
+        if state == "failed" {
+            tracing::warn!(task = %task_id, %detail, "task cleanup incomplete");
+        }
+    }
+
+    fn finish_project_cleanup(&self, project_id: &str, children: &[String]) {
+        let result = (|| -> Result<bool, String> {
+            self.store
+                .retire_project_local_records(project_id)
+                .map_err(|error| error.to_string())?;
+            let mut provider_pending = false;
+            for task_id in children {
+                match self
+                    .store
+                    .task_cleanup_state(task_id)
+                    .map_err(|error| error.to_string())?
+                {
+                    Some((state, _)) if state == "completed" => {}
+                    Some((state, _)) if state == "provider-pending" => provider_pending = true,
+                    Some((_, detail)) => return Err(format!("task {task_id}: {detail}")),
+                    None => return Err(format!("task {task_id} cleanup status is missing")),
+                }
+            }
+            Ok(provider_pending)
+        })();
+        let (state, detail) = match result {
+            Ok(true) => (
+                "provider-pending",
+                "LUNA project cleanup completed; provider-native cleanup is unsupported."
+                    .to_string(),
+            ),
+            Ok(false) => (
+                "completed",
+                "LUNA-owned project cleanup completed.".to_string(),
+            ),
+            Err(error) => ("failed", format!("Project cleanup failed: {error}")),
+        };
+        if let Err(error) = self
+            .store
+            .set_project_cleanup_state(project_id, state, &detail)
+        {
+            tracing::warn!(project = %project_id, %error, "project cleanup state could not be persisted");
+        }
+    }
+
+    fn resume_pending_project_cleanups(&self) {
+        if !self.workspace.registry_synced() {
+            return;
+        }
+        let projects = match self.store.pending_project_cleanups(8) {
+            Ok(projects) => projects,
+            Err(error) => {
+                tracing::warn!(%error, "project cleanup resume scan failed");
+                return;
+            }
+        };
+        for (project_id, children) in projects {
+            if self.workspace.space(&project_id).ok().flatten().is_some() {
+                // Another RPC service may have prepared this operation and be
+                // about to commit it. Only the initiating path can abort its
+                // marker on a proven failure; a startup scan leaves it pending.
+                continue;
+            }
+            let mut failure = None;
+            for task_id in &children {
+                if self.sessions.has_live_run(task_id) {
+                    failure = Some(format!("task {task_id} is still executing"));
+                    break;
+                }
+                if let Ok(Some(chat)) = self.workspace.chat(task_id)
+                    && chat.space_id.as_deref() == Some(&project_id)
+                {
+                    if let Err(error) = self
+                        .workspace
+                        .delete_chat(task_id)
+                        .and_then(|_| self.workspace.flush_checked())
+                    {
+                        failure = Some(error.to_string());
+                        break;
+                    }
+                }
+                if let Some(view) = self.task_identity.view(task_id)
+                    && !view.task.tombstoned
+                    && let Err(error) = self.task_identity.tombstone_task(task_id)
+                {
+                    failure = Some(error.to_string());
+                    break;
+                }
+                if let Err(error) = self
+                    .store
+                    .prepare_task_cleanup(&self.engine_info.device_id, task_id)
+                {
+                    failure = Some(error.to_string());
+                    break;
+                }
+                let provider_bound = self
+                    .task_identity
+                    .view(task_id)
+                    .is_some_and(|view| view.current_binding.is_some());
+                self.cleanup_deleted_task(task_id, provider_bound);
+            }
+            if let Some(error) = failure {
+                let _ = self
+                    .store
+                    .set_project_cleanup_state(&project_id, "failed", &error);
+            } else {
+                self.finish_project_cleanup(&project_id, &children);
+            }
+        }
     }
 
     /// Migration/reopen ingestion plus metadata reconciliation. This runs
@@ -1920,29 +2106,113 @@ impl EngineRpc {
                 .rename_space(&space_id, name.as_deref())
                 .map_err(failed)
                 .map(drop),
-            MutateParams::DeleteSpace { space_id } => {
-                let deleted = self.workspace.delete_space(&space_id).map_err(failed)?;
-                // Best-effort teardown of live runs we host for the deleted chats
-                // (the doc rows are already tombstoned; a straggler run would only
-                // write into an orphaned session doc).
-                let sessions = self.sessions.clone();
-                let doc_host = self.doc_host.clone();
-                let chat_ids = deleted.chat_ids;
-                for chat_id in &chat_ids {
-                    self.task_identity.tombstone_task(chat_id).map_err(failed)?;
-                    let removed = self.terminals.delete_task(chat_id).map_err(failed)?;
-                    if removed > 0 {
-                        tracing::info!(chat = %chat_id, records = removed, "deleted task terminal history");
+            MutateParams::DeleteSpace {
+                space_id,
+                expected_chat_ids,
+            } => {
+                let mut expected = expected_chat_ids.ok_or_else(|| {
+                    RpcError::BadParams("project deletion requires a reviewed session list".into())
+                })?;
+                expected.sort();
+                expected.dedup();
+                let space = self
+                    .workspace
+                    .space(&space_id)
+                    .map_err(failed)?
+                    .ok_or_else(|| RpcError::BadParams("project no longer exists".into()))?;
+                if space.device_id != self.engine_info.device_id {
+                    return Err(RpcError::Failed(
+                        "remote project cleanup is unsupported on this device".into(),
+                    ));
+                }
+                let mut current: Vec<_> = self
+                    .workspace
+                    .read_chats()
+                    .map_err(failed)?
+                    .into_iter()
+                    .filter(|chat| chat.space_id.as_deref() == Some(&space_id))
+                    .collect();
+                current.sort_by(|a, b| a.id.cmp(&b.id));
+                if current.iter().map(|chat| &chat.id).ne(expected.iter()) {
+                    return Err(RpcError::Failed(
+                        "project sessions changed; reopen the deletion preview".into(),
+                    ));
+                }
+                if current
+                    .iter()
+                    .any(|chat| chat.device_id != self.engine_info.device_id)
+                {
+                    return Err(RpcError::Failed(
+                        "project contains remote tasks; remote cleanup is unsupported".into(),
+                    ));
+                }
+                let mut _gates = Vec::with_capacity(expected.len());
+                for task_id in &expected {
+                    _gates.push(self.doc_host.task_command_gate(task_id).await);
+                }
+                for task_id in &expected {
+                    self.sessions.interrupt(task_id).await.map_err(failed)?;
+                    if self.sessions.has_live_run(task_id) {
+                        return Err(RpcError::Failed(format!(
+                            "task {task_id} did not settle; project was not deleted"
+                        )));
                     }
                 }
-                tokio::spawn(async move {
-                    for chat_id in chat_ids {
-                        if let Err(err) = sessions.interrupt(&chat_id).await {
-                            tracing::debug!(chat = %chat_id, error = %err, "deleteSpace interrupt skipped");
+                self.store
+                    .prepare_project_cleanup(&space_id, &expected)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let mut prepared = Vec::new();
+                for task_id in &expected {
+                    if let Err(error) = self
+                        .store
+                        .prepare_task_cleanup(&self.engine_info.device_id, task_id)
+                    {
+                        for prepared_id in prepared {
+                            let _ = self.store.abort_task_cleanup(prepared_id);
                         }
-                        doc_host.purge_chat(&chat_id);
+                        let _ = self.store.abort_project_cleanup(&space_id);
+                        return Err(RpcError::Failed(error.to_string()));
                     }
-                });
+                    prepared.push(task_id.as_str());
+                }
+                let deleted = match self.workspace.delete_space_if_chats(&space_id, &expected) {
+                    Ok(deleted) => deleted,
+                    Err(error) => {
+                        if self.workspace.space(&space_id).ok().flatten().is_some() {
+                            for task_id in &expected {
+                                let _ = self.store.abort_task_cleanup(task_id);
+                            }
+                            let _ = self.store.abort_project_cleanup(&space_id);
+                        }
+                        return Err(failed(error));
+                    }
+                };
+                if let Err(error) = self.workspace.flush_checked() {
+                    let _ = self.store.set_project_cleanup_state(
+                        &space_id,
+                        "failed",
+                        &format!("registry deletion could not be durably flushed: {error}"),
+                    );
+                    return Err(failed(error));
+                }
+                for task_id in &deleted.chat_ids {
+                    let provider_bound = self
+                        .task_identity
+                        .view(task_id)
+                        .is_some_and(|view| view.current_binding.is_some());
+                    if self.task_identity.view(task_id).is_some() {
+                        if let Err(error) = self.task_identity.tombstone_task(task_id) {
+                            let _ = self.store.set_project_cleanup_state(
+                                &space_id,
+                                "failed",
+                                &format!("task {task_id} identity cleanup failed: {error}"),
+                            );
+                            return Err(failed(error));
+                        }
+                    }
+                    self.cleanup_deleted_task(task_id, provider_bound);
+                }
+                self.finish_project_cleanup(&space_id, &deleted.chat_ids);
                 Ok(())
             }
             MutateParams::RenameDevice { device_id, name } => self
@@ -2095,6 +2365,28 @@ impl EngineRpc {
                 "the task has an active turn",
                 "Stop the expected active turn, wait for settlement, then retry with a new command id.",
             );
+        }
+        if matches!(command.intent, TaskCommandIntent::Delete {}) {
+            if let Err(error) = self.sessions.interrupt(&command.task_id).await {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Failed,
+                    false,
+                    CommandReasonCode::OperationFailed,
+                    &error.to_string(),
+                    "The task is still present. Retry deletion after execution stops.",
+                );
+            }
+            if self.sessions.has_live_run(&command.task_id) {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Conflict,
+                    false,
+                    CommandReasonCode::ActiveTurnConflict,
+                    "execution did not settle before deletion",
+                    "Stop the task and retry.",
+                );
+            }
         }
         let validated_project_move = if let TaskCommandIntent::MoveProject {
             destination_space_id,
@@ -4494,6 +4786,15 @@ impl EngineRpc {
                 Ok(Some(receipt))
             }
             TaskCommandIntent::Delete {} => {
+                let provider_bound = self
+                    .task_identity
+                    .view(task_id)
+                    .is_some_and(|view| view.current_binding.is_some());
+                self.store
+                    .prepare_task_cleanup(&self.engine_info.device_id, task_id)
+                    .map_err(|error| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(error.to_string()))
+                    })?;
                 let owned_task_id = task_id.to_string();
                 let mut current = self
                     .current_task_command_snapshot(task_id)
@@ -4503,7 +4804,7 @@ impl EngineRpc {
                 current.binding_id = None;
                 current.binding_generation = None;
                 current.active_turn_id = None;
-                let (_, receipt) = self.task_identity.tombstone_task_with_command(
+                let committed = self.task_identity.tombstone_task_with_command(
                     task_id,
                     move |identity_snapshot| {
                         self.commit_task_projection_with_changes(
@@ -4517,17 +4818,22 @@ impl EngineRpc {
                             },
                         )
                     },
-                )?;
-                self.doc_host.evict_chat(task_id);
-                // The task tombstone is authoritative. Stop only PTYs opened
-                // for this task and remove their local output history.
-                let removed = self
-                    .terminals
-                    .delete_task(task_id)
-                    .map_err(TaskProjectionError::Mutation)?;
-                if removed > 0 {
-                    tracing::info!(task = %task_id, records = removed, "deleted task terminal history");
-                }
+                );
+                let (_, receipt) = match committed {
+                    Ok(committed) => committed,
+                    Err(error) => {
+                        if self.workspace.chat(task_id).ok().flatten().is_some()
+                            && !self.store.has_applied_task_delete(task_id).unwrap_or(false)
+                        {
+                            let _ = self.store.abort_task_cleanup(task_id);
+                        }
+                        return Err(error);
+                    }
+                };
+                // The receipt covers the atomic tombstone/index change. Local
+                // cleanup has its own persisted status and can resume after a
+                // crash; it must not rewrite an Applied receipt as Failed.
+                self.cleanup_deleted_task(task_id, provider_bound);
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetBranch { branch } => {
@@ -5344,6 +5650,7 @@ fn forwardable(method: &str) -> bool {
             | methods::QUEUE_COMMAND
             | methods::EXECUTE_TASK_COMMAND
             | methods::GET_TASK_COMMAND_RECEIPT
+            | methods::GET_TASK_CLEANUP
             | methods::GET_TASK_COMMAND_SNAPSHOT
             | methods::WATCH_TASK_COMMANDS
             | methods::SEARCH_SESSION_HISTORY
@@ -7071,6 +7378,40 @@ impl RpcService for EngineRpc {
                         .task_command_receipt(&p.command_id)
                         .map_err(|error| RpcError::Failed(error.to_string()))?,
                 )
+            }
+            methods::GET_TASK_CLEANUP => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    task_id: String,
+                }
+                let p: P = parse_params(params)?;
+                let status = self
+                    .store
+                    .task_cleanup_state(&p.task_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&status.map(|(state, detail)| {
+                    serde_json::json!({
+                        "state": state, "detail": detail
+                    })
+                }))
+            }
+            methods::GET_PROJECT_CLEANUP => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    project_id: String,
+                }
+                let p: P = parse_params(params)?;
+                let status = self
+                    .store
+                    .project_cleanup_state(&p.project_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&status.map(|(state, detail)| {
+                    serde_json::json!({
+                        "state": state, "detail": detail
+                    })
+                }))
             }
             methods::GET_COMPOSER_DRAFT => {
                 let p: ComposerDraftReadParams = parse_params(params)?;
