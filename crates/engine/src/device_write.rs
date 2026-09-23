@@ -63,6 +63,12 @@ pub(crate) struct DeviceWriteHandle {
 }
 
 impl DeviceWriteHandle {
+    pub(crate) fn owns(&self, permit: &DeviceWritePermit) -> bool {
+        self.inner
+            .upgrade()
+            .is_some_and(|lease| Arc::ptr_eq(&lease, &permit._lease))
+    }
+
     pub(crate) fn try_admit(&self) -> Result<DeviceWritePermit, EpochError> {
         let lease = self.inner.upgrade().ok_or(EpochError::Retired)?;
         let ticket = lease.epoch.try_admit()?;

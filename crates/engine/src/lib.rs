@@ -373,7 +373,10 @@ impl EngineCore {
         registry.load_prefs(data_dir);
         let store = Arc::new(DocsStore::open(profile.store_root())?);
         let store_for_import = store.clone();
-        let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
+        let journal = Arc::new(RunJournal::open_guarded(
+            profile.store_root().join("journals"),
+            device_write.handle(),
+        )?);
         let sessions =
             SessionsEngine::new(device_id.clone(), journal, registry.clone(), store.clone());
         sessions.set_recovery_settings_path(profile.device_root().join("ui-settings.json"));
@@ -466,7 +469,7 @@ impl EngineCore {
             agent_accounts_config.codex_home.join("generated_images"),
         );
         let local_import = (profile.scope() == WorkspaceScope::Synced).then(|| {
-            local_import::LocalImporter::new(
+            local_import::LocalImporter::new_guarded(
                 data_dir,
                 &device_id,
                 profile.org_id(),
@@ -475,6 +478,7 @@ impl EngineCore {
                 profile.store_root().join("journals"),
                 workspace.clone(),
                 uploads.clone(),
+                device_write.handle(),
             )
         });
         let agent_accounts = AgentAccounts::new(agent_accounts_config);
