@@ -6,8 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::sync::Arc;
 use tempfile::TempDir;
-use zeron_engine::backup::IsolatedRoot;
-use zeron_engine::backup_control::BackupControl;
+use zeron_engine::backup::{IsolatedRoot, RecoveryKey, inspect_archive};
+use zeron_engine::backup_control::{BackupControl, BackupControlError};
 use zeron_engine::credentials::{CredentialBroker, CredentialScope};
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_proto::HarnessId;
@@ -22,6 +22,22 @@ fn marked_root(path: &Path) {
         "L17 synthetic or copy-isolated root\n",
     )
     .unwrap();
+}
+
+#[test]
+fn synthetic_key_generation_never_falls_back_to_platform_broker() {
+    let temp = TempDir::new().unwrap();
+    let owner = temp.path().join("marked-synthetic-owner");
+    marked_root(&owner);
+    let control = BackupControl::new(
+        IsolatedRoot::open(&owner).unwrap(),
+        CredentialBroker::for_data_dir(&owner),
+    );
+    assert!(matches!(
+        control.generate_recovery_key_for_synthetic_tests(),
+        Err(BackupControlError::SyntheticKeyOnly)
+    ));
+    assert!(!owner.join("credentials").exists());
 }
 
 #[test]
@@ -167,7 +183,9 @@ fn staged_checkpoint_fails_closed_across_restart_and_retries_after_repair() {
 
     let broker = CredentialBroker::in_memory_for_tests(&owner);
     let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
-    control.configure_recovery_key_hex("44".repeat(32)).unwrap();
+    let owner_code = control.generate_recovery_key_for_synthetic_tests().unwrap();
+    assert_eq!(owner_code.len(), 64);
+    assert!(owner_code.bytes().all(|byte| byte.is_ascii_hexdigit()));
     control
         .configure(BackupConfigureRequest {
             source_root: source.display().to_string(),
@@ -176,6 +194,11 @@ fn staged_checkpoint_fails_closed_across_restart_and_retries_after_repair() {
         })
         .unwrap();
     let archive = control.manual_backup().unwrap().archive_path;
+    let recovered_bytes: [u8; 32] = std::array::from_fn(|index| {
+        u8::from_str_radix(&owner_code[index * 2..index * 2 + 2], 16).unwrap()
+    });
+    assert!(inspect_archive(Path::new(&archive), &RecoveryKey::injected(recovered_bytes)).is_ok());
+    assert!(control.generate_recovery_key_for_synthetic_tests().is_err());
     let request = BackupArchiveRequest {
         archive_path: archive,
     };

@@ -25,7 +25,7 @@ use crate::credentials::{
 
 const STATE_FILE: &str = "backup-control-v1.json";
 const KEY_NAME: &str = "LUNA backup recovery key";
-const RESTORE_REASON: &str = "Restore activation remains unavailable: chat2, task identity and usage reconstruction, plus post-start engine readback, are incomplete.";
+const RESTORE_REASON: &str = "Restore activation remains unavailable: chat2 remote frontier, provider mappings, usage reconstruction, and post-start engine readback are unresolved.";
 
 #[derive(Debug, thiserror::Error)]
 pub enum BackupControlError {
@@ -41,6 +41,8 @@ pub enum BackupControlError {
     Unconfigured,
     #[error("recovery key must be exactly 64 hexadecimal characters")]
     InvalidRecoveryKey,
+    #[error("recovery key generation is limited to an explicit in-memory synthetic broker")]
+    SyntheticKeyOnly,
     #[error("backup source, destination, and engine roots must be separate")]
     OverlappingRoots,
     #[error("backup control state is incompatible")]
@@ -101,6 +103,27 @@ impl BackupControl {
                 operation: Mutex::new(()),
             }),
         }
+    }
+
+    /// Generate owner-held recovery material only for marked synthetic
+    /// fixtures with an in-memory broker. The production UI/RPC does not
+    /// expose this method or fall back to the OS credential store.
+    #[doc(hidden)]
+    pub fn generate_recovery_key_for_synthetic_tests(&self) -> Result<Zeroizing<String>> {
+        if !self.inner.broker.is_in_memory_for_tests() {
+            return Err(BackupControlError::SyntheticKeyOnly);
+        }
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        getrandom::fill(&mut *bytes)
+            .map_err(|error| BackupError::Invalid(format!("randomness unavailable: {error}")))?;
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut owner_code = Zeroizing::new(String::with_capacity(64));
+        for byte in bytes.iter() {
+            owner_code.push(HEX[(byte >> 4) as usize] as char);
+            owner_code.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        self.configure_recovery_key_hex(owner_code.to_string())?;
+        Ok(owner_code)
     }
 
     /// Import owner-held 256-bit recovery material into an exact backup-only
