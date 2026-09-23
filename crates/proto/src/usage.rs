@@ -6,6 +6,9 @@ use std::collections::HashMap;
 
 /// v2 adds a distinct OpenCode Go provider that older clients cannot decode.
 pub const USAGE_CONTRACT_VERSION: u32 = 2;
+/// A recent observation may show a countdown; older observations remain visible
+/// only as last-reported data. This does not establish live account access.
+pub const USAGE_LIMIT_FRESHNESS_MS: i64 = 5 * 60_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -189,6 +192,47 @@ pub struct UsageLimitSnapshot {
     pub detail: Option<String>,
 }
 
+/// Interpretation of an explicitly reported reset time at display time.
+/// Derived locally from the existing wire fields; never serialized or inferred
+/// when the provider supplied no reset timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageResetState {
+    Unknown,
+    ReportedFuture { at_ms: i64 },
+    ReportedPassed { at_ms: i64 },
+    LastReported { at_ms: i64 },
+}
+
+impl UsageLimitSnapshot {
+    /// None includes missing and future check times; neither proves freshness.
+    pub fn checked_age_ms(&self, now_ms: i64) -> Option<i64> {
+        now_ms
+            .checked_sub(self.checked_at_ms?)
+            .filter(|age| *age >= 0)
+    }
+
+    pub fn is_fresh(&self, now_ms: i64) -> bool {
+        self.availability == LimitAvailability::Ready
+            && self
+                .checked_age_ms(now_ms)
+                .is_some_and(|age| age < USAGE_LIMIT_FRESHNESS_MS)
+    }
+
+    pub fn reset_state(&self, window: &UsageLimitWindow, now_ms: i64) -> UsageResetState {
+        let Some(at_ms) = window.resets_at_ms else {
+            return UsageResetState::Unknown;
+        };
+        if !self.is_fresh(now_ms) {
+            return UsageResetState::LastReported { at_ms };
+        }
+        if at_ms <= now_ms {
+            UsageResetState::ReportedPassed { at_ms }
+        } else {
+            UsageResetState::ReportedFuture { at_ms }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSnapshot {
@@ -287,6 +331,100 @@ pub fn merge_usage_snapshots(mut snapshots: Vec<UsageSnapshot>) -> Option<UsageS
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reported_resets_require_a_recent_ready_check_for_countdown() {
+        let now = 10 * 60_000;
+        let future = now + 60_000;
+        let cases = [
+            (
+                "codex future",
+                UsageProvider::Codex,
+                LimitAvailability::Ready,
+                Some(now - 60_000),
+                Some(future),
+                UsageResetState::ReportedFuture { at_ms: future },
+            ),
+            (
+                "go future",
+                UsageProvider::OpenCodeGo,
+                LimitAvailability::Ready,
+                Some(now - 60_000),
+                Some(future),
+                UsageResetState::ReportedFuture { at_ms: future },
+            ),
+            (
+                "passed",
+                UsageProvider::Codex,
+                LimitAvailability::Ready,
+                Some(now - 60_000),
+                Some(now),
+                UsageResetState::ReportedPassed { at_ms: now },
+            ),
+            (
+                "stale boundary",
+                UsageProvider::OpenCodeGo,
+                LimitAvailability::Ready,
+                Some(now - USAGE_LIMIT_FRESHNESS_MS),
+                Some(future),
+                UsageResetState::LastReported { at_ms: future },
+            ),
+            (
+                "failed last good",
+                UsageProvider::Codex,
+                LimitAvailability::ProbeFailed,
+                Some(now - 60_000),
+                Some(future),
+                UsageResetState::LastReported { at_ms: future },
+            ),
+            (
+                "future check",
+                UsageProvider::OpenCodeGo,
+                LimitAvailability::Ready,
+                Some(now + 1),
+                Some(future),
+                UsageResetState::LastReported { at_ms: future },
+            ),
+            (
+                "missing check",
+                UsageProvider::Codex,
+                LimitAvailability::Ready,
+                None,
+                Some(future),
+                UsageResetState::LastReported { at_ms: future },
+            ),
+            (
+                "missing reset",
+                UsageProvider::OpenCodeGo,
+                LimitAvailability::Ready,
+                Some(now - 60_000),
+                None,
+                UsageResetState::Unknown,
+            ),
+        ];
+        for (name, provider, availability, checked_at_ms, resets_at_ms, expected) in cases {
+            let limit = UsageLimitSnapshot {
+                provider,
+                verified_account_id: Some("synthetic-account".into()),
+                account_label: None,
+                plan: None,
+                checked_at_ms,
+                availability,
+                windows: vec![],
+                reset_credits: None,
+                detail: None,
+            };
+            let window = UsageLimitWindow {
+                id: "synthetic".into(),
+                label: "Synthetic window".into(),
+                used_percent: 40.0,
+                resets_at_ms,
+                duration_minutes: Some(300),
+            };
+            assert_eq!(limit.reset_state(&window, now), expected, "{name}");
+        }
+        assert_eq!(USAGE_CONTRACT_VERSION, 2);
+    }
 
     #[test]
     fn physical_sources_and_verified_accounts_dedupe() {
