@@ -57,6 +57,7 @@ pub mod titles;
 mod transcript_history;
 pub mod uploads;
 pub mod usage;
+mod usage_opencode;
 pub mod workspace_files;
 pub mod workspace_host;
 
