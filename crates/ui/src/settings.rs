@@ -21,6 +21,7 @@ pub mod backup;
 pub mod composer;
 pub mod devices;
 pub mod files;
+pub mod general;
 pub mod harnesses;
 pub mod notifications;
 pub mod shortcuts;
