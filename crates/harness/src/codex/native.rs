@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 
@@ -31,6 +32,37 @@ pub const NATIVE_CAPABILITIES: &[&str] = &[
     "thread/fork",
     "thread/compact/start",
 ];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexQuotaWindow {
+    pub limit_id: String,
+    pub limit_name: Option<String>,
+    pub position: &'static str,
+    pub used_percent: f32,
+    pub duration_minutes: Option<u64>,
+    pub resets_at_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexQuotaRead {
+    /// Backend `accountId` when supplied, SHA-256 hashed before leaving this adapter.
+    /// Email from `account/read` is never used as a de-duplication identity.
+    pub verified_account_id: Option<String>,
+    pub plan: Option<String>,
+    pub checked_at_ms: i64,
+    pub windows: Vec<CodexQuotaWindow>,
+    pub reset_credits: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CodexQuotaObservation {
+    Ready(CodexQuotaRead),
+    Unsupported,
+    /// A previously verified account can retain its own last good bars.
+    Failed {
+        verified_account_id: Option<String>,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +114,77 @@ impl CodexNativeClient {
             executable: self.executable.clone(),
             force_file_auth,
         }
+    }
+
+    /// Read only through Codex's supported app-server account API. The same
+    /// connection brackets the quota read with non-refreshing account reads;
+    /// a changed identity never contributes a snapshot or a last-good match.
+    pub async fn read_account_rate_limits(&self) -> Result<CodexQuotaObservation, HarnessError> {
+        let mut connection = self.connect(None).await?;
+        let result = async {
+            let before = connection
+                .client
+                .request("account/read", json!({"refreshToken": false}))
+                .await?;
+            let Some(account) = codex_account_marker(&before) else {
+                return Ok(CodexQuotaObservation::Unsupported);
+            };
+            let limits = match connection
+                .client
+                .request(
+                    "account/rateLimits/read",
+                    json!({"excludeResetCreditDetails": true}),
+                )
+                .await
+            {
+                Ok(limits) => limits,
+                Err(_) => {
+                    return Ok(CodexQuotaObservation::Failed {
+                        verified_account_id: None,
+                    });
+                }
+            };
+            let after = connection
+                .client
+                .request("account/read", json!({"refreshToken": false}))
+                .await;
+            if after
+                .ok()
+                .and_then(|value| codex_account_marker(&value))
+                .is_none_or(|observed| observed.signature != account.signature)
+            {
+                return Ok(CodexQuotaObservation::Failed {
+                    verified_account_id: None,
+                });
+            }
+            let has_limits = limits
+                .get("rateLimits")
+                .is_some_and(|value| !value.is_null())
+                || limits
+                    .get("rateLimitsByLimitId")
+                    .is_some_and(|value| !value.is_null());
+            if !has_limits {
+                return Ok(CodexQuotaObservation::Unsupported);
+            }
+            let Some((windows, reset_credits, limit_plan)) = codex_quota_windows(&limits) else {
+                return Ok(CodexQuotaObservation::Failed {
+                    verified_account_id: quota_account_id(&limits),
+                });
+            };
+            let checked_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis() as i64);
+            Ok(CodexQuotaObservation::Ready(CodexQuotaRead {
+                verified_account_id: quota_account_id(&limits),
+                plan: limit_plan.or(account.plan),
+                checked_at_ms,
+                windows,
+                reset_credits,
+            }))
+        }
+        .await;
+        connection.close().await;
+        result
     }
 
     pub async fn observe_thread(
@@ -655,6 +758,117 @@ fn optional_string(value: &Value, field: &str) -> Option<String> {
     value.get(field).and_then(Value::as_str).map(str::to_owned)
 }
 
+struct CodexAccountMarker {
+    signature: String,
+    plan: Option<String>,
+}
+
+fn codex_account_marker(value: &Value) -> Option<CodexAccountMarker> {
+    let account = value.get("account")?;
+    if account.get("type")?.as_str()? != "chatgpt" {
+        return None;
+    }
+    // This is only a before/after change marker. Account/read exposes an
+    // optional email, not a verified identity for quota cache matching.
+    let signature = format!("{:x}", Sha256::digest(account.to_string().as_bytes()));
+    let plan = account
+        .get("planType")
+        .and_then(Value::as_str)
+        .filter(|plan| !plan.is_empty() && plan.len() <= 80)
+        .map(str::to_owned);
+    Some(CodexAccountMarker { signature, plan })
+}
+
+fn quota_account_id(value: &Value) -> Option<String> {
+    let id = value.get("accountId")?.as_str()?.trim();
+    if id.is_empty() || id.len() > 320 {
+        return None;
+    }
+    Some(format!("codex:{:x}", Sha256::digest(id.as_bytes())))
+}
+
+fn codex_quota_windows(
+    value: &Value,
+) -> Option<(Vec<CodexQuotaWindow>, Option<u64>, Option<String>)> {
+    let mut buckets: Vec<(&str, &Value)> = if let Some(by_id) = value
+        .get("rateLimitsByLimitId")
+        .and_then(Value::as_object)
+        .filter(|map| !map.is_empty())
+    {
+        by_id
+            .iter()
+            .map(|(key, bucket)| (key.as_str(), bucket))
+            .collect()
+    } else {
+        vec![("codex", value.get("rateLimits")?)]
+    };
+    buckets.sort_by(|(left, _), (right, _)| {
+        (left != &"codex", *left).cmp(&(right != &"codex", *right))
+    });
+    let mut windows = Vec::new();
+    let mut plan = None;
+    for (fallback_id, bucket) in buckets.into_iter().take(8) {
+        if bucket.is_null() {
+            continue;
+        }
+        let id = bucket
+            .get("limitId")
+            .and_then(Value::as_str)
+            .unwrap_or(fallback_id);
+        if id.is_empty()
+            || id.len() > 64
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return None;
+        }
+        if id == "codex" {
+            plan = bucket
+                .get("planType")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty() && value.len() <= 80)
+                .map(str::to_owned);
+        }
+        let name = bucket
+            .get("limitName")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 100)
+            .map(str::to_owned);
+        for (position, field) in [("primary", "primary"), ("secondary", "secondary")] {
+            let Some(window) = bucket.get(field).filter(|window| !window.is_null()) else {
+                continue;
+            };
+            let used = window.get("usedPercent")?.as_f64()?;
+            if !used.is_finite() || !(0.0..=100.0).contains(&used) {
+                return None;
+            }
+            windows.push(CodexQuotaWindow {
+                limit_id: id.to_owned(),
+                limit_name: name.clone(),
+                position,
+                used_percent: used as f32,
+                duration_minutes: window
+                    .get("windowDurationMins")
+                    .and_then(Value::as_u64)
+                    .filter(|duration| *duration > 0),
+                resets_at_seconds: window
+                    .get("resetsAt")
+                    .and_then(Value::as_i64)
+                    .filter(|at| *at > 0),
+            });
+        }
+    }
+    if windows.is_empty() {
+        return None;
+    }
+    let reset_credits = value
+        .get("rateLimitResetCredits")
+        .and_then(|credits| credits.get("availableCount"))
+        .and_then(Value::as_u64);
+    Some((windows, reset_credits, plan))
+}
+
 fn string(value: &Value, field: &str) -> Result<String, HarnessError> {
     optional_string(value, field).ok_or_else(|| {
         HarnessError::Protocol(format!("thread/read response missing thread.{field}"))
@@ -676,6 +890,56 @@ fn missing_thread(error: &HarnessError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_quota_backend_id_is_a_verified_account_identity() {
+        let account =
+            json!({"account":{"type":"chatgpt","email":"Test@Example.invalid","planType":"pro"}});
+        let marker = codex_account_marker(&account).unwrap();
+        assert!(!marker.signature.contains("Test@Example.invalid"));
+        assert_eq!(marker.plan.as_deref(), Some("pro"));
+        assert_eq!(
+            marker.signature,
+            codex_account_marker(&account).unwrap().signature
+        );
+        assert!(
+            codex_account_marker(
+                &json!({"account":{"type":"chatgpt","email":null,"planType":"pro"}})
+            )
+            .is_some()
+        );
+        let verified = quota_account_id(&json!({"accountId":"provider-account"})).unwrap();
+        assert!(verified.starts_with("codex:"));
+        assert!(!verified.contains("provider-account"));
+        assert!(quota_account_id(&json!({"accountId":null})).is_none());
+        assert!(codex_account_marker(&json!({"account":{"type":"apiKey"}})).is_none());
+    }
+
+    #[test]
+    fn sparse_codex_windows_keep_reported_duration_and_other_bucket_separate() {
+        let read = json!({
+            "rateLimits": {"limitId":"codex","primary":{"usedPercent":99,"windowDurationMins":300}},
+            "rateLimitsByLimitId": {
+                "codex": {"limitId":"codex","primary":null,"secondary":{"usedPercent":42,"windowDurationMins":10080,"resetsAt":1780000000}},
+                "codex_other": {"limitId":"codex_other","limitName":"Other model","primary":{"usedPercent":12,"windowDurationMins":60,"resetsAt":1780003600}}
+            },
+            "rateLimitResetCredits":{"availableCount":2}
+        });
+        let (windows, credits, _) = codex_quota_windows(&read).unwrap();
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].limit_id, "codex");
+        assert_eq!(windows[0].position, "secondary");
+        assert_eq!(windows[0].duration_minutes, Some(10080));
+        assert_eq!(windows[1].limit_id, "codex_other");
+        assert_eq!(windows[1].limit_name.as_deref(), Some("Other model"));
+        assert_eq!(credits, Some(2));
+        assert!(
+            codex_quota_windows(
+                &json!({"rateLimits":{"limitId":"codex","primary":{"usedPercent":null}}})
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn compact_completion_requires_matching_native_context_item() {

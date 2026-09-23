@@ -1,6 +1,6 @@
-//! L16 fixture-gated local historical usage. Parser and cache behavior follow
-//! T3 Code's MIT usageTranscripts/usageScanCache contracts, adapted to Rust.
-//! No default provider-home resolution or native account probe exists here.
+//! L16 local historical usage and normalized limit snapshots. Historical
+//! parser/cache behavior follows T3 Code's MIT transcript contracts, adapted
+//! to Rust. Explicit synthetic fixture settings isolate native limit probes.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use zeron_harness::codex::native::CodexQuotaRead;
 use zeron_proto::{
     CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, UsageBucket, UsageLimitSnapshot,
     UsagePriceRate, UsageProvider, UsageRequest, UsageSnapshot, UsageSource, UsageSourceStatus,
@@ -23,6 +24,72 @@ const MAX_FILES: usize = 10_000;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SCAN_TIME: Duration = Duration::from_secs(4);
 const SYNTHETIC_MARKER: &str = ".luna-usage-synthetic";
+const SYNTHETIC_USAGE_VARIABLES: &[&str] = &[
+    "LUNA_USAGE_SYNTHETIC_CODEX_HOME",
+    "LUNA_USAGE_SYNTHETIC_CLAUDE_HOME",
+    "LUNA_USAGE_SYNTHETIC_CACHE_DIR",
+    "LUNA_USAGE_SYNTHETIC_PRICES_JSON",
+    "LUNA_USAGE_SYNTHETIC_LIMITS_JSON",
+];
+
+fn synthetic_mode_with(configured: impl Fn(&str) -> bool) -> bool {
+    SYNTHETIC_USAGE_VARIABLES
+        .iter()
+        .any(|name| configured(name))
+}
+
+/// An explicit fixture setting is an isolation boundary even when its path is
+/// missing or malformed. Never fall through to a live account in that case.
+pub fn synthetic_mode_requested() -> bool {
+    synthetic_mode_with(|name| std::env::var_os(name).is_some())
+}
+
+pub fn live_codex_limit(read: CodexQuotaRead) -> UsageLimitSnapshot {
+    let windows = read
+        .windows
+        .into_iter()
+        .map(|window| {
+            let base = match window.duration_minutes {
+                Some(300) => "Five-hour".into(),
+                Some(10_080) => "Weekly".into(),
+                Some(minutes) if minutes % 60 == 0 => format!("{}-hour", minutes / 60),
+                Some(minutes) => format!("{minutes}-minute"),
+                None if window.position == "primary" => "Primary window".into(),
+                None => "Secondary window".into(),
+            };
+            let label = if window.limit_id == "codex" {
+                base
+            } else {
+                format!(
+                    "{} · {base}",
+                    window.limit_name.as_deref().unwrap_or(&window.limit_id)
+                )
+            };
+            zeron_proto::UsageLimitWindow {
+                id: format!("{}/{}", window.limit_id, window.position),
+                label,
+                used_percent: window.used_percent,
+                resets_at_ms: window
+                    .resets_at_seconds
+                    .and_then(|seconds| seconds.checked_mul(1000)),
+                duration_minutes: window.duration_minutes,
+            }
+        })
+        .collect();
+    UsageLimitSnapshot {
+        provider: UsageProvider::Codex,
+        verified_account_id: read.verified_account_id,
+        account_label: Some("Selected Codex account".into()),
+        plan: read.plan,
+        checked_at_ms: Some(read.checked_at_ms),
+        availability: LimitAvailability::Ready,
+        windows,
+        reset_credits: read.reset_credits,
+        detail: Some(
+            "Read-only Codex app-server account/rateLimits/read · selected machine".into(),
+        ),
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Record {
@@ -957,6 +1024,54 @@ pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn any_explicit_usage_fixture_blocks_live_fallback() {
+        assert!(!synthetic_mode_with(|_| false));
+        for variable in SYNTHETIC_USAGE_VARIABLES {
+            assert!(synthetic_mode_with(|name| name == *variable), "{variable}");
+        }
+    }
+
+    #[test]
+    fn live_codex_mapping_does_not_invent_a_primary_or_reset() {
+        let read = CodexQuotaRead {
+            verified_account_id: Some("codex:synthetic-hash".into()),
+            plan: Some("pro".into()),
+            checked_at_ms: 500_000,
+            windows: vec![
+                zeron_harness::codex::native::CodexQuotaWindow {
+                    limit_id: "codex".into(),
+                    limit_name: None,
+                    position: "secondary",
+                    used_percent: 42.0,
+                    duration_minutes: Some(10_080),
+                    resets_at_seconds: None,
+                },
+                zeron_harness::codex::native::CodexQuotaWindow {
+                    limit_id: "codex_other".into(),
+                    limit_name: Some("Other model".into()),
+                    position: "primary",
+                    used_percent: 12.0,
+                    duration_minutes: Some(60),
+                    resets_at_seconds: Some(1780000000),
+                },
+            ],
+            reset_credits: None,
+        };
+        let limit = live_codex_limit(read);
+        assert_eq!(
+            limit.verified_account_id.as_deref(),
+            Some("codex:synthetic-hash")
+        );
+        assert_eq!(limit.windows.len(), 2);
+        assert_eq!(limit.windows[0].id, "codex/secondary");
+        assert_eq!(limit.windows[0].label, "Weekly");
+        assert_eq!(limit.windows[0].resets_at_ms, None);
+        assert_eq!(limit.windows[1].id, "codex_other/primary");
+        assert_eq!(limit.windows[1].resets_at_ms, Some(1_780_000_000_000));
+        assert_eq!(limit.reset_credits, None);
+    }
 
     #[test]
     fn claude_repeated_blocks_have_same_dedupe_identity() {

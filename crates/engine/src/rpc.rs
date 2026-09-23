@@ -1074,6 +1074,7 @@ pub struct EngineRpc {
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
     agent_accounts: AgentAccounts,
+    codex_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
     task_identity: crate::TaskIdentityService,
     auth: Option<Auth>,
     links: Option<std::sync::Arc<LinkCache>>,
@@ -1090,6 +1091,88 @@ impl Drop for EngineRpc {
 }
 
 impl EngineRpc {
+    async fn attach_codex_live_limits(&self, snapshot: &mut zeron_proto::UsageSnapshot) {
+        if crate::usage::synthetic_mode_requested() {
+            return;
+        }
+        let Some(index) = snapshot
+            .limits
+            .iter()
+            .position(|limit| limit.provider == zeron_proto::UsageProvider::Codex)
+        else {
+            return;
+        };
+        let Ok((home, force_file_auth)) = self.agent_accounts.codex_usage_target() else {
+            snapshot.limits[index].detail = Some("Selected Codex account is unavailable".into());
+            return;
+        };
+        if !home.is_dir() {
+            snapshot.limits[index].detail =
+                Some("Selected Codex account home is unavailable".into());
+            return;
+        }
+        let client = zeron_harness::codex::native::CodexNativeClient::new(&home)
+            .for_execution_home(&home, force_file_auth);
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(8), client.read_account_rate_limits()).await;
+        // A user can switch named Codex accounts while the provider replies.
+        // Never publish a different selected home under the old selection.
+        if self.agent_accounts.codex_usage_target().ok() != Some((home, force_file_auth)) {
+            snapshot.limits[index].availability = zeron_proto::LimitAvailability::Unverified;
+            snapshot.limits[index].detail =
+                Some("Codex account selection changed during refresh".into());
+            return;
+        }
+        use zeron_harness::codex::native::CodexQuotaObservation;
+        match outcome {
+            Ok(Ok(CodexQuotaObservation::Ready(read))) => {
+                let limit = crate::usage::live_codex_limit(read);
+                *self
+                    .codex_usage_last_good
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    limit.verified_account_id.as_ref().map(|_| limit.clone());
+                snapshot.limits[index] = limit;
+            }
+            Ok(Ok(CodexQuotaObservation::Unsupported)) => {
+                *self
+                    .codex_usage_last_good
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                snapshot.limits[index].detail = Some(
+                    "Selected Codex account did not report ChatGPT subscription limits".into(),
+                );
+            }
+            Ok(Ok(CodexQuotaObservation::Failed {
+                verified_account_id: Some(id),
+            })) => {
+                let last_good = self
+                    .codex_usage_last_good
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                if let Some(mut limit) = last_good
+                    .filter(|limit| limit.verified_account_id.as_deref() == Some(id.as_str()))
+                {
+                    limit.availability = zeron_proto::LimitAvailability::ProbeFailed;
+                    limit.detail =
+                        Some("Codex app-server refresh failed · last good values".into());
+                    snapshot.limits[index] = limit;
+                } else {
+                    snapshot.limits[index].availability =
+                        zeron_proto::LimitAvailability::ProbeFailed;
+                    snapshot.limits[index].detail =
+                        Some("Codex app-server refresh failed · quota unavailable".into());
+                }
+            }
+            _ => {
+                snapshot.limits[index].availability = zeron_proto::LimitAvailability::ProbeFailed;
+                snapshot.limits[index].detail =
+                    Some("Codex app-server usage check failed · quota unavailable".into());
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)] // engine assembly seam, not a public API
     pub fn new(
         store: std::sync::Arc<DocsStore>,
@@ -1128,6 +1211,7 @@ impl EngineRpc {
             diff_sync,
             uploads,
             agent_accounts,
+            codex_usage_last_good: std::sync::Mutex::new(None),
             task_identity,
             auth: None,
             links: None,
@@ -6390,6 +6474,7 @@ impl RpcService for EngineRpc {
                     tokio::task::spawn_blocking(move || crate::usage::snapshot(request))
                         .await
                         .map_err(|error| RpcError::Failed(error.to_string()))?;
+                self.attach_codex_live_limits(&mut snapshot).await;
                 for source in &mut snapshot.summary.sources {
                     source.environment_id = self.engine_info.device_id.clone();
                 }

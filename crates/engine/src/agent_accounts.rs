@@ -495,17 +495,24 @@ impl AgentAccounts {
     /// read-only inventory. Unlike execution resolution this neither reads
     /// auth material nor creates/refreshes a named account's shadow home.
     pub fn codex_home_for_inventory(&self) -> Result<PathBuf, EngineError> {
+        self.codex_usage_target().map(|(home, _)| home)
+    }
+
+    /// The selected Codex home and its provider-owned auth-store mode for a
+    /// read-only app-server usage request. This never materializes a home or
+    /// opens an auth file; the provider remains responsible for credentials.
+    pub fn codex_usage_target(&self) -> Result<(PathBuf, bool), EngineError> {
         let state = lock(&self.inner.state);
         let id = state.default_codex_account_id.as_str();
         if id == CODEX_NATIVE_ACCOUNT_ID {
-            return Ok(self.inner.config.codex_home.clone());
+            return Ok((self.inner.config.codex_home.clone(), false));
         }
         if !safe_account_id(id) || !state.codex_accounts.iter().any(|account| account.id == id) {
             return Err(EngineError::Other(
                 "The selected Codex account has no known provider home".into(),
             ));
         }
-        Ok(self.inner.config.codex_shadow_home(id))
+        Ok((self.inner.config.codex_shadow_home(id), true))
     }
 
     fn codex_home_for_account_with_state(
@@ -2667,6 +2674,10 @@ mod tests {
             accounts.codex_home_for_inventory().unwrap(),
             config.codex_home
         );
+        assert_eq!(
+            accounts.codex_usage_target().unwrap(),
+            (config.codex_home.clone(), false)
+        );
         {
             let mut state = lock(&accounts.inner.state);
             state.default_codex_account_id = "named".into();
@@ -2687,6 +2698,7 @@ mod tests {
         let home = accounts.codex_home_for_inventory().unwrap();
         assert_eq!(home, config.codex_shadow_home("named"));
         assert!(!home.exists());
+        assert_eq!(accounts.codex_usage_target().unwrap(), (home, true));
     }
 
     #[test]
