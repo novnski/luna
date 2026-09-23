@@ -505,6 +505,10 @@ pub enum Route {
     Settings(SettingsSection),
 }
 
+fn is_settings_nav_activation(key: &str, is_held: bool) -> bool {
+    !is_held && matches!(key, "enter" | "space")
+}
+
 /// Maximum width the right pane may occupy while retaining the conversation
 /// floor. On unusually small windows this deliberately falls below the right
 /// pane's preferred minimum: the chat remains usable and the side surface
@@ -1793,6 +1797,7 @@ pub struct Shell {
     /// Scroll position of the sidebar lists region (drives its edge fades).
     sidebar_scroll: gpui::ScrollHandle,
     activity_sidebar_scroll: gpui::ScrollHandle,
+    settings_nav_scroll: gpui::ScrollHandle,
     /// L14 session-history query state. Cmd+K owns the only query input;
     /// results are derived/index-only rows and navigate back to the
     /// authoritative transcript.
@@ -2183,6 +2188,7 @@ impl Shell {
             chat_status_hover: None,
             sidebar_scroll: gpui::ScrollHandle::new(),
             activity_sidebar_scroll: gpui::ScrollHandle::new(),
+            settings_nav_scroll: gpui::ScrollHandle::new(),
             history_search_global: false,
             history_search_results: Vec::new(),
             history_search_loading: false,
@@ -6609,6 +6615,7 @@ impl Shell {
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
             SettingsSection::Usage => icons::CHART,
         };
+        let focus_border = theme.border_strong;
         // Match the user's dragged sidebar width — the pane container clips to
         // it, so a hardcoded default here left hover washes stopping short of
         // the sidebar's right edge (user-reported). Device identity lives on
@@ -6621,6 +6628,7 @@ impl Shell {
             .child(
                 div()
                     .flex_1()
+                    .min_h_0()
                     .px(px(Theme::SPACE_SM))
                     .flex()
                     .flex_col()
@@ -6635,87 +6643,130 @@ impl Shell {
                             .child(SharedString::from("Settings")),
                     )
                     .child(
-                        div().flex().flex_col().gap(px(2.0)).children(
-                            SettingsSection::ALL
-                                .into_iter()
-                                .filter(|item| {
-                                    *item != SettingsSection::Appshots
-                                        || crate::appshots::is_desktop()
-                                })
-                                .map(|item| {
-                                    let selected = item == section;
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "settings-nav-{}",
-                                            item.label()
-                                        )))
-                                        .when(
-                                            matches!(
-                                                item,
-                                                SettingsSection::Files | SettingsSection::Archived
-                                            ),
-                                            |el| el.mt(px(Theme::SPACE_LG)),
-                                        )
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap(px(8.0))
-                                        .rounded(px(8.0))
-                                        .px(px(Theme::SPACE_SM))
-                                        .py(px(6.0))
-                                        .text_size(crate::typography::ui_rems(13.0))
-                                        .when(selected, |el| {
-                                            // Same tokens as the main sidebar's session
-                                            // rows — the two sidebars must feel alike.
-                                            el.bg(crate::theme::glass_selected_bg())
-                                                .font_weight(gpui::FontWeight::MEDIUM)
+                        div()
+                            .id("settings-sections-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.settings_nav_scroll)
+                            .child(
+                                div().flex().flex_col().gap(px(2.0)).children(
+                                    SettingsSection::ALL
+                                        .into_iter()
+                                        .filter(|item| {
+                                            *item != SettingsSection::Appshots
+                                                || crate::appshots::is_desktop()
                                         })
-                                        .text_color(if selected {
-                                            theme.text
-                                        } else {
-                                            theme.text_muted
-                                        })
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.open_settings(item, cx)
-                                        }))
-                                        .child(
-                                            icon(section_icon(item))
-                                                .size(px(16.0))
-                                                .text_color(theme.text_muted),
-                                        )
-                                        .child(SharedString::from(item.label()))
-                                }),
-                        ),
+                                        .map(|item| {
+                                            let selected = item == section;
+                                            div()
+                                            .id(SharedString::from(format!(
+                                                "settings-nav-{}",
+                                                item.label()
+                                            )))
+                                            .role(gpui::Role::Button)
+                                            .aria_label(format!("{} settings", item.label()))
+                                            .aria_selected(selected)
+                                            .tab_index(0)
+                                            .focus_visible(move |style| {
+                                                style.border_2().border_color(focus_border)
+                                            })
+                                            .when(
+                                                matches!(
+                                                    item,
+                                                    SettingsSection::Files
+                                                        | SettingsSection::Archived
+                                                ),
+                                                |el| el.mt(px(Theme::SPACE_LG)),
+                                            )
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(8.0))
+                                            .rounded(px(8.0))
+                                            .px(px(Theme::SPACE_SM))
+                                            .py(px(6.0))
+                                            .text_size(crate::typography::ui_rems(13.0))
+                                            .when(selected, |el| {
+                                                // Same tokens as the main sidebar's session
+                                                // rows — the two sidebars must feel alike.
+                                                el.bg(crate::theme::glass_selected_bg())
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                            })
+                                            .text_color(if selected {
+                                                theme.text
+                                            } else {
+                                                theme.text_muted
+                                            })
+                                            .cursor_pointer()
+                                            .hover(|s| {
+                                                s.bg(theme.glass_hover()).text_color(theme.text)
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.open_settings(item, cx)
+                                            }))
+                                            .on_key_down(cx.listener(
+                                                move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                                    if is_settings_nav_activation(
+                                                        &event.keystroke.key,
+                                                        event.is_held,
+                                                    ) {
+                                                        cx.stop_propagation();
+                                                        this.open_settings(item, cx);
+                                                    }
+                                                },
+                                            ))
+                                            .child(
+                                                icon(section_icon(item))
+                                                    .size(px(16.0))
+                                                    .text_color(theme.text_muted),
+                                            )
+                                            .child(SharedString::from(item.label()))
+                                        }),
+                                ),
+                            ),
                     ),
             )
             // Back pinned to the bottom (zeron settings-sidebar.tsx).
             .child(
-                div().px(px(Theme::SPACE_SM)).pb(px(12.0)).child(
-                    div()
-                        .id("settings-back")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.0))
-                        .rounded(px(8.0))
-                        .px(px(Theme::SPACE_SM))
-                        .py(px(6.0))
-                        .text_size(crate::typography::ui_rems(13.0))
-                        .text_color(theme.text_muted)
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
-                        .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
-                        .child(
-                            // AltArrowLeft chevron (zeron settings-sidebar.tsx),
-                            // not the straight history arrow.
-                            icon(icons::ALT_ARROW_LEFT)
-                                .size(px(16.0))
-                                .text_color(theme.text_muted),
-                        )
-                        .child(SharedString::from("Back")),
-                ),
+                div()
+                    .flex_none()
+                    .px(px(Theme::SPACE_SM))
+                    .pb(px(12.0))
+                    .child(
+                        div()
+                            .id("settings-back")
+                            .role(gpui::Role::Button)
+                            .aria_label("Back to chat")
+                            .tab_index(0)
+                            .focus_visible(move |style| style.border_2().border_color(focus_border))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .rounded(px(8.0))
+                            .px(px(Theme::SPACE_SM))
+                            .py(px(6.0))
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_color(theme.text_muted)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
+                            .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
+                                    cx.stop_propagation();
+                                    this.close_settings(cx);
+                                }
+                            }))
+                            .child(
+                                // AltArrowLeft chevron (zeron settings-sidebar.tsx),
+                                // not the straight history arrow.
+                                icon(icons::ALT_ARROW_LEFT)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from("Back")),
+                    ),
             )
             .into_any_element()
     }
@@ -12248,6 +12299,15 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_sidebar_keyboard_activation_ignores_repeats_and_other_keys() {
+        assert!(is_settings_nav_activation("enter", false));
+        assert!(is_settings_nav_activation("space", false));
+        assert!(!is_settings_nav_activation("enter", true));
+        assert!(!is_settings_nav_activation("space", true));
+        assert!(!is_settings_nav_activation("escape", false));
+    }
 
     #[test]
     fn settings_entry_and_fixture_routes_keep_their_targets() {
