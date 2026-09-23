@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use zeron_doc::{
     MessagePart, MessageRole, MessageStatus, RegistryDoc, SessionDoc, SessionMessageEntry,
 };
+use zeron_engine::InstanceLock;
 use zeron_engine::backup::{
     BackupError, BackupService, IsolatedRoot, RecoveryKey, inspect_archive,
 };
@@ -57,6 +58,23 @@ fn service(root: &Path) -> BackupService {
         IsolatedRoot::open(root).unwrap(),
         RecoveryKey::injected([17; 32]),
     )
+}
+
+#[test]
+fn active_engine_lock_refuses_copy_backup_until_writer_stops() {
+    let (_parent, root, backups) = fixture();
+    let lock = InstanceLock::acquire(&root).unwrap();
+    assert!(matches!(
+        service(&root).export(&backups.join("blocked.lunabk")),
+        Err(BackupError::EngineRunning)
+    ));
+    assert!(!backups.join("blocked.lunabk").exists());
+    drop(lock);
+    assert!(
+        service(&root)
+            .export(&backups.join("after-stop.lunabk"))
+            .is_ok()
+    );
 }
 
 fn add_synthetic_task(root: &Path, room_gen: Option<u32>) {

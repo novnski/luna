@@ -242,6 +242,32 @@ pub struct StagedRestore {
     staged_fingerprint: String,
 }
 
+/// Persisted proof for rechecking a staged copy after the control process
+/// restarts. It contains fingerprints and the manifest claim, never key bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StagedEvidence {
+    archive: PathBuf,
+    archive_sha256: String,
+    stage: PathBuf,
+    staged_fingerprint: String,
+    target_baseline: String,
+    manifest_sha256: String,
+}
+
+impl StagedRestore {
+    pub(crate) fn evidence(&self, archive: &Path) -> Result<StagedEvidence> {
+        ensure_real_file(archive)?;
+        Ok(StagedEvidence {
+            archive: archive.canonicalize()?,
+            archive_sha256: hash_file(archive)?,
+            stage: self.path.clone(),
+            staged_fingerprint: self.staged_fingerprint.clone(),
+            target_baseline: self.baseline.clone(),
+            manifest_sha256: hash_bytes(&serde_json::to_vec(&self.preview.manifest)?),
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct RestoreReceipt {
     pub active_root: PathBuf,
@@ -1117,6 +1143,10 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(measure_file(path)?.1)
 }
 
+fn hash_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> Result<(u64, String)> {
     let mut hash = Sha256::new();
     let mut count = 0u64;
@@ -1511,6 +1541,70 @@ impl BackupService {
         self.stage_restore_with_space(archive, None)
     }
 
+    /// Reopen a persisted stage without extracting or activating anything.
+    /// Both the archive and the staged root must match the exact prior proof.
+    pub(crate) fn reverify_staged(
+        &self,
+        evidence: &StagedEvidence,
+        recorded_archive: &Path,
+        recorded_stage: &Path,
+    ) -> Result<()> {
+        let _root_lock = self.root.lock()?;
+        ensure_real_file(recorded_archive)?;
+        if recorded_archive.canonicalize()? != evidence.archive || recorded_stage != evidence.stage
+        {
+            return Err(BackupError::SourceChanged(
+                "staged checkpoint paths changed".into(),
+            ));
+        }
+        let parent = self
+            .root
+            .path()
+            .parent()
+            .ok_or_else(|| BackupError::Invalid("root has no parent".into()))?;
+        if evidence.stage.parent() != Some(parent)
+            || !evidence.stage.file_name().is_some_and(|name| {
+                name.to_str()
+                    .is_some_and(|name| name.starts_with(".luna-l17-stage-"))
+            })
+            || restore_journal_path(self.root.path())?.exists()
+        {
+            return Err(BackupError::Unsupported(
+                "staged path or interrupted restore journal requires owner review".into(),
+            ));
+        }
+        let stage = IsolatedRoot::open(&evidence.stage)?;
+        if stage.path() != evidence.stage {
+            return Err(BackupError::UnauthorizedRoot);
+        }
+        let _stage_lock = stage.lock()?;
+        ensure_real_file(&evidence.archive)?;
+        if hash_file(&evidence.archive)? != evidence.archive_sha256 {
+            return Err(BackupError::SourceChanged("staged archive changed".into()));
+        }
+        let preview = self.preview_restore(&evidence.archive)?;
+        if hash_bytes(&serde_json::to_vec(&preview.manifest)?) != evidence.manifest_sha256 {
+            return Err(BackupError::SourceChanged(
+                "staged archive manifest changed".into(),
+            ));
+        }
+        if replaceable_root_fingerprint(self.root.path())? != evidence.target_baseline {
+            return Err(BackupError::SourceChanged(
+                "staged restore target changed".into(),
+            ));
+        }
+        if replaceable_root_fingerprint(stage.path())? != evidence.staged_fingerprint {
+            return Err(BackupError::SourceChanged("staged data changed".into()));
+        }
+        verify_stage(stage.path(), &preview.manifest)?;
+        if replaceable_root_fingerprint(stage.path())? != evidence.staged_fingerprint {
+            return Err(BackupError::SourceChanged(
+                "staged data changed during readback".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Hermetic restart/readback seam for a previously staged isolated copy.
     #[doc(hidden)]
     pub fn verify_staged_for_tests(&self, staged: &StagedRestore) -> Result<()> {
@@ -1574,7 +1668,7 @@ impl BackupService {
                 ensure_real_file(&device_id)?;
                 fs::copy(&device_id, stage.join("device-id"))?;
             }
-            verify_stage_base(&stage, &preview.manifest)?;
+            verify_stage_base(&stage, &preview.manifest, true)?;
             rebuild_stage_activity(&stage, &preview.manifest)?;
             verify_stage_derived(&stage, &preview.manifest)?;
             replaceable_root_fingerprint(&stage)?;
@@ -1810,11 +1904,11 @@ fn create_private_file(path: &Path) -> Result<File> {
 }
 
 fn verify_stage(stage: &Path, manifest: &BackupManifest) -> Result<()> {
-    verify_stage_base(stage, manifest)?;
+    verify_stage_base(stage, manifest, false)?;
     verify_stage_derived(stage, manifest)
 }
 
-fn verify_stage_base(stage: &Path, manifest: &BackupManifest) -> Result<()> {
+fn verify_stage_base(stage: &Path, manifest: &BackupManifest, migrate: bool) -> Result<()> {
     for entry in &manifest.entries {
         let path = stage.join(&entry.path);
         ensure_real_file(&path)?;
@@ -1828,17 +1922,22 @@ fn verify_stage_base(stage: &Path, manifest: &BackupManifest) -> Result<()> {
     }
     for expected in &manifest.databases {
         let path = stage.join(&expected.path);
-        // Migrations are applied to the staged copy only. No source or target
-        // database is opened writable during this phase.
         let profile = path
             .parent()
             .ok_or_else(|| BackupError::Invalid("database path has no parent".into()))?;
-        let store = zeron_sync::DocsStore::open(profile)
-            .map_err(|e| BackupError::Invalid(format!("staged migration failed: {e}")))?;
-        drop(store);
-        let conn = Connection::open(&path)?;
-        conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
-        conn.pragma_update(None, "journal_mode", "DELETE")?;
+        // Migrate only during first extraction. Subsequent readback must not
+        // rewrite the checkpoint whose fingerprint it is proving.
+        let conn = if migrate {
+            let store = zeron_sync::DocsStore::open(profile)
+                .map_err(|e| BackupError::Invalid(format!("staged migration failed: {e}")))?;
+            drop(store);
+            let conn = Connection::open(&path)?;
+            conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+            conn.pragma_update(None, "journal_mode", "DELETE")?;
+            conn
+        } else {
+            Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
+        };
         verify_database(&conn)?;
         let actual = database_counts(&conn, expected.path.clone())?;
         if actual.documents != expected.documents
