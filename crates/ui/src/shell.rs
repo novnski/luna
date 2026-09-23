@@ -61,7 +61,9 @@ use crate::state::{
     AppState, ConnectionStatus, EngineBootConfig, EngineMode, GatePhase, Indicator, OrgRow,
     format_time_ago, org_name_valid, parse_orgs, sort_memberships,
 };
-use crate::terminal::panel::{TerminalPanel, ToggleTerminal, clamp_terminal_height};
+use crate::terminal::panel::{
+    TerminalPanel, TerminalPanelEvent, ToggleTerminal, clamp_terminal_height,
+};
 use crate::theme::Theme;
 use crate::transcript::{self, Transcript, TranscriptEvent};
 use crate::workspace_links::resolve_workspace_file_link;
@@ -1655,6 +1657,8 @@ pub struct Shell {
     /// entity from the bottom drawer's (own PTYs, own grid geometry; one
     /// panel can only size one visible grid at a time).
     right_terminal: Option<Entity<TerminalPanel>>,
+    right_terminal_sub: Option<Subscription>,
+    terminal_picker_notice: Option<(String, SharedString)>,
     /// The surface-tab strip's `+` menu (Files / Terminal / Diffs / History rows).
     right_plus: popover::Popup<()>,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
@@ -2078,6 +2082,8 @@ impl Shell {
             jump_hints: false,
             terminal: None,
             right_terminal: None,
+            right_terminal_sub: None,
+            terminal_picker_notice: None,
             right_plus: popover::Popup::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),
@@ -2697,8 +2703,68 @@ impl Shell {
             return terminal.clone();
         }
         let terminal = cx.new(|cx| TerminalPanel::new_embedded(self.state.clone(), cx));
+        let sub = cx.subscribe(&terminal, |this: &mut Self, _, event, cx| match event {
+            TerminalPanelEvent::SavedTabsLoaded { chat_id, tab_keys } => {
+                this.register_saved_terminal_surfaces(chat_id, tab_keys, cx);
+            }
+            TerminalPanelEvent::SavedTabsUnavailable { chat_id } => {
+                if this.active_chat == *chat_id {
+                    this.terminal_picker_notice = Some((
+                        chat_id.clone(),
+                        "Saved terminals could not be loaded. Try Terminal again.".into(),
+                    ));
+                    cx.notify();
+                }
+            }
+        });
+        self.right_terminal_sub = Some(sub);
         self.right_terminal = Some(terminal.clone());
         terminal
+    }
+
+    fn register_saved_terminal_surfaces(
+        &mut self,
+        chat_id: &str,
+        tab_keys: &[u64],
+        cx: &mut Context<Self>,
+    ) {
+        let activate = self.active_chat == chat_id
+            && self.panels.get(chat_id).right_active == RightSurface::Picker;
+        if !tab_keys.is_empty() {
+            let tabs = self.right_tabs.entry(chat_id.to_string()).or_default();
+            for tab in tab_keys {
+                let surface = RightSurface::Terminal(*tab);
+                if !tabs.contains(&surface) {
+                    tabs.push(surface);
+                }
+            }
+        }
+        if !tab_keys.is_empty()
+            && self
+                .terminal_picker_notice
+                .as_ref()
+                .is_some_and(|(chat, _)| chat == chat_id)
+        {
+            self.terminal_picker_notice = None;
+        }
+        if self.active_chat == chat_id {
+            if let Some(first) = tab_keys.first() {
+                if activate {
+                    // This event may arrive while the terminal entity is in
+                    // its own update. Store the selection without reading or
+                    // re-entering that entity; the next shell paint mounts it.
+                    self.panels.update(chat_id, |panel| {
+                        panel.right_active = RightSurface::Terminal(*first);
+                    });
+                }
+            } else {
+                self.terminal_picker_notice = Some((
+                    chat_id.to_string(),
+                    "No saved terminals. Use + → Terminal to start a new shell.".into(),
+                ));
+            }
+            cx.notify();
+        }
     }
 
     /// The right pane's surface tabs in the STORED (drag-reorderable) order —
@@ -3333,15 +3399,28 @@ impl Shell {
         self.set_right_active(RightSurface::Diff(id), cx);
     }
 
-    /// The picker's Terminal card / the `+` menu's Terminal row: every click
-    /// opens a fresh embedded terminal tab.
+    /// The picker's Terminal card restores saved/live tabs for this task.
     fn add_terminal_surface(&mut self, cx: &mut Context<Self>) {
+        self.terminal_picker_notice = None;
+        let key = self.panel_key(cx);
+        self.panels
+            .update(&key, |panel| panel.right_active = RightSurface::Picker);
+        let panel = self.right_terminal_panel(cx);
+        panel.update(cx, |panel, cx| {
+            panel.set_open(true, cx);
+            panel.restore_tabs_for_selected(cx);
+        });
+    }
+
+    /// The right-pane `+` menu explicitly starts a fresh managed shell.
+    fn add_new_terminal_surface(&mut self, cx: &mut Context<Self>) {
         let panel = self.right_terminal_panel(cx);
         let opened = panel.update(cx, |panel, cx| {
             panel.set_open(true, cx);
             panel.open_tab_for_selected(cx)
         });
         if let Some(tab) = opened {
+            self.terminal_picker_notice = None;
             let key = self.panel_key(cx);
             self.right_tabs
                 .entry(key)
@@ -10125,6 +10204,11 @@ impl Shell {
     /// wasted short ones.
     fn render_surface_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
+        let terminal_notice = self
+            .terminal_picker_notice
+            .as_ref()
+            .filter(|(chat, _)| chat == &self.active_chat)
+            .map(|(_, notice)| notice.clone());
         let text = theme.text;
         let muted = theme.text_muted;
         let border = theme.border;
@@ -10186,6 +10270,15 @@ impl Shell {
                             }),
                         ),
                     )
+                    .when_some(terminal_notice, |el, notice| {
+                        el.child(
+                            div()
+                                .px(px(14.0))
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(muted)
+                                .child(notice),
+                        )
+                    })
                     // Git surfaces only where there IS git — the pane itself
                     // no longer gates on it (terminals work anywhere).
                     .when(self.space_git_detected(cx), |el| {
@@ -10709,7 +10802,7 @@ impl Shell {
                             popover::menu_row(&theme, false, "right-plus-terminal")
                                 .id("right-plus-terminal-row")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.add_terminal_surface(cx);
+                                    this.add_new_terminal_surface(cx);
                                     this.close_right_plus(cx);
                                 }))
                                 .child(
@@ -13377,6 +13470,8 @@ mod tests {
 mod exit_regressions {
     use super::*;
     use async_trait::async_trait;
+    use base64::Engine as _;
+    use futures::StreamExt as _;
     use gpui::{AppContext, TestAppContext};
     use std::collections::HashMap;
     use std::path::Path;
@@ -15849,6 +15944,228 @@ mod exit_regressions {
         }
     }
 
+    struct SavedTerminalRpc {
+        saved: bool,
+        listings: AtomicUsize,
+        opens: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl RpcService for SavedTerminalRpc {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            match method {
+                methods::LIST_TERMINALS => {
+                    let selected = params.get("chatId").and_then(|value| value.as_str())
+                        == Some("terminal-task");
+                    if selected {
+                        self.listings.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let records = if self.saved && selected {
+                        vec![zeron_proto::TerminalInventoryEntry {
+                            id: "saved-terminal".into(),
+                            chat_id: "terminal-task".into(),
+                            device_id: "local".into(),
+                            cwd: "/synthetic/project-a".into(),
+                            shell: "sh".into(),
+                            state: zeron_proto::TerminalProcessState::Stopped,
+                            exit_code: None,
+                            last_seq: 2,
+                            updated_at_ms: 1,
+                        }]
+                    } else {
+                        Vec::new()
+                    };
+                    RpcReply::value(&records)
+                }
+                methods::SUBSCRIBE_TERMINAL => {
+                    let frames = if params["terminalId"] == "saved-terminal" {
+                        vec![
+                            serde_json::to_value(zeron_proto::TerminalEvent::Data {
+                                seq: 1,
+                                data: base64::engine::general_purpose::STANDARD
+                                    .encode(b"L21_QA\r\n"),
+                            })
+                            .unwrap(),
+                            serde_json::to_value(zeron_proto::TerminalEvent::Exit {
+                                seq: 2,
+                                exit_code: -1,
+                                signal: Some("closed".into()),
+                            })
+                            .unwrap(),
+                        ]
+                    } else {
+                        Vec::new()
+                    };
+                    Ok(RpcReply::Stream(futures::stream::iter(frames).boxed()))
+                }
+                methods::OPEN_TERMINAL => {
+                    self.opens.fetch_add(1, Ordering::SeqCst);
+                    RpcReply::value(&zeron_proto::TerminalSession {
+                        id: "fresh-terminal".into(),
+                        cwd: "/synthetic/project-a".into(),
+                        shell: "sh".into(),
+                    })
+                }
+                _ => Err(RpcError::UnknownMethod(method.into())),
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn right_terminal_picker_restores_saved_output_without_spawning(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        init_handoff_shell_test(cx, dir.path());
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let service = Arc::new(SavedTerminalRpc {
+            saved: true,
+            listings: AtomicUsize::new(0),
+            opens: AtomicUsize::new(0),
+        });
+        let window = {
+            let _entered = runtime.enter();
+            command_palette_test_window(
+                cx,
+                dir.path(),
+                Some(service.clone()),
+                vec![palette_chat(
+                    "terminal-task",
+                    Some("project-a"),
+                    "Terminal QA",
+                )],
+                Some("terminal-task"),
+            )
+        };
+        window
+            .update(cx, |shell, _, cx| {
+                shell.active_chat = "terminal-task".into();
+                shell.add_terminal_surface(cx);
+                assert_eq!(service.opens.load(Ordering::SeqCst), 0);
+            })
+            .unwrap();
+        for _ in 0..150 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            let restored = window
+                .read_with(cx, |shell, cx| {
+                    let tabs = shell.right_tabs.get("terminal-task");
+                    let panel = shell.right_terminal.as_ref();
+                    tabs.is_some_and(|tabs| tabs.len() == 1)
+                        && panel.is_some_and(|panel| {
+                            panel
+                                .read(cx)
+                                .tab_summaries(cx)
+                                .first()
+                                .is_some_and(|(_, _, exited)| *exited)
+                        })
+                })
+                .unwrap();
+            if restored {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        window
+            .read_with(cx, |shell, cx| {
+                let tabs = shell
+                    .right_tabs
+                    .get("terminal-task")
+                    .expect("saved surface tab");
+                assert_eq!(tabs.len(), 1);
+                assert_eq!(shell.panels.get("terminal-task").right_active, tabs[0]);
+                let panel = shell.right_terminal.as_ref().unwrap().read(cx);
+                assert_eq!(panel.tab_summaries(cx).len(), 1);
+                let text: String = panel
+                    .active_grid_snapshot(cx)
+                    .unwrap()
+                    .lines
+                    .iter()
+                    .flat_map(|line| line.iter().map(|cell| cell.ch))
+                    .collect();
+                assert!(text.contains("L21_QA"));
+                assert!(text.contains("[terminal stopped]"));
+                assert!(shell.terminal_picker_notice.is_none());
+            })
+            .unwrap();
+        assert!(service.listings.load(Ordering::SeqCst) >= 1);
+        assert_eq!(service.opens.load(Ordering::SeqCst), 0);
+        window
+            .update(cx, |shell, _, cx| shell.add_new_terminal_surface(cx))
+            .unwrap();
+        for _ in 0..100 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            if service.opens.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+        }
+        assert_eq!(service.opens.load(Ordering::SeqCst), 1);
+    }
+
+    #[gpui::test]
+    fn right_terminal_picker_with_no_history_waits_for_new(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        init_handoff_shell_test(cx, dir.path());
+        cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+        let service = Arc::new(SavedTerminalRpc {
+            saved: false,
+            listings: AtomicUsize::new(0),
+            opens: AtomicUsize::new(0),
+        });
+        let window = {
+            let _entered = runtime.enter();
+            command_palette_test_window(
+                cx,
+                dir.path(),
+                Some(service.clone()),
+                vec![palette_chat(
+                    "terminal-task",
+                    Some("project-a"),
+                    "Terminal QA",
+                )],
+                Some("terminal-task"),
+            )
+        };
+        window
+            .update(cx, |shell, _, cx| {
+                shell.active_chat = "terminal-task".into();
+                shell.add_terminal_surface(cx);
+            })
+            .unwrap();
+        for _ in 0..150 {
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            if window
+                .read_with(cx, |shell, _| shell.terminal_picker_notice.is_some())
+                .unwrap()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        window
+            .read_with(cx, |shell, _| {
+                assert!(shell.right_tabs.get("terminal-task").is_none());
+                assert_eq!(
+                    shell.terminal_picker_notice.as_ref().unwrap().0,
+                    "terminal-task"
+                );
+            })
+            .unwrap();
+        assert_eq!(service.opens.load(Ordering::SeqCst), 0);
+    }
+
     #[gpui::test]
     fn opening_terminals_focuses_the_terminal_once(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
@@ -15888,7 +16205,7 @@ mod exit_regressions {
                     shell.open_chat("terminal-session".into(), cx);
                     shell.active_chat = "terminal-session".into();
                     let panel = if embedded {
-                        shell.add_terminal_surface(cx);
+                        shell.add_new_terminal_surface(cx);
                         shell.right_terminal.clone().unwrap()
                     } else {
                         shell.toggle_terminal(window, cx);

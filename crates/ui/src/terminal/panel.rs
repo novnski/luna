@@ -45,6 +45,15 @@ const SELECTION_SCROLL_TICK_MS: u64 = 24;
 
 actions!(terminal, [ToggleTerminal]);
 
+/// The right-pane surface strip needs the keys minted by an asynchronous
+/// saved-terminal load. Drawer terminals do not subscribe to these events.
+pub enum TerminalPanelEvent {
+    SavedTabsLoaded { chat_id: String, tab_keys: Vec<u64> },
+    SavedTabsUnavailable { chat_id: String },
+}
+
+impl gpui::EventEmitter<TerminalPanelEvent> for TerminalPanel {}
+
 /// Bind the terminal keymap (global): Cmd+J on macOS, Ctrl+J elsewhere.
 pub fn init(cx: &mut App) {
     let toggle = if cfg!(target_os = "macos") {
@@ -486,6 +495,19 @@ impl TerminalPanel {
         Some(self.tab_seq)
     }
 
+    /// Restore saved/live terminal tabs without opening a new shell. The
+    /// right-pane host receives their keys once the inventory RPC resolves.
+    pub fn restore_tabs_for_selected(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(chat) = self.selected_chat(cx) else {
+            return false;
+        };
+        self.request_focus(cx);
+        if self.loading_chats.insert(chat.clone()) {
+            self.load_saved_tabs(chat, cx);
+        }
+        true
+    }
+
     /// Make `key` the rendered tab of the selected chat.
     pub fn select_tab_by_key(&mut self, key: u64, cx: &mut Context<Self>) {
         let Some(chat) = self.selected_chat(cx) else {
@@ -608,6 +630,9 @@ impl TerminalPanel {
     fn load_saved_tabs(&mut self, chat: String, cx: &mut Context<Self>) {
         let Some(engine) = self.engine(cx) else {
             self.loading_chats.remove(&chat);
+            if self.embedded {
+                cx.emit(TerminalPanelEvent::SavedTabsUnavailable { chat_id: chat });
+            }
             return;
         };
         let generation = self.engine_generation;
@@ -650,9 +675,27 @@ impl TerminalPanel {
                         {
                             panel.open_tab(chat.clone(), cx);
                         }
+                        if panel.embedded {
+                            let tab_keys = panel
+                                .chats
+                                .get(&chat)
+                                .map(|tabs| tabs.tabs.iter().map(|tab| tab.key).collect::<Vec<_>>())
+                                .unwrap_or_default();
+                            cx.emit(TerminalPanelEvent::SavedTabsLoaded {
+                                chat_id: chat.clone(),
+                                tab_keys,
+                            });
+                        }
                     }
                     Err(error) => {
                         tracing::warn!(%error, "terminal inventory load failed");
+                        if panel.embedded {
+                            cx.emit(TerminalPanelEvent::SavedTabsUnavailable {
+                                chat_id: chat.clone(),
+                            });
+                            cx.notify();
+                            return;
+                        }
                         // Keep the existing open behavior available while an
                         // older engine has no inventory RPC.
                         panel.hydrated_chats.insert(chat.clone());
