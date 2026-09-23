@@ -6126,6 +6126,12 @@ impl DocHost {
                 request_id,
                 decision,
             } => {
+                if sessions.is_luna_pending_approval(chat_id, request_id) {
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some("LUNA approval requires a trusted local UI response".into()),
+                    ));
+                }
                 if sessions.respond_approval(chat_id, request_id, *decision)? {
                     return Ok((SessionCommandStatus::Applied, None));
                 }
@@ -6133,22 +6139,7 @@ impl DocHost {
                 // A recovered approval remains visible in the transcript, but
                 // answering it can only close it as denied; never replay an
                 // approval as a new prompt or infer that an action succeeded.
-                let recoverable = handle.doc.read_entries().ok().is_some_and(|entries| {
-                    entries.iter().rev().any(|entry| {
-                        entry.parts.iter().any(|part| match part {
-                            MessagePart::Input {
-                                request_id: pending_id,
-                                questions,
-                                resolved: false,
-                                ..
-                            } => {
-                                pending_id == request_id
-                                    && questions.iter().any(|question| question.approval.is_some())
-                            }
-                            _ => false,
-                        })
-                    })
-                });
+                let recoverable = recoverable_provider_approval(&handle.doc, request_id);
                 if !recoverable {
                     return Ok((
                         SessionCommandStatus::Rejected,
@@ -6165,6 +6156,12 @@ impl DocHost {
                 request_id,
                 answers,
             } => {
+                if sessions.is_luna_pending_approval(chat_id, request_id) {
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some("LUNA approval requires a trusted local UI response".into()),
+                    ));
+                }
                 if sessions.respond_input(chat_id, request_id, answers.clone())? {
                     return Ok((SessionCommandStatus::Applied, None));
                 }
@@ -6197,6 +6194,17 @@ impl DocHost {
                         Some("no pending input request".into()),
                     ));
                 };
+                if questions.iter().any(|question| {
+                    question
+                        .approval
+                        .as_ref()
+                        .is_some_and(zeron_proto::ApprovalRequest::is_luna_cross_task)
+                }) {
+                    return Ok((
+                        SessionCommandStatus::Rejected,
+                        Some("LUNA approval requires a trusted local UI response".into()),
+                    ));
+                }
                 if questions.iter().any(|question| question.approval.is_some()) {
                     // A recovered approval has no provider response channel.
                     // Only RespondApproval may close it (as a safe denial);
@@ -6654,6 +6662,185 @@ mod async_question_tests {
             )
             .is_err()
         );
+    }
+}
+
+/// An orphaned provider approval can only be closed as denied. A LUNA marker
+/// is never recoverable through the generic command path, even after restart.
+fn recoverable_provider_approval(doc: &SessionDoc, request_id: &str) -> bool {
+    let Ok(entries) = doc.read_entries() else {
+        return false;
+    };
+    for entry in entries.iter().rev() {
+        for part in entry.parts.iter().rev() {
+            if let MessagePart::Input {
+                request_id: pending_id,
+                questions,
+                resolved,
+                ..
+            } = part
+                && pending_id == request_id
+            {
+                return !resolved
+                    && questions.iter().any(|question| question.approval.is_some())
+                    && !questions.iter().any(|question| {
+                        question
+                            .approval
+                            .as_ref()
+                            .is_some_and(zeron_proto::ApprovalRequest::is_luna_cross_task)
+                    });
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod luna_approval_recovery_tests {
+    use super::*;
+    use crate::registry::HarnessRegistry;
+    use crate::run_journal::RunJournal;
+
+    fn approval_question(kind: zeron_proto::ApprovalActionKind) -> UserInputQuestion {
+        UserInputQuestion {
+            id: "question".into(),
+            header: "Approval".into(),
+            question: "Allow?".into(),
+            options: vec!["Deny".into(), "Allow once".into()],
+            multi_select: false,
+            approval: Some(zeron_proto::ApprovalRequest {
+                provider_request_id: "claimed-local-ui".into(),
+                provider: HarnessId::Codex,
+                turn_id: Some("turn-a".into()),
+                machine_name: "synthetic".into(),
+                action_kind: kind,
+                summary: "synthetic".into(),
+                requested_scope: zeron_proto::PermissionScope::Workspace,
+                expires_at_ms: i64::MAX,
+                supports_task_allowance: false,
+            }),
+        }
+    }
+
+    fn pending_command(id: &str, payload: SessionCommandPayload) -> SessionCommandEntry {
+        SessionCommandEntry {
+            id: id.into(),
+            payload,
+            issued_by: "claimed-local-ui".into(),
+            issued_at: 1,
+            based_on: None,
+            expires_at: None,
+            status: SessionCommandStatus::Pending,
+            resolution: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn restarted_luna_approval_rejects_generic_answers_without_resolving_input() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path().join("store")).unwrap());
+        let doc = SessionDoc::init("chat-a").unwrap();
+        for (request_id, kind) in [
+            (
+                "luna-request",
+                zeron_proto::ApprovalActionKind::LunaCrossTask,
+            ),
+            ("provider-request", zeron_proto::ApprovalActionKind::Command),
+        ] {
+            doc.push_message(&SessionMessageEntry {
+                id: format!("message-{request_id}"),
+                role: MessageRole::Assistant,
+                parts: vec![MessagePart::Input {
+                    id: request_id.into(),
+                    request_id: request_id.into(),
+                    questions: vec![approval_question(kind)],
+                    resolved: false,
+                }],
+                created_at: 1,
+                device_id: "device-test".into(),
+                status: Some(MessageStatus::Aborted),
+                continuation_of: None,
+            })
+            .unwrap();
+        }
+        store
+            .save_snapshot("chat-a", &doc.export_snapshot().unwrap())
+            .unwrap();
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "device-test".into(),
+                default_harness: HarnessId::Codex,
+                edge: None,
+            },
+        );
+        let handle = host.open("chat-a").unwrap();
+        let sessions = SessionsEngine::new(
+            "device-test".into(),
+            Arc::new(RunJournal::open(root.path().join("journals")).unwrap()),
+            Arc::new(HarnessRegistry::new()),
+            store,
+        );
+        assert!(!recoverable_provider_approval(&handle.doc, "luna-request"));
+        assert!(recoverable_provider_approval(
+            &handle.doc,
+            "provider-request"
+        ));
+
+        for payload in [
+            SessionCommandPayload::RespondApproval {
+                request_id: "luna-request".into(),
+                decision: zeron_proto::ApprovalDecision::AllowOnce,
+            },
+            SessionCommandPayload::RespondInput {
+                request_id: "luna-request".into(),
+                answers: vec![UserInputAnswer {
+                    question_id: "question".into(),
+                    labels: vec!["Allow once".into()],
+                }],
+            },
+        ] {
+            let entry = pending_command("forged-luna-answer", payload);
+            let (status, _) = host.execute(&sessions, &handle, &entry).await.unwrap();
+            assert_eq!(status, SessionCommandStatus::Rejected);
+            assert!(matches!(
+                &handle
+                    .doc
+                    .read_entries()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry.id == "message-luna-request")
+                    .unwrap()
+                    .parts[0],
+                MessagePart::Input {
+                    resolved: false,
+                    ..
+                }
+            ));
+        }
+
+        let entry = pending_command(
+            "provider-answer",
+            SessionCommandPayload::RespondApproval {
+                request_id: "provider-request".into(),
+                decision: zeron_proto::ApprovalDecision::AllowOnce,
+            },
+        );
+        let (status, detail) = host.execute(&sessions, &handle, &entry).await.unwrap();
+        assert_eq!(status, SessionCommandStatus::Applied);
+        assert!(detail.unwrap().contains("denied safely"));
+        assert!(matches!(
+            &handle
+                .doc
+                .read_entries()
+                .unwrap()
+                .iter()
+                .find(|entry| entry.id == "message-provider-request")
+                .unwrap()
+                .parts[0],
+            MessagePart::Input { resolved: true, .. }
+        ));
+        host.shutdown_workers().await;
     }
 }
 
