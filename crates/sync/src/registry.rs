@@ -14,6 +14,7 @@
 //! down for a fresh dial.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -28,6 +29,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use zeron_doc::{PendingBatch, RegistryDoc, RegistryRow, StateOutcome};
 
 use crate::types::{RoomStatsSnapshot, StaticUrl, SyncError, UrlProvider};
+use crate::write_epoch::EpochError;
 
 /// Text `"ping"` keepalive interval (answered by the DO auto-response pair
 /// without waking it — transport liveness only).
@@ -302,6 +304,112 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// A drop-only ticket. Product callbacks must keep both the write epoch and
+/// device-root lease alive inside this box; the sync crate cannot inspect it.
+pub type RegistryWritePermit = Box<dyn Send>;
+/// Called before any mutation of the shared registry document. The engine can
+/// supply a weak owner handle without making this crate depend on the engine.
+pub type RegistryAdmission = Arc<dyn Fn() -> Result<RegistryWritePermit, EpochError> + Send + Sync>;
+
+#[derive(Clone)]
+struct DocWriter {
+    doc: Arc<Mutex<RegistryDoc>>,
+    admission: Option<RegistryAdmission>,
+    retry_flight_reset: Arc<AtomicBool>,
+    shutdown: watch::Sender<bool>,
+}
+
+impl DocWriter {
+    fn mutate<R>(&self, f: impl FnOnce(&mut RegistryDoc) -> R) -> Result<R, EpochError> {
+        let _permit = self
+            .admission
+            .as_ref()
+            .map(|admit| admit())
+            .transpose()
+            .inspect_err(|error| {
+                if *error == EpochError::Retired {
+                    self.shutdown.send_replace(true);
+                }
+            })?;
+        Ok(f(&mut lock(&self.doc)))
+    }
+
+    fn mark_disconnected(&self) -> Result<(), EpochError> {
+        match self.mutate(RegistryDoc::mark_disconnected) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.retry_flight_reset.store(true, Ordering::Release);
+                Err(error)
+            }
+        }
+    }
+
+    fn take_pushable(&self) -> Result<Vec<PendingBatch>, EpochError> {
+        self.mutate(|doc| {
+            if self.retry_flight_reset.swap(false, Ordering::AcqRel) {
+                doc.mark_disconnected();
+            }
+            doc.take_pushable()
+        })
+    }
+
+    fn defer_flight_reset(&self) {
+        self.retry_flight_reset.store(true, Ordering::Release);
+    }
+}
+
+#[derive(Default)]
+struct OfflineTaskState {
+    stopping: bool,
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct OfflineTasks(Mutex<OfflineTaskState>);
+
+impl OfflineTasks {
+    fn stop(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let mut state = lock(&self.0);
+        state.stopping = true;
+        state.handle.take()
+    }
+}
+
+/// Aborts an actor if construction is canceled before it returns a client.
+/// Dropping a bare JoinHandle would detach that actor and its HTTPS child.
+struct PendingConnection {
+    task: Option<tokio::task::JoinHandle<()>>,
+    offline: Arc<OfflineTasks>,
+}
+
+impl PendingConnection {
+    async fn abort_and_join(&mut self) {
+        let child = self.offline.stop();
+        if let Some(child) = &child {
+            child.abort();
+        }
+        if let Some(task) = self.task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(child) = child {
+            let _ = child.await;
+        }
+    }
+}
+
+impl Drop for PendingConnection {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            let child = self.offline.stop();
+            task.abort();
+            if let Some(child) = child {
+                child.abort();
+            }
+        }
+    }
+}
+
 // ── the client ──────────────────────────────────────────────────────────────
 
 /// A live registry-room membership for one [`RegistryDoc`].
@@ -320,6 +428,7 @@ pub struct RegistryClient {
     presence: Arc<Mutex<HashMap<String, (i64, tokio::time::Instant)>>>,
     stats: Arc<Stats>,
     task: Option<tokio::task::JoinHandle<()>>,
+    offline: Arc<OfflineTasks>,
 }
 
 impl RegistryClient {
@@ -354,6 +463,20 @@ impl RegistryClient {
         Self::connect_with_transport(connector, doc, device_id, tuning, None).await
     }
 
+    /// Guarded WebSocket membership. Every shared-doc mutation must obtain an
+    /// owner-held ticket; denied admission never falls back to legacy mode.
+    pub async fn connect_via_tuned_guarded(
+        provider: Arc<dyn UrlProvider>,
+        doc: Arc<Mutex<RegistryDoc>>,
+        device_id: &str,
+        tuning: RegistryTuning,
+        admission: RegistryAdmission,
+    ) -> Result<Self, SyncError> {
+        let connector = Arc::new(WsTextConnector { url: provider });
+        Self::connect_with_transport_mode(connector, doc, device_id, tuning, None, Some(admission))
+            .await
+    }
+
     /// Connect with a plain-HTTPS pull/push seam alongside the socket (the
     /// airplane-wifi transport): an immediate delta GET bootstraps the doc
     /// in ~1 RTT while the WS dials, and every backoff cycle syncs over
@@ -367,6 +490,28 @@ impl RegistryClient {
     ) -> Result<Self, SyncError> {
         let connector = Arc::new(WsTextConnector { url: provider });
         Self::connect_with_transport(connector, doc, device_id, tuning, Some(transport)).await
+    }
+
+    /// Guarded dual transport; the HTTPS child uses the same admission as the
+    /// socket actor and is canceled with this client.
+    pub async fn connect_via_transport_guarded(
+        provider: Arc<dyn UrlProvider>,
+        doc: Arc<Mutex<RegistryDoc>>,
+        device_id: &str,
+        tuning: RegistryTuning,
+        transport: Arc<dyn RegistryTransport>,
+        admission: RegistryAdmission,
+    ) -> Result<Self, SyncError> {
+        let connector = Arc::new(WsTextConnector { url: provider });
+        Self::connect_with_transport_mode(
+            connector,
+            doc,
+            device_id,
+            tuning,
+            Some(transport),
+            Some(admission),
+        )
+        .await
     }
 
     pub(crate) async fn connect_with_tuned(
@@ -385,6 +530,17 @@ impl RegistryClient {
         tuning: RegistryTuning,
         transport: Option<Arc<dyn RegistryTransport>>,
     ) -> Result<Self, SyncError> {
+        Self::connect_with_transport_mode(connector, doc, device_id, tuning, transport, None).await
+    }
+
+    async fn connect_with_transport_mode(
+        connector: Arc<dyn TextConnector>,
+        doc: Arc<Mutex<RegistryDoc>>,
+        device_id: &str,
+        tuning: RegistryTuning,
+        transport: Option<Arc<dyn RegistryTransport>>,
+        admission: Option<RegistryAdmission>,
+    ) -> Result<Self, SyncError> {
         let (events, _) = broadcast::channel(256);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -394,9 +550,15 @@ impl RegistryClient {
         let (presence_tx, presence_rx) = mpsc::channel(4);
         let presence = Arc::new(Mutex::new(HashMap::new()));
         let stats = Arc::new(Stats::default());
+        let offline = Arc::new(OfflineTasks::default());
 
         let actor = Actor {
-            doc: doc.clone(),
+            writer: DocWriter {
+                doc: doc.clone(),
+                admission,
+                retry_flight_reset: Arc::new(AtomicBool::new(false)),
+                shutdown: shutdown_tx.clone(),
+            },
             device_id: device_id.to_string(),
             connector,
             tuning,
@@ -405,13 +567,17 @@ impl RegistryClient {
             nudge_rx,
             probe_rx,
             redial_rx,
+            redial: redial_tx.clone(),
             presence_rx,
             presence: presence.clone(),
             stats: stats.clone(),
             transport,
-            sync_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            offline: offline.clone(),
         };
-        let task = tokio::spawn(actor.run(ready_tx));
+        let mut pending = PendingConnection {
+            task: Some(tokio::spawn(actor.run(ready_tx))),
+            offline: offline.clone(),
+        };
 
         match ready_rx.await {
             Ok(Ok(())) => Ok(Self {
@@ -424,14 +590,15 @@ impl RegistryClient {
                 presence_out: presence_tx,
                 presence,
                 stats,
-                task: Some(task),
+                task: pending.task.take(),
+                offline,
             }),
             Ok(Err(err)) => {
-                task.abort();
+                pending.abort_and_join().await;
                 Err(err)
             }
             Err(_) => {
-                task.abort();
+                pending.abort_and_join().await;
                 Err(SyncError::Closed)
             }
         }
@@ -494,17 +661,33 @@ impl RegistryClient {
 
     /// Leave cleanly and stop the actor.
     pub async fn shutdown(mut self) {
+        let child = self.offline.stop();
+        if let Some(child) = &child {
+            child.abort();
+        }
         let _ = self.shutdown.send(true);
-        if let Some(task) = self.task.take() {
+        if let Some(mut task) = self.task.take()
+            && tokio::time::timeout(Duration::from_secs(2), &mut task)
+                .await
+                .is_err()
+        {
+            task.abort();
             let _ = task.await;
+        }
+        if let Some(child) = child {
+            let _ = child.await;
         }
     }
 }
 
 impl Drop for RegistryClient {
     fn drop(&mut self) {
-        if let Some(task) = &self.task {
+        let child = self.offline.stop();
+        if let Some(task) = self.task.take() {
             task.abort();
+        }
+        if let Some(child) = child {
+            child.abort();
         }
     }
 }
@@ -512,7 +695,7 @@ impl Drop for RegistryClient {
 // ── the actor ───────────────────────────────────────────────────────────────
 
 struct Actor {
-    doc: Arc<Mutex<RegistryDoc>>,
+    writer: DocWriter,
     device_id: String,
     connector: Arc<dyn TextConnector>,
     tuning: RegistryTuning,
@@ -521,13 +704,14 @@ struct Actor {
     nudge_rx: mpsc::Receiver<()>,
     probe_rx: mpsc::Receiver<()>,
     redial_rx: mpsc::Receiver<()>,
+    redial: mpsc::Sender<()>,
     presence_rx: mpsc::Receiver<i64>,
     presence: Arc<Mutex<HashMap<String, (i64, tokio::time::Instant)>>>,
     stats: Arc<Stats>,
     /// Plain-HTTPS pull/push (None = socket-only: tests, dev bearers).
     transport: Option<Arc<dyn RegistryTransport>>,
-    /// One offline sync in flight at a time.
-    sync_busy: Arc<std::sync::atomic::AtomicBool>,
+    /// One tracked HTTPS sync in flight at a time; shutdown fences new tasks.
+    offline: Arc<OfflineTasks>,
 }
 
 enum SessionEnd {
@@ -535,6 +719,13 @@ enum SessionEnd {
     Reconnect,
     /// Shutdown requested: stop the actor.
     Stop,
+}
+
+fn admission_end(error: EpochError) -> SessionEnd {
+    match error {
+        EpochError::Retired => SessionEnd::Stop,
+        _ => SessionEnd::Reconnect,
+    }
 }
 
 /// How a backoff wait ended.
@@ -546,7 +737,16 @@ enum Waited {
 }
 
 impl Actor {
-    async fn run(mut self, ready: oneshot::Sender<Result<(), SyncError>>) {
+    async fn run(self, ready: oneshot::Sender<Result<(), SyncError>>) {
+        let offline = self.offline.clone();
+        self.run_inner(ready).await;
+        if let Some(child) = offline.stop() {
+            child.abort();
+            let _ = child.await;
+        }
+    }
+
+    async fn run_inner(mut self, ready: oneshot::Sender<Result<(), SyncError>>) {
         let mut ready = Some(ready);
         let mut backoff = BACKOFF_BASE;
         // Pull-first bootstrap: with an HTTPS transport, the doc syncs in
@@ -575,7 +775,15 @@ impl Actor {
                 .dial_seq
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 + 1;
-            let dial = tokio::time::timeout(CONNECT_TIMEOUT, self.connector.connect()).await;
+            let dial = tokio::select! {
+                result = tokio::time::timeout(CONNECT_TIMEOUT, self.connector.connect()) => result,
+                changed = self.shutdown.changed() => {
+                    if changed.is_err() || *self.shutdown.borrow() {
+                        return;
+                    }
+                    continue;
+                }
+            };
             let pipe = match dial {
                 Ok(Ok(pipe)) => pipe,
                 Ok(Err(err)) => {
@@ -614,7 +822,9 @@ impl Actor {
             match self.run_session(pipe, &mut ready).await {
                 SessionEnd::Stop => return,
                 SessionEnd::Reconnect => {
-                    lock(&self.doc).mark_disconnected();
+                    if let Err(EpochError::Retired) = self.writer.mark_disconnected() {
+                        return;
+                    }
                     // Only a session that joined AND stayed healthy for a
                     // while earns a fresh backoff. Reset-on-join alone let a
                     // connect-and-die socket (captive portal, half-broken
@@ -711,7 +921,7 @@ impl Actor {
 
         // ── hello / state handshake ─────────────────────────────────────────
         let cursor = {
-            let doc = lock(&self.doc);
+            let doc = lock(&self.writer.doc);
             let cursor = doc.cursor();
             if cursor == 0 && doc.pending_len() == 0 && doc.generation() == 0 {
                 None
@@ -727,7 +937,8 @@ impl Actor {
         if pipe.tx.send(hello).await.is_err() {
             return SessionEnd::Reconnect;
         }
-        let state = tokio::time::timeout(HELLO_DEADLINE, async {
+        let state = tokio::select! {
+            result = tokio::time::timeout(HELLO_DEADLINE, async {
             loop {
                 match pipe.rx.recv().await {
                     Some(text) => match serde_json::from_str::<ServerFrame>(&text) {
@@ -741,8 +952,14 @@ impl Actor {
                     None => None?,
                 }
             }
-        })
-        .await;
+            }) => result,
+            changed = self.shutdown.changed() => {
+                if changed.is_err() || *self.shutdown.borrow() {
+                    return SessionEnd::Stop;
+                }
+                return SessionEnd::Reconnect;
+            }
+        };
         let Ok(Some(ServerFrame::State {
             seq,
             full,
@@ -754,15 +971,18 @@ impl Actor {
             tracing::warn!("registry: no state frame within deadline");
             return SessionEnd::Reconnect;
         };
+        let outcome = match self
+            .writer
+            .mutate(|doc| doc.apply_state(seq, full, gc_floor, rows))
         {
-            let mut doc = lock(&self.doc);
-            let outcome = doc.apply_state(seq, full, gc_floor, rows);
-            if full {
-                self.stats.full_resyncs.fetch_add(1, Relaxed);
-            }
-            if outcome == StateOutcome::Reseeded {
-                tracing::info!("registry: server behind local state; re-seeding");
-            }
+            Ok(outcome) => outcome,
+            Err(error) => return admission_end(error),
+        };
+        if full {
+            self.stats.full_resyncs.fetch_add(1, Relaxed);
+        }
+        if outcome == StateOutcome::Reseeded {
+            tracing::info!("registry: server behind local state; re-seeding");
         }
         {
             let now = tokio::time::Instant::now();
@@ -786,8 +1006,10 @@ impl Actor {
         let _ = self.events.send(RegistryEvent::Applied);
 
         // Anything pending (offline writes, reseeds, migration) pushes now.
-        if !self.push_pending(&mut pipe).await {
-            return SessionEnd::Reconnect;
+        match self.push_pending(&mut pipe).await {
+            Ok(true) => {}
+            Ok(false) => return SessionEnd::Reconnect,
+            Err(error) => return admission_end(error),
         }
 
         // ── steady state ────────────────────────────────────────────────────
@@ -804,13 +1026,17 @@ impl Actor {
                     };
                     last_frame = tokio::time::Instant::now();
                     probe_deadline = None;
-                    if !self.handle_frame(&text) {
-                        return SessionEnd::Reconnect;
+                    match self.handle_frame(&text) {
+                        Ok(true) => {}
+                        Ok(false) => return SessionEnd::Reconnect,
+                        Err(error) => return admission_end(error),
                     }
                 }
                 _ = self.nudge_rx.recv() => {
-                    if !self.push_pending(&mut pipe).await {
-                        return SessionEnd::Reconnect;
+                    match self.push_pending(&mut pipe).await {
+                        Ok(true) => {}
+                        Ok(false) => return SessionEnd::Reconnect,
+                        Err(error) => return admission_end(error),
                     }
                 }
                 at = self.presence_rx.recv() => {
@@ -873,106 +1099,31 @@ impl Actor {
     /// apply it exactly as a state frame. Single-flight; failures are logged
     /// and retried on the next backoff cycle.
     fn spawn_offline_sync(&self) {
-        use std::sync::atomic::Ordering::Relaxed;
         let Some(transport) = self.transport.clone() else {
             return;
         };
-        if self.sync_busy.swap(true, Relaxed) {
+        let mut state = lock(&self.offline.0);
+        if state.stopping
+            || state
+                .handle
+                .as_ref()
+                .is_some_and(|task| !task.is_finished())
+        {
             return;
         }
-        let doc = self.doc.clone();
+        state.handle.take(); // completed child, if any
+        let writer = self.writer.clone();
         let events = self.events.clone();
         let presence = self.presence.clone();
         let stats = self.stats.clone();
-        let busy = self.sync_busy.clone();
-        tokio::spawn(async move {
-            let batches: Vec<PendingBatch> = lock(&doc).take_pushable();
-            let mut push_failed = false;
-            for batch in &batches {
-                let body =
-                    serde_json::json!({ "batch": batch.batch, "ops": batch.ops }).to_string();
-                match transport.push(body).await {
-                    Ok(ack) => {
-                        let parsed = serde_json::from_str::<serde_json::Value>(&ack)
-                            .ok()
-                            .and_then(|v| {
-                                Some((v["batch"].as_str()?.to_owned(), v["seq"].as_u64()?))
-                            });
-                        match parsed {
-                            Some((b, seq)) => {
-                                lock(&doc).ack_batch(&b, seq);
-                                stats.last_ack_ms.store(epoch_ms(), Relaxed);
-                                let _ = events.send(RegistryEvent::Applied);
-                            }
-                            None => {
-                                // An unreadable ack must count as a FAILED
-                                // push: swallowing it left the batch marked
-                                // in-flight, and on a pure-HTTPS device no
-                                // socket disconnect ever comes along to
-                                // un-mark it — the write was stranded until
-                                // process restart.
-                                tracing::warn!("registry: http push ack unreadable; will retry");
-                                push_failed = true;
-                                break;
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "registry: http push failed; will retry");
-                        push_failed = true;
-                        break;
-                    }
-                }
-            }
-            if push_failed {
-                // take_pushable marked them in flight; nothing will clear
-                // that until the next socket disconnect — un-mark so the
-                // next cycle (HTTP or WS) retries them.
-                lock(&doc).mark_disconnected();
-            }
-            let since = lock(&doc).cursor();
-            match transport.fetch(since).await {
-                Ok(body) => {
-                    #[derive(serde::Deserialize)]
-                    #[serde(rename_all = "camelCase")]
-                    struct PullBody {
-                        seq: u64,
-                        full: bool,
-                        gc_floor: u64,
-                        rows: Vec<RegistryRow>,
-                        #[serde(default)]
-                        presence: HashMap<String, i64>,
-                    }
-                    match serde_json::from_str::<PullBody>(&body) {
-                        Ok(pull) => {
-                            let mut d = lock(&doc);
-                            d.apply_state(pull.seq, pull.full, pull.gc_floor, pull.rows);
-                            drop(d);
-                            let now = tokio::time::Instant::now();
-                            let mut map = lock(&presence);
-                            for (device, at) in pull.presence {
-                                map.insert(device, (at, now));
-                            }
-                            drop(map);
-                            stats.synced.store(true, Relaxed);
-                            stats.last_pushed_ms.store(epoch_ms(), Relaxed);
-                            let _ = events.send(RegistryEvent::Applied);
-                        }
-                        Err(err) => {
-                            tracing::warn!(error = %err, "registry: http pull body unparseable");
-                        }
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "registry: http pull failed; will retry");
-                }
-            }
-            busy.store(false, Relaxed);
-        });
+        let redial = self.redial.clone();
+        state.handle = Some(tokio::spawn(async move {
+            offline_sync_once(writer, transport, events, presence, stats, redial).await;
+        }));
     }
 
-    async fn push_pending(&self, pipe: &mut TextPipe) -> bool {
-        let batches: Vec<PendingBatch> = lock(&self.doc).take_pushable();
+    async fn push_pending(&self, pipe: &mut TextPipe) -> Result<bool, EpochError> {
+        let batches = self.writer.take_pushable()?;
         for batch in batches {
             let frame = serde_json::to_string(&ClientFrame::Push {
                 batch: &batch.batch,
@@ -980,25 +1131,25 @@ impl Actor {
             })
             .expect("push serializes");
             if pipe.tx.send(frame).await.is_err() {
-                return false;
+                return Ok(false);
             }
         }
-        true
+        Ok(true)
     }
 
     /// Apply one inbound protocol frame. False = protocol breakdown, redial.
-    fn handle_frame(&self, text: &str) -> bool {
+    fn handle_frame(&self, text: &str) -> Result<bool, EpochError> {
         use std::sync::atomic::Ordering::Relaxed;
         let frame = match serde_json::from_str::<ServerFrame>(text) {
             Ok(frame) => frame,
             Err(err) => {
                 tracing::warn!(error = %err, "registry: unparseable frame");
-                return false;
+                return Ok(false);
             }
         };
         match frame {
             ServerFrame::Rows { seq, rows } => {
-                let contiguous = lock(&self.doc).apply_rows(seq, rows);
+                let contiguous = self.writer.mutate(|doc| doc.apply_rows(seq, rows))?;
                 self.stats.last_pushed_ms.store(epoch_ms(), Relaxed);
                 let _ = self.events.send(RegistryEvent::Applied);
                 if !contiguous {
@@ -1006,11 +1157,14 @@ impl Actor {
                     // the cursor held. Reconnect — the fresh hello pulls the
                     // whole gap from the true cursor.
                     tracing::warn!(seq, "registry: broadcast seq gap; resyncing");
-                    return false;
+                    return Ok(false);
                 }
             }
             ServerFrame::Ack { batch, seq, .. } => {
-                lock(&self.doc).ack_batch(&batch, seq);
+                if let Err(error) = self.writer.mutate(|doc| doc.ack_batch(&batch, seq)) {
+                    self.writer.defer_flight_reset();
+                    return Err(error);
+                }
                 self.stats.last_ack_ms.store(epoch_ms(), Relaxed);
                 let _ = self.events.send(RegistryEvent::Applied);
             }
@@ -1030,9 +1184,8 @@ impl Actor {
             } => {
                 // Servers only send state as a hello answer, but applying a
                 // late duplicate is harmless and simpler than special-casing.
-                let mut doc = lock(&self.doc);
-                doc.apply_state(seq, full, gc_floor, rows);
-                drop(doc);
+                self.writer
+                    .mutate(|doc| doc.apply_state(seq, full, gc_floor, rows))?;
                 let now = tokio::time::Instant::now();
                 let mut map = lock(&self.presence);
                 for (device, at) in presence {
@@ -1045,7 +1198,652 @@ impl Actor {
                 tracing::warn!(code, message, "registry: server rejected a frame");
             }
         }
-        true
+        Ok(true)
+    }
+}
+
+async fn offline_sync_once(
+    writer: DocWriter,
+    transport: Arc<dyn RegistryTransport>,
+    events: broadcast::Sender<RegistryEvent>,
+    presence: Arc<Mutex<HashMap<String, (i64, tokio::time::Instant)>>>,
+    stats: Arc<Stats>,
+    redial: mpsc::Sender<()>,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let batches = match writer.take_pushable() {
+        Ok(batches) => batches,
+        Err(error) => {
+            request_redial_on_busy(error, &redial);
+            return;
+        }
+    };
+    let mut push_failed = false;
+    for batch in &batches {
+        let body = serde_json::json!({ "batch": batch.batch, "ops": batch.ops }).to_string();
+        match transport.push(body).await {
+            Ok(ack) => {
+                let parsed = serde_json::from_str::<serde_json::Value>(&ack)
+                    .ok()
+                    .and_then(|value| {
+                        Some((value["batch"].as_str()?.to_owned(), value["seq"].as_u64()?))
+                    });
+                match parsed {
+                    Some((id, seq)) => {
+                        if let Err(error) = writer.mutate(|doc| doc.ack_batch(&id, seq)) {
+                            writer.defer_flight_reset();
+                            request_redial_on_busy(error, &redial);
+                            return;
+                        }
+                        stats.last_ack_ms.store(epoch_ms(), Relaxed);
+                        let _ = events.send(RegistryEvent::Applied);
+                    }
+                    None => {
+                        tracing::warn!("registry: http push ack unreadable; will retry");
+                        push_failed = true;
+                        break;
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "registry: http push failed; will retry");
+                push_failed = true;
+                break;
+            }
+        }
+    }
+    if push_failed && let Err(error) = writer.mark_disconnected() {
+        request_redial_on_busy(error, &redial);
+        return;
+    }
+    let since = lock(&writer.doc).cursor();
+    match transport.fetch(since).await {
+        Ok(body) => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct PullBody {
+                seq: u64,
+                full: bool,
+                gc_floor: u64,
+                rows: Vec<RegistryRow>,
+                #[serde(default)]
+                presence: HashMap<String, i64>,
+            }
+            match serde_json::from_str::<PullBody>(&body) {
+                Ok(pull) => {
+                    if let Err(error) = writer.mutate(|doc| {
+                        doc.apply_state(pull.seq, pull.full, pull.gc_floor, pull.rows)
+                    }) {
+                        request_redial_on_busy(error, &redial);
+                        return; // Cursor unchanged; the redial re-fetches.
+                    }
+                    let now = tokio::time::Instant::now();
+                    let mut map = lock(&presence);
+                    for (device, at) in pull.presence {
+                        map.insert(device, (at, now));
+                    }
+                    drop(map);
+                    stats.synced.store(true, Relaxed);
+                    stats.last_pushed_ms.store(epoch_ms(), Relaxed);
+                    let _ = events.send(RegistryEvent::Applied);
+                }
+                Err(err) => tracing::warn!(error = %err, "registry: http pull body unparseable"),
+            }
+        }
+        Err(err) => tracing::warn!(error = %err, "registry: http pull failed; will retry"),
+    }
+}
+
+fn request_redial_on_busy(error: EpochError, redial: &mpsc::Sender<()>) {
+    if error == EpochError::Busy {
+        let _ = redial.try_send(());
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use crate::write_epoch::WriteEpoch;
+    use std::sync::atomic::AtomicUsize;
+
+    struct ChannelConnector {
+        pipes: Arc<tokio::sync::Mutex<mpsc::Receiver<TextPipe>>>,
+    }
+
+    impl TextConnector for ChannelConnector {
+        fn connect(&self) -> BoxFuture<'static, Result<TextPipe, SyncError>> {
+            let pipes = self.pipes.clone();
+            Box::pin(async move { pipes.lock().await.recv().await.ok_or(SyncError::Closed) })
+        }
+    }
+
+    fn connector() -> (Arc<ChannelConnector>, mpsc::Sender<TextPipe>) {
+        let (tx, rx) = mpsc::channel(4);
+        (
+            Arc::new(ChannelConnector {
+                pipes: Arc::new(tokio::sync::Mutex::new(rx)),
+            }),
+            tx,
+        )
+    }
+
+    fn pipe() -> (TextPipe, mpsc::Receiver<String>, mpsc::Sender<String>) {
+        let (out_tx, out_rx) = mpsc::channel(8);
+        let (in_tx, in_rx) = mpsc::channel(8);
+        (
+            TextPipe {
+                tx: out_tx,
+                rx: in_rx,
+            },
+            out_rx,
+            in_tx,
+        )
+    }
+
+    fn admission(epoch: WriteEpoch) -> RegistryAdmission {
+        Arc::new(move || {
+            epoch
+                .try_admit()
+                .map(|ticket| Box::new(ticket) as RegistryWritePermit)
+        })
+    }
+
+    async fn wait_until(mut condition: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if condition() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_rows_wait_for_reconnect_after_snapshot_without_advancing_cursor() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+        let (connector, pipes) = connector();
+        let (first_pipe, mut first_out, first_in) = pipe();
+        pipes.send(first_pipe).await.unwrap();
+        let connecting = tokio::spawn({
+            let doc = doc.clone();
+            let gate = admission(epoch.clone());
+            async move {
+                RegistryClient::connect_with_transport_mode(
+                    connector,
+                    doc,
+                    "device-a",
+                    RegistryTuning::default(),
+                    None,
+                    Some(gate),
+                )
+                .await
+            }
+        });
+        let hello = first_out.recv().await.unwrap();
+        assert!(hello.contains("\"t\":\"hello\""));
+        first_in
+            .send(r#"{"t":"state","seq":0,"full":false,"rows":[]}"#.into())
+            .await
+            .unwrap();
+        let client = connecting.await.unwrap().unwrap();
+        let mut events = client.events();
+        let before = {
+            let doc = lock(&doc);
+            (doc.cursor(), doc.generation())
+        };
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        first_in
+            .send(r#"{"t":"rows","seq":1,"rows":[]}"#.into())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while events.recv().await.unwrap() != RegistryEvent::Disconnected {}
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            {
+                let doc = lock(&doc);
+                (doc.cursor(), doc.generation())
+            },
+            before
+        );
+        drop(snapshot);
+
+        let (second_pipe, mut second_out, second_in) = pipe();
+        pipes.send(second_pipe).await.unwrap();
+        let hello = tokio::time::timeout(Duration::from_secs(2), second_out.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(hello.contains("\"cursor\":0"), "{hello}");
+        second_in
+            .send(r#"{"t":"state","seq":1,"full":false,"rows":[]}"#.into())
+            .await
+            .unwrap();
+        wait_until(|| lock(&doc).cursor() == 1).await;
+        client.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn legacy_constructor_still_applies_fake_socket_frames_without_a_gate() {
+        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+        let (connector, pipes) = connector();
+        let (socket, mut outgoing, incoming) = pipe();
+        pipes.send(socket).await.unwrap();
+        let connecting = tokio::spawn({
+            let doc = doc.clone();
+            async move {
+                RegistryClient::connect_with_transport(
+                    connector,
+                    doc,
+                    "device-a",
+                    RegistryTuning::default(),
+                    None,
+                )
+                .await
+            }
+        });
+        outgoing.recv().await.unwrap();
+        incoming
+            .send(r#"{"t":"state","seq":0,"full":false,"rows":[]}"#.into())
+            .await
+            .unwrap();
+        let client = connecting.await.unwrap().unwrap();
+        incoming
+            .send(r#"{"t":"rows","seq":1,"rows":[]}"#.into())
+            .await
+            .unwrap();
+        wait_until(|| lock(&doc).cursor() == 1).await;
+        client.shutdown().await;
+    }
+
+    struct AckTransport {
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        release: Mutex<Option<oneshot::Receiver<()>>>,
+        pushes: Arc<AtomicUsize>,
+    }
+
+    impl RegistryTransport for AckTransport {
+        fn push(&self, body: String) -> BoxFuture<'static, Result<String, SyncError>> {
+            let started = lock(&self.started).take();
+            let release = lock(&self.release).take();
+            let pushes = self.pushes.clone();
+            Box::pin(async move {
+                pushes.fetch_add(1, Ordering::Relaxed);
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                if let Some(release) = release {
+                    let _ = release.await;
+                }
+                let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+                Ok(serde_json::json!({"batch":value["batch"],"seq":1}).to_string())
+            })
+        }
+
+        fn fetch(&self, _since: u64) -> BoxFuture<'static, Result<String, SyncError>> {
+            Box::pin(async { Ok(r#"{"seq":0,"full":false,"rows":[]}"#.into()) })
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_https_ack_denial_retries_same_pending_batch_after_thaw() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+        lock(&doc)
+            .upsert_device(&zeron_proto::Device {
+                id: "device-a".into(),
+                name: "Synthetic".into(),
+                platform: "test".into(),
+                last_seen_at: None,
+                created_at: Some(chrono::Utc::now()),
+                version: None,
+                capabilities: Vec::new(),
+            })
+            .unwrap();
+        let (shutdown, _) = watch::channel(false);
+        let writer = DocWriter {
+            doc: doc.clone(),
+            admission: Some(admission(epoch.clone())),
+            retry_flight_reset: Arc::new(AtomicBool::new(false)),
+            shutdown,
+        };
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let pushes = Arc::new(AtomicUsize::new(0));
+        let transport: Arc<dyn RegistryTransport> = Arc::new(AckTransport {
+            started: Mutex::new(Some(started_tx)),
+            release: Mutex::new(Some(release_rx)),
+            pushes: pushes.clone(),
+        });
+        let (events, _) = broadcast::channel(8);
+        let presence = Arc::new(Mutex::new(HashMap::new()));
+        let stats = Arc::new(Stats::default());
+        let (redial, mut redial_rx) = mpsc::channel(1);
+        let first = tokio::spawn(offline_sync_once(
+            writer.clone(),
+            transport.clone(),
+            events.clone(),
+            presence.clone(),
+            stats.clone(),
+            redial.clone(),
+        ));
+        started_rx.await.unwrap();
+        let pending_before_denied_ack = lock(&doc).to_bytes().unwrap();
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        release_tx.send(()).unwrap();
+        first.await.unwrap();
+        assert_eq!(lock(&doc).pending_len(), 1);
+        assert_eq!(lock(&doc).cursor(), 0);
+        assert_eq!(lock(&doc).to_bytes().unwrap(), pending_before_denied_ack);
+        assert!(
+            redial_rx.try_recv().is_ok(),
+            "Busy HTTPS ACK must request replay"
+        );
+        drop(snapshot);
+
+        offline_sync_once(writer, transport, events, presence, stats, redial).await;
+        assert_eq!(pushes.load(Ordering::Relaxed), 2);
+        assert_eq!(lock(&doc).pending_len(), 0);
+    }
+
+    struct DelayedFetch {
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        release: Mutex<Option<oneshot::Receiver<()>>>,
+        fetches: Arc<AtomicUsize>,
+    }
+
+    impl RegistryTransport for DelayedFetch {
+        fn push(&self, _body: String) -> BoxFuture<'static, Result<String, SyncError>> {
+            Box::pin(async { Err(SyncError::Closed) })
+        }
+
+        fn fetch(&self, _since: u64) -> BoxFuture<'static, Result<String, SyncError>> {
+            let started = lock(&self.started).take();
+            let release = lock(&self.release).take();
+            let fetches = self.fetches.clone();
+            Box::pin(async move {
+                fetches.fetch_add(1, Ordering::Relaxed);
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                if let Some(release) = release {
+                    let _ = release.await;
+                }
+                Ok(r#"{"seq":1,"full":false,"gcFloor":0,"rows":[]}"#.into())
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_https_pull_denial_requests_refetch_from_unchanged_cursor() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+        let (shutdown, _) = watch::channel(false);
+        let writer = DocWriter {
+            doc: doc.clone(),
+            admission: Some(admission(epoch.clone())),
+            retry_flight_reset: Arc::new(AtomicBool::new(false)),
+            shutdown,
+        };
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let transport: Arc<dyn RegistryTransport> = Arc::new(DelayedFetch {
+            started: Mutex::new(Some(started_tx)),
+            release: Mutex::new(Some(release_rx)),
+            fetches: fetches.clone(),
+        });
+        let (events, _) = broadcast::channel(8);
+        let presence = Arc::new(Mutex::new(HashMap::new()));
+        let stats = Arc::new(Stats::default());
+        let (redial, mut redial_rx) = mpsc::channel(1);
+        let first = tokio::spawn(offline_sync_once(
+            writer.clone(),
+            transport.clone(),
+            events.clone(),
+            presence.clone(),
+            stats.clone(),
+            redial.clone(),
+        ));
+        started_rx.await.unwrap();
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        release_tx.send(()).unwrap();
+        first.await.unwrap();
+        assert_eq!(lock(&doc).cursor(), 0);
+        assert!(redial_rx.try_recv().is_ok());
+        drop(snapshot);
+
+        offline_sync_once(writer, transport, events, presence, stats, redial).await;
+        assert_eq!(fetches.load(Ordering::Relaxed), 2);
+        assert_eq!(lock(&doc).cursor(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn admitted_doc_mutation_keeps_freeze_quiescing_until_it_finishes() {
+        use crate::write_epoch::Phase;
+
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let (shutdown, _) = watch::channel(false);
+        let writer = DocWriter {
+            doc: Arc::new(Mutex::new(RegistryDoc::new("device-a"))),
+            admission: Some(admission(epoch.clone())),
+            retry_flight_reset: Arc::new(AtomicBool::new(false)),
+            shutdown,
+        };
+        let doc = writer.doc.clone();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mutating = tokio::task::spawn_blocking(move || {
+            writer
+                .mutate(|doc| {
+                    let _ = entered_tx.send(());
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    let _ = doc.apply_rows(1, Vec::new());
+                })
+                .unwrap();
+        });
+        entered_rx.await.unwrap();
+        let freezing = tokio::spawn({
+            let epoch = epoch.clone();
+            async move { epoch.freeze(Duration::from_secs(3)).await }
+        });
+        wait_until(|| epoch.phase() == Phase::Quiescing).await;
+        assert!(!freezing.is_finished());
+        release_tx.send(()).unwrap();
+        mutating.await.unwrap();
+        let snapshot = freezing.await.unwrap().unwrap().into_snapshot().unwrap();
+        assert_eq!(lock(&doc).cursor(), 1);
+        drop(snapshot);
+    }
+
+    struct FetchDrop(Arc<AtomicBool>);
+
+    impl Drop for FetchDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    struct HangingFetch {
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl RegistryTransport for HangingFetch {
+        fn push(&self, _body: String) -> BoxFuture<'static, Result<String, SyncError>> {
+            Box::pin(async { Err(SyncError::Closed) })
+        }
+
+        fn fetch(&self, _since: u64) -> BoxFuture<'static, Result<String, SyncError>> {
+            let started = lock(&self.started).take();
+            let dropped = self.dropped.clone();
+            Box::pin(async move {
+                let _guard = FetchDrop(dropped);
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                std::future::pending().await
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_and_drop_cancel_https_child_and_fake_dial() {
+        for graceful in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+            let (connector, _pipes) = connector(); // no pipe: actor is parked in dial
+            let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+            let (started_tx, started_rx) = oneshot::channel();
+            let dropped = Arc::new(AtomicBool::new(false));
+            let client = RegistryClient::connect_with_transport_mode(
+                connector,
+                doc.clone(),
+                "device-a",
+                RegistryTuning::default(),
+                Some(Arc::new(HangingFetch {
+                    started: Mutex::new(Some(started_tx)),
+                    dropped: dropped.clone(),
+                })),
+                Some(admission(epoch)),
+            )
+            .await
+            .unwrap();
+            started_rx.await.unwrap();
+            if graceful {
+                tokio::time::timeout(Duration::from_secs(2), client.shutdown())
+                    .await
+                    .unwrap();
+            } else {
+                drop(client);
+            }
+            wait_until(|| dropped.load(Ordering::Acquire)).await;
+            assert_eq!(lock(&doc).cursor(), 0);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retired_admission_stops_guarded_actor_without_applying_frame() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+        let (connector, pipes) = connector();
+        let (socket, mut outgoing, incoming) = pipe();
+        pipes.send(socket).await.unwrap();
+        let connecting = tokio::spawn({
+            let doc = doc.clone();
+            let gate = admission(epoch.clone());
+            async move {
+                RegistryClient::connect_with_transport_mode(
+                    connector,
+                    doc,
+                    "device-a",
+                    RegistryTuning::default(),
+                    None,
+                    Some(gate),
+                )
+                .await
+            }
+        });
+        outgoing.recv().await.unwrap();
+        incoming
+            .send(r#"{"t":"state","seq":0,"full":false,"rows":[]}"#.into())
+            .await
+            .unwrap();
+        let client = connecting.await.unwrap().unwrap();
+        let before = {
+            let doc = lock(&doc);
+            (doc.cursor(), doc.generation())
+        };
+        epoch.retire();
+        incoming
+            .send(r#"{"t":"rows","seq":1,"rows":[]}"#.into())
+            .await
+            .unwrap();
+        wait_until(|| client.task.as_ref().unwrap().is_finished()).await;
+        assert_eq!(
+            {
+                let doc = lock(&doc);
+                (doc.cursor(), doc.generation())
+            },
+            before
+        );
+        assert!(*client.shutdown.borrow());
+        client.shutdown().await;
+    }
+
+    struct PendingConnector {
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl TextConnector for PendingConnector {
+        fn connect(&self) -> BoxFuture<'static, Result<TextPipe, SyncError>> {
+            let started = self.started.clone();
+            let dropped = self.dropped.clone();
+            Box::pin(async move {
+                let _guard = FetchDrop(dropped);
+                started.store(true, Ordering::Release);
+                std::future::pending().await
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn canceled_guarded_constructor_aborts_its_actor() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let connector = Arc::new(PendingConnector {
+            started: started.clone(),
+            dropped: dropped.clone(),
+        });
+        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+        let connecting = tokio::spawn({
+            let doc = doc.clone();
+            async move {
+                RegistryClient::connect_with_transport_mode(
+                    connector,
+                    doc,
+                    "device-a",
+                    RegistryTuning::default(),
+                    None,
+                    Some(admission(epoch)),
+                )
+                .await
+            }
+        });
+        wait_until(|| started.load(Ordering::Acquire)).await;
+        connecting.abort();
+        let _ = connecting.await;
+        wait_until(|| dropped.load(Ordering::Acquire)).await;
+        assert_eq!(lock(&doc).cursor(), 0);
     }
 }
 
