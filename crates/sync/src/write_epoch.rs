@@ -201,6 +201,10 @@ impl WriteEpoch {
         state.epoch == permit.epoch && matches!(state.phase, Phase::Open | Phase::Quiescing)
     }
 
+    pub(crate) fn same_coordinator(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub(crate) fn permits_flush(&self, permit: &FlushPermit<'_>) -> bool {
         if !Arc::ptr_eq(&self.inner, &permit.guard.inner) {
             return false;
