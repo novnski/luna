@@ -11,11 +11,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use zeron_proto::{
-    CommandReasonCode, CommandReceiptStatus, CrossTaskControlAction, CrossTaskControlReceipt,
-    CrossTaskControlRequest, CrossTaskListPage, CrossTaskListRequest, CrossTaskReadPage,
-    CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendReceipt, CrossTaskSendRequest,
-    CrossTaskSummary, CrossTaskWaitEvent, CrossTaskWaitRequest, CrossTaskWaitResult,
-    OmittedRuntimeTool, RuntimeContext, RuntimeDelivery, RuntimeToolDefinition,
+    CommandReasonCode, CommandReceipt, CommandReceiptStatus, CrossTaskControlAction,
+    CrossTaskControlReceipt, CrossTaskControlRequest, CrossTaskListPage, CrossTaskListRequest,
+    CrossTaskReadPage, CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendReceipt,
+    CrossTaskSendRequest, CrossTaskSummary, CrossTaskWaitEvent, CrossTaskWaitRequest,
+    CrossTaskWaitResult, OmittedRuntimeTool, RuntimeContext, RuntimeDelivery,
+    RuntimeToolDefinition, TaskCommandSnapshot,
 };
 
 const MAX_PAGE: usize = 20;
@@ -96,6 +97,8 @@ pub enum CrossTaskError {
     Unsupported,
     #[error("the backend returned an invalid or unverified result")]
     InvalidBackendResult,
+    #[error("the target task changed since the captured snapshot")]
+    StaleSnapshot,
     #[error("cross-task call was cancelled")]
     Cancelled,
     #[error("cross-task backend deadline exceeded")]
@@ -137,6 +140,25 @@ pub trait CrossTaskBackend: Send + Sync {
         &self,
         request: CrossTaskWaitRequest,
     ) -> Result<Option<CrossTaskWaitEvent>, CrossTaskError>;
+    /// Read-only evidence for a prospective control. No grant or command is
+    /// created; implementations must enforce the local authority scope.
+    async fn control_target_snapshot(
+        &self,
+        _task_id: &str,
+        _authority: &CrossTaskAuthority,
+    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+        Err(CrossTaskError::Unavailable)
+    }
+    /// None means no durable receipt was found, not that execution is known
+    /// not to have happened. No command may be replayed from this result.
+    async fn control_command_receipt(
+        &self,
+        _task_id: &str,
+        _command_id: &str,
+        _authority: &CrossTaskAuthority,
+    ) -> Result<Option<CommandReceipt>, CrossTaskError> {
+        Err(CrossTaskError::Unavailable)
+    }
     async fn control(
         &self,
         _request: CrossTaskControlRequest,
@@ -181,6 +203,23 @@ impl<T: CrossTaskBackend + ?Sized> CrossTaskBackend for Arc<T> {
     ) -> Result<Option<CrossTaskWaitEvent>, CrossTaskError> {
         (**self).wait_event(request).await
     }
+    async fn control_target_snapshot(
+        &self,
+        task_id: &str,
+        authority: &CrossTaskAuthority,
+    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+        (**self).control_target_snapshot(task_id, authority).await
+    }
+    async fn control_command_receipt(
+        &self,
+        task_id: &str,
+        command_id: &str,
+        authority: &CrossTaskAuthority,
+    ) -> Result<Option<CommandReceipt>, CrossTaskError> {
+        (**self)
+            .control_command_receipt(task_id, command_id, authority)
+            .await
+    }
     async fn control(
         &self,
         request: CrossTaskControlRequest,
@@ -198,6 +237,110 @@ pub struct CrossTaskTools<B> {
 impl<B: CrossTaskBackend> CrossTaskTools<B> {
     pub fn new(backend: B) -> Self {
         Self { backend }
+    }
+
+    /// Internal evidence only. A caller must separately obtain a trusted
+    /// per-request local UI grant before any future control dispatch.
+    #[allow(dead_code)]
+    pub(crate) async fn control_target_snapshot(
+        &self,
+        authority: &CrossTaskAuthority,
+        task_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+        self.check(authority, "threads.read", self.backend.capabilities().read)?;
+        let target = self
+            .control_evidence_target(authority, task_id, cancel)
+            .await?;
+        let snapshot = with_cancel(
+            cancel,
+            self.backend.control_target_snapshot(task_id, authority),
+        )
+        .await?;
+        if snapshot.task_id != task_id
+            || snapshot.binding_id.as_deref() == Some("")
+            || snapshot.active_turn_id.as_deref() == Some("")
+        {
+            return Err(CrossTaskError::InvalidBackendResult);
+        }
+        let after = self
+            .control_evidence_target(authority, task_id, cancel)
+            .await?;
+        if after.project_id != target.project_id || after.environment_id != target.environment_id {
+            return Err(CrossTaskError::StaleSnapshot);
+        }
+        check_output(&snapshot)?;
+        Ok(snapshot)
+    }
+
+    /// Re-read all snapshot fields, including task sequence, binding ID and
+    /// the engine turn. A changed field is stale evidence, never a new grant.
+    #[allow(dead_code)]
+    pub(crate) async fn revalidate_control_target_snapshot(
+        &self,
+        authority: &CrossTaskAuthority,
+        task_id: &str,
+        expected: &TaskCommandSnapshot,
+        cancel: &CancellationToken,
+    ) -> Result<(), CrossTaskError> {
+        if &self
+            .control_target_snapshot(authority, task_id, cancel)
+            .await?
+            != expected
+        {
+            return Err(CrossTaskError::StaleSnapshot);
+        }
+        Ok(())
+    }
+
+    /// None is an unknown/missing readback. It must never be interpreted as
+    /// proof that a previously submitted command did not execute.
+    #[allow(dead_code)]
+    pub(crate) async fn control_command_receipt(
+        &self,
+        authority: &CrossTaskAuthority,
+        task_id: &str,
+        command_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Option<CommandReceipt>, CrossTaskError> {
+        self.check(authority, "threads.read", self.backend.capabilities().read)?;
+        if !valid_key(command_id) {
+            return Err(CrossTaskError::Input);
+        }
+        let target = self
+            .control_evidence_target(authority, task_id, cancel)
+            .await?;
+        let receipt = with_cancel(
+            cancel,
+            self.backend
+                .control_command_receipt(task_id, command_id, authority),
+        )
+        .await?;
+        let after = self
+            .control_evidence_target(authority, task_id, cancel)
+            .await?;
+        if after.project_id != target.project_id || after.environment_id != target.environment_id {
+            return Err(CrossTaskError::StaleSnapshot);
+        }
+        if let Some(receipt) = &receipt {
+            if receipt.command_id != command_id
+                || receipt.task_id != task_id
+                || receipt.snapshot.task_id != task_id
+                || receipt.execution_environment.as_deref()
+                    != Some(authority.local_environment_id.as_str())
+                || receipt.client_id != "luna-cross-task"
+                || receipt.actor_id != format!("luna-tool:{}", authority.caller_task_id)
+                || receipt.client_session_id != authority.caller_task_id
+                || !matches!(
+                    receipt.intent.as_str(),
+                    "createChat" | "stop" | "setArchived" | "moveProject"
+                )
+            {
+                return Err(CrossTaskError::InvalidBackendResult);
+            }
+            check_output(receipt)?;
+        }
+        Ok(receipt)
     }
 
     /// Internal control path. A model request alone can never supply `grant`.
@@ -638,6 +781,25 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
         }
         Ok(task)
     }
+
+    async fn control_evidence_target(
+        &self,
+        authority: &CrossTaskAuthority,
+        task_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<CrossTaskSummary, CrossTaskError> {
+        if task_id == authority.caller_task_id {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let caller = self
+            .target(authority, &authority.caller_task_id, cancel)
+            .await?;
+        let target = self.target(authority, task_id, cancel).await?;
+        if caller.project_id.is_none() || target.project_id != caller.project_id {
+            return Err(CrossTaskError::TargetScope);
+        }
+        Ok(target)
+    }
 }
 
 fn visible(authority: &CrossTaskAuthority, task: &CrossTaskSummary) -> bool {
@@ -789,6 +951,8 @@ mod tests {
     #[derive(Clone, Default)]
     struct FakeBackend {
         queued: Arc<Mutex<HashMap<String, (String, CrossTaskSendReceipt)>>>,
+        snapshot: Arc<Mutex<Option<TaskCommandSnapshot>>>,
+        receipts: Arc<Mutex<HashMap<String, CommandReceipt>>>,
     }
 
     fn task(id: &str, environment: &str) -> CrossTaskSummary {
@@ -815,6 +979,39 @@ mod tests {
         }
     }
 
+    fn control_snapshot() -> TaskCommandSnapshot {
+        TaskCommandSnapshot {
+            task_id: "task-a".into(),
+            task_revision: 7,
+            task_sequence: 12,
+            binding_id: Some("binding-a".into()),
+            binding_generation: Some(2),
+            active_turn_id: Some("run-a".into()),
+        }
+    }
+
+    fn control_receipt(command_id: &str) -> CommandReceipt {
+        CommandReceipt {
+            command_id: command_id.into(),
+            task_id: "task-a".into(),
+            intent: "stop".into(),
+            payload_hash: "synthetic-hash".into(),
+            status: CommandReceiptStatus::Pending,
+            snapshot: control_snapshot(),
+            event_sequence: None,
+            actor_id: "luna-tool:caller".into(),
+            client_id: "luna-cross-task".into(),
+            client_session_id: "caller".into(),
+            execution_environment: Some("local".into()),
+            correlation_id: None,
+            reason: None,
+            recovery_action: None,
+            accepted_at_ms: 1,
+            committed_at_ms: None,
+            observed_at_ms: 1,
+        }
+    }
+
     #[async_trait]
     impl CrossTaskBackend for FakeBackend {
         fn capabilities(&self) -> CrossTaskCapabilities {
@@ -828,10 +1025,38 @@ mod tests {
 
         async fn task(&self, task_id: &str) -> Result<Option<CrossTaskSummary>, CrossTaskError> {
             Ok(match task_id {
-                "task-a" => Some(task(task_id, "local")),
+                "caller" | "task-a" => Some(task(task_id, "local")),
                 "remote-task" => Some(task(task_id, "remote")),
+                "foreign-project" => Some(CrossTaskSummary {
+                    project_id: Some("project-b".into()),
+                    ..task(task_id, "local")
+                }),
                 _ => None,
             })
+        }
+
+        async fn control_target_snapshot(
+            &self,
+            _task_id: &str,
+            _authority: &CrossTaskAuthority,
+        ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+            self.snapshot
+                .lock()
+                .await
+                .clone()
+                .ok_or(CrossTaskError::Unavailable)
+        }
+
+        async fn control_command_receipt(
+            &self,
+            _task_id: &str,
+            command_id: &str,
+            _authority: &CrossTaskAuthority,
+        ) -> Result<Option<CommandReceipt>, CrossTaskError> {
+            if command_id == "lookup-error" {
+                return Err(CrossTaskError::Backend("synthetic readback failure".into()));
+            }
+            Ok(self.receipts.lock().await.get(command_id).cloned())
         }
 
         async fn list(
@@ -913,6 +1138,154 @@ mod tests {
             _request: CrossTaskWaitRequest,
         ) -> Result<Option<CrossTaskWaitEvent>, CrossTaskError> {
             std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn control_evidence_snapshot_is_local_exact_and_revalidates_every_field() {
+        let backend = FakeBackend::default();
+        *backend.snapshot.lock().await = Some(control_snapshot());
+        let delegated: Arc<dyn CrossTaskBackend> = Arc::new(backend.clone());
+        let tools = CrossTaskTools::new(delegated);
+        let cancel = CancellationToken::new();
+        let captured = tools
+            .control_target_snapshot(&authority(), "task-a", &cancel)
+            .await
+            .unwrap();
+        assert_eq!(captured, control_snapshot());
+        tools
+            .revalidate_control_target_snapshot(&authority(), "task-a", &captured, &cancel)
+            .await
+            .unwrap();
+
+        backend
+            .snapshot
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .task_sequence += 1;
+        assert_eq!(
+            tools
+                .revalidate_control_target_snapshot(&authority(), "task-a", &captured, &cancel)
+                .await,
+            Err(CrossTaskError::StaleSnapshot)
+        );
+        for task_id in ["missing", "remote-task", "foreign-project", "caller"] {
+            assert_eq!(
+                tools
+                    .control_target_snapshot(&authority(), task_id, &cancel)
+                    .await,
+                Err(CrossTaskError::TargetScope),
+                "{task_id}"
+            );
+        }
+        *backend.snapshot.lock().await = None;
+        assert_eq!(
+            tools
+                .control_target_snapshot(&authority(), "task-a", &cancel)
+                .await,
+            Err(CrossTaskError::Unavailable)
+        );
+        *backend.snapshot.lock().await = Some(TaskCommandSnapshot {
+            task_id: "other-task".into(),
+            ..control_snapshot()
+        });
+        assert_eq!(
+            tools
+                .control_target_snapshot(&authority(), "task-a", &cancel)
+                .await,
+            Err(CrossTaskError::InvalidBackendResult)
+        );
+        let mut no_read = authority();
+        no_read.granted_scopes.remove("threads.read");
+        assert_eq!(
+            tools
+                .control_target_snapshot(&no_read, "task-a", &cancel)
+                .await,
+            Err(CrossTaskError::Scope)
+        );
+        let stopped = CancellationToken::new();
+        stopped.cancel();
+        assert_eq!(
+            tools
+                .control_target_snapshot(&authority(), "task-a", &stopped)
+                .await,
+            Err(CrossTaskError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn control_evidence_receipt_distinguishes_unknown_error_and_mismatch() {
+        let backend = FakeBackend::default();
+        let receipt = control_receipt("command-a");
+        backend
+            .receipts
+            .lock()
+            .await
+            .insert("command-a".into(), receipt.clone());
+        let delegated: Arc<dyn CrossTaskBackend> = Arc::new(backend.clone());
+        let tools = CrossTaskTools::new(delegated);
+        let cancel = CancellationToken::new();
+        assert_eq!(
+            tools
+                .control_command_receipt(&authority(), "task-a", "command-a", &cancel)
+                .await,
+            Ok(Some(receipt.clone()))
+        );
+        assert_eq!(receipt.status, CommandReceiptStatus::Pending);
+        assert_eq!(
+            tools
+                .control_command_receipt(&authority(), "task-a", "command-missing", &cancel)
+                .await,
+            Ok(None),
+            "no receipt is unknown, not proof of non-execution"
+        );
+        assert!(matches!(
+            tools
+                .control_command_receipt(&authority(), "task-a", "lookup-error", &cancel)
+                .await,
+            Err(CrossTaskError::Backend(_))
+        ));
+        for task_id in ["missing", "remote-task", "foreign-project", "caller"] {
+            assert_eq!(
+                tools
+                    .control_command_receipt(&authority(), task_id, "command-a", &cancel)
+                    .await,
+                Err(CrossTaskError::TargetScope)
+            );
+        }
+        assert_eq!(
+            tools
+                .control_command_receipt(&authority(), "task-a", "", &cancel)
+                .await,
+            Err(CrossTaskError::Input)
+        );
+        for case in 0..8 {
+            let mut mismatched = receipt.clone();
+            match case {
+                0 => mismatched.command_id = "other-command".into(),
+                1 => mismatched.task_id = "other-task".into(),
+                2 => mismatched.snapshot.task_id = "other-task".into(),
+                3 => mismatched.execution_environment = Some("remote".into()),
+                4 => mismatched.client_id = "other-client".into(),
+                5 => mismatched.actor_id = "luna-tool:other-caller".into(),
+                6 => mismatched.client_session_id = "other-caller".into(),
+                7 => mismatched.intent = "queueMessage".into(),
+                _ => unreachable!(),
+            }
+            backend
+                .receipts
+                .lock()
+                .await
+                .insert("command-a".into(), mismatched);
+            assert_eq!(
+                tools
+                    .control_command_receipt(&authority(), "task-a", "command-a", &cancel)
+                    .await,
+                Err(CrossTaskError::InvalidBackendResult),
+                "case {case}"
+            );
         }
     }
 
