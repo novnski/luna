@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use zeron_proto::{
     ActivityEnvelope, AppshotActivityKind, AppshotActivityRecord, AttentionItem, AttentionKind,
     AttentionLifecycle, AttentionMutation, AttentionTransition, AttentionTransitionKind,
@@ -404,13 +404,17 @@ impl Drop for OpenRegistration {
 /// cold starts instant and offline restarts possible) and the command ledger
 /// that gives command execution mark-BEFORE-execute idempotence.
 pub struct DocsStore {
+    // Guarded stores expose this connection only for reads. Unguarded stores
+    // retain their existing single read/write connection here.
     conn: Mutex<Connection>,
+    // Guarded snapshot saves reach this connection only after permit checks.
+    snapshot_writer: Option<Mutex<Connection>>,
     activity_gate: Mutex<()>,
     failed_publications: Mutex<HashSet<String>>,
-    // This bounded seam gates only the three save_snapshot variants. Other
-    // mutation methods remain outside the barrier.
+    // Other mutators on a guarded store fail closed on the read-only conn;
+    // they still need admitted APIs before product wiring is possible.
     write_epoch: Option<WriteEpoch>,
-    // Last field: release the process-local path reservation after conn closes.
+    // Last field: release the path reservation after both connections close.
     _registration: OpenRegistration,
 }
 
@@ -454,13 +458,23 @@ impl DocsStore {
         write_epoch: Option<WriteEpoch>,
         registration: OpenRegistration,
     ) -> Result<Self, StoreError> {
-        let mut conn = Connection::open(data_dir.join("docs.sqlite3"))?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        migrate(&mut conn)?;
+        let database = data_dir.join("docs.sqlite3");
+        let mut writer = Connection::open(&database)?;
+        writer.pragma_update(None, "journal_mode", "WAL")?;
+        writer.pragma_update(None, "synchronous", "NORMAL")?;
+        writer.busy_timeout(std::time::Duration::from_secs(5))?;
+        migrate(&mut writer)?;
+        let (conn, snapshot_writer) = if write_epoch.is_some() {
+            let reader = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            reader.busy_timeout(std::time::Duration::from_secs(5))?;
+            reader.pragma_update(None, "query_only", true)?;
+            (reader, Some(Mutex::new(writer)))
+        } else {
+            (writer, None)
+        };
         Ok(Self {
             conn: Mutex::new(conn),
+            snapshot_writer,
             activity_gate: Mutex::new(()),
             failed_publications: Mutex::new(HashSet::new()),
             write_epoch,
@@ -1281,7 +1295,7 @@ impl DocsStore {
     }
 
     fn save_snapshot_inner(&self, doc_id: &str, bytes: &[u8]) -> Result<(), StoreError> {
-        let mut conn = self.conn();
+        let mut conn = self.snapshot_write_conn();
         let tx = conn.transaction()?;
         self.persist_snapshot_changes_tx(&tx, &[(doc_id, bytes)], &[], &[])?;
         tx.commit()?;
@@ -1329,7 +1343,7 @@ impl DocsStore {
         bytes: &[u8],
         updates: &[(&str, &[u8])],
     ) -> Result<(), StoreError> {
-        let mut conn = self.conn();
+        let mut conn = self.snapshot_write_conn();
         let tx = conn.transaction()?;
         let updates = updates
             .iter()
@@ -1385,7 +1399,7 @@ impl DocsStore {
         cursor: u64,
         epoch: u32,
     ) -> Result<(), StoreError> {
-        let mut conn = self.conn();
+        let mut conn = self.snapshot_write_conn();
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO snapshots (doc_id, bytes, saved_at, cursor, epoch) VALUES (?1, ?2, ?3, ?4, ?5)
@@ -2791,6 +2805,16 @@ impl DocsStore {
         }
     }
 
+    // Call only after the public save_snapshot entry point has checked its
+    // writer/flush permit, or its unguarded legacy mode. No other mutator may
+    // use the guarded store's writable connection.
+    fn snapshot_write_conn(&self) -> MutexGuard<'_, Connection> {
+        match &self.snapshot_writer {
+            Some(writer) => writer.lock().unwrap_or_else(PoisonError::into_inner),
+            None => self.conn(),
+        }
+    }
+
     fn conn(&self) -> MutexGuard<'_, Connection> {
         // A poisoned lock only means another thread panicked mid-query; the
         // connection itself is still usable.
@@ -3381,6 +3405,14 @@ mod tests {
         AttentionSeverity, AttentionSourcePointer, AttentionTarget, HistorySearchFilters,
     };
 
+    fn is_sqlite_read_only<T>(result: Result<T, StoreError>) -> bool {
+        matches!(
+            result,
+            Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(error, _)))
+                if error.code == rusqlite::ErrorCode::ReadOnly
+        )
+    }
+
     fn activity(
         event_id: &str,
         task_id: &str,
@@ -3800,6 +3832,99 @@ mod tests {
             .save_snapshot_admitted(&second, "doc", b"second")
             .unwrap();
         assert_eq!(store.load_snapshot("doc").unwrap().unwrap(), b"second");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_default_connection_rejects_legacy_mutations_across_freeze() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("profile");
+        std::fs::create_dir(&data_dir).unwrap();
+        let initial = DocsStore::open(&data_dir).unwrap();
+        initial.save_snapshot("doc", b"seed").unwrap();
+        initial
+            .replace_activity_events("task", &[activity("event", "task", "project", 1)])
+            .unwrap();
+        drop(initial);
+
+        let coordinator = WriteEpoch::for_device_root(root.path()).unwrap();
+        let first = coordinator.try_admit().unwrap();
+        let store =
+            Arc::new(DocsStore::open_guarded(&data_dir, coordinator.clone(), &first).unwrap());
+        let peer = DocsStore::open_guarded(&data_dir, coordinator.clone(), &first).unwrap();
+        assert_eq!(peer.load_snapshot("doc").unwrap().unwrap(), b"seed");
+        assert!(is_sqlite_read_only(store.mark_processed("blocked-open")));
+        assert!(!peer.is_processed("blocked-open").unwrap());
+
+        let freezing = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.freeze(Duration::from_secs(2)).await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while coordinator.phase() != Phase::Quiescing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let start = Arc::new(Barrier::new(4));
+        let (results_tx, results_rx) = mpsc::channel();
+        let mut workers = Vec::new();
+        for operation in 0..3 {
+            let store = store.clone();
+            let start = start.clone();
+            let results_tx = results_tx.clone();
+            workers.push(thread::spawn(move || {
+                start.wait();
+                let denied = match operation {
+                    0 => is_sqlite_read_only(store.mark_processed("blocked-drain")),
+                    1 => is_sqlite_read_only(store.delete_snapshot("doc")),
+                    _ => is_sqlite_read_only(store.replace_activity_events("task", &[])),
+                };
+                results_tx.send(denied).unwrap();
+            }));
+        }
+        start.wait();
+        for _ in 0..3 {
+            assert!(results_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert!(!peer.is_processed("blocked-drain").unwrap());
+        assert_eq!(peer.load_snapshot("doc").unwrap().unwrap(), b"seed");
+        assert_eq!(peer.activity_task_ids().unwrap(), ["task"]);
+
+        store
+            .save_snapshot_admitted(&first, "doc", b"writer-A")
+            .unwrap();
+        assert_eq!(peer.load_snapshot("doc").unwrap().unwrap(), b"writer-A");
+        drop(first);
+        let flush = freezing.await.unwrap().unwrap();
+        store
+            .save_snapshot_flushing(&flush.permit(), "doc", b"flushed")
+            .unwrap();
+        let snapshot = flush.into_snapshot().unwrap();
+        assert_eq!(peer.load_snapshot("doc").unwrap().unwrap(), b"flushed");
+        assert!(is_sqlite_read_only(peer.mark_processed("blocked-snapshot")));
+        drop(snapshot);
+
+        let second = coordinator.try_admit().unwrap();
+        assert_eq!(second.epoch(), 2);
+        store
+            .save_snapshot_admitted(&second, "doc", b"writer-B")
+            .unwrap();
+        assert_eq!(peer.load_snapshot("doc").unwrap().unwrap(), b"writer-B");
+        drop(second);
+        drop(peer);
+        drop(store);
+
+        let ordinary = DocsStore::open(&data_dir).unwrap();
+        assert!(ordinary.mark_processed("ordinary").unwrap());
+        ordinary.delete_snapshot("doc").unwrap();
+        ordinary.replace_activity_events("task", &[]).unwrap();
+        assert_eq!(ordinary.load_snapshot("doc").unwrap(), None);
+        assert!(ordinary.activity_task_ids().unwrap().is_empty());
     }
 
     #[test]
