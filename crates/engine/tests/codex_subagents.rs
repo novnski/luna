@@ -6,20 +6,66 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
-use zeron_engine::{EngineCore, EngineProfile, HarnessRegistry};
+use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_harness::CodexHarness;
 use zeron_proto::{HarnessId, RunRequest, SandboxLevel, SessionStatus};
 
 const CHAT: &str = "codex-subagents";
 
-fn assemble(dir: &Path) -> (EngineCore, EngineProfile) {
+fn assemble(dir: &Path, replay_kind: Option<&str>) -> (EngineCore, EngineProfile) {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../harness/tests/fixtures/fake-codex.sh");
-    let registry = Arc::new(HarnessRegistry::new());
-    registry.register(Arc::new(CodexHarness::new().with_executable(fixture)));
-    let profile = EngineProfile::development(dir, "test-org", "test-user");
-    let core = EngineCore::assemble_with_profile(profile.clone(), registry, HarnessId::Codex, None)
+    let executable = if let Some(kind @ ("v1" | "v2")) = replay_kind {
+        // This test's fake first turn acknowledges `th-1`. Keep that real
+        // binding for LUNA's resume-contract guard, while replaying the
+        // fixture's v1/v2 child list from the same shared fake server.
+        let wrapper = dir.join("fake-codex-resume.sh");
+        let quoted_fixture = format!("'{}'", fixture.to_string_lossy().replace('\'', "'\\''"));
+        let script = r#"#!/bin/sh
+{
+    while IFS= read -r line; do
+        case "$line" in
+            *'"method":"thread/resume"'*)
+                line=$(printf '%s\n' "$line" | sed 's/"threadId":"th-1"/"threadId":"resume-with-child-__KIND__"/')
+                ;;
+        esac
+        printf '%s\n' "$line"
+    done
+} | __FIXTURE__ "$@"
+"#;
+        std::fs::write(
+            &wrapper,
+            script
+                .replace("__KIND__", kind)
+                .replace("__FIXTURE__", &quoted_fixture),
+        )
         .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::metadata(&fixture).unwrap().permissions())
+            .unwrap();
+        wrapper
+    } else {
+        assert!(replay_kind.is_none());
+        fixture
+    };
+    let registry = Arc::new(HarnessRegistry::new());
+    registry.register(Arc::new(CodexHarness::new().with_executable(executable)));
+    let profile = EngineProfile::development(dir, "test-org", "test-user");
+    let accounts = AgentAccountsConfig {
+        data_dir: dir.join("synthetic-provider-state"),
+        claude_config_dir: dir.join("synthetic-claude"),
+        claude_config_file: dir.join("synthetic-claude.json"),
+        codex_home: dir.join("synthetic-codex"),
+        cursor_sdk_auth_file: dir.join("synthetic-cursor-auth.json"),
+    };
+    accounts.disable_claude_keychain_fallback().unwrap();
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        profile.clone(),
+        registry,
+        HarnessId::Codex,
+        None,
+        accounts,
+    )
+    .unwrap();
     (core, profile)
 }
 
@@ -51,7 +97,12 @@ async fn check_persistence(
     alpha_users: &str,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let (core, profile) = assemble(dir.path());
+    let replay_kind = if scenario.starts_with("v1") {
+        "v1"
+    } else {
+        "v2"
+    };
+    let (core, profile) = assemble(dir.path(), Some(replay_kind));
     let request = RunRequest {
         prompt: format!("scenario:{scenario}"),
         harness: None,
@@ -177,19 +228,14 @@ async fn check_persistence(
         .query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
     assert_eq!(ids, [alpha_doc.clone(), beta_doc.clone()]);
     drop(db);
-    let (reopened, _) = assemble(dir.path());
+    let (reopened, _) = assemble(dir.path(), Some(replay_kind));
     assert_eq!(entries(&reopened, &alpha_doc), alpha);
     assert_eq!(entries(&reopened, &beta_doc), beta);
     let mut request = request;
     request.prompt = "scenario:resumed-child".into();
-    request.resume = Some(
-        if scenario.starts_with("v1") {
-            "resume-with-child-v1"
-        } else {
-            "resume-with-child-v2"
-        }
-        .into(),
-    );
+    // Resume the ID acknowledged by the fake provider's first thread/start.
+    // An invented ID has no persisted LUNA tool contract and must fail closed.
+    request.resume = Some("th-1".into());
     reopened
         .sessions
         .dispatch(
@@ -260,7 +306,7 @@ async fn v2_followup_appends_to_the_original_document_and_updates_the_original_c
 #[tokio::test(flavor = "multi_thread")]
 async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
     let dir = tempfile::tempdir().unwrap();
-    let (core, _profile) = assemble(dir.path());
+    let (core, _profile) = assemble(dir.path(), None);
     let request = RunRequest {
         prompt: "scenario:child-unobserved".into(),
         harness: None,
