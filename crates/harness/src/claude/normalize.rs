@@ -4,7 +4,35 @@
 use serde_json::Value;
 use zeron_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, ToolCall};
 
-use super::wire::{ContentBlock, Frame};
+use super::wire::{ContentBlock, Frame, InitIntegrationObservation};
+
+const MAX_OBSERVED_SESSION_ID_BYTES: usize = 256;
+const MAX_OBSERVED_CWD_BYTES: usize = 2_048;
+
+/// Private, one-shot observation from the first init of one run. Names and
+/// status words are not inventory attachment, health, callability or grants.
+#[allow(dead_code)] // No product consumer until source ownership can be mapped.
+struct SessionIntegrationReceipt {
+    session_id: String,
+    cwd: String,
+    observed: InitIntegrationObservation,
+}
+
+fn bounded_observation_identity(session_id: &str, cwd: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.trim() == session_id
+        && session_id.len() <= MAX_OBSERVED_SESSION_ID_BYTES
+        && !session_id.chars().any(char::is_control)
+        && !cwd.trim().is_empty()
+        && cwd.len() <= MAX_OBSERVED_CWD_BYTES
+        && !cwd.chars().any(char::is_control)
+}
+
+fn has_observed_names(observed: &InitIntegrationObservation) -> bool {
+    !observed.mcp_servers.is_empty()
+        || !observed.skill_names.is_empty()
+        || !observed.tool_names.is_empty()
+}
 
 /// Human-readable text for the CLI's assistant-level error codes. These arrive
 /// as a terse `error` field on an `assistant` frame — usually with NO text
@@ -185,6 +213,7 @@ fn is_synthetic_user_text(text: &str) -> bool {
 /// resume turns them into the done→Working→done wake.
 pub(crate) struct Normalizer {
     saw_init: bool,
+    init_integration_receipt: Option<SessionIntegrationReceipt>,
     last_model: Option<String>,
     /// Background-agent ids (`task_started.task_id`) → the spawning Agent
     /// tool_use id. `SendMessage` steers address the AGENT id; this map
@@ -210,6 +239,7 @@ impl Normalizer {
     pub fn new() -> Self {
         Self {
             saw_init: false,
+            init_integration_receipt: None,
             last_model: None,
             agent_tasks: std::collections::HashMap::new(),
             agent_spawn_tools: std::collections::HashSet::new(),
@@ -223,6 +253,13 @@ impl Normalizer {
     pub fn rotate_for_steer(&mut self) -> (String, String) {
         let prev = std::mem::replace(&mut self.assistant_message_id, new_message_id());
         (prev, self.assistant_message_id.clone())
+    }
+
+    /// Internal readback only. Taking it removes the observation from this
+    /// per-run normalizer; no event, journal entry or UI surface is created.
+    #[allow(dead_code)] // Reserved for a future owner-mapped read-only consumer.
+    fn take_init_integration_receipt(&mut self) -> Option<SessionIntegrationReceipt> {
+        self.init_integration_receipt.take()
     }
 
     /// Normalize one stdout frame into 0+ unified events. `interrupted` folds
@@ -251,9 +288,7 @@ impl Normalizer {
                         return Vec::new();
                     }
                     let status = match f.status.as_deref().unwrap_or("") {
-                        "completed" | "complete" | "succeeded" | "success" => {
-                            DoneStatus::Completed
-                        }
+                        "completed" | "complete" | "succeeded" | "success" => DoneStatus::Completed,
                         "failed" | "errored" | "error" => DoneStatus::Errored,
                         "killed" | "cancelled" | "canceled" | "stopped" | "interrupted" => {
                             DoneStatus::Interrupted
@@ -290,6 +325,16 @@ impl Normalizer {
                 }
                 self.saw_init = true;
                 self.session_id = Some(f.session_id.clone());
+                if bounded_observation_identity(&f.session_id, &f.cwd)
+                    && let Some(observed) = f.integration_observation
+                    && has_observed_names(&observed)
+                {
+                    self.init_integration_receipt = Some(SessionIntegrationReceipt {
+                        session_id: f.session_id.clone(),
+                        cwd: f.cwd.clone(),
+                        observed,
+                    });
+                }
                 vec![AgentEvent::SessionStarted {
                     harness: HarnessId::ClaudeCode,
                     model: f.model,
@@ -413,12 +458,14 @@ impl Normalizer {
                             .flatten()
                             .and_then(Value::as_str)
                             .filter(|p| !p.trim().is_empty())
-                            .map(|prompt| tag(
-                                &b.id,
-                                AgentEvent::UserMessage {
-                                    text: prompt.to_owned(),
-                                },
-                            ));
+                            .map(|prompt| {
+                                tag(
+                                    &b.id,
+                                    AgentEvent::UserMessage {
+                                        text: prompt.to_owned(),
+                                    },
+                                )
+                            });
                         // A SendMessage steer never echoes on the child feed
                         // (live-verified) — surface it from the parent's own
                         // call, re-keyed onto the spawn it addresses.
@@ -841,8 +888,7 @@ mod tests {
         ] {
             let ev = normalize_one(frame);
             assert!(
-                !ev.iter()
-                    .any(|e| matches!(e, AgentEvent::Subagent { .. })),
+                !ev.iter().any(|e| matches!(e, AgentEvent::Subagent { .. })),
                 "{frame}: {ev:?}"
             );
         }
@@ -1018,10 +1064,12 @@ mod tests {
             r#"{"type":"system","subtype":"task_notification","tool_use_id":"toolu_agent","status":"running"}"#,
         )
         .is_empty());
-        assert!(normalize_one(
-            r#"{"type":"system","subtype":"task_notification","status":"completed"}"#,
-        )
-        .is_empty());
+        assert!(
+            normalize_one(
+                r#"{"type":"system","subtype":"task_notification","status":"completed"}"#,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1095,6 +1143,149 @@ mod tests {
             ),
             "wake turn settles with its own Done"
         );
+    }
+
+    #[test]
+    fn first_init_receipt_matches_session_and_can_be_taken_once() {
+        let raw = json!({
+            "type": "system", "subtype": "init", "model": "synthetic-model",
+            "cwd": "/synthetic-project", "session_id": "synthetic-session",
+            "tools": ["Bash", "mcp__demo__read"],
+            "skills": ["review"],
+            "mcp_servers": [{
+                "name": "Demo", "status": "connected",
+                "auth": {"token": "SECRET_TOKEN_SENTINEL"}
+            }],
+            "credentials": "SECRET_CREDENTIAL_SENTINEL"
+        });
+        let mut norm = Normalizer::new();
+        assert!(norm.take_init_integration_receipt().is_none());
+        let events = norm.normalize(
+            crate::claude::wire::parse_frame(&raw.to_string()).unwrap(),
+            false,
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [AgentEvent::SessionStarted { session_id, cwd, tools, .. }]
+                if session_id == "synthetic-session"
+                    && cwd == "/synthetic-project"
+                    && tools == &["Bash", "mcp__demo__read"]
+        ));
+        let receipt = norm.take_init_integration_receipt().unwrap();
+        assert_eq!(receipt.session_id, "synthetic-session");
+        assert_eq!(receipt.cwd, "/synthetic-project");
+        assert_eq!(receipt.observed.skill_names, ["review"]);
+        assert_eq!(receipt.observed.tool_names, ["Bash", "mcp__demo__read"]);
+        assert_eq!(receipt.observed.mcp_servers.len(), 1);
+        assert_eq!(receipt.observed.mcp_servers[0].name, "Demo");
+        assert_eq!(
+            receipt.observed.mcp_servers[0].status,
+            crate::claude::wire::ObservedMcpStatus::Connected
+        );
+        let readback = format!("{:?}", receipt.observed);
+        assert!(!readback.contains("SECRET_TOKEN_SENTINEL"));
+        assert!(!readback.contains("SECRET_CREDENTIAL_SENTINEL"));
+        assert!(norm.take_init_integration_receipt().is_none());
+    }
+
+    #[test]
+    fn duplicate_init_cannot_replace_or_reissue_first_receipt() {
+        let mut norm = Normalizer::new();
+        let first = json!({
+            "type": "system", "subtype": "init", "session_id": "first-session",
+            "cwd": "/first", "skills": ["first"]
+        });
+        let duplicate = json!({
+            "type": "system", "subtype": "init", "session_id": "other-session",
+            "cwd": "/other", "skills": ["other"]
+        });
+        assert_eq!(
+            norm.normalize(
+                crate::claude::wire::parse_frame(&first.to_string()).unwrap(),
+                false
+            )
+            .len(),
+            1
+        );
+        assert!(
+            norm.normalize(
+                crate::claude::wire::parse_frame(&duplicate.to_string()).unwrap(),
+                false
+            )
+            .is_empty()
+        );
+        let receipt = norm.take_init_integration_receipt().unwrap();
+        assert_eq!(receipt.session_id, "first-session");
+        assert_eq!(receipt.cwd, "/first");
+        assert_eq!(receipt.observed.skill_names, ["first"]);
+        assert!(norm.take_init_integration_receipt().is_none());
+    }
+
+    #[test]
+    fn missing_or_oversized_session_identity_keeps_start_event_without_receipt() {
+        for (session_id, cwd) in [
+            (String::new(), "/synthetic".into()),
+            (
+                "s".repeat(MAX_OBSERVED_SESSION_ID_BYTES + 1),
+                "/synthetic".into(),
+            ),
+            ("bad\nsession".into(), "/synthetic".into()),
+            ("synthetic-session".into(), String::new()),
+            (
+                "synthetic-session".into(),
+                "x".repeat(MAX_OBSERVED_CWD_BYTES + 1),
+            ),
+            ("synthetic-session".into(), "/bad\nproject".into()),
+        ] {
+            let raw = json!({
+                "type": "system", "subtype": "init", "session_id": session_id,
+                "cwd": cwd, "skills": ["review"]
+            });
+            let mut norm = Normalizer::new();
+            assert!(matches!(
+                norm.normalize(
+                    crate::claude::wire::parse_frame(&raw.to_string()).unwrap(),
+                    false
+                )
+                .as_slice(),
+                [AgentEvent::SessionStarted { .. }]
+            ));
+            assert!(norm.take_init_integration_receipt().is_none());
+        }
+    }
+
+    #[test]
+    fn rejected_or_empty_wire_observation_creates_no_receipt() {
+        let oversized_skills = (0..129)
+            .map(|index| format!("skill{index}"))
+            .collect::<Vec<_>>();
+        for raw in [
+            json!({
+                "type": "system", "subtype": "init", "session_id": "s",
+                "cwd": "/synthetic", "skills": {"name": "malformed"},
+                "mcp_servers": [{"name": "Future", "status": "unknown"}]
+            }),
+            json!({
+                "type": "system", "subtype": "init", "session_id": "s",
+                "cwd": "/synthetic", "skills": oversized_skills,
+                "mcp_servers": [{"name": "too/odd", "status": "connected"}]
+            }),
+            json!({
+                "type": "system", "subtype": "init", "session_id": "s",
+                "cwd": "/synthetic"
+            }),
+        ] {
+            let mut norm = Normalizer::new();
+            assert_eq!(
+                norm.normalize(
+                    crate::claude::wire::parse_frame(&raw.to_string()).unwrap(),
+                    false
+                )
+                .len(),
+                1
+            );
+            assert!(norm.take_init_integration_receipt().is_none());
+        }
     }
 
     #[test]
