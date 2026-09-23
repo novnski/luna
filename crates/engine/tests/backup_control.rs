@@ -359,12 +359,13 @@ async fn ordinary_unmarked_fixture_root_has_no_backup_control_or_vault_probe() {
         codex_home: temp.path().join("synthetic-codex"),
         cursor_sdk_auth_file: temp.path().join("synthetic-cursor-auth.json"),
     };
+    accounts.disable_claude_keychain_fallback().unwrap();
     let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
         EngineProfile::development(&owner, "fixture-org", "fixture-user"),
         Arc::new(HarnessRegistry::new()),
         HarnessId::Mock,
         None,
-        accounts,
+        accounts.clone(),
     )
     .unwrap();
     let client = memory_client(core.rpc_service());
@@ -401,4 +402,17 @@ async fn ordinary_unmarked_fixture_root_has_no_backup_control_or_vault_probe() {
         receipt.archive.display().to_string()
     );
     assert!(after.automatic_enabled);
+    drop(client);
+    let restored = BackupService::restore_managed_offline(&owner, &receipt.archive).unwrap();
+    assert!(restored.restored_entries > 0);
+    let reopened =
+        EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+            EngineProfile::development(&owner, "fixture-org", "fixture-user"),
+            Arc::new(HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+            accounts,
+        )
+        .unwrap();
+    assert!(reopened.shutdown().await);
 }
