@@ -25,6 +25,7 @@ pub mod change_requests;
 pub mod chat2_host;
 pub mod context_controls;
 pub mod credentials;
+pub mod cross_task_tools;
 pub mod diff_sync;
 pub mod doc_host;
 pub mod git_actions;
