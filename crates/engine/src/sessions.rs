@@ -329,6 +329,10 @@ struct RunHandle {
     /// This is separate from `active_turn_id()`, which intentionally returns
     /// the engine run ID for the existing command fence.
     provider_turn: Option<ProviderTurnFence>,
+    /// The binding durably published for this provider run's SessionStarted.
+    /// A warm steer may reuse it, but never adopt a changed generation.
+    run_provider_binding: Option<ProviderBindingKey>,
+    provider_turn_readiness: watch::Sender<ProviderTurnReadiness>,
     steerable: bool,
     runtime_config: RuntimeConfig,
     steer_tx: mpsc::Sender<SteerMessage>,
@@ -368,7 +372,78 @@ struct ProviderTurnFence {
     claimed_call_ids: HashSet<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderTurnReadiness {
+    AwaitingBinding,
+    AwaitingCheckpoint,
+    Ready,
+    Unavailable,
+    Ended,
+}
+
 impl RunHandle {
+    fn set_provider_turn_readiness(&self, next: ProviderTurnReadiness) {
+        if *self.provider_turn_readiness.borrow() != next {
+            self.provider_turn_readiness.send_replace(next);
+        }
+    }
+
+    fn observe_codex_binding(
+        &mut self,
+        task_id: &str,
+        run_id: &str,
+        provider_thread_id: &str,
+        binding: Option<&ProviderBindingKey>,
+    ) -> bool {
+        if self.run_id != run_id {
+            return false;
+        }
+        let ready = binding.is_some_and(|binding| {
+            self.runtime_config.harness_id == HarnessId::Codex
+                && !self.interrupt_token.is_cancelled()
+                && !*self.cancel.subscribe().borrow()
+                && binding.task_id == task_id
+                && !binding.binding_id.is_empty()
+                && !provider_thread_id.is_empty()
+                && binding.provider_thread_id == provider_thread_id
+        });
+        self.provider_turn = None;
+        self.run_provider_binding = if ready { binding.cloned() } else { None };
+        self.set_provider_turn_readiness(if ready {
+            ProviderTurnReadiness::AwaitingCheckpoint
+        } else {
+            ProviderTurnReadiness::Unavailable
+        });
+        ready
+    }
+
+    fn rearm_codex_checkpoint(
+        &mut self,
+        task_id: &str,
+        run_id: &str,
+        provider_thread_id: Option<&str>,
+        binding: Option<&ProviderBindingKey>,
+    ) -> bool {
+        if self.run_id != run_id {
+            return false;
+        }
+        let ready = self.runtime_config.harness_id == HarnessId::Codex
+            && !self.interrupt_token.is_cancelled()
+            && !*self.cancel.subscribe().borrow()
+            && binding.is_some_and(|binding| {
+                self.run_provider_binding.as_ref() == Some(binding)
+                    && binding.task_id == task_id
+                    && provider_thread_id == Some(binding.provider_thread_id.as_str())
+            });
+        self.provider_turn = None;
+        self.set_provider_turn_readiness(if ready {
+            ProviderTurnReadiness::AwaitingCheckpoint
+        } else {
+            ProviderTurnReadiness::Unavailable
+        });
+        ready
+    }
+
     fn observe_codex_checkpoint(
         &mut self,
         task_id: &str,
@@ -381,9 +456,13 @@ impl RunHandle {
             return false;
         }
         let Some(binding) = binding.filter(|binding| {
-            self.runtime_config.harness_id == HarnessId::Codex
+            matches!(
+                *self.provider_turn_readiness.borrow(),
+                ProviderTurnReadiness::AwaitingCheckpoint | ProviderTurnReadiness::Ready
+            ) && self.runtime_config.harness_id == HarnessId::Codex
                 && !self.interrupt_token.is_cancelled()
                 && !*self.cancel.subscribe().borrow()
+                && self.run_provider_binding.as_ref() == Some(binding)
                 && binding.task_id == task_id
                 && !binding.binding_id.is_empty()
                 && !binding.provider_thread_id.is_empty()
@@ -391,6 +470,7 @@ impl RunHandle {
                 && !provider_turn_id.is_empty()
         }) else {
             self.provider_turn = None;
+            self.set_provider_turn_readiness(ProviderTurnReadiness::Unavailable);
             return false;
         };
         if self.provider_turn.as_ref().is_some_and(|turn| {
@@ -407,6 +487,7 @@ impl RunHandle {
             provider_turn_id: provider_turn_id.to_owned(),
             claimed_call_ids: HashSet::new(),
         });
+        self.set_provider_turn_readiness(ProviderTurnReadiness::Ready);
         true
     }
 
@@ -425,6 +506,7 @@ impl RunHandle {
             || self.runtime_config.harness_id != HarnessId::Codex
             || self.interrupt_token.is_cancelled()
             || *self.cancel.subscribe().borrow()
+            || *self.provider_turn_readiness.borrow() != ProviderTurnReadiness::Ready
             || provider_call_id.is_empty()
             || provider_call_id.len() > MAX_CALL_ID_BYTES
         {
@@ -438,6 +520,7 @@ impl RunHandle {
         };
         turn.run_id == run_id
             && turn.binding.task_id == task_id
+            && self.run_provider_binding.as_ref() == Some(binding)
             && turn.binding == *binding
             && turn.binding.provider_thread_id == provider_thread_id
             && turn.provider_turn_id == provider_turn_id
@@ -685,27 +768,109 @@ impl SessionsEngine {
             .map(|run| run.run_id.clone())
     }
 
-    /// Reserve one adapter-validated provider call for a future LUNA approval
-    /// proposal. The adapter context is evidence only; this never grants a
-    /// cross-task action. No production mutating caller is attached yet.
+    /// Await this run's engine-observed binding and checkpoint, then reserve
+    /// one adapter-validated call for a future LUNA approval proposal. This
+    /// context is evidence only, never a user grant or a tool dispatch.
     #[allow(dead_code)]
-    fn claim_luna_provider_invocation(
+    async fn wait_and_claim_luna_provider_invocation(
         &self,
         chat_id: &str,
         run_id: &str,
         context: &zeron_harness::LunaToolInvocationContext,
+        deadline: tokio::time::Instant,
+    ) -> bool {
+        self.wait_and_claim_luna_provider_call(
+            chat_id,
+            run_id,
+            context.provider_thread_id(),
+            context.provider_turn_id(),
+            context.provider_call_id(),
+            deadline,
+        )
+        .await
+    }
+
+    /// Raw IDs stay private to this engine seam for hermetic tests. Production
+    /// callers must use the typed adapter context above, not model arguments.
+    async fn wait_and_claim_luna_provider_call(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        provider_thread_id: &str,
+        provider_turn_id: &str,
+        provider_call_id: &str,
+        caller_deadline: tokio::time::Instant,
+    ) -> bool {
+        const MAX_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+        let deadline = caller_deadline.min(tokio::time::Instant::now() + MAX_WAIT);
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        let (mut readiness, mut cancel, interrupt) = {
+            let runs = lock(&self.inner.runs);
+            let Some(run) = runs.get(chat_id).filter(|run| run.run_id == run_id) else {
+                return false;
+            };
+            (
+                run.provider_turn_readiness.subscribe(),
+                run.cancel.subscribe(),
+                run.interrupt_token.clone(),
+            )
+        };
+        loop {
+            if tokio::time::Instant::now() >= deadline
+                || interrupt.is_cancelled()
+                || *cancel.borrow()
+            {
+                return false;
+            }
+            let state = *readiness.borrow_and_update();
+            match state {
+                ProviderTurnReadiness::Ready => {
+                    return self.claim_luna_provider_call(
+                        chat_id,
+                        run_id,
+                        provider_thread_id,
+                        provider_turn_id,
+                        provider_call_id,
+                    );
+                }
+                ProviderTurnReadiness::Unavailable | ProviderTurnReadiness::Ended => return false,
+                ProviderTurnReadiness::AwaitingBinding
+                | ProviderTurnReadiness::AwaitingCheckpoint => {}
+            }
+            tokio::select! {
+                biased;
+                _ = interrupt.cancelled() => return false,
+                changed = cancel.changed() => if changed.is_err() { return false; },
+                changed = readiness.changed() => if changed.is_err() { return false; },
+                _ = tokio::time::sleep_until(deadline) => return false,
+            }
+        }
+    }
+
+    fn claim_luna_provider_call(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        provider_thread_id: &str,
+        provider_turn_id: &str,
+        provider_call_id: &str,
     ) -> bool {
         let binding = self.inner.current_codex_binding_key(chat_id);
-        lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
+        let claimed = lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
             run.claim_codex_invocation(
                 chat_id,
                 run_id,
                 binding.as_ref(),
-                context.provider_thread_id(),
-                context.provider_turn_id(),
-                context.provider_call_id(),
+                provider_thread_id,
+                provider_turn_id,
+                provider_call_id,
             )
-        })
+        });
+        // A binding may advance between the first lookup and the run lock.
+        // Consuming that call ID and failing closed is safer than granting it.
+        claimed && self.inner.current_codex_binding_key(chat_id) == binding
     }
 
     pub fn task_binding_generation(&self, chat_id: &str) -> Option<u32> {
@@ -1642,6 +1807,11 @@ impl SessionsEngine {
             RunHandle {
                 run_id: run_id.clone(),
                 provider_turn: None,
+                run_provider_binding: None,
+                provider_turn_readiness: tokio::sync::watch::channel(
+                    ProviderTurnReadiness::AwaitingBinding,
+                )
+                .0,
                 steerable: harness.supports_steering(),
                 runtime_config: RuntimeConfig::from_request(harness_id, &request),
                 steer_tx,
@@ -1807,6 +1977,7 @@ impl SessionsEngine {
     ) -> Result<bool, EngineError> {
         let target = lock(&self.inner.runs).get_mut(chat_id).map(|h| {
             h.provider_turn = None;
+            h.set_provider_turn_readiness(ProviderTurnReadiness::Ended);
             (
                 h.run_id.clone(),
                 h.interrupt_token.clone(),
@@ -3482,12 +3653,58 @@ impl Inner {
         })
     }
 
+    fn observe_codex_binding(&self, chat_id: &str, run_id: &str, provider_thread_id: &str) -> bool {
+        let binding = self.current_codex_binding_key(chat_id);
+        lock(&self.runs).get_mut(chat_id).is_some_and(|run| {
+            run.observe_codex_binding(chat_id, run_id, provider_thread_id, binding.as_ref())
+        })
+    }
+
+    fn reset_codex_checkpoint(&self, chat_id: &str, run_id: &str) {
+        if let Some(run) = lock(&self.runs)
+            .get_mut(chat_id)
+            .filter(|run| run.run_id == run_id)
+        {
+            run.provider_turn = None;
+            run.run_provider_binding = None;
+            run.set_provider_turn_readiness(ProviderTurnReadiness::AwaitingBinding);
+        }
+    }
+
+    fn rearm_codex_checkpoint_after_done(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        provider_thread_id: Option<&str>,
+    ) {
+        let binding = self.current_codex_binding_key(chat_id);
+        if let Some(run) = lock(&self.runs)
+            .get_mut(chat_id)
+            .filter(|run| run.run_id == run_id)
+            && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ended
+        {
+            run.rearm_codex_checkpoint(chat_id, run_id, provider_thread_id, binding.as_ref());
+        }
+    }
+
     fn clear_codex_checkpoint(&self, chat_id: &str, run_id: &str) {
         if let Some(run) = lock(&self.runs)
             .get_mut(chat_id)
             .filter(|run| run.run_id == run_id)
         {
             run.provider_turn = None;
+            run.set_provider_turn_readiness(ProviderTurnReadiness::Ended);
+        }
+    }
+
+    fn fail_codex_checkpoint(&self, chat_id: &str, run_id: &str) {
+        if let Some(run) = lock(&self.runs)
+            .get_mut(chat_id)
+            .filter(|run| run.run_id == run_id)
+        {
+            run.provider_turn = None;
+            run.run_provider_binding = None;
+            run.set_provider_turn_readiness(ProviderTurnReadiness::Unavailable);
         }
     }
 }
@@ -3935,6 +4152,7 @@ fn stop_after_journal_failure(
             .filter(|handle| handle.run_id == run_id)
             .map(|handle| {
                 handle.provider_turn = None;
+                handle.set_provider_turn_readiness(ProviderTurnReadiness::Ended);
                 let steers = lock(&handle.routed_steers).drain(..).collect::<Vec<_>>();
                 (
                     handle.interrupt_token.clone(),
@@ -4870,6 +5088,13 @@ async fn drive_run(
             ..
         } = &event
         {
+            if harness_id == HarnessId::Codex {
+                inner.rearm_codex_checkpoint_after_done(
+                    &chat_id,
+                    &run_id,
+                    recovery_session_id.as_deref(),
+                );
+            }
             if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
                 journal_failure = Some(error);
                 break SessionStatus::Errored;
@@ -5005,7 +5230,7 @@ async fn drive_run(
             AgentEvent::SessionStarted {
                 session_id, cwd, ..
             } => {
-                inner.clear_codex_checkpoint(&chat_id, &run_id);
+                inner.reset_codex_checkpoint(&chat_id, &run_id);
                 saw_session_started = true;
                 recovery_session_id = Some(session_id.clone());
                 let engine = SessionsEngine {
@@ -5042,6 +5267,7 @@ async fn drive_run(
                     && let Err(error) =
                         task_identity.record_session_binding(&chat_id, harness_id, session_id, cwd)
                 {
+                    inner.fail_codex_checkpoint(&chat_id, &run_id);
                     // Binding conflicts are terminal. Publishing SessionStarted
                     // without its durable mapping would make an unowned native
                     // thread look resumable, so fail before that event escapes.
@@ -5098,6 +5324,9 @@ async fn drive_run(
                         tracing::warn!(chat = %chat_id, %recovery_error, "binding-failure recovery persistence failed");
                     }
                     return;
+                }
+                if harness_id == HarnessId::Codex {
+                    inner.observe_codex_binding(&chat_id, &run_id, session_id);
                 }
                 if let Some(contract) = runtime_contract.as_ref() {
                     let mut receipt = contract.diagnostics(session_id);
@@ -5501,9 +5730,9 @@ async fn drive_run(
 mod tests {
     use super::{
         LunaApprovalOutcome, LunaSyntheticArchiveGrant, LunaSyntheticArchiveProposal, PendingInput,
-        PendingInputKind, PendingInputs, ProviderBindingKey, RunHandle, RunResumeState,
-        RuntimeConfig, SessionsEngine, approval_answer, expire_pending_approval, lock,
-        reduce_provider_context_compaction, reduce_provider_context_terminal,
+        PendingInputKind, PendingInputs, ProviderBindingKey, ProviderTurnReadiness, RunHandle,
+        RunResumeState, RuntimeConfig, SessionsEngine, approval_answer, expire_pending_approval,
+        lock, reduce_provider_context_compaction, reduce_provider_context_terminal,
         stop_after_journal_failure, subagent_doc_id, take_pending_ordinary_input,
     };
     use futures::StreamExt as _;
@@ -6229,6 +6458,11 @@ mod tests {
             RunHandle {
                 run_id: "run-a".into(),
                 provider_turn: None,
+                run_provider_binding: None,
+                provider_turn_readiness: tokio::sync::watch::channel(
+                    ProviderTurnReadiness::AwaitingBinding,
+                )
+                .0,
                 steerable: false,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
                 steer_tx,
@@ -6330,6 +6564,11 @@ mod tests {
             RunHandle {
                 run_id: "run-a".into(),
                 provider_turn: None,
+                run_provider_binding: None,
+                provider_turn_readiness: tokio::sync::watch::channel(
+                    ProviderTurnReadiness::AwaitingBinding,
+                )
+                .0,
                 steerable: false,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
                 steer_tx,
@@ -6351,6 +6590,103 @@ mod tests {
             generation: 1,
             provider_thread_id: "provider-thread-a".into(),
         }
+    }
+
+    fn managed_codex_wait_fixture() -> (tempfile::TempDir, crate::EngineCore, String) {
+        let root = tempfile::tempdir().unwrap();
+        let accounts = crate::agent_accounts::AgentAccountsConfig {
+            data_dir: root.path().join("synthetic-provider-state"),
+            claude_config_dir: root.path().join("synthetic-claude"),
+            claude_config_file: root.path().join("synthetic-claude.json"),
+            codex_home: root.path().join("synthetic-codex"),
+            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
+        };
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let core = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+            crate::EngineProfile::development(
+                &root.path().join("synthetic-engine"),
+                "synthetic-org",
+                "synthetic-user",
+            ),
+            Arc::new(crate::registry::HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+            accounts,
+        )
+        .unwrap();
+        let project_path = root.path().join("project-a");
+        std::fs::create_dir_all(&project_path).unwrap();
+        core.workspace
+            .create_space(
+                "project-a",
+                &core.device_id,
+                &project_path.display().to_string(),
+                None,
+                false,
+            )
+            .unwrap();
+        let task_id = uuid::Uuid::new_v4().to_string();
+        core.workspace
+            .create_chat(&task_id, Some("project-a"), None, None, None)
+            .unwrap();
+        core.task_identity
+            .register_new_task(
+                &task_id,
+                Some("project-a"),
+                None,
+                project_path.to_str(),
+                zeron_proto::TaskLineage::default(),
+            )
+            .unwrap();
+        let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
+        let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+        let (engine_tx, _engine_rx) = tokio::sync::mpsc::unbounded_channel();
+        lock(&core.sessions.inner.runs).insert(
+            task_id.clone(),
+            RunHandle {
+                run_id: "run-a".into(),
+                provider_turn: None,
+                run_provider_binding: None,
+                provider_turn_readiness: tokio::sync::watch::channel(
+                    ProviderTurnReadiness::AwaitingBinding,
+                )
+                .0,
+                steerable: false,
+                runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
+                steer_tx,
+                interrupt_token: zeron_harness::CancellationToken::new(),
+                cancel,
+                hold_recovery_on_interrupt: Arc::new(AtomicBool::new(true)),
+                engine_tx,
+                pending_inputs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            },
+        );
+        (root, core, task_id)
+    }
+
+    fn publish_managed_codex_binding(
+        root: &tempfile::TempDir,
+        core: &crate::EngineCore,
+        task_id: &str,
+    ) {
+        let cwd = root.path().join("project-a");
+        let binding = core
+            .task_identity
+            .record_session_binding(
+                task_id,
+                HarnessId::Codex,
+                "provider-thread-a",
+                cwd.to_str().unwrap(),
+            )
+            .unwrap()
+            .expect("durable managed binding");
+        assert_eq!(binding.generation, 1);
+        assert!(
+            core.sessions
+                .inner
+                .observe_codex_binding(task_id, "run-a", "provider-thread-a")
+        );
     }
 
     #[test]
@@ -6381,6 +6717,7 @@ mod tests {
             Some(&binding),
         ));
         assert!(!run.observe_codex_checkpoint("chat-a", "run-a", None, "turn-a", Some(&binding),));
+        assert!(run.observe_codex_binding("chat-a", "run-a", "provider-thread-a", Some(&binding),));
         assert!(!run.observe_codex_checkpoint(
             "chat-a",
             "run-a",
@@ -6388,6 +6725,7 @@ mod tests {
             "turn-a",
             Some(&binding),
         ));
+        assert!(run.observe_codex_binding("chat-a", "run-a", "provider-thread-a", Some(&binding),));
         assert!(!run.observe_codex_checkpoint(
             "chat-a",
             "run-a",
@@ -6395,6 +6733,7 @@ mod tests {
             "turn-a",
             None,
         ));
+        assert!(run.observe_codex_binding("chat-a", "run-a", "provider-thread-a", Some(&binding),));
         assert!(run.observe_codex_checkpoint(
             "chat-a",
             "run-a",
@@ -6490,6 +6829,7 @@ mod tests {
         let binding = synthetic_provider_binding();
         let mut runs = lock(&sessions.inner.runs);
         let run = runs.get_mut("chat-a").unwrap();
+        assert!(run.observe_codex_binding("chat-a", "run-a", "provider-thread-a", Some(&binding),));
         assert!(run.observe_codex_checkpoint(
             "chat-a",
             "run-a",
@@ -6523,6 +6863,12 @@ mod tests {
             "provider-thread-a",
             "turn-a",
             "call-a",
+        ));
+        assert!(run.observe_codex_binding(
+            "chat-a",
+            "run-b",
+            "provider-thread-a",
+            Some(&replaced_binding),
         ));
         assert!(run.observe_codex_checkpoint(
             "chat-a",
@@ -6571,6 +6917,322 @@ mod tests {
                 .unwrap()
                 .provider_turn
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_turn_waits_for_durable_binding_and_checkpoint_then_claims_once() {
+        let (root, core, task_id) = managed_codex_wait_fixture();
+        let sessions = core.sessions.clone();
+        let waiting_task = task_id.clone();
+        let waiter = tokio::spawn(async move {
+            sessions
+                .wait_and_claim_luna_provider_call(
+                    &waiting_task,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-a",
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        publish_managed_codex_binding(&root, &core, &task_id);
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "binding alone is not turn readiness");
+        assert!(core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        ));
+        assert!(waiter.await.unwrap());
+        assert!(
+            !core
+                .sessions
+                .wait_and_claim_luna_provider_call(
+                    &task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-a",
+                    tokio::time::Instant::now() + Duration::from_millis(100),
+                )
+                .await
+        );
+        assert_eq!(
+            core.sessions.active_turn_id(&task_id).as_deref(),
+            Some("run-a")
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_turn_wait_rejects_missing_binding_rebind_and_stale_context() {
+        let (_root, core, task_id) = managed_codex_wait_fixture();
+        let sessions = core.sessions.clone();
+        let waiting_task = task_id.clone();
+        let waiter = tokio::spawn(async move {
+            sessions
+                .wait_and_claim_luna_provider_call(
+                    &waiting_task,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-a",
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !core
+                .sessions
+                .inner
+                .observe_codex_binding(&task_id, "run-a", "provider-thread-a")
+        );
+        assert!(!waiter.await.unwrap());
+
+        let (root, core, task_id) = managed_codex_wait_fixture();
+        publish_managed_codex_binding(&root, &core, &task_id);
+        core.task_identity
+            .advance_binding(
+                &task_id,
+                HarnessId::Codex,
+                "provider-thread-b",
+                zeron_proto::BindingOrigin::ContextReset,
+                "synthetic rebind",
+            )
+            .unwrap();
+        assert!(!core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        ));
+        assert!(
+            !core
+                .sessions
+                .wait_and_claim_luna_provider_call(
+                    &task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-b",
+                    tokio::time::Instant::now() + Duration::from_millis(100),
+                )
+                .await
+        );
+
+        let (root, core, task_id) = managed_codex_wait_fixture();
+        publish_managed_codex_binding(&root, &core, &task_id);
+        assert!(core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        ));
+        assert!(
+            !core
+                .sessions
+                .wait_and_claim_luna_provider_call(
+                    &task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "stale-turn",
+                    "call-a",
+                    tokio::time::Instant::now() + Duration::from_millis(100),
+                )
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_turn_wait_wakes_closed_on_cancel_done_and_run_drop() {
+        for end in ["interrupt", "engine-cancel", "done", "replacement"] {
+            let (_root, core, task_id) = managed_codex_wait_fixture();
+            let sessions = core.sessions.clone();
+            let waiting_task = task_id.clone();
+            let waiter = tokio::spawn(async move {
+                sessions
+                    .wait_and_claim_luna_provider_call(
+                        &waiting_task,
+                        "run-a",
+                        "provider-thread-a",
+                        "turn-a",
+                        "call-a",
+                        tokio::time::Instant::now() + Duration::from_secs(5),
+                    )
+                    .await
+            });
+            tokio::task::yield_now().await;
+            match end {
+                "interrupt" => lock(&core.sessions.inner.runs)
+                    .get(&task_id)
+                    .unwrap()
+                    .interrupt_token
+                    .cancel(),
+                "engine-cancel" => {
+                    lock(&core.sessions.inner.runs)
+                        .get(&task_id)
+                        .unwrap()
+                        .cancel
+                        .send_replace(true);
+                }
+                "done" => core
+                    .sessions
+                    .inner
+                    .clear_codex_checkpoint(&task_id, "run-a"),
+                "replacement" => {
+                    lock(&core.sessions.inner.runs).remove(&task_id);
+                }
+                _ => unreachable!(),
+            }
+            assert!(!waiter.await.unwrap(), "{end} must not claim the call");
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_turn_wait_has_a_strict_cap_and_failed_binding_is_terminal() {
+        let (_root, core, task_id) = managed_codex_wait_fixture();
+        let started = tokio::time::Instant::now();
+        let claimed = core
+            .sessions
+            .wait_and_claim_luna_provider_call(
+                &task_id,
+                "run-a",
+                "provider-thread-a",
+                "turn-a",
+                "call-a",
+                started + Duration::from_secs(60),
+            )
+            .await;
+        assert!(!claimed);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(
+            !core
+                .sessions
+                .wait_and_claim_luna_provider_call(
+                    &task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-b",
+                    tokio::time::Instant::now(),
+                )
+                .await
+        );
+
+        let (root, core, task_id) = managed_codex_wait_fixture();
+        publish_managed_codex_binding(&root, &core, &task_id);
+        let sessions = core.sessions.clone();
+        let waiting_task = task_id.clone();
+        let waiter = tokio::spawn(async move {
+            sessions
+                .wait_and_claim_luna_provider_call(
+                    &waiting_task,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-a",
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        let cwd = root.path().join("project-a");
+        assert!(
+            core.task_identity
+                .record_session_binding(
+                    &task_id,
+                    HarnessId::Codex,
+                    "conflicting-thread",
+                    cwd.to_str().unwrap()
+                )
+                .is_err()
+        );
+        core.sessions.inner.fail_codex_checkpoint(&task_id, "run-a");
+        assert!(!waiter.await.unwrap());
+        assert!(!core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_turn_wait_rearms_only_the_same_warm_run_binding() {
+        let (root, core, task_id) = managed_codex_wait_fixture();
+        publish_managed_codex_binding(&root, &core, &task_id);
+        assert!(core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        ));
+        core.sessions
+            .inner
+            .clear_codex_checkpoint(&task_id, "run-a");
+        core.sessions.inner.rearm_codex_checkpoint_after_done(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+        );
+        assert!(core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-b",
+        ));
+        assert!(
+            core.sessions
+                .wait_and_claim_luna_provider_call(
+                    &task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-b",
+                    "call-a",
+                    tokio::time::Instant::now() + Duration::from_millis(100),
+                )
+                .await
+        );
+        core.sessions
+            .inner
+            .clear_codex_checkpoint(&task_id, "run-a");
+        core.task_identity
+            .advance_binding(
+                &task_id,
+                HarnessId::Codex,
+                "provider-thread-b",
+                zeron_proto::BindingOrigin::ContextReset,
+                "synthetic warm rebind",
+            )
+            .unwrap();
+        core.sessions.inner.rearm_codex_checkpoint_after_done(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+        );
+        assert!(!core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-c",
+        ));
+        assert!(
+            !core
+                .sessions
+                .wait_and_claim_luna_provider_call(
+                    &task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-c",
+                    "call-b",
+                    tokio::time::Instant::now() + Duration::from_millis(100),
+                )
+                .await
         );
     }
 
@@ -7709,6 +8371,11 @@ mod tests {
             RunHandle {
                 run_id: "run-active".into(),
                 provider_turn: None,
+                run_provider_binding: None,
+                provider_turn_readiness: tokio::sync::watch::channel(
+                    ProviderTurnReadiness::AwaitingBinding,
+                )
+                .0,
                 steerable: true,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request),
                 steer_tx,
