@@ -1706,6 +1706,12 @@ pub struct Changes {
     git_task: Option<Task<()>>,
     git_pr_status: Option<GitPrStatus>,
     git_pr_task: Option<Task<()>>,
+    checkpoints: Option<zeron_proto::GitCheckpointList>,
+    checkpoint_diff: Option<zeron_proto::GitCheckpointDiff>,
+    checkpoint_restore: Option<zeron_proto::GitCheckpointRestorePreview>,
+    checkpoint_notice: Option<String>,
+    checkpoint_receipt: Option<String>,
+    checkpoint_task: Option<Task<()>>,
     _observe: Subscription,
 }
 
@@ -1796,6 +1802,12 @@ impl Changes {
             git_task: None,
             git_pr_status: None,
             git_pr_task: None,
+            checkpoints: None,
+            checkpoint_diff: None,
+            checkpoint_restore: None,
+            checkpoint_notice: None,
+            checkpoint_receipt: None,
+            checkpoint_task: None,
             _observe: observe,
         }
     }
@@ -4916,6 +4928,12 @@ impl Render for Changes {
                 self.git_selected.clear();
                 self.git_pr_status = None;
                 self.git_pr_task = None;
+                self.checkpoints = None;
+                self.checkpoint_diff = None;
+                self.checkpoint_restore = None;
+                self.checkpoint_notice = None;
+                self.checkpoint_receipt = None;
+                self.checkpoint_task = None;
                 self.git_target = current;
                 self.load_git(cx);
             }

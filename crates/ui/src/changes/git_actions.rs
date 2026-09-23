@@ -2,8 +2,9 @@
 
 use super::*;
 use zeron_proto::{
-    GitActionKind, GitActionReceipt, GitActionRequest, GitMessageRequest, GitPrStatus,
-    GitPrStatusRequest,
+    GitActionKind, GitActionReceipt, GitActionRequest, GitCheckpointDiff, GitCheckpointList,
+    GitCheckpointRestorePreview, GitCheckpointRestoreReceipt, GitCheckpointRestoreRequest,
+    GitMessageRequest, GitPrStatus, GitPrStatusRequest,
 };
 
 impl Changes {
@@ -13,7 +14,7 @@ impl Changes {
         let cwd = chat.cwd.clone()?;
         let target = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
             .then(|| chat.device_id.clone());
-        let key = format!("{}\0{}", chat.device_id, cwd);
+        let key = format!("{}\0{}\0{}", chat.device_id, cwd, chat.id);
         Some((cwd, target, key))
     }
 
@@ -56,12 +57,180 @@ impl Changes {
                         pane.git_preview = Some(preview);
                         pane.git_notice = None;
                         pane.load_git_pr(cx);
+                        pane.load_checkpoints(cx);
                     }
                     Err(error) => {
                         pane.git_preview = None;
                         pane.git_pr_status = None;
                         pane.git_notice = Some(error.to_string());
                     }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn checkpoint_context(&self, cx: &App) -> Option<(String, String, String, bool)> {
+        let state = self.state.read(cx);
+        let chat = state.selected_chat_row()?;
+        let cwd = chat.cwd.clone()?;
+        let local = state.local_device_id.as_deref() == Some(chat.device_id.as_str());
+        Some((
+            chat.id.clone(),
+            cwd.clone(),
+            format!("{}\0{cwd}\0{}", chat.device_id, chat.id),
+            local,
+        ))
+    }
+
+    fn load_checkpoints(&mut self, cx: &mut Context<Self>) {
+        let Some((chat_id, cwd, key, local)) = self.checkpoint_context(cx) else {
+            return;
+        };
+        self.checkpoint_diff = None;
+        self.checkpoint_restore = None;
+        if !local {
+            self.checkpoints = None;
+            self.checkpoint_notice =
+                Some("Git checkpoints are available only on this device".into());
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.checkpoint_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::LIST_GIT_CHECKPOINTS,
+                    serde_json::json!({ "chatId": chat_id, "cwd": cwd }),
+                )
+                .await;
+            this.update(cx, |pane, cx| {
+                if pane.git_target.as_deref() != Some(&key) {
+                    return;
+                }
+                match result.and_then(|value| {
+                    serde_json::from_value::<GitCheckpointList>(value)
+                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                }) {
+                    Ok(list) => {
+                        pane.checkpoints = Some(list);
+                        pane.checkpoint_notice = None;
+                    }
+                    Err(error) => {
+                        pane.checkpoints = None;
+                        pane.checkpoint_notice = Some(error.to_string());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn diff_checkpoint(&mut self, turn_id: String, cx: &mut Context<Self>) {
+        let Some((chat_id, cwd, key, true)) = self.checkpoint_context(cx) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.checkpoint_diff = None;
+        self.checkpoint_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::DIFF_GIT_CHECKPOINT,
+                    serde_json::json!({ "chatId": chat_id, "cwd": cwd, "turnId": turn_id }),
+                )
+                .await;
+            this.update(cx, |pane, cx| {
+                if pane.git_target.as_deref() != Some(&key) {
+                    return;
+                }
+                match result.and_then(|value| {
+                    serde_json::from_value::<GitCheckpointDiff>(value)
+                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                }) {
+                    Ok(diff) => {
+                        pane.checkpoint_diff = Some(diff);
+                        pane.checkpoint_notice = None;
+                    }
+                    Err(error) => pane.checkpoint_notice = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn preview_checkpoint_restore(&mut self, turn_id: String, cx: &mut Context<Self>) {
+        let Some((chat_id, cwd, key, true)) = self.checkpoint_context(cx) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.checkpoint_restore = None;
+        self.checkpoint_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call(methods::PREVIEW_GIT_CHECKPOINT_RESTORE,
+                serde_json::json!({ "chatId": chat_id, "cwd": cwd, "turnId": turn_id, "point": "before" })).await;
+            this.update(cx, |pane, cx| {
+                if pane.git_target.as_deref() != Some(&key) { return; }
+                match result.and_then(|value| serde_json::from_value::<GitCheckpointRestorePreview>(value)
+                    .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))) {
+                    Ok(preview) => { pane.checkpoint_restore = Some(preview); pane.checkpoint_notice = None; }
+                    Err(error) => pane.checkpoint_notice = Some(error.to_string()),
+                }
+                cx.notify();
+            }).ok();
+        }));
+    }
+
+    fn restore_checkpoint(&mut self, cx: &mut Context<Self>) {
+        let Some(preview) = self.checkpoint_restore.take() else {
+            return;
+        };
+        let Some((chat_id, cwd, key, true)) = self.checkpoint_context(cx) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let request = GitCheckpointRestoreRequest {
+            chat_id,
+            cwd,
+            turn_id: preview.turn_id,
+            point: preview.point,
+            expected_token: preview.token,
+        };
+        self.checkpoint_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::RESTORE_GIT_CHECKPOINT,
+                    serde_json::to_value(request).unwrap_or_default(),
+                )
+                .await;
+            this.update(cx, |pane, cx| {
+                if pane.git_target.as_deref() != Some(&key) {
+                    return;
+                }
+                match result.and_then(|value| {
+                    serde_json::from_value::<GitCheckpointRestoreReceipt>(value)
+                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                }) {
+                    Ok(receipt) => {
+                        pane.checkpoint_receipt = Some(format!(
+                            "Files restored. Recovery ref: {}",
+                            receipt.recovery_ref
+                        ));
+                        pane.checkpoint_notice = None;
+                        pane.load_git(cx);
+                    }
+                    Err(error) => pane.checkpoint_notice = Some(error.to_string()),
                 }
                 cx.notify();
             })
@@ -332,9 +501,11 @@ impl Changes {
         let preview = self.git_preview.clone();
         let busy = self.git_busy;
         let mut card = div()
+            .id("git-card")
             .flex_none()
             .w_full()
-            .max_h(px(350.0))
+            .max_h(px(530.0))
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap(px(6.0))
@@ -363,6 +534,7 @@ impl Changes {
                     ),
             );
             card = card.child(self.render_pr_status(theme));
+            card = card.child(self.render_checkpoint_section(theme, cx));
             let selected = self.git_selected.clone();
             let rows = preview.files.into_iter().map(|file| {
                 let path = file.path.clone();
@@ -510,5 +682,167 @@ impl Changes {
             );
         }
         card.into_any_element()
+    }
+
+    fn render_checkpoint_section(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .gap(px(5.0))
+            .py(px(Theme::SPACE_SM))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text)
+                    .child("File checkpoints"),
+            );
+        if let Some(list) = &self.checkpoints {
+            if let Some(reason) = &list.restore_unavailable_reason {
+                section = section.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_dim)
+                        .child(SharedString::from(reason.clone())),
+                );
+            }
+            if list.checkpoints.is_empty() {
+                section = section.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_dim)
+                        .child("No completed turn checkpoints yet"),
+                );
+            }
+            for row in list.checkpoints.iter().take(5) {
+                let turn_id = row.turn_id.clone();
+                let stamp =
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(row.started_at_ms)
+                        .map(|at| at.format("%b %-d %H:%M").to_string())
+                        .unwrap_or_else(|| "Unknown time".into());
+                let outcome = row.outcome.as_deref().unwrap_or("in progress");
+                let mut line = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .text_size(px(11.0))
+                    .text_color(theme.text_dim)
+                    .child(format!("{stamp} · {outcome}"));
+                if row.before_available && row.after_available {
+                    line = line.child(
+                        Self::git_button(format!("checkpoint-diff-{turn_id}"), "Diff", theme)
+                            .on_click(cx.listener({
+                                let turn_id = turn_id.clone();
+                                move |this, _, _, cx| this.diff_checkpoint(turn_id.clone(), cx)
+                            })),
+                    );
+                }
+                if row.before_available && list.restore_available {
+                    line = line.child(
+                        Self::git_button(
+                            format!("checkpoint-preview-{turn_id}"),
+                            "Preview restore",
+                            theme,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.preview_checkpoint_restore(turn_id.clone(), cx)
+                        })),
+                    );
+                }
+                section = section.child(line);
+                if let Some(error) = &row.error {
+                    section = section.child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_dim)
+                            .child(format!("Capture failed: {error}")),
+                    );
+                }
+            }
+            if list.checkpoints.len() > 5 {
+                section = section.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_faint)
+                        .child(format!(
+                            "Showing 5 of {} recent turns",
+                            list.checkpoints.len()
+                        )),
+                );
+            }
+        } else {
+            section = section.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_dim)
+                    .child("Checkpoints unavailable or loading…"),
+            );
+        }
+        if let Some(diff) = &self.checkpoint_diff {
+            let snippet: String = diff.patch.chars().take(8000).collect();
+            section = section.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_dim)
+                            .child(format!(
+                                "{} changed paths · observed checkout changes",
+                                diff.paths.len()
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id("checkpoint-diff-view")
+                            .max_h(px(140.0))
+                            .overflow_y_scroll()
+                            .text_size(px(10.0))
+                            .font_family(theme.font_mono.clone())
+                            .text_color(theme.text)
+                            .child(SharedString::from(snippet)),
+                    ),
+            );
+        }
+        if let Some(preview) = &self.checkpoint_restore {
+            let path_text = if preview.paths.is_empty() {
+                "No file changes".into()
+            } else {
+                preview
+                    .paths
+                    .iter()
+                    .take(12)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            section = section.child(div().flex().flex_col().gap(px(4.0))
+                .child(div().text_size(px(11.0)).text_color(theme.text_dim)
+                    .child(format!("Restore will change {} paths: {path_text}", preview.paths.len())))
+                .child(div().text_size(px(11.0)).text_color(theme.text_dim)
+                    .child("This changes files only. Conversation history and external actions remain as they are."))
+                .child(Self::git_button("checkpoint-restore", "Restore files", theme)
+                    .on_click(cx.listener(|this, _, _, cx| this.restore_checkpoint(cx)))));
+        }
+        if let Some(notice) = &self.checkpoint_notice {
+            section = section.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_dim)
+                    .child(SharedString::from(notice.clone())),
+            );
+        }
+        if let Some(receipt) = &self.checkpoint_receipt {
+            section = section.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_dim)
+                    .child(SharedString::from(receipt.clone())),
+            );
+        }
+        section.into_any_element()
     }
 }

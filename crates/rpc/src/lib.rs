@@ -234,6 +234,10 @@ pub mod methods {
     pub const EXECUTE_GIT_ACTION: &str = "ExecuteGitAction";
     pub const GENERATE_GIT_COMMIT_MESSAGE: &str = "GenerateGitCommitMessage";
     pub const GET_GIT_PR_STATUS: &str = "GetGitPrStatus";
+    pub const LIST_GIT_CHECKPOINTS: &str = "ListGitCheckpoints";
+    pub const DIFF_GIT_CHECKPOINT: &str = "DiffGitCheckpoint";
+    pub const PREVIEW_GIT_CHECKPOINT_RESTORE: &str = "PreviewGitCheckpointRestore";
+    pub const RESTORE_GIT_CHECKPOINT: &str = "RestoreGitCheckpoint";
     // Agent account metadata is relay-readable; credential/login actions stay local.
     pub const LIST_AGENT_ACCOUNTS: &str = "ListAgentAccounts";
     pub const ACTIVATE_AGENT_ACCOUNT: &str = "ActivateAgentAccount";

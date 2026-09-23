@@ -40,7 +40,7 @@ impl GitActions {
         }
     }
 
-    fn lane(&self, root: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    pub(crate) fn lane(&self, root: &Path) -> Arc<tokio::sync::Mutex<()>> {
         self.lanes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

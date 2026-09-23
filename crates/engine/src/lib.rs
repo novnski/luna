@@ -30,6 +30,7 @@ mod device_write;
 pub mod diff_sync;
 pub mod doc_host;
 pub mod git_actions;
+pub mod git_checkpoints;
 pub mod history_operations;
 mod http_error;
 pub mod instance_lock;
@@ -76,6 +77,7 @@ pub use diff_sync::{
     read_diff_file_text, snapshot_tree, working_diff_base,
 };
 pub use doc_host::{ChatDocHandle, DocHost, DocHostConfig, EdgeConfig};
+pub use git_checkpoints::GitCheckpoints;
 pub use instance_lock::InstanceLock;
 pub use permissions::{provider_capabilities, provider_capabilities_for, resolve_run_policy};
 pub use profile::EngineProfile;
@@ -498,6 +500,7 @@ impl EngineCore {
         titles.set_task_identity(task_identity.clone());
         sessions.set_titles(titles);
         let diff_sync = CheckoutDiffSync::start(repos.clone(), workspace.clone(), &device_id, edge);
+        sessions.set_git_checkpoints(GitCheckpoints::new(repos.clone()));
         // Turn starts snapshot the checkout tree — the "Latest turn" diff base.
         let turn_diff = diff_sync.clone();
         sessions.set_turn_listener(Arc::new(move |chat_id, cwd| {

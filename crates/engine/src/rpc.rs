@@ -1070,6 +1070,7 @@ pub struct EngineRpc {
     registry: std::sync::Arc<HarnessRegistry>,
     repos: Repos,
     git_actions: crate::git_actions::GitActions,
+    git_checkpoints: Option<crate::git_checkpoints::GitCheckpoints>,
     workspace_files: crate::WorkspaceFiles,
     terminals: Terminals,
     previews: Option<zeron_preview::PreviewService>,
@@ -1283,6 +1284,11 @@ impl EngineRpc {
         workspace_scope: WorkspaceScope,
         cleanup_boot_id: String,
     ) -> Self {
+        let git_checkpoints = sessions.git_checkpoints().cloned();
+        let git_actions = git_checkpoints
+            .as_ref()
+            .map(crate::git_checkpoints::GitCheckpoints::actions)
+            .unwrap_or_else(|| crate::git_actions::GitActions::new(repos.clone()));
         let engine_info = EngineInfo {
             device_id: doc_host.device_id().to_string(),
             workspace_scope,
@@ -1296,7 +1302,8 @@ impl EngineRpc {
             doc_host,
             workspace,
             registry,
-            git_actions: crate::git_actions::GitActions::new(repos.clone()),
+            git_actions,
+            git_checkpoints,
             repos,
             workspace_files,
             terminals,
@@ -2175,6 +2182,64 @@ impl EngineRpc {
         Err(RpcError::BadParams(
             "cwd is not a known checkout on this device".into(),
         ))
+    }
+
+    fn checkpoint_service(&self) -> Result<&crate::git_checkpoints::GitCheckpoints, RpcError> {
+        self.git_checkpoints.as_ref().ok_or_else(|| {
+            RpcError::Failed("Git checkpoints are unavailable in this engine".into())
+        })
+    }
+
+    fn validate_checkpoint_task(&self, chat_id: &str, cwd: &str) -> Result<(), RpcError> {
+        let chat = self
+            .workspace
+            .chat(chat_id)
+            .map_err(|_| RpcError::Failed("Task registry is unavailable".into()))?;
+        if chat.is_some_and(|chat| {
+            chat.device_id == self.doc_host.device_id() && chat.cwd.as_deref() == Some(cwd)
+        }) {
+            Ok(())
+        } else {
+            Err(RpcError::BadParams(
+                "Checkpoint task and local checkout do not match".into(),
+            ))
+        }
+    }
+
+    fn checkpoint_owner_overlap_now(&self, chat_id: &str, root: &std::path::Path) -> bool {
+        let Ok(chats) = self.workspace.read_chats() else {
+            return true;
+        };
+        for chat in chats
+            .iter()
+            .filter(|chat| chat.device_id == self.doc_host.device_id())
+        {
+            let Some(other_cwd) = chat.cwd.as_deref() else {
+                continue;
+            };
+            if chat.id == chat_id {
+                if self.sessions.turn_in_flight(&chat.id) {
+                    return true;
+                }
+                continue;
+            }
+            let Ok(other_path) = std::path::Path::new(other_cwd).canonicalize() else {
+                continue;
+            };
+            if restore_owner_paths_overlap(root, &other_path) {
+                return true;
+            }
+        }
+        false
+    }
+
+    async fn checkpoint_checkout_busy(&self, chat_id: &str, cwd: &str) -> Result<bool, RpcError> {
+        let identity = self
+            .repos
+            .checkout_identity(std::path::Path::new(cwd))
+            .await
+            .map_err(|_| RpcError::Failed("Git checkout is unavailable".into()))?;
+        Ok(self.checkpoint_owner_overlap_now(chat_id, &identity.root))
     }
 
     /// Most-recent-first paths the current chat actually touched, followed by
@@ -5873,6 +5938,10 @@ fn forward_deadline(method: &str) -> std::time::Duration {
 /// ControlRpc methods that honor `targetDeviceId` (feature-inventory §2.1). Extend this
 /// list (plus [`is_stream_method`] for streams) to make more of the surface
 /// device-addressable — the handlers themselves need no changes.
+fn restore_owner_paths_overlap(root: &std::path::Path, other: &std::path::Path) -> bool {
+    other.starts_with(root) || root.starts_with(other)
+}
+
 fn forwardable(method: &str) -> bool {
     matches!(
         method,
@@ -6982,6 +7051,21 @@ impl RpcService for EngineRpc {
             return Err(RpcError::Failed(
                 "Remote credential actions are unavailable until paired end-to-end transport is implemented."
                     .into(),
+            ));
+        }
+        if matches!(
+            method,
+            methods::LIST_GIT_CHECKPOINTS
+                | methods::DIFF_GIT_CHECKPOINT
+                | methods::PREVIEW_GIT_CHECKPOINT_RESTORE
+                | methods::RESTORE_GIT_CHECKPOINT
+        ) && params
+            .get("targetDeviceId")
+            .and_then(|value| value.as_str())
+            .is_some_and(|target| target != self.doc_host.device_id())
+        {
+            return Err(RpcError::Failed(
+                "Remote Git checkpoints are unavailable".into(),
             ));
         }
         // Device-addressed routing: forward calls that target another device over its
@@ -8434,6 +8518,75 @@ impl RpcService for EngineRpc {
                 })
                 .await
             }
+            methods::LIST_GIT_CHECKPOINTS => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    chat_id: String,
+                    cwd: String,
+                }
+                let p: P = parse_params(params)?;
+                self.validate_checkpoint_task(&p.chat_id, &p.cwd)?;
+                let busy = self.checkpoint_checkout_busy(&p.chat_id, &p.cwd).await?;
+                let list = self
+                    .checkpoint_service()?
+                    .list(&p.chat_id, &p.cwd, busy)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&list)
+            }
+            methods::DIFF_GIT_CHECKPOINT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    chat_id: String,
+                    cwd: String,
+                    turn_id: String,
+                }
+                let p: P = parse_params(params)?;
+                self.validate_checkpoint_task(&p.chat_id, &p.cwd)?;
+                let diff = self
+                    .checkpoint_service()?
+                    .diff(&p.chat_id, &p.cwd, &p.turn_id)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&diff)
+            }
+            methods::PREVIEW_GIT_CHECKPOINT_RESTORE => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    chat_id: String,
+                    cwd: String,
+                    turn_id: String,
+                    point: String,
+                }
+                let p: P = parse_params(params)?;
+                self.validate_checkpoint_task(&p.chat_id, &p.cwd)?;
+                let busy = self.checkpoint_checkout_busy(&p.chat_id, &p.cwd).await?;
+                let preview = self
+                    .checkpoint_service()?
+                    .preview_restore(&p.chat_id, &p.cwd, &p.turn_id, &p.point, busy)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&preview)
+            }
+            methods::RESTORE_GIT_CHECKPOINT => {
+                let request: zeron_proto::GitCheckpointRestoreRequest = parse_params(params)?;
+                self.validate_checkpoint_task(&request.chat_id, &request.cwd)?;
+                let busy = self
+                    .checkpoint_checkout_busy(&request.chat_id, &request.cwd)
+                    .await?;
+                let chat_id = request.chat_id.clone();
+                let receipt = self
+                    .checkpoint_service()?
+                    .restore(request, busy, |root| {
+                        self.checkpoint_owner_overlap_now(&chat_id, root)
+                    })
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&receipt)
+            }
             methods::WATCH_CHECKOUT_CHANGE_REQUEST => {
                 let p: CheckoutChangeRequestParams = parse_params(params)?;
                 let cwd = self.change_request_root(&p.cwd).await?;
@@ -9179,6 +9332,24 @@ impl RpcService for EngineRpc {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn checkpoint_restore_owner_gate_catches_parent_and_nested_tasks() {
+        let root = std::path::Path::new("/fixture/managed/task");
+        assert!(restore_owner_paths_overlap(root, root));
+        assert!(restore_owner_paths_overlap(
+            root,
+            std::path::Path::new("/fixture/managed")
+        ));
+        assert!(restore_owner_paths_overlap(
+            root,
+            std::path::Path::new("/fixture/managed/task/nested")
+        ));
+        assert!(!restore_owner_paths_overlap(
+            root,
+            std::path::Path::new("/fixture/managed/sibling")
+        ));
+    }
 
     #[tokio::test]
     async fn project_cleanup_waits_for_authoritative_registry_then_continues() {

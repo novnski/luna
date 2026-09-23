@@ -132,6 +132,11 @@ fn registration_after_create_error(target: &Path, error: EngineError) -> EngineE
 }
 
 impl Repos {
+    /// Root reserved for LUNA-created linked worktrees. A caller must still
+    /// verify Git's worktree registration before treating a path as isolated.
+    pub(crate) fn managed_worktrees_root(&self) -> &Path {
+        &self.inner.worktrees_root
+    }
     /// `data_dir` holds `repos.json` + cloned/created repos; the worktree root
     /// comes from `$LUNA_WORKTREES_DIR` or `~/.luna/worktrees`.
     pub fn new(data_dir: &Path, device_id: &str) -> Self {

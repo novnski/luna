@@ -863,6 +863,7 @@ struct Inner {
     /// dispatch or accepted steer) — the diff sync snapshots the checkout tree
     /// for the Changes pane's "Latest turn" scope. Absent in bare tests.
     turn_listener: OnceLock<TurnListener>,
+    git_checkpoints: OnceLock<crate::git_checkpoints::GitCheckpoints>,
 }
 
 /// Turn-start hook: called with `(chat_id, cwd)`.
@@ -909,6 +910,7 @@ impl SessionsEngine {
                 account_transition: Arc::new(AsyncMutex::new(())),
                 generated_images: OnceLock::new(),
                 turn_listener: OnceLock::new(),
+                git_checkpoints: OnceLock::new(),
             }),
         }
     }
@@ -1005,6 +1007,14 @@ impl SessionsEngine {
     /// Wire the turn-start listener (called once at engine assembly).
     pub fn set_turn_listener(&self, listener: TurnListener) {
         let _ = self.inner.turn_listener.set(listener);
+    }
+
+    pub fn set_git_checkpoints(&self, checkpoints: crate::git_checkpoints::GitCheckpoints) {
+        let _ = self.inner.git_checkpoints.set(checkpoints);
+    }
+
+    pub(crate) fn git_checkpoints(&self) -> Option<&crate::git_checkpoints::GitCheckpoints> {
+        self.inner.git_checkpoints.get()
     }
 
     fn note_turn_start(&self, chat_id: &str, cwd: &str) {
@@ -2530,6 +2540,9 @@ impl SessionsEngine {
         }
         // Every accepted dispatched prompt is a turn — routed steer or fresh
         // run alike. A single-flight rejection above is not a turn.
+        if let Some(checkpoints) = self.git_checkpoints() {
+            checkpoints.start(chat_id, &request.cwd).await;
+        }
         self.note_turn_start(chat_id, &request.cwd);
         if let Some((run_id, steerable, same_runtime, steer_tx, ledger)) = routed {
             let user_id = message_id.clone().unwrap_or_else(new_id);
@@ -6154,11 +6167,18 @@ async fn drive_run(
                         }
                         continue;
                     }
-                    if let Some(request) = lock(&inner.last_requests).get(&chat_id) {
+                    let turn_cwd = lock(&inner.last_requests)
+                        .get(&chat_id)
+                        .map(|request| request.cwd.clone());
+                    if let Some(cwd) = turn_cwd {
+                        if let Some(checkpoints) = inner.git_checkpoints.get() {
+                            checkpoints.end(&chat_id, "steered").await;
+                            checkpoints.start(&chat_id, &cwd).await;
+                        }
                         SessionsEngine {
                             inner: inner.clone(),
                         }
-                        .note_turn_start(&chat_id, &request.cwd);
+                        .note_turn_start(&chat_id, &cwd);
                     }
                     inner.note_message(&chat_id, &steer.prompt);
                 }
@@ -6445,6 +6465,14 @@ async fn drive_run(
         }
 
         if let AgentEvent::Done { status, error, .. } = &event {
+            if let Some(checkpoints) = inner.git_checkpoints.get() {
+                let outcome = match status {
+                    DoneStatus::Completed => "completed",
+                    DoneStatus::Interrupted => "interrupted",
+                    DoneStatus::Errored => "errored",
+                };
+                checkpoints.end(&chat_id, outcome).await;
+            }
             // A question still pending at turn end can never be legitimately
             // answered (its turn is over): drain the resolvers NOW, or a late
             // `respond_input` finds one, emits InputResolved, and un-parks
