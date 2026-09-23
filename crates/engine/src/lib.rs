@@ -431,7 +431,7 @@ impl EngineCore {
             Err(err) => tracing::error!(error = %err, "stale-session recovery failed"),
         }
         doc_host.spawn_transcript_salvage(profile.store_root().join("journals"));
-        let repos = Repos::new(data_dir, &device_id);
+        let repos = Repos::new_guarded(data_dir, &device_id, device_write.handle());
         doc_host.set_repos(repos.clone());
         let change_requests = CheckoutChangeRequests::start(repos.clone(), &device_id);
         let workspace_files =
