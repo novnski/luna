@@ -528,6 +528,55 @@ impl DocsStore {
         })
     }
 
+    /// Page one task's already minimized L14 activity rows. Cross-task reads
+    /// must not fall back to raw transcript content when the index is empty.
+    pub fn read_activity_task_page(
+        &self,
+        task_id: &str,
+        cursor: Option<&HistoryCursor>,
+        limit: usize,
+    ) -> Result<(Vec<ActivityEnvelope>, Option<HistoryCursor>, bool), StoreError> {
+        let limit = limit.clamp(1, 20);
+        let conn = self.conn();
+        let mut sql = String::from("SELECT envelope_json FROM activity_events WHERE task_id=?");
+        let mut values = vec![rusqlite::types::Value::from(task_id.to_owned())];
+        if let Some(cursor) = cursor {
+            sql.push_str(
+                " AND (timestamp_ms<? OR (timestamp_ms=? AND sequence<?)
+                  OR (timestamp_ms=? AND sequence=? AND event_id<?))",
+            );
+            values.push(cursor.timestamp_ms.into());
+            values.push(cursor.timestamp_ms.into());
+            values.push((cursor.sequence as i64).into());
+            values.push(cursor.timestamp_ms.into());
+            values.push((cursor.sequence as i64).into());
+            values.push(cursor.event_id.clone().into());
+        }
+        sql.push_str(" ORDER BY timestamp_ms DESC,sequence DESC,event_id DESC LIMIT ?");
+        values.push(((limit + 1) as i64).into());
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut events = rows
+            .iter()
+            .map(|bytes| serde_json::from_slice::<ActivityEnvelope>(bytes))
+            .collect::<Result<Vec<_>, _>>()?;
+        let has_more = events.len() > limit;
+        events.truncate(limit);
+        let next_cursor = has_more.then(|| {
+            let last = events.last().expect("paged task activity has a last row");
+            HistoryCursor {
+                timestamp_ms: last.timestamp_ms,
+                sequence: last.sequence,
+                event_id: last.event_id.clone(),
+            }
+        });
+        Ok((events, next_cursor, has_more))
+    }
+
     /// Reconcile the minimized Activity projection with a fresh authoritative
     /// snapshot. Presentation state survives unchanged; only disappearance
     /// from one of the explicitly managed producer kinds resolves an item.
@@ -3286,6 +3335,51 @@ mod tests {
                 .events
                 .len(),
             8
+        );
+    }
+
+    #[test]
+    fn task_activity_page_uses_exact_task_and_opaque_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        store
+            .replace_activity_events(
+                "task-a",
+                &[
+                    activity("a-new", "task-a", "project-a", 30),
+                    activity("a-old", "task-a", "project-a", 10),
+                ],
+            )
+            .unwrap();
+        store
+            .replace_activity_events("task-b", &[activity("b-middle", "task-b", "project-a", 20)])
+            .unwrap();
+        let (first, cursor, more) = store.read_activity_task_page("task-a", None, 1).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-new"]
+        );
+        assert!(more);
+        let (second, _, more) = store
+            .read_activity_task_page("task-a", cursor.as_ref(), 1)
+            .unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-old"]
+        );
+        assert!(!more);
+        assert!(
+            store
+                .read_activity_task_page("unknown", None, 20)
+                .unwrap()
+                .0
+                .is_empty()
         );
     }
 
