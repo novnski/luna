@@ -302,6 +302,7 @@ struct Inner {
     /// Local provider-auth selection and lifecycle state. L06 keeps using its
     /// canonical session-home identity; this service only resolves execution auth.
     agent_accounts: OnceLock<crate::agent_accounts::AgentAccounts>,
+    integration_settings: OnceLock<crate::integration_settings::IntegrationSettings>,
     /// Serializes provider-account changes with runtime routing/startup.
     account_transition: Arc<AsyncMutex<()>>,
     generated_images: OnceLock<(crate::uploads::Uploads, std::path::PathBuf)>,
@@ -350,6 +351,7 @@ impl SessionsEngine {
                 titles: OnceLock::new(),
                 task_identity: OnceLock::new(),
                 agent_accounts: OnceLock::new(),
+                integration_settings: OnceLock::new(),
                 account_transition: Arc::new(AsyncMutex::new(())),
                 generated_images: OnceLock::new(),
                 turn_listener: OnceLock::new(),
@@ -399,6 +401,19 @@ impl SessionsEngine {
 
     pub fn set_agent_accounts(&self, accounts: crate::agent_accounts::AgentAccounts) {
         let _ = self.inner.agent_accounts.set(accounts);
+    }
+
+    pub fn set_integration_settings(
+        &self,
+        settings: crate::integration_settings::IntegrationSettings,
+    ) {
+        let _ = self.inner.integration_settings.set(settings);
+    }
+
+    pub fn integration_settings(
+        &self,
+    ) -> Option<&crate::integration_settings::IntegrationSettings> {
+        self.inner.integration_settings.get()
     }
 
     /// Wire the turn-start listener (called once at engine assembly).
@@ -1058,6 +1073,10 @@ impl SessionsEngine {
                 .transpose()?
                 .flatten();
             let context = self.runtime_context_for(chat_id, harness_id, &request)?;
+            let (user_instructions, workspace_instructions) = self
+                .integration_settings()
+                .map(|settings| settings.contributions(context.project_id.as_deref()))
+                .unwrap_or_default();
             let provider_delivery = self
                 .inner
                 .registry
@@ -1067,8 +1086,8 @@ impl SessionsEngine {
                 crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
                     context,
                     provider_delivery,
-                    user_instructions: Vec::new(),
-                    workspace_instructions: Vec::new(),
+                    user_instructions,
+                    workspace_instructions,
                     resume: known_session_id.is_some(),
                     acknowledged_contract: prior,
                 })?;

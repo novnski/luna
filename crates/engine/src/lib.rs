@@ -31,6 +31,7 @@ pub mod git_actions;
 pub mod history_operations;
 mod http_error;
 pub mod instance_lock;
+pub mod integration_settings;
 pub mod local_import;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
@@ -370,6 +371,9 @@ impl EngineCore {
         let sessions =
             SessionsEngine::new(device_id.clone(), journal, registry.clone(), store.clone());
         sessions.set_recovery_settings_path(profile.device_root().join("ui-settings.json"));
+        sessions.set_integration_settings(integration_settings::IntegrationSettings::open(
+            profile.store_root().join("luna-instructions.json"),
+        )?);
         let doc_host = DocHost::new(
             store.clone(),
             DocHostConfig {

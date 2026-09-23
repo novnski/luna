@@ -124,6 +124,11 @@ pub mod methods {
     pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
     /// Redacted, provider-acknowledged LUNA runtime contract for one task.
     pub const GET_RUNTIME_CONTRACT: &str = "GetRuntimeContract";
+    /// LUNA-owned global/project instruction settings, with revision readback.
+    pub const GET_INSTRUCTION_SETTINGS: &str = "GetInstructionSettings";
+    pub const SET_INSTRUCTION_SETTINGS: &str = "SetInstructionSettings";
+    /// Read-only provider-owned skill/MCP configuration inventory.
+    pub const GET_INTEGRATION_INVENTORY: &str = "GetIntegrationInventory";
     /// Bounded search over the local derived session-activity index.
     pub const SEARCH_SESSION_HISTORY: &str = "SearchSessionHistory";
     /// L16 normalized local usage. The runtime accepts only explicit synthetic homes.

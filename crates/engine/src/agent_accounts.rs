@@ -491,6 +491,23 @@ impl AgentAccounts {
         self.codex_home_for_account_with_state(&state, account_id)
     }
 
+    /// Resolve the selected provider-owned configuration location for a
+    /// read-only inventory. Unlike execution resolution this neither reads
+    /// auth material nor creates/refreshes a named account's shadow home.
+    pub fn codex_home_for_inventory(&self) -> Result<PathBuf, EngineError> {
+        let state = lock(&self.inner.state);
+        let id = state.default_codex_account_id.as_str();
+        if id == CODEX_NATIVE_ACCOUNT_ID {
+            return Ok(self.inner.config.codex_home.clone());
+        }
+        if !safe_account_id(id) || !state.codex_accounts.iter().any(|account| account.id == id) {
+            return Err(EngineError::Other(
+                "The selected Codex account has no known provider home".into(),
+            ));
+        }
+        Ok(self.inner.config.codex_shadow_home(id))
+    }
+
     fn codex_home_for_account_with_state(
         &self,
         state: &ProviderAccountState,
@@ -2639,6 +2656,37 @@ mod tests {
             codex_home: root.join("codex"),
             cursor_sdk_auth_file: root.join("cursor-auth.json"),
         }
+    }
+
+    #[test]
+    fn inventory_home_resolution_does_not_materialize_named_account() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        let accounts = AgentAccounts::new(config.clone());
+        assert_eq!(
+            accounts.codex_home_for_inventory().unwrap(),
+            config.codex_home
+        );
+        {
+            let mut state = lock(&accounts.inner.state);
+            state.default_codex_account_id = "named".into();
+            state.codex_accounts.push(CodexAccountRecord {
+                id: "named".into(),
+                label: "Named".into(),
+                account_key: "synthetic".into(),
+                profile: SlotProfile {
+                    email: "synthetic@example.test".into(),
+                    display_name: None,
+                    organization: None,
+                    plan: None,
+                    auth_kind: AgentAuthKind::Oauth,
+                },
+                created_at: 0,
+            });
+        }
+        let home = accounts.codex_home_for_inventory().unwrap();
+        assert_eq!(home, config.codex_shadow_home("named"));
+        assert!(!home.exists());
     }
 
     #[test]
