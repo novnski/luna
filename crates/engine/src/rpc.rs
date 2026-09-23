@@ -1093,6 +1093,17 @@ impl Drop for EngineRpc {
 }
 
 impl EngineRpc {
+    fn usage_providers_for(harnesses: &[HarnessId]) -> Vec<zeron_proto::UsageProvider> {
+        [
+            (HarnessId::Codex, zeron_proto::UsageProvider::Codex),
+            (HarnessId::Opencode, zeron_proto::UsageProvider::OpenCodeGo),
+            (HarnessId::ClaudeCode, zeron_proto::UsageProvider::Claude),
+        ]
+        .into_iter()
+        .filter_map(|(harness, provider)| harnesses.contains(&harness).then_some(provider))
+        .collect()
+    }
+
     /// Settings → Agents is authoritative for which providers Usage exposes
     /// on this device, including historical buckets and cached quota rows.
     fn retain_enabled_usage(
@@ -6550,17 +6561,7 @@ impl RpcService for EngineRpc {
             methods::GET_USAGE_SNAPSHOT => {
                 let request: UsageRequest = parse_params(params)?;
                 let synthetic = crate::usage::synthetic_mode_requested();
-                let enabled_harnesses = self.registry.enabled_set();
-                let enabled: Vec<_> = [
-                    (HarnessId::Codex, zeron_proto::UsageProvider::Codex),
-                    (HarnessId::Opencode, zeron_proto::UsageProvider::OpenCodeGo),
-                    (HarnessId::ClaudeCode, zeron_proto::UsageProvider::Claude),
-                ]
-                .into_iter()
-                .filter_map(|(harness, provider)| {
-                    enabled_harnesses.contains(&harness).then_some(provider)
-                })
-                .collect();
+                let enabled = Self::usage_providers_for(&self.registry.enabled_set());
                 let homes = (!synthetic).then(|| self.agent_accounts.usage_history_paths());
                 let opencode = (!synthetic
                     && enabled.contains(&zeron_proto::UsageProvider::OpenCodeGo))
@@ -6608,7 +6609,10 @@ impl RpcService for EngineRpc {
                         "Claude refresh failed · last good values",
                     );
                 }
-                Self::retain_enabled_usage(&mut snapshot, &enabled);
+                // A switch can change while a transcript or quota read is in
+                // flight. Re-read the device setting before publishing it.
+                let still_enabled = Self::usage_providers_for(&self.registry.enabled_set());
+                Self::retain_enabled_usage(&mut snapshot, &still_enabled);
                 for source in &mut snapshot.summary.sources {
                     source.environment_id = self.engine_info.device_id.clone();
                 }
@@ -8570,6 +8574,10 @@ mod tests {
 
     #[test]
     fn disabled_agent_usage_is_removed_from_all_snapshot_sections() {
+        assert_eq!(
+            EngineRpc::usage_providers_for(&[HarnessId::Codex, HarnessId::Hermes]),
+            vec![zeron_proto::UsageProvider::Codex]
+        );
         let mut snapshot = crate::usage::snapshot(UsageRequest {
             days: 7,
             price_overrides: std::collections::HashMap::new(),
