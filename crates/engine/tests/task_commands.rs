@@ -1377,6 +1377,137 @@ async fn project_cleanup_failure_resumes_from_durable_child_list() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_recovery_waits_for_durable_registry_delete() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("workspace");
+    std::fs::create_dir_all(&project).unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    let core = assemble(root.path(), runs.clone(), false);
+    core.workspace
+        .create_space(
+            "flush-failure-project",
+            &core.device_id,
+            project.to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task_in_space(&client, &task_id, "flush-failure-project", &project).await;
+    assert!(core.task_identity.view(&task_id).is_some());
+    let handle = core.doc_host.open(&task_id).unwrap();
+    core.doc_host.flush_all();
+    drop(handle);
+    assert!(snapshot_row_exists(&db_path, &task_id));
+    let blob = core.uploads.dir().join("registry-failure-fixture.png");
+    std::fs::create_dir_all(core.uploads.dir()).unwrap();
+    std::fs::write(&blob, b"synthetic").unwrap();
+    let mut draft = composer_draft(&task_id, "keep until durable");
+    draft.attachments.push(zeron_proto::DraftBlob {
+        attachment_id: "registry-failure-fixture".into(),
+        name: "registry-failure-fixture.png".into(),
+        path: Some(blob.to_string_lossy().to_string()),
+        sha256: None,
+        size: Some(9),
+        state: zeron_proto::DraftBlobState::Saved,
+        error: None,
+    });
+    core.store
+        .save_composer_draft(&core.device_id, &draft)
+        .unwrap();
+    core.workspace.flush(); // persist the project/chat before injecting failure
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER reject_l18_registry_delete BEFORE UPDATE ON snapshots
+             WHEN NEW.doc_id='registry1'
+             BEGIN SELECT RAISE(ABORT, 'synthetic registry write failure'); END;",
+        )
+        .unwrap();
+    }
+    let attempted = client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "deleteSpace", "spaceId": "flush-failure-project",
+                "expectedChatIds": [task_id]
+            }),
+        )
+        .await;
+    assert!(attempted.is_err());
+    let rpc = core.rpc_service();
+    rpc.run_project_cleanup_maintenance_for_tests();
+    let status: serde_json::Value = client
+        .call_as(
+            methods::GET_PROJECT_CLEANUP,
+            serde_json::json!({ "projectId": "flush-failure-project" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status["state"], "failed");
+    assert!(!core.task_identity.view(&task_id).unwrap().task.tombstoned);
+    assert!(
+        core.store
+            .read_composer_draft(&core.device_id, Some(&task_id), None)
+            .unwrap()
+            .draft
+            .is_some()
+    );
+    assert!(snapshot_row_exists(&db_path, &task_id));
+    assert!(blob.exists());
+    let persisted = core.store.load_snapshot("registry1").unwrap().unwrap();
+    let persisted = zeron_doc::RegistryDoc::from_bytes(&persisted, &core.device_id).unwrap();
+    assert!(persisted.space("flush-failure-project").unwrap().is_some());
+    assert!(persisted.chat(&task_id).unwrap().is_some());
+
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER reject_l18_registry_delete")
+            .unwrap();
+    }
+    rpc.run_project_cleanup_maintenance_for_tests();
+    let status: serde_json::Value = client
+        .call_as(
+            methods::GET_PROJECT_CLEANUP,
+            serde_json::json!({ "projectId": "flush-failure-project" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status["state"], "completed", "{status}");
+    let persisted = core.store.load_snapshot("registry1").unwrap().unwrap();
+    let persisted = zeron_doc::RegistryDoc::from_bytes(&persisted, &core.device_id).unwrap();
+    assert!(persisted.space("flush-failure-project").unwrap().is_none());
+    assert!(persisted.chat(&task_id).unwrap().is_none());
+    assert!(core.task_identity.view(&task_id).unwrap().task.tombstoned);
+    assert!(!snapshot_row_exists(&db_path, &task_id));
+    assert!(!blob.exists());
+    drop(client);
+    drop(rpc);
+    drop(core);
+    tokio::task::yield_now().await;
+    let reopened = assemble(root.path(), runs, false);
+    assert!(
+        reopened
+            .workspace
+            .space("flush-failure-project")
+            .unwrap()
+            .is_none()
+    );
+    assert!(reopened.workspace.chat(&task_id).unwrap().is_none());
+    assert!(
+        reopened
+            .task_identity
+            .view(&task_id)
+            .unwrap()
+            .task
+            .tombstoned
+    );
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deletion_settles_a_held_synthetic_run_before_tombstoning() {
     let root = tempfile::tempdir().unwrap();
     let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), true);

@@ -1495,6 +1495,11 @@ impl EngineRpc {
         self.resume_pending_project_cleanups_with_readiness(after, self.workspace.registry_synced())
     }
 
+    #[doc(hidden)]
+    pub fn run_project_cleanup_maintenance_for_tests(&self) {
+        self.resume_pending_project_cleanups_after("");
+    }
+
     fn resume_pending_project_cleanups_with_readiness(
         &self,
         after: &str,
@@ -1600,6 +1605,31 @@ impl EngineRpc {
                 let _ = self
                     .store
                     .set_project_cleanup_state(&project_id, "failed", &error);
+                self.release_surviving_project_children(&children);
+                continue;
+            }
+            // The previous process may have removed these rows only in memory
+            // before its checked snapshot save failed. Persist the validated
+            // deletion now, while the child command gates are held, before
+            // retiring identity, snapshots, drafts, terminals or upload bytes.
+            if let Err(error) = self.workspace.flush_checked() {
+                let _ = self.store.set_project_cleanup_state(
+                    &project_id,
+                    "failed",
+                    &format!("Registry deletion is not durable: {error}"),
+                );
+                continue;
+            }
+            let persisted_selection = self.workspace.registry_synced()
+                && matches!(self.workspace.space(&project_id), Ok(None))
+                && children
+                    .iter()
+                    .all(|task_id| matches!(self.workspace.chat(task_id), Ok(None)));
+            if !persisted_selection {
+                let detail = "Project or child state changed after the checked registry flush; cleanup was not resumed.";
+                let _ = self
+                    .store
+                    .set_project_cleanup_state(&project_id, "failed", detail);
                 self.release_surviving_project_children(&children);
                 continue;
             }
