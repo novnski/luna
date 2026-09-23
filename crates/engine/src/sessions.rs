@@ -17,7 +17,7 @@
 //! Every dying path must instead carry its own visible error (child crash with stderr,
 //! spawn failure, stream error, engine-restart recovery).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
@@ -325,6 +325,10 @@ impl RuntimeConfig {
 
 struct RunHandle {
     run_id: String,
+    /// In-memory provider turn evidence for a future per-request LUNA grant.
+    /// This is separate from `active_turn_id()`, which intentionally returns
+    /// the engine run ID for the existing command fence.
+    provider_turn: Option<ProviderTurnFence>,
     steerable: bool,
     runtime_config: RuntimeConfig,
     steer_tx: mpsc::Sender<SteerMessage>,
@@ -343,6 +347,103 @@ struct RunHandle {
     /// fallback. Explicit native steers never replay: the run task converts
     /// any unconfirmed explicit entry to delivery-unknown at exit.
     routed_steers: Arc<Mutex<std::collections::VecDeque<RoutedSteer>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderBindingKey {
+    task_id: String,
+    binding_id: String,
+    generation: u32,
+    provider_thread_id: String,
+}
+
+/// A checkpoint is evidence for one active provider turn, never authorization.
+/// Claiming a call ID only reserves it for a future engine-owned proposal; it
+/// does not mint a grant or dispatch a tool.
+#[derive(Debug)]
+struct ProviderTurnFence {
+    run_id: String,
+    binding: ProviderBindingKey,
+    provider_turn_id: String,
+    claimed_call_ids: HashSet<String>,
+}
+
+impl RunHandle {
+    fn observe_codex_checkpoint(
+        &mut self,
+        task_id: &str,
+        run_id: &str,
+        provider_thread_id: Option<&str>,
+        provider_turn_id: &str,
+        binding: Option<&ProviderBindingKey>,
+    ) -> bool {
+        if self.run_id != run_id {
+            return false;
+        }
+        let Some(binding) = binding.filter(|binding| {
+            self.runtime_config.harness_id == HarnessId::Codex
+                && !self.interrupt_token.is_cancelled()
+                && !*self.cancel.subscribe().borrow()
+                && binding.task_id == task_id
+                && !binding.binding_id.is_empty()
+                && !binding.provider_thread_id.is_empty()
+                && provider_thread_id == Some(binding.provider_thread_id.as_str())
+                && !provider_turn_id.is_empty()
+        }) else {
+            self.provider_turn = None;
+            return false;
+        };
+        if self.provider_turn.as_ref().is_some_and(|turn| {
+            turn.run_id == run_id
+                && turn.binding == *binding
+                && turn.provider_turn_id == provider_turn_id
+        }) {
+            // A duplicate checkpoint must not reopen an already claimed call.
+            return true;
+        }
+        self.provider_turn = Some(ProviderTurnFence {
+            run_id: run_id.to_owned(),
+            binding: binding.clone(),
+            provider_turn_id: provider_turn_id.to_owned(),
+            claimed_call_ids: HashSet::new(),
+        });
+        true
+    }
+
+    fn claim_codex_invocation(
+        &mut self,
+        task_id: &str,
+        run_id: &str,
+        binding: Option<&ProviderBindingKey>,
+        provider_thread_id: &str,
+        provider_turn_id: &str,
+        provider_call_id: &str,
+    ) -> bool {
+        const MAX_CALL_ID_BYTES: usize = 256;
+        const MAX_CLAIMS_PER_TURN: usize = 4_096;
+        if self.run_id != run_id
+            || self.runtime_config.harness_id != HarnessId::Codex
+            || self.interrupt_token.is_cancelled()
+            || *self.cancel.subscribe().borrow()
+            || provider_call_id.is_empty()
+            || provider_call_id.len() > MAX_CALL_ID_BYTES
+        {
+            return false;
+        }
+        let Some(binding) = binding else {
+            return false;
+        };
+        let Some(turn) = self.provider_turn.as_mut() else {
+            return false;
+        };
+        turn.run_id == run_id
+            && turn.binding.task_id == task_id
+            && turn.binding == *binding
+            && turn.binding.provider_thread_id == provider_thread_id
+            && turn.provider_turn_id == provider_turn_id
+            && turn.claimed_call_ids.len() < MAX_CLAIMS_PER_TURN
+            && turn.claimed_call_ids.insert(provider_call_id.to_owned())
+    }
 }
 
 /// One accepted-but-unconfirmed steer. `delivery` decides whether run exit may
@@ -582,6 +683,29 @@ impl SessionsEngine {
         lock(&self.inner.runs)
             .get(chat_id)
             .map(|run| run.run_id.clone())
+    }
+
+    /// Reserve one adapter-validated provider call for a future LUNA approval
+    /// proposal. The adapter context is evidence only; this never grants a
+    /// cross-task action. No production mutating caller is attached yet.
+    #[allow(dead_code)]
+    fn claim_luna_provider_invocation(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        context: &zeron_harness::LunaToolInvocationContext,
+    ) -> bool {
+        let binding = self.inner.current_codex_binding_key(chat_id);
+        lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
+            run.claim_codex_invocation(
+                chat_id,
+                run_id,
+                binding.as_ref(),
+                context.provider_thread_id(),
+                context.provider_turn_id(),
+                context.provider_call_id(),
+            )
+        })
     }
 
     pub fn task_binding_generation(&self, chat_id: &str) -> Option<u32> {
@@ -1517,6 +1641,7 @@ impl SessionsEngine {
             chat_id.to_string(),
             RunHandle {
                 run_id: run_id.clone(),
+                provider_turn: None,
                 steerable: harness.supports_steering(),
                 runtime_config: RuntimeConfig::from_request(harness_id, &request),
                 steer_tx,
@@ -1680,7 +1805,8 @@ impl SessionsEngine {
         chat_id: &str,
         hold_recovery: bool,
     ) -> Result<bool, EngineError> {
-        let target = lock(&self.inner.runs).get(chat_id).map(|h| {
+        let target = lock(&self.inner.runs).get_mut(chat_id).map(|h| {
+            h.provider_turn = None;
             (
                 h.run_id.clone(),
                 h.interrupt_token.clone(),
@@ -3315,6 +3441,55 @@ impl Inner {
             runs.remove(chat_id);
         }
     }
+
+    fn current_codex_binding_key(&self, chat_id: &str) -> Option<ProviderBindingKey> {
+        let view = self.task_identity.get()?.view(chat_id)?;
+        let binding = view.current_binding?;
+        if view.task.tombstoned
+            || view.workspace.environment_id != self.device_id
+            || binding.task_id != chat_id
+            || binding.environment_id != self.device_id
+            || binding.provider_id != HarnessId::Codex
+            || binding.binding_id.is_empty()
+            || binding.provider_task_id.is_empty()
+        {
+            return None;
+        }
+        Some(ProviderBindingKey {
+            task_id: chat_id.to_owned(),
+            binding_id: binding.binding_id,
+            generation: binding.generation,
+            provider_thread_id: binding.provider_task_id,
+        })
+    }
+
+    fn observe_codex_checkpoint(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        provider_thread_id: Option<&str>,
+        provider_turn_id: &str,
+    ) -> bool {
+        let binding = self.current_codex_binding_key(chat_id);
+        lock(&self.runs).get_mut(chat_id).is_some_and(|run| {
+            run.observe_codex_checkpoint(
+                chat_id,
+                run_id,
+                provider_thread_id,
+                provider_turn_id,
+                binding.as_ref(),
+            )
+        })
+    }
+
+    fn clear_codex_checkpoint(&self, chat_id: &str, run_id: &str) {
+        if let Some(run) = lock(&self.runs)
+            .get_mut(chat_id)
+            .filter(|run| run.run_id == run_id)
+        {
+            run.provider_turn = None;
+        }
+    }
 }
 
 // ── run task ────────────────────────────────────────────────────────────────
@@ -3755,10 +3930,11 @@ fn stop_after_journal_failure(
 ) {
     tracing::error!(chat = %chat_id, run = %run_id, %error, "run journal write outcome uncertain; stopping provider");
     let target = {
-        let runs = lock(&inner.runs);
-        runs.get(chat_id)
+        let mut runs = lock(&inner.runs);
+        runs.get_mut(chat_id)
             .filter(|handle| handle.run_id == run_id)
             .map(|handle| {
+                handle.provider_turn = None;
                 let steers = lock(&handle.routed_steers).drain(..).collect::<Vec<_>>();
                 (
                     handle.interrupt_token.clone(),
@@ -4075,6 +4251,7 @@ async fn drive_run(
                 changed = cancel_rx.changed(), if !interrupted => {
                     let _ = changed;
                     interrupted = true;
+                    inner.clear_codex_checkpoint(&chat_id, &run_id);
                     interrupt_deadline = Some(
                         tokio::time::Instant::now() + std::time::Duration::from_secs(3),
                     );
@@ -4803,16 +4980,32 @@ async fn drive_run(
 
         if let AgentEvent::ProviderCheckpoint { checkpoint_id } = &event {
             provider_checkpoint_id = Some(checkpoint_id.clone());
+            if harness_id == HarnessId::Codex {
+                inner.observe_codex_checkpoint(
+                    &chat_id,
+                    &run_id,
+                    if saw_session_started {
+                        recovery_session_id.as_deref()
+                    } else {
+                        None
+                    },
+                    checkpoint_id,
+                );
+            }
             // Provider checkpoint ids are LUNA control-plane metadata. They
             // are persisted on the completed assistant entry below, never in
             // the visible event stream or transcript parts.
             continue;
+        }
+        if matches!(&event, AgentEvent::Done { .. }) {
+            inner.clear_codex_checkpoint(&chat_id, &run_id);
         }
 
         match &event {
             AgentEvent::SessionStarted {
                 session_id, cwd, ..
             } => {
+                inner.clear_codex_checkpoint(&chat_id, &run_id);
                 saw_session_started = true;
                 recovery_session_id = Some(session_id.clone());
                 let engine = SessionsEngine {
@@ -5308,10 +5501,10 @@ async fn drive_run(
 mod tests {
     use super::{
         LunaApprovalOutcome, LunaSyntheticArchiveGrant, LunaSyntheticArchiveProposal, PendingInput,
-        PendingInputKind, PendingInputs, RunHandle, RunResumeState, RuntimeConfig, SessionsEngine,
-        approval_answer, expire_pending_approval, lock, reduce_provider_context_compaction,
-        reduce_provider_context_terminal, stop_after_journal_failure, subagent_doc_id,
-        take_pending_ordinary_input,
+        PendingInputKind, PendingInputs, ProviderBindingKey, RunHandle, RunResumeState,
+        RuntimeConfig, SessionsEngine, approval_answer, expire_pending_approval, lock,
+        reduce_provider_context_compaction, reduce_provider_context_terminal,
+        stop_after_journal_failure, subagent_doc_id, take_pending_ordinary_input,
     };
     use futures::StreamExt as _;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -6035,6 +6228,7 @@ mod tests {
             "chat-a".into(),
             RunHandle {
                 run_id: "run-a".into(),
+                provider_turn: None,
                 steerable: false,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
                 steer_tx,
@@ -6135,6 +6329,7 @@ mod tests {
             "chat-a".into(),
             RunHandle {
                 run_id: "run-a".into(),
+                provider_turn: None,
                 steerable: false,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
                 steer_tx,
@@ -6147,6 +6342,236 @@ mod tests {
             },
         );
         (root, sessions, pending, engine_rx)
+    }
+
+    fn synthetic_provider_binding() -> ProviderBindingKey {
+        ProviderBindingKey {
+            task_id: "chat-a".into(),
+            binding_id: "binding-a".into(),
+            generation: 1,
+            provider_thread_id: "provider-thread-a".into(),
+        }
+    }
+
+    #[test]
+    fn provider_turn_fence_requires_exact_checkpoint_and_claims_each_call_once() {
+        let (_root, sessions, _pending, _events) = local_luna_test_run();
+        let binding = synthetic_provider_binding();
+        assert!(!sessions.inner.observe_codex_checkpoint(
+            "chat-a",
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        )); // No authoritative task binding is installed in this fixture.
+        let mut runs = lock(&sessions.inner.runs);
+        let run = runs.get_mut("chat-a").unwrap();
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-a",
+        ));
+        assert!(!run.observe_codex_checkpoint(
+            "chat-a",
+            "old-run",
+            Some("provider-thread-a"),
+            "turn-a",
+            Some(&binding),
+        ));
+        assert!(!run.observe_codex_checkpoint("chat-a", "run-a", None, "turn-a", Some(&binding),));
+        assert!(!run.observe_codex_checkpoint(
+            "chat-a",
+            "run-a",
+            Some("foreign-thread"),
+            "turn-a",
+            Some(&binding),
+        ));
+        assert!(!run.observe_codex_checkpoint(
+            "chat-a",
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+            None,
+        ));
+        assert!(run.observe_codex_checkpoint(
+            "chat-a",
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+            Some(&binding),
+        ));
+        for (task, thread, turn, call) in [
+            (
+                "foreign-task",
+                "provider-thread-a",
+                "turn-a",
+                "foreign-task",
+            ),
+            ("chat-a", "foreign-thread", "turn-a", "foreign-thread"),
+            ("chat-a", "provider-thread-a", "old-turn", "old-turn"),
+            ("chat-a", "provider-thread-a", "turn-a", ""),
+        ] {
+            assert!(
+                !run.claim_codex_invocation(task, "run-a", Some(&binding), thread, turn, call,)
+            );
+        }
+        assert!(run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-a",
+        ));
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-a",
+        ));
+        // A duplicate checkpoint cannot reopen an already claimed call ID.
+        assert!(run.observe_codex_checkpoint(
+            "chat-a",
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+            Some(&binding),
+        ));
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-a",
+        ));
+        assert!(run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-b",
+        ));
+        assert!(run.observe_codex_checkpoint(
+            "chat-a",
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-b",
+            Some(&binding),
+        ));
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-c",
+        ));
+        assert!(run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-b",
+            "call-a",
+        )); // A call ID belongs to its provider turn, not the whole warm run.
+        drop(runs);
+        assert_eq!(sessions.active_turn_id("chat-a").as_deref(), Some("run-a"));
+    }
+
+    #[test]
+    fn provider_turn_fence_rejects_rebinding_replacement_cancel_and_completion() {
+        let (_root, sessions, _pending, _events) = local_luna_test_run();
+        let binding = synthetic_provider_binding();
+        let mut runs = lock(&sessions.inner.runs);
+        let run = runs.get_mut("chat-a").unwrap();
+        assert!(run.observe_codex_checkpoint(
+            "chat-a",
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+            Some(&binding),
+        ));
+        let mut replaced_binding = binding.clone();
+        replaced_binding.generation += 1;
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-a",
+            Some(&replaced_binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-a",
+        ));
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "old-run",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-a",
+        ));
+        run.run_id = "run-b".into();
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-b",
+            Some(&binding),
+            "provider-thread-a",
+            "turn-a",
+            "call-a",
+        ));
+        assert!(run.observe_codex_checkpoint(
+            "chat-a",
+            "run-b",
+            Some("provider-thread-a"),
+            "turn-b",
+            Some(&replaced_binding),
+        ));
+        drop(runs);
+        sessions.inner.clear_codex_checkpoint("chat-a", "run-a");
+        let mut runs = lock(&sessions.inner.runs);
+        let run = runs.get_mut("chat-a").unwrap();
+        assert!(run.claim_codex_invocation(
+            "chat-a",
+            "run-b",
+            Some(&replaced_binding),
+            "provider-thread-a",
+            "turn-b",
+            "call-b",
+        ));
+        run.cancel.send_replace(true);
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-b",
+            Some(&replaced_binding),
+            "provider-thread-a",
+            "turn-b",
+            "call-c",
+        ));
+        run.cancel.send_replace(false);
+        run.interrupt_token.cancel();
+        assert!(!run.claim_codex_invocation(
+            "chat-a",
+            "run-b",
+            Some(&replaced_binding),
+            "provider-thread-a",
+            "turn-b",
+            "call-d",
+        ));
+        drop(runs);
+        // Done clears the same fence through this run-scoped helper.
+        sessions.inner.clear_codex_checkpoint("chat-a", "run-b");
+        assert!(
+            lock(&sessions.inner.runs)
+                .get("chat-a")
+                .unwrap()
+                .provider_turn
+                .is_none()
+        );
     }
 
     #[test]
@@ -7283,6 +7708,7 @@ mod tests {
             "chat-active".into(),
             RunHandle {
                 run_id: "run-active".into(),
+                provider_turn: None,
                 steerable: true,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request),
                 steer_tx,
