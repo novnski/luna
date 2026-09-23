@@ -40,7 +40,7 @@ pub enum StoreError {
     AttentionCommandConflict,
     #[error("cannot dismiss unresolved attention")]
     UnresolvedAttention,
-    #[error("snapshot save requires a write or flush permit")]
+    #[error("write requires an admitted writer or flush permit")]
     AdmissionRequired,
     #[error("write permit does not belong to this guarded store")]
     AdmissionMismatch,
@@ -1168,6 +1168,12 @@ impl DocsStore {
         batch_id: &str,
         bytes: &[u8],
     ) -> Result<(), StoreError> {
+        // A guarded legacy call is an admission failure, not a publication
+        // failure: recording it would invalidate a later valid snapshot's
+        // durable outbox-initialized marker.
+        if self.write_epoch.is_some() {
+            return Err(StoreError::AdmissionRequired);
+        }
         let result = self.conn().execute(
             "INSERT OR IGNORE INTO chat_outbox(doc_id,batch_id,bytes) VALUES (?1,?2,?3)",
             params![doc_id, batch_id, bytes],
@@ -4635,6 +4641,33 @@ mod draft_tests {
 #[cfg(test)]
 mod publication_failure_tests {
     use super::*;
+
+    #[test]
+    fn guarded_enqueue_denial_does_not_invalidate_later_admitted_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("profile");
+        std::fs::create_dir(&profile).unwrap();
+        let seed = DocsStore::open(&profile).unwrap();
+        seed.initialize_chat_outbox("chat", &[]).unwrap();
+        drop(seed);
+
+        let coordinator = WriteEpoch::for_device_root(root.path()).unwrap();
+        let permit = coordinator.try_admit().unwrap();
+        let guarded = DocsStore::open_guarded(&profile, coordinator, &permit).unwrap();
+        assert!(guarded.chat_outbox_initialized("chat").unwrap());
+        assert!(matches!(
+            guarded.enqueue_chat_update("chat", "denied", b"not-published"),
+            Err(StoreError::AdmissionRequired)
+        ));
+        assert!(!guarded.failed_publications.lock().unwrap().contains("chat"));
+        guarded
+            .save_snapshot_admitted(&permit, "chat", b"valid")
+            .unwrap();
+        assert!(guarded.chat_outbox_initialized("chat").unwrap());
+        assert!(guarded.pending_chat_updates("chat").unwrap().is_empty());
+        assert_eq!(guarded.load_snapshot("chat").unwrap().unwrap(), b"valid");
+    }
+
     #[test]
     fn cursor_save_after_failed_outbox_write_keeps_a_durable_replay_obligation() {
         for cursor_save in [false, true] {
@@ -4650,6 +4683,7 @@ mod publication_failure_tests {
                     .enqueue_chat_update("chat", "batch", b"cleanup")
                     .is_err()
             );
+            assert!(store.failed_publications.lock().unwrap().contains("chat"));
             if cursor_save {
                 store
                     .save_snapshot_with_cursor("chat", b"after", 43, 2)
