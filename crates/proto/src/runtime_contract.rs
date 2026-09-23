@@ -153,6 +153,50 @@ pub struct RuntimeContractView {
     pub unavailable_reason: Option<String>,
 }
 
+/// LUNA-owned instructions. Provider-native instruction files stay with their
+/// provider and are deliberately absent from this editable settings value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstructionSettingsView {
+    pub revision: u64,
+    pub global: String,
+    pub project_id: Option<String>,
+    pub project: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IntegrationKind {
+    Skill,
+    McpServer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationInventoryItem {
+    pub name: String,
+    pub kind: IntegrationKind,
+    /// Provider-reported or provider-owned config, never a LUNA copy.
+    pub source: String,
+    pub scope: String,
+    pub configured: bool,
+    /// None means availability has not been verified with the provider.
+    pub available: Option<bool>,
+    /// None means the provider has no trustworthy per-session attachment readback.
+    pub attached: Option<bool>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationInventoryView {
+    pub provider: HarnessId,
+    pub machine_id: String,
+    pub items: Vec<IntegrationInventoryItem>,
+    pub unavailable_reason: Option<String>,
+    pub help: String,
+}
+
 impl LunaAgentRuntimeContract {
     pub fn diagnostics(
         &self,

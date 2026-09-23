@@ -24,12 +24,16 @@ use gpui::{
     px,
 };
 
+use crate::composer::ComposerInput;
 use std::time::Duration;
 use zeron_engine::registry::TitleSettings;
 use zeron_engine::registry::{HarnessDescriptor, descriptor_enabled};
 
 use zeron_proto::Model;
-use zeron_proto::{AgentLoginPoll, AgentLoginStart, AgentLoginStatus, HarnessId};
+use zeron_proto::{
+    AgentLoginPoll, AgentLoginStart, AgentLoginStatus, HarnessId, InstructionSettingsView,
+    IntegrationInventoryView, IntegrationKind, RuntimeContractView,
+};
 use zeron_rpc::methods;
 
 use crate::pickers::visible_harnesses;
@@ -37,6 +41,10 @@ use crate::popover::{self, Loadable};
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
+
+fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
+    widgets::meta_line(theme, vec![div().child(value.into()).into_any_element()])
+}
 
 /// One-line blurb per agent (the t3code models page pairs every toggle row
 /// with a description; the catalog descriptor doesn't carry one).
@@ -97,6 +105,17 @@ pub struct HarnessesPage {
     sign_in: Option<SignIn>,
     sign_in_failure: Option<SignInFailure>,
     sign_in_task: Option<Task<()>>,
+    instructions: Loadable<InstructionSettingsView>,
+    inventory: Loadable<IntegrationInventoryView>,
+    integration_provider: HarnessId,
+    instruction_project_id: Option<String>,
+    global_input: Entity<ComposerInput>,
+    project_input: Entity<ComposerInput>,
+    instruction_task: Option<Task<()>>,
+    inventory_task: Option<Task<()>>,
+    instruction_saving: bool,
+    runtime_contract: Loadable<RuntimeContractView>,
+    runtime_task: Option<Task<()>>,
 }
 
 struct SignIn {
@@ -148,6 +167,8 @@ fn signs_in_on_enable(harness: HarnessId) -> bool {
 
 impl HarnessesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let global_input = cx.new(|cx| ComposerInput::new("Instructions for every LUNA task", cx));
+        let project_input = cx.new(|cx| ComposerInput::new("Instructions for this project", cx));
         let mut page = Self {
             title_settings: Loadable::Idle,
             title_models: Loadable::Idle,
@@ -166,6 +187,17 @@ impl HarnessesPage {
             sign_in: None,
             sign_in_failure: None,
             sign_in_task: None,
+            instructions: Loadable::Idle,
+            inventory: Loadable::Idle,
+            integration_provider: HarnessId::Codex,
+            instruction_project_id: None,
+            global_input,
+            project_input,
+            instruction_task: None,
+            inventory_task: None,
+            instruction_saving: false,
+            runtime_contract: Loadable::Idle,
+            runtime_task: None,
         };
         page.load(cx);
         page
@@ -197,6 +229,9 @@ impl HarnessesPage {
         self.error = None;
         self.sign_in_failure = None;
         self.harnesses = Loadable::Idle;
+        self.instructions = Loadable::Idle;
+        self.inventory = Loadable::Idle;
+        self.runtime_contract = Loadable::Idle;
         self.load(cx);
         cx.notify();
     }
@@ -209,6 +244,11 @@ impl HarnessesPage {
         };
         let params = self.with_target(serde_json::json!({}));
         self.load_titles(None, cx);
+        if self.target_device.is_none() {
+            self.load_instructions(cx);
+            self.load_inventory(cx);
+            self.load_runtime_contract(cx);
+        }
         self.harnesses = Loadable::Loading;
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::LIST_HARNESSES, params).await;
@@ -304,6 +344,375 @@ impl HarnessesPage {
             }
         }));
         cx.notify();
+    }
+
+    fn load_instructions(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let project_id = self
+            .state
+            .read(cx)
+            .selected_space_row()
+            .map(|space| space.id.clone());
+        self.instruction_project_id = project_id.clone();
+        self.instructions = Loadable::Loading;
+        self.instruction_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::GET_INSTRUCTION_SETTINGS,
+                    serde_json::json!({"projectId": project_id}),
+                )
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<InstructionSettingsView>(value)
+                        .map_err(|e| e.to_string())
+                });
+            this.update(cx, |page, cx| {
+                page.instructions = match result {
+                    Ok(view) => {
+                        page.global_input
+                            .update(cx, |input, cx| input.set_text(view.global.clone(), cx));
+                        page.project_input
+                            .update(cx, |input, cx| input.set_text(view.project.clone(), cx));
+                        Loadable::Ready(view)
+                    }
+                    Err(error) => Loadable::Error(error),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn save_instructions(&mut self, project: bool, cx: &mut Context<Self>) {
+        let Loadable::Ready(view) = &self.instructions else {
+            return;
+        };
+        if self.instruction_saving {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let project_id = if project {
+            self.instruction_project_id.clone()
+        } else {
+            None
+        };
+        if project && project_id.is_none() {
+            return;
+        }
+        let text = if project {
+            self.project_input.read(cx).text()
+        } else {
+            self.global_input.read(cx).text()
+        }
+        .to_string();
+        let revision = view.revision;
+        self.instruction_saving = true;
+        self.instruction_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call(
+                methods::SET_INSTRUCTION_SETTINGS,
+                serde_json::json!({"projectId": project_id, "text": text, "expectedRevision": revision}),
+            ).await.map_err(|e| e.to_string()).and_then(|value| {
+                serde_json::from_value::<InstructionSettingsView>(value).map_err(|e| e.to_string())
+            });
+            this.update(cx, |page, cx| {
+                page.instruction_saving = false;
+                match result {
+                    Ok(view) => {
+                        page.instructions = Loadable::Ready(view);
+                        page.error = None;
+                        page.load_runtime_contract(cx);
+                    }
+                    Err(error) => page.error = Some(error),
+                }
+                cx.notify();
+            }).ok();
+        }));
+        cx.notify();
+    }
+
+    fn load_inventory(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let provider = self.integration_provider;
+        let project_id = self
+            .state
+            .read(cx)
+            .selected_space_row()
+            .map(|space| space.id.clone());
+        self.inventory = Loadable::Loading;
+        self.inventory_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::GET_INTEGRATION_INVENTORY,
+                    serde_json::json!({"provider": provider, "projectId": project_id}),
+                )
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<IntegrationInventoryView>(value)
+                        .map_err(|e| e.to_string())
+                });
+            this.update(cx, |page, cx| {
+                page.inventory = match result {
+                    Ok(view) => Loadable::Ready(view),
+                    Err(error) => Loadable::Error(error),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn load_runtime_contract(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let Some(task_id) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        self.runtime_contract = Loadable::Loading;
+        self.runtime_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::GET_RUNTIME_CONTRACT,
+                    serde_json::json!({"taskId": task_id}),
+                )
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<RuntimeContractView>(value).map_err(|e| e.to_string())
+                });
+            this.update(cx, |page, cx| {
+                page.runtime_contract = match result {
+                    Ok(view) => Loadable::Ready(view),
+                    Err(error) => Loadable::Error(error),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn render_runtime_contract(&self, theme: &Theme) -> AnyElement {
+        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
+            .child(widgets::row_title(theme, "Effective session"))
+            .child(widgets::page_subtitle(theme,
+                "Redacted readback for the selected task. Instruction text and provider credentials are never shown here."));
+        match &self.runtime_contract {
+            Loadable::Ready(view) => {
+                if let Some(effective) = &view.effective {
+                    card = card.child(meta_text(
+                        theme,
+                        format!(
+                            "Contract v{} · {} · {:?} · {}",
+                            effective.contract_version,
+                            effective.contract_hash,
+                            effective.delivery,
+                            if effective.restart_required {
+                                "restart required"
+                            } else {
+                                "current at last provider acknowledgment"
+                            },
+                        ),
+                    ));
+                    for instruction in &effective.instructions {
+                        card = card.child(div().mt(px(6.0)).child(meta_text(
+                            theme,
+                            format!(
+                                "{} · {} characters · {}",
+                                instruction.name,
+                                instruction.character_count,
+                                instruction.provenance
+                            ),
+                        )));
+                    }
+                    for tool in &effective.attached_tools {
+                        card = card.child(div().mt(px(6.0)).child(meta_text(
+                            theme,
+                            format!("Tool attached: {}@{}", tool.name, tool.version),
+                        )));
+                    }
+                    for tool in &effective.omitted_tools {
+                        card = card.child(div().mt(px(6.0)).child(meta_text(
+                            theme,
+                            format!("Tool unavailable: {} · {}", tool.name, tool.reason),
+                        )));
+                    }
+                } else {
+                    card = card.child(meta_text(
+                        theme,
+                        view.unavailable_reason.clone().unwrap_or_else(|| {
+                            "No provider session has acknowledged a LUNA contract.".into()
+                        }),
+                    ));
+                }
+            }
+            Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
+            Loadable::Idle => {
+                card = card.child(meta_text(
+                    theme,
+                    "Select a task to inspect its effective session.",
+                ))
+            }
+            Loadable::Loading => card = card.child(meta_text(theme, "Loading effective session…")),
+        }
+        card.into_any_element()
+    }
+
+    fn render_integrations(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
+            .child(widgets::row_title(theme, "Skills and MCP"))
+            .child(widgets::page_subtitle(theme,
+                "Provider-owned configuration on this device. Configured, available, and attached are separate checks; unknown is shown when the provider has no session readback."))
+            .child(widgets::ghost_action(theme).id("refresh-integrations")
+                .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
+                .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(cx); cx.notify(); }))
+                .child("Refresh"));
+        if let Loadable::Ready(harnesses) = &self.harnesses {
+            let mut picker = div()
+                .mt(px(10.0))
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(6.0));
+            for harness in harnesses {
+                let id = harness.id;
+                let selected = id == self.integration_provider;
+                picker = picker.child(
+                    widgets::ghost_action(theme)
+                        .id(SharedString::from(format!("integration-provider-{id:?}")))
+                        .when(selected, |el| el.bg(theme.accent_wash))
+                        .hover(|s| widgets::ghost_hover(theme, s))
+                        .on_click(cx.listener(move |page, _, _, cx| {
+                            page.integration_provider = id;
+                            page.load_inventory(cx);
+                            cx.notify();
+                        }))
+                        .child(harness.name.clone()),
+                );
+            }
+            card = card.child(picker);
+        }
+        match &self.inventory {
+            Loadable::Ready(view) => {
+                card = card.child(meta_text(theme, format!("Device: {}", view.machine_id)));
+                if let Some(reason) = &view.unavailable_reason {
+                    card = card.child(meta_text(theme, reason.clone()));
+                }
+                for item in &view.items {
+                    let kind = if item.kind == IntegrationKind::Skill {
+                        "Skill"
+                    } else {
+                        "MCP"
+                    };
+                    let available = match item.available {
+                        Some(true) => "available",
+                        Some(false) => "unavailable",
+                        None => "availability unknown",
+                    };
+                    let attached = match item.attached {
+                        Some(true) => "attached",
+                        Some(false) => "not attached",
+                        None => "attachment unknown",
+                    };
+                    card = card.child(
+                        div()
+                            .mt(px(12.0))
+                            .child(widgets::row_title(theme, format!("{kind} · {}", item.name)))
+                            .child(meta_text(
+                                theme,
+                                format!(
+                                    "{} · {} · configured · {available} · {attached}",
+                                    item.source, item.scope
+                                ),
+                            ))
+                            .when_some(item.reason.clone(), |el, reason| {
+                                el.child(meta_text(theme, reason))
+                            }),
+                    );
+                }
+                card = card.child(div().mt(px(8.0)).child(meta_text(theme, view.help.clone())));
+            }
+            Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
+            _ => card = card.child(meta_text(theme, "Loading provider inventory…")),
+        }
+        card.into_any_element()
+    }
+
+    fn render_instructions(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
+            .child(widgets::row_title(theme, "LUNA instructions"))
+            .child(widgets::page_subtitle(theme,
+                "Global instructions precede project instructions. Provider-native files remain with their provider. Changes apply at the next safe turn or a new provider session."))
+            .child(widgets::ghost_action(theme).id("reload-luna-instructions")
+                .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
+                .on_click(cx.listener(|page, _, _, cx| { page.load_instructions(cx); cx.notify(); }))
+                .child("Reload"));
+        match &self.instructions {
+            Loadable::Ready(view) => {
+                card = card
+                    .child(
+                        div()
+                            .mt(px(12.0))
+                            .child(widgets::row_title(theme, "Global")),
+                    )
+                    .child(div().mt(px(6.0)).child(popover::dialog_field(
+                        self.global_input.clone().into_any_element(),
+                    )))
+                    .child(
+                        widgets::ghost_action(theme)
+                            .id("save-global-instructions")
+                            .mt(px(8.0))
+                            .hover(|s| widgets::ghost_hover(theme, s))
+                            .when(!self.instruction_saving, |el| {
+                                el.on_click(
+                                    cx.listener(|page, _, _, cx| page.save_instructions(false, cx)),
+                                )
+                            })
+                            .child("Save global"),
+                    );
+                if view.project_id.is_some() {
+                    card = card
+                        .child(
+                            div()
+                                .mt(px(16.0))
+                                .child(widgets::row_title(theme, "Current project")),
+                        )
+                        .child(div().mt(px(6.0)).child(popover::dialog_field(
+                            self.project_input.clone().into_any_element(),
+                        )))
+                        .child(
+                            widgets::ghost_action(theme)
+                                .id("save-project-instructions")
+                                .mt(px(8.0))
+                                .hover(|s| widgets::ghost_hover(theme, s))
+                                .when(!self.instruction_saving, |el| {
+                                    el.on_click(cx.listener(|page, _, _, cx| {
+                                        page.save_instructions(true, cx)
+                                    }))
+                                })
+                                .child("Save project"),
+                        );
+                } else {
+                    card = card.child(meta_text(
+                        theme,
+                        "Select a project to edit its LUNA instructions.",
+                    ));
+                }
+            }
+            Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
+            _ => card = card.child(meta_text(theme, "Loading instructions…")),
+        }
+        card.into_any_element()
     }
 
     fn render_titles(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1063,6 +1472,13 @@ impl Render for HarnessesPage {
             .map(|message| widgets::error_strip(&theme, message).into_any_element());
         let switcher = self.render_device_switcher(&theme, cx);
         let titles = self.render_titles(&theme, cx);
+        let local_sections = (self.target_device.is_none()).then(|| {
+            (
+                self.render_integrations(&theme, cx),
+                self.render_instructions(&theme, cx),
+                self.render_runtime_contract(&theme),
+            )
+        });
         let scrollbar = popover::rail(self, "harnesses-page-scrollbar", &theme, cx);
 
         div()
@@ -1099,6 +1515,9 @@ impl Render for HarnessesPage {
                             )
                             .children(error)
                             .child(body)
+                            .when_some(local_sections, |el, (integrations, instructions, runtime)| {
+                                el.child(integrations).child(instructions).child(runtime)
+                            })
                             .child(titles),
                     ),
             )

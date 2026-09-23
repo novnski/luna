@@ -112,6 +112,45 @@ struct TaskIdentityParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct InstructionSettingsParams {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    target_device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveInstructionSettingsParams {
+    #[serde(default)]
+    project_id: Option<String>,
+    text: String,
+    expected_revision: u64,
+    #[serde(default)]
+    target_device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationInventoryParams {
+    provider: HarnessId,
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    target_device_id: Option<String>,
+}
+
+fn require_local_integration_target(target: Option<&str>, local: &str) -> Result<(), RpcError> {
+    if target.is_some_and(|id| id != local) {
+        return Err(RpcError::Failed(
+            "LUNA integration settings and inventory are local to the owning device".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PreviewProviderTaskImportParams {
     provider_id: HarnessId,
     provider_task_id: String,
@@ -5672,12 +5711,17 @@ impl RpcService for EngineRpc {
                             &request,
                         )
                         .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    let (user_instructions, workspace_instructions) = self
+                        .sessions
+                        .integration_settings()
+                        .map(|settings| settings.contributions(context.project_id.as_deref()))
+                        .unwrap_or_default();
                     let compiled =
                         crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
                             context,
                             provider_delivery,
-                            user_instructions: Vec::new(),
-                            workspace_instructions: Vec::new(),
+                            user_instructions,
+                            workspace_instructions,
                             resume: true,
                             acknowledged_contract: Some(receipt.clone()),
                         })
@@ -5709,6 +5753,94 @@ impl RpcService for EngineRpc {
                         _ => None,
                     },
                 })
+            }
+            methods::GET_INSTRUCTION_SETTINGS => {
+                let p: InstructionSettingsParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                if let Some(id) = p.project_id.as_deref() {
+                    let space = self
+                        .workspace
+                        .space(id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                        .ok_or_else(|| RpcError::BadParams("unknown project id".into()))?;
+                    if space.device_id != self.engine_info.device_id {
+                        return Err(RpcError::Failed(
+                            "project instructions require the owning device".into(),
+                        ));
+                    }
+                }
+                let settings = self.sessions.integration_settings().ok_or_else(|| {
+                    RpcError::Failed("LUNA instruction settings are unavailable".into())
+                })?;
+                RpcReply::value(&settings.view(p.project_id.as_deref()))
+            }
+            methods::SET_INSTRUCTION_SETTINGS => {
+                let p: SaveInstructionSettingsParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                if let Some(id) = p.project_id.as_deref() {
+                    let space = self
+                        .workspace
+                        .space(id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                        .ok_or_else(|| RpcError::BadParams("unknown project id".into()))?;
+                    if space.device_id != self.engine_info.device_id {
+                        return Err(RpcError::Failed(
+                            "project instructions require the owning device".into(),
+                        ));
+                    }
+                }
+                let settings = self.sessions.integration_settings().ok_or_else(|| {
+                    RpcError::Failed("LUNA instruction settings are unavailable".into())
+                })?;
+                let saved = settings
+                    .save(p.project_id.as_deref(), &p.text, p.expected_revision)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&saved)
+            }
+            methods::GET_INTEGRATION_INVENTORY => {
+                let p: IntegrationInventoryParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                let project_root = if let Some(id) = p.project_id.as_deref() {
+                    let space = self
+                        .workspace
+                        .space(id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                        .ok_or_else(|| RpcError::BadParams("unknown project id".into()))?;
+                    if space.device_id != self.engine_info.device_id {
+                        return Err(RpcError::Failed(
+                            "integration inventory requires the owning device".into(),
+                        ));
+                    }
+                    Some(space.path)
+                } else {
+                    None
+                };
+                let view = if p.provider == HarnessId::Codex {
+                    let home = self
+                        .agent_accounts
+                        .codex_home_for_inventory()
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    crate::integration_settings::codex_inventory(
+                        &home,
+                        project_root.as_deref().map(std::path::Path::new),
+                        &self.engine_info.device_id,
+                    )
+                } else {
+                    crate::integration_settings::unavailable_inventory(
+                        p.provider,
+                        &self.engine_info.device_id,
+                    )
+                };
+                RpcReply::value(&view)
             }
             methods::GET_HISTORY_CAPABILITY => {
                 let p: TaskIdentityParams = parse_params(params)?;
@@ -7237,6 +7369,13 @@ impl RpcService for EngineRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integration_reads_do_not_silently_use_the_wrong_device() {
+        assert!(require_local_integration_target(None, "local").is_ok());
+        assert!(require_local_integration_target(Some("local"), "local").is_ok());
+        assert!(require_local_integration_target(Some("remote"), "local").is_err());
+    }
 
     fn move_test_space(path: &str) -> zeron_proto::Space {
         zeron_proto::Space {
