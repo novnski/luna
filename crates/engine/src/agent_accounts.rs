@@ -498,6 +498,16 @@ impl AgentAccounts {
         self.codex_usage_target().map(|(home, _)| home)
     }
 
+    /// Provider-owned transcript locations and LUNA's own cache directory.
+    /// This does not open credentials or materialize a named provider home.
+    pub fn usage_history_paths(&self) -> (Option<PathBuf>, PathBuf, PathBuf) {
+        (
+            self.codex_home_for_inventory().ok(),
+            self.inner.config.claude_config_dir.clone(),
+            self.inner.config.data_dir.clone(),
+        )
+    }
+
     /// The selected Codex home and its provider-owned auth-store mode for a
     /// read-only app-server usage request. This never materializes a home or
     /// opens an auth file; the provider remains responsible for credentials.
@@ -1666,6 +1676,102 @@ impl AgentAccounts {
 
     // ── remaining usage ─────────────────────────────────────────────────────
 
+    /// Read-only Claude subscription limits for the full Usage page. Reuses
+    /// the existing provider usage endpoint, but intentionally reads only the
+    /// credentials file. Usage never queries macOS Keychain or opens auth UI.
+    pub async fn read_claude_usage_limit(&self) -> zeron_proto::UsageLimitSnapshot {
+        use zeron_proto::{LimitAvailability, UsageLimitSnapshot, UsageProvider};
+        let unavailable = |availability, detail: String, verified_account_id| UsageLimitSnapshot {
+            provider: UsageProvider::Claude,
+            verified_account_id,
+            account_label: None,
+            plan: None,
+            checked_at_ms: None,
+            availability,
+            windows: Vec::new(),
+            reset_credits: None,
+            detail: Some(detail),
+        };
+        let account = read_json(&self.inner.config.claude_config_file);
+        let account_key = account
+            .as_ref()
+            .and_then(|config| config.get("oauthAccount"))
+            .and_then(|oauth| {
+                str_field(oauth, "accountUuid").or_else(|| str_field(oauth, "emailAddress"))
+            });
+        let verified_id = account_key
+            .as_deref()
+            .map(|key| format!("claude:{:x}", Sha256::digest(key.as_bytes())));
+        let plan = account
+            .as_ref()
+            .and_then(|config| config.get("oauthAccount"))
+            .and_then(|oauth| {
+                claude_plan(
+                    str_field(oauth, "organizationType").as_deref(),
+                    str_field(oauth, "organizationRateLimitTier").as_deref(),
+                )
+            });
+        let credentials = read_json(&self.inner.config.claude_creds_file());
+        let Some(oauth) = credentials
+            .as_ref()
+            .and_then(|value| value.get("claudeAiOauth"))
+        else {
+            return unavailable(
+                LimitAvailability::Unsupported,
+                "Claude credentials file is unavailable; Usage does not access Keychain".into(),
+                verified_id,
+            );
+        };
+        let Some(token) = str_field(oauth, "accessToken") else {
+            return unavailable(
+                LimitAvailability::Unsupported,
+                "Claude Code OAuth usage is unavailable".into(),
+                verified_id,
+            );
+        };
+        if oauth
+            .get("expiresAt")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|expiry| expiry <= Utc::now().timestamp_millis())
+        {
+            return unavailable(
+                LimitAvailability::ProbeFailed,
+                "Claude Code login has expired; LUNA did not refresh it".into(),
+                verified_id,
+            );
+        }
+        let body = match self.claude_usage_response(&token).await {
+            Ok(body) => body,
+            Err(_) => {
+                return unavailable(
+                    LimitAvailability::ProbeFailed,
+                    "Claude usage request failed without changing the login".into(),
+                    verified_id,
+                );
+            }
+        };
+        let current_key = read_json(&self.inner.config.claude_config_file)
+            .as_ref()
+            .and_then(|config| config.get("oauthAccount"))
+            .and_then(|oauth| {
+                str_field(oauth, "accountUuid").or_else(|| str_field(oauth, "emailAddress"))
+            });
+        if current_key != account_key {
+            return unavailable(
+                LimitAvailability::Unverified,
+                "Claude account changed during usage refresh".into(),
+                None,
+            );
+        }
+        crate::usage::live_claude_limit(&body, verified_id.clone(), plan).unwrap_or_else(|| {
+            unavailable(
+                LimitAvailability::Unsupported,
+                "Claude did not report subscription windows".into(),
+                verified_id,
+            )
+        })
+    }
+
     async fn usage_for(
         &self,
         harness: HarnessId,
@@ -1705,6 +1811,12 @@ impl AgentAccounts {
     /// One usage probe: GET the endpoint and parse windows. `Err` means the
     /// token was rejected (401/403) — the only case worth a refresh.
     async fn claude_usage_request(&self, access_token: &str) -> Result<Option<UsageSnapshot>, ()> {
+        self.claude_usage_response(access_token)
+            .await
+            .map(|body| claude_usage_windows(&body))
+    }
+
+    async fn claude_usage_response(&self, access_token: &str) -> Result<serde_json::Value, ()> {
         let response = self
             .inner
             .http
@@ -1725,7 +1837,7 @@ impl AgentAccounts {
             .json()
             .await
             .map_err(|_| ())?;
-        Ok(claude_usage_windows(&body))
+        Ok(body)
     }
 
     async fn codex_usage(&self, slot: &Slot) -> Option<UsageSnapshot> {
@@ -3360,6 +3472,28 @@ mod tests {
             compose_claude_credentials(&api_key, Some(&live)),
             api_key,
             "opaque/API-key shapes activate verbatim"
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_usage_without_credentials_file_never_falls_back_to_keychain() {
+        let root = tempfile::tempdir().unwrap();
+        let config = test_config(root.path());
+        assert!(!config.claude_creds_file().exists());
+        assert!(!config.claude_keychain_fallback_disabled());
+        let observed = AgentAccounts::new(config).read_claude_usage_limit().await;
+        assert_eq!(observed.provider, zeron_proto::UsageProvider::Claude);
+        assert_eq!(
+            observed.availability,
+            zeron_proto::LimitAvailability::Unsupported
+        );
+        assert!(observed.windows.is_empty());
+        assert!(
+            observed
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("does not access Keychain")
         );
     }
 }

@@ -714,6 +714,7 @@ impl Shell {
         compact: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let visible = self.selected_usage_snapshot();
         div()
             .flex()
             .flex_wrap()
@@ -726,6 +727,21 @@ impl Shell {
                     (Some(UsageProvider::Claude), "Claude"),
                 ]
                 .into_iter()
+                .filter(|(provider, _)| {
+                    provider.is_none_or(|provider| {
+                        visible.as_ref().is_some_and(|snapshot| {
+                            snapshot
+                                .summary
+                                .sources
+                                .iter()
+                                .any(|source| source.provider == provider)
+                                || snapshot
+                                    .limits
+                                    .iter()
+                                    .any(|limit| limit.provider == provider)
+                        })
+                    })
+                })
                 .map(|(provider, label)| {
                     let label = if compact && provider.is_none() {
                         "All"
@@ -885,6 +901,21 @@ impl Shell {
                     }
                     shell.usage_environment_snapshots = snapshots;
                     shell.usage_snapshot = Some(merged);
+                    if shell.usage_provider_filter.is_some_and(|provider| {
+                        shell.selected_usage_snapshot().is_none_or(|snapshot| {
+                            !snapshot
+                                .summary
+                                .sources
+                                .iter()
+                                .any(|source| source.provider == provider)
+                                && !snapshot
+                                    .limits
+                                    .iter()
+                                    .any(|limit| limit.provider == provider)
+                        })
+                    }) {
+                        shell.usage_provider_filter = None;
+                    }
                     if failures > 0 {
                         shell.usage_error = Some(format!(
                             "{failures} environments unavailable; showing partial usage"
@@ -1077,7 +1108,7 @@ impl Shell {
                         .child("Subscription limits"))
                     .child(div().text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
-                        .child("Account allowance and reset windows are separate from historical tokens and API-equivalent cost. OpenCode Go is shown only from a marked synthetic Go fixture."));
+                        .child("Account allowance and reset windows are separate from historical tokens and API-equivalent cost. Local OpenCode Go reports subscription windows; external servers do not expose their credentials here."));
                 for provider in [
                     UsageProvider::Codex,
                     UsageProvider::OpenCodeGo,
@@ -1152,7 +1183,7 @@ impl Shell {
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
                         .child(if self.usage_provider_filter == Some(UsageProvider::OpenCodeGo) {
-                            "OpenCode Go historical tokens and Zen spending are unsupported; its subscription windows appear under Limits only when a marked Go fixture supplies them."
+                            "OpenCode Go historical tokens and Zen spending are not in the T3/BB history adapters. Its local subscription windows appear under Limits when the selected machine reports them."
                         } else {
                             "No historical buckets are available for this provider and window."
                         }));
@@ -1410,7 +1441,7 @@ impl Shell {
                         };
                         let provenance = match quality {
                             CostQuality::ProviderReported => "provider reported",
-                            CostQuality::ModelPriced => "exact model price",
+                            CostQuality::ModelPriced => "LiteLLM model price",
                             CostQuality::UserOverride => "your exact-model rate",
                             CostQuality::Unpriced => "unpriced",
                             CostQuality::Mixed => "mixed provenance",
@@ -1477,7 +1508,7 @@ impl Shell {
         } else {
             content = content.child(div().text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted)
-                .child("No verified usage source is available. Configure an isolated synthetic fixture to validate this page."));
+                .child("No readable Codex or Claude transcript source is available for this environment. Provider limits may still be reported separately."));
         }
         div()
             .id("usage-page")

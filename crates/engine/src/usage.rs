@@ -21,8 +21,13 @@ use zeron_proto::{
 
 const CACHE_VERSION: u32 = 2;
 const MAX_FILES: usize = 10_000;
-const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+// Codex rollouts can exceed 1 GiB. The scanner streams them and checkpoints
+// completed prefixes, so bound total file size without rejecting real history.
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SCAN_TIME: Duration = Duration::from_secs(4);
+const LITELLM_RATES_URL: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const RATES_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 const SYNTHETIC_MARKER: &str = ".luna-usage-synthetic";
 const SYNTHETIC_USAGE_VARIABLES: &[&str] = &[
     "LUNA_USAGE_SYNTHETIC_CODEX_HOME",
@@ -91,6 +96,80 @@ pub fn live_codex_limit(read: CodexQuotaRead) -> UsageLimitSnapshot {
     }
 }
 
+/// T3's Claude `get_usage` mapping over the same read-only OAuth usage body
+/// already consumed by LUNA Accounts. Omitted windows stay omitted.
+pub fn live_claude_limit(
+    body: &Value,
+    verified_account_id: Option<String>,
+    plan: Option<String>,
+) -> Option<UsageLimitSnapshot> {
+    let mut windows = Vec::new();
+    let mut push_window = |id: String, label: String, duration_minutes: u64, row: &Value| {
+        let Some(percent) = row.get("utilization").and_then(Value::as_f64) else {
+            return;
+        };
+        if !percent.is_finite() || percent < 0.0 {
+            return;
+        }
+        windows.push(zeron_proto::UsageLimitWindow {
+            id,
+            label,
+            used_percent: percent.min(100.0) as f32,
+            resets_at_ms: row
+                .get("resets_at")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.timestamp_millis()),
+            duration_minutes: Some(duration_minutes),
+        });
+    };
+    for (id, label, duration) in [
+        ("five_hour", "Five-hour", 300),
+        ("seven_day", "Weekly", 10_080),
+    ] {
+        if let Some(row) = body.get(id) {
+            push_window(id.into(), label.into(), duration, row);
+        }
+    }
+    if let Some(scoped) = body.get("model_scoped").and_then(Value::as_array) {
+        for row in scoped {
+            let Some(name) = row.get("display_name").and_then(Value::as_str) else {
+                continue;
+            };
+            if name.trim().is_empty() {
+                continue;
+            }
+            let slug = name
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() {
+                        ch.to_ascii_lowercase()
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>();
+            push_window(
+                format!("seven_day_{}", slug.trim_matches('_')),
+                format!("Weekly · {name}"),
+                10_080,
+                row,
+            );
+        }
+    }
+    (!windows.is_empty()).then_some(UsageLimitSnapshot {
+        provider: UsageProvider::Claude,
+        verified_account_id,
+        account_label: Some("Selected Claude account".into()),
+        plan,
+        checked_at_ms: Some(now_ms()),
+        availability: LimitAvailability::Ready,
+        windows,
+        reset_credits: None,
+        detail: Some("Read-only Claude usage endpoint · selected machine".into()),
+    })
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Record {
     at_ms: i64,
@@ -126,6 +205,12 @@ struct CachedFile {
 struct ScanCache {
     version: u32,
     files: HashMap<String, CachedFile>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LiveRatesCache {
+    fetched_at_ms: i64,
+    rates: HashMap<String, UsagePriceRate>,
 }
 
 fn price_cost(rate: UsagePriceRate, tokens: UsageTokens) -> f64 {
@@ -327,13 +412,17 @@ fn scan_file(
         && modified > 0
         && old.size == size
         && old.modified_ns == modified
+        && old.complete_offset == size
     {
         return Ok((old.clone(), true));
     }
     // A same-size rewrite must replay from byte zero even if the short guard
     // happened to match. Only actual growth can safely resume at the offset.
     let mut result = old
-        .filter(|old| size > old.size)
+        .filter(|old| {
+            size > old.size
+                || (size == old.size && old.complete_offset < size && old.modified_ns == modified)
+        })
         .cloned()
         .unwrap_or_else(|| CachedFile {
             size: 0,
@@ -349,10 +438,9 @@ fn scan_file(
     let mut line = String::new();
     loop {
         if Instant::now() >= deadline {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "usage scan time bound reached",
-            ));
+            // Persist the completed prefix. A subsequent refresh resumes from
+            // this byte offset instead of repeating a large cold file.
+            break;
         }
         line.clear();
         let start = reader.stream_position()?;
@@ -608,6 +696,181 @@ fn prices() -> HashMap<String, (UsagePriceRate, CostQuality)> {
         .collect()
 }
 
+fn parse_litellm_rates(document: &Value) -> HashMap<String, UsagePriceRate> {
+    let mut rates = HashMap::new();
+    let Some(entries) = document.as_object() else {
+        return rates;
+    };
+    for (name, raw) in entries {
+        let key = name.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        let finite = |field: &str| {
+            raw.get(field)
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+        };
+        let (Some(input), Some(output)) = (
+            finite("input_cost_per_token"),
+            finite("output_cost_per_token"),
+        ) else {
+            continue;
+        };
+        let rate = UsagePriceRate {
+            input_per_million: input * 1_000_000.0,
+            cached_per_million: finite("cache_read_input_token_cost").unwrap_or(input)
+                * 1_000_000.0,
+            creation_per_million: finite("cache_creation_input_token_cost").unwrap_or(input)
+                * 1_000_000.0,
+            output_per_million: output * 1_000_000.0,
+        };
+        if rate.valid() {
+            rates.insert(key, rate);
+        }
+    }
+    // T3 aliases a bare model only when all qualified entries agree on price.
+    let mut aliases: HashMap<String, Option<UsagePriceRate>> = HashMap::new();
+    for (key, rate) in &rates {
+        let Some((_, bare)) = key.rsplit_once('/') else {
+            continue;
+        };
+        if bare.is_empty() || rates.contains_key(bare) {
+            continue;
+        }
+        aliases
+            .entry(bare.to_owned())
+            .and_modify(|held| {
+                if held.is_some_and(|held| held != *rate) {
+                    *held = None;
+                }
+            })
+            .or_insert(Some(*rate));
+    }
+    rates.extend(
+        aliases
+            .into_iter()
+            .filter_map(|(name, rate)| rate.map(|rate| (name, rate))),
+    );
+    rates
+}
+
+fn read_live_rates_cache(path: &Path) -> Option<LiveRatesCache> {
+    let cache = fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LiveRatesCache>(&bytes).ok())?;
+    (cache.fetched_at_ms > 0 && !cache.rates.is_empty()).then_some(cache)
+}
+
+/// T3's 24-hour LiteLLM refresh, with the last on-disk copy retained on error.
+/// The fixed public URL is the only network source; provider homes are untouched.
+pub async fn refresh_live_prices(data_dir: &Path) {
+    static REFRESH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    let _guard = REFRESH_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let Some(path) = live_cache_file(data_dir, "usage-model-rates.json") else {
+        return;
+    };
+    if read_live_rates_cache(&path)
+        .is_some_and(|cache| now_ms().saturating_sub(cache.fetched_at_ms) < RATES_TTL_MS)
+    {
+        return;
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    else {
+        return;
+    };
+    let Ok(response) = client.get(LITELLM_RATES_URL).send().await else {
+        return;
+    };
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|len| len > 16 * 1024 * 1024)
+    {
+        return;
+    }
+    let Ok(bytes) = response.bytes().await else {
+        return;
+    };
+    if bytes.len() > 16 * 1024 * 1024 {
+        return;
+    }
+    let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
+        return;
+    };
+    let rates = parse_litellm_rates(&document);
+    if rates.is_empty() {
+        return;
+    }
+    let Ok(encoded) = serde_json::to_vec(&LiveRatesCache {
+        fetched_at_ms: now_ms(),
+        rates,
+    }) else {
+        return;
+    };
+    write_cache_bytes(&path, &encoded);
+}
+
+fn live_prices(data_dir: &Path) -> HashMap<String, (UsagePriceRate, CostQuality)> {
+    live_cache_file(data_dir, "usage-model-rates.json")
+        .as_deref()
+        .and_then(read_live_rates_cache)
+        .map(|cache| {
+            cache
+                .rates
+                .into_iter()
+                .map(|(model, rate)| (model, (rate, CostQuality::ModelPriced)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn live_pricing_warning(data_dir: &Path) -> Option<String> {
+    let cached = live_cache_file(data_dir, "usage-model-rates.json")
+        .as_deref()
+        .and_then(read_live_rates_cache);
+    match cached {
+        None => Some(
+            "LiteLLM model prices unavailable; unknown historical costs remain unpriced".into(),
+        ),
+        Some(cache) if now_ms().saturating_sub(cache.fetched_at_ms) >= RATES_TTL_MS => Some(
+            "Using older cached LiteLLM model prices; refresh did not obtain a current table"
+                .into(),
+        ),
+        Some(_) => None,
+    }
+}
+
+fn lookup_price<'a>(
+    prices: &'a HashMap<String, (UsagePriceRate, CostQuality)>,
+    model: &str,
+) -> Option<&'a (UsagePriceRate, CostQuality)> {
+    if let Some(exact) = prices.get(model.trim()) {
+        return Some(exact);
+    }
+    let normalized = model.trim().to_ascii_lowercase();
+    let key = normalized.split('[').next().unwrap_or("");
+    let bare = key.rsplit('/').next().unwrap_or("");
+    if [
+        "<synthetic>",
+        "synthetic",
+        "opus",
+        "sonnet",
+        "haiku",
+        "fable",
+    ]
+    .contains(&bare)
+    {
+        return None;
+    }
+    prices.get(key)
+}
+
 fn load_cache(path: Option<&Path>) -> ScanCache {
     path.filter(|path| safe_cache_file(path))
         .and_then(|path| fs::read(path).ok())
@@ -688,6 +951,10 @@ fn add_source_configured(
             Ok((scanned, warm)) => {
                 source.files_scanned += (!warm) as u64;
                 source.files_cached += warm as u64;
+                if scanned.complete_offset < scanned.size {
+                    source.status = UsageSourceStatus::Partial;
+                    source.detail = Some("Transcript scan paused at its time bound".into());
+                }
                 for record in &scanned.records {
                     if record.at_ms >= cutoff_ms {
                         if !record.session.is_empty() {
@@ -707,6 +974,46 @@ fn add_source_configured(
     }
     source.distinct_sessions = sessions.len() as u64;
     source
+}
+
+fn add_live_source(
+    provider: UsageProvider,
+    home: Option<&Path>,
+    directory: &str,
+    cutoff_ms: i64,
+    deadline: Instant,
+    cache: &mut ScanCache,
+    all: &mut Vec<(UsageProvider, Record)>,
+) -> UsageSource {
+    let root = home.map(|home| {
+        let root = home.join(directory);
+        root.canonicalize().unwrap_or(root)
+    });
+    let mut source = add_source_configured(provider, Ok(root), cutoff_ms, deadline, cache, all);
+    source.environment_id = "local".into();
+    if source.status == UsageSourceStatus::Unsupported {
+        source.detail = Some("Selected provider home is unavailable".into());
+    } else if source.status == UsageSourceStatus::Missing {
+        source.detail = Some("Provider transcript directory is missing".into());
+    }
+    source
+}
+
+fn live_cache_file(data_dir: &Path, name: &str) -> Option<PathBuf> {
+    // The scan cache belongs to LUNA, never inside a provider's private home.
+    let root = data_dir.canonicalize().ok()?;
+    if actual_provider_homes().iter().any(|home| {
+        let home = home.canonicalize().unwrap_or_else(|_| home.clone());
+        paths_overlap(&root, &home)
+    }) {
+        return None;
+    }
+    let path = root.join(name);
+    safe_cache_file(&path).then_some(path)
+}
+
+fn live_cache_path(data_dir: &Path) -> Option<PathBuf> {
+    live_cache_file(data_dir, "usage-scan-v2.json")
 }
 
 fn unsupported_limit(provider: UsageProvider) -> UsageLimitSnapshot {
@@ -891,12 +1198,11 @@ fn aggregate_records(
         });
         bucket.tokens.add(record.tokens);
         bucket.records += 1;
+        let rate = lookup_price(prices, &record.model).copied();
         let savings = if record.tokens.cached_input == 0 {
             Some(0.0)
         } else {
-            prices
-                .get(&record.model)
-                .map(|(rate, _)| modeled_cache_savings(*rate, record.tokens))
+            rate.map(|(rate, _)| modeled_cache_savings(rate, record.tokens))
         };
         bucket.cache_savings_usd = bucket
             .cache_savings_usd
@@ -904,14 +1210,19 @@ fn aggregate_records(
         if !record.session.is_empty() {
             sessions.insert(record.session);
         }
-        let priced = record
-            .cost_usd
-            .map(|cost| (cost, CostQuality::ProviderReported))
-            .or_else(|| {
-                prices
-                    .get(&record.model)
-                    .map(|(price, quality)| (price_cost(*price, record.tokens), *quality))
-            });
+        // Match T3: an exact user override wins even over provider-reported
+        // cost; otherwise the provider's own amount beats model estimates.
+        let priced = match rate {
+            Some((price, CostQuality::UserOverride)) => {
+                Some((price_cost(price, record.tokens), CostQuality::UserOverride))
+            }
+            _ => record
+                .cost_usd
+                .map(|cost| (cost, CostQuality::ProviderReported))
+                .or_else(|| {
+                    rate.map(|(price, quality)| (price_cost(price, record.tokens), quality))
+                }),
+        };
         if let Some((cost, quality)) = priced {
             if let Some(total) = &mut bucket.api_equivalent_cost_usd {
                 *total += cost;
@@ -943,6 +1254,30 @@ fn aggregate_records(
 /// Reads only marked, explicitly configured synthetic homes. Never resolves
 /// CODEX_HOME/Claude home as a source and never invokes a provider account.
 pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
+    snapshot_impl(request, None, None)
+}
+
+/// Read selected provider transcripts without touching their credentials or
+/// writing into their homes. The cache is stored only in LUNA's data dir.
+pub fn snapshot_live(
+    request: UsageRequest,
+    codex_home: Option<PathBuf>,
+    claude_home: PathBuf,
+    data_dir: PathBuf,
+    enabled: Vec<UsageProvider>,
+) -> UsageSnapshot {
+    snapshot_impl(
+        request,
+        Some((codex_home, claude_home, data_dir)),
+        Some(enabled),
+    )
+}
+
+fn snapshot_impl(
+    request: UsageRequest,
+    live: Option<(Option<PathBuf>, PathBuf, PathBuf)>,
+    enabled: Option<Vec<UsageProvider>>,
+) -> UsageSnapshot {
     static SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = SCAN_LOCK.get_or_init(|| Mutex::new(())).lock();
     let started = Instant::now();
@@ -953,39 +1288,82 @@ pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
         30
     };
     let cutoff = read_at - i64::from(days) * 86_400_000;
-    let cache_file = cache_path();
+    let cache_file = live
+        .as_ref()
+        .map_or_else(cache_path, |(_, _, data_dir)| live_cache_path(data_dir));
     let mut cache = load_cache(cache_file.as_deref());
     let mut records = Vec::new();
     let deadline = started + MAX_SCAN_TIME;
-    let sources = vec![
-        add_source(
-            UsageProvider::Codex,
-            "LUNA_USAGE_SYNTHETIC_CODEX_HOME",
-            cutoff,
-            deadline,
-            &mut cache,
-            &mut records,
-        ),
-        add_source(
-            UsageProvider::Claude,
-            "LUNA_USAGE_SYNTHETIC_CLAUDE_HOME",
-            cutoff,
-            deadline,
-            &mut cache,
-            &mut records,
-        ),
+    let (codex, claude) = if let Some((codex_home, claude_home, _)) = live.as_ref() {
+        (
+            add_live_source(
+                UsageProvider::Codex,
+                codex_home.as_deref().filter(|_| {
+                    enabled
+                        .as_ref()
+                        .is_none_or(|items| items.contains(&UsageProvider::Codex))
+                }),
+                "sessions",
+                cutoff,
+                deadline,
+                &mut cache,
+                &mut records,
+            ),
+            add_live_source(
+                UsageProvider::Claude,
+                enabled
+                    .as_ref()
+                    .is_none_or(|items| items.contains(&UsageProvider::Claude))
+                    .then_some(claude_home.as_path()),
+                "projects",
+                cutoff,
+                Instant::now() + MAX_SCAN_TIME,
+                &mut cache,
+                &mut records,
+            ),
+        )
+    } else {
+        (
+            add_source(
+                UsageProvider::Codex,
+                "LUNA_USAGE_SYNTHETIC_CODEX_HOME",
+                cutoff,
+                deadline,
+                &mut cache,
+                &mut records,
+            ),
+            add_source(
+                UsageProvider::Claude,
+                "LUNA_USAGE_SYNTHETIC_CLAUDE_HOME",
+                cutoff,
+                Instant::now() + MAX_SCAN_TIME,
+                &mut cache,
+                &mut records,
+            ),
+        )
+    };
+    let sources: Vec<_> = vec![
+        codex,
+        claude,
         UsageSource {
             provider: UsageProvider::OpenCodeGo,
-            environment_id: "local-synthetic".into(),
+            environment_id: if live.is_some() { "local" } else { "local-synthetic" }.into(),
             fingerprint: String::new(),
             status: UsageSourceStatus::Unsupported,
             distinct_sessions: 0,
             files_scanned: 0,
             files_cached: 0,
             failed_files: 0,
-            detail: Some("OpenCode history and Zen spending have no verified copy-isolated transcript adapter".into()),
+            detail: Some("OpenCode historical session usage is not in the T3/BB usage adapters; Go subscription limits are separate".into()),
         },
-    ];
+    ]
+    .into_iter()
+    .filter(|source| {
+        enabled
+            .as_ref()
+            .is_none_or(|items| items.contains(&source.provider))
+    })
+    .collect();
     // Longest supported window plus one day of boundary slack.
     let retention = read_at - 91 * 86_400_000;
     cache.files.retain(|_, file| {
@@ -995,13 +1373,28 @@ pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
     cache.version = CACHE_VERSION;
     save_cache(cache_file.as_deref(), &cache);
 
-    let mut price_rates = prices();
+    let mut price_rates = live
+        .as_ref()
+        .map_or_else(prices, |(_, _, data_dir)| live_prices(data_dir));
     for (model, rate) in request.price_overrides {
         if !model.trim().is_empty() && model.len() <= 200 && rate.valid() {
             price_rates.insert(model, (rate, CostQuality::UserOverride));
         }
     }
     let buckets = aggregate_records(records, &sources, days, &price_rates);
+    let warnings = live
+        .as_ref()
+        .filter(|_| {
+            sources.iter().any(|source| {
+                matches!(
+                    source.provider,
+                    UsageProvider::Codex | UsageProvider::Claude
+                )
+            })
+        })
+        .and_then(|(_, _, data_dir)| live_pricing_warning(data_dir))
+        .into_iter()
+        .collect();
     UsageSnapshot {
         summary: UsageSummary {
             contract_version: USAGE_CONTRACT_VERSION,
@@ -1015,9 +1408,16 @@ pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
                 .any(|source| source.status == UsageSourceStatus::Partial),
             sources,
             scan_duration_ms: started.elapsed().as_millis() as u64,
-            warnings: vec![],
+            warnings,
         },
-        limits: limits(),
+        limits: limits()
+            .into_iter()
+            .filter(|limit| {
+                enabled
+                    .as_ref()
+                    .is_none_or(|items| items.contains(&limit.provider))
+            })
+            .collect(),
     }
 }
 
@@ -1071,6 +1471,105 @@ mod tests {
         assert_eq!(limit.windows[1].id, "codex_other/primary");
         assert_eq!(limit.windows[1].resets_at_ms, Some(1_780_000_000_000));
         assert_eq!(limit.reset_credits, None);
+    }
+
+    #[test]
+    fn claude_usage_maps_only_reported_account_and_model_scoped_windows() {
+        let body = serde_json::json!({
+            "five_hour": {"utilization": 31.5, "resets_at": "2026-09-23T20:00:00Z"},
+            "seven_day": null,
+            "model_scoped": [
+                {"display_name": "Fable 5", "utilization": 112.0, "resets_at": null},
+                {"display_name": "Unknown", "utilization": null, "resets_at": null}
+            ]
+        });
+        let limit =
+            live_claude_limit(&body, Some("claude:fake".into()), Some("Max".into())).unwrap();
+        assert_eq!(limit.windows.len(), 2);
+        assert_eq!(limit.windows[0].id, "five_hour");
+        assert_eq!(limit.windows[0].used_percent, 31.5);
+        assert_eq!(limit.windows[1].id, "seven_day_fable_5");
+        assert_eq!(limit.windows[1].used_percent, 100.0);
+        assert_eq!(limit.windows[1].resets_at_ms, None);
+        assert!(live_claude_limit(&serde_json::json!({"five_hour": null}), None, None).is_none());
+    }
+
+    #[test]
+    fn litellm_prices_require_complete_rates_and_unambiguous_aliases() {
+        let document = serde_json::json!({
+            "vendor-a/model-one": {
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+                "cache_read_input_token_cost": 0.0000005
+            },
+            "vendor-b/model-one": {
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+                "cache_read_input_token_cost": 0.0000005
+            },
+            "vendor-a/model-two": {
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002
+            },
+            "vendor-b/model-two": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000004
+            },
+            "incomplete": { "input_cost_per_token": 0.000001 }
+        });
+        let rates = parse_litellm_rates(&document);
+        assert_eq!(rates["model-one"].input_per_million, 1.0);
+        assert_eq!(rates["model-one"].cached_per_million, 0.5);
+        assert!(!rates.contains_key("model-two"));
+        assert!(!rates.contains_key("incomplete"));
+        let prices = rates
+            .into_iter()
+            .map(|(name, rate)| (name, (rate, CostQuality::ModelPriced)))
+            .collect();
+        assert!(lookup_price(&prices, "MODEL-ONE[1m]").is_some());
+        assert!(lookup_price(&prices, "model-two").is_none());
+    }
+
+    #[test]
+    fn exact_price_override_wins_over_provider_reported_cost() {
+        let source = UsageSource {
+            provider: UsageProvider::Claude,
+            environment_id: "fake".into(),
+            fingerprint: "fake-home".into(),
+            status: UsageSourceStatus::Ready,
+            distinct_sessions: 1,
+            files_scanned: 1,
+            files_cached: 0,
+            failed_files: 0,
+            detail: None,
+        };
+        let record = Record {
+            at_ms: now_ms(),
+            model: "fake-model".into(),
+            session: "fake-session".into(),
+            tokens: UsageTokens {
+                uncached_input: 1_000_000,
+                ..UsageTokens::default()
+            },
+            cost_usd: Some(99.0),
+            dedupe: None,
+        };
+        let prices = HashMap::from([(
+            "fake-model".into(),
+            (
+                UsagePriceRate {
+                    input_per_million: 1.0,
+                    cached_per_million: 1.0,
+                    creation_per_million: 1.0,
+                    output_per_million: 1.0,
+                },
+                CostQuality::UserOverride,
+            ),
+        )]);
+        let buckets =
+            aggregate_records(vec![(UsageProvider::Claude, record)], &[source], 7, &prices);
+        assert_eq!(buckets[0].api_equivalent_cost_usd, Some(1.0));
+        assert_eq!(buckets[0].cost_quality, CostQuality::UserOverride);
     }
 
     #[test]
@@ -1133,6 +1632,27 @@ mod tests {
             scan_file(&path, UsageProvider::Claude, Some(&append), deadline).unwrap();
         assert_eq!(rewrite.records.len(), 1);
         assert_eq!(rewrite.records[0].dedupe.as_deref(), Some("other:other"));
+    }
+
+    #[test]
+    fn timed_out_file_resumes_its_saved_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("fake.jsonl");
+        let line = r#"{"type":"assistant","timestamp":"2026-09-22T00:00:00Z","sessionId":"fake","message":{"id":"fake","model":"fake-model","usage":{"input_tokens":2}}}"#;
+        fs::write(&path, format!("{line}\n{line}\n")).unwrap();
+        let (paused, _) = scan_file(&path, UsageProvider::Claude, None, Instant::now()).unwrap();
+        assert_eq!(paused.complete_offset, 0);
+        assert_eq!(paused.size, fs::metadata(&path).unwrap().len());
+        let (resumed, warm) = scan_file(
+            &path,
+            UsageProvider::Claude,
+            Some(&paused),
+            Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(!warm);
+        assert_eq!(resumed.complete_offset, resumed.size);
+        assert_eq!(resumed.records.len(), 2);
     }
 
     #[test]
@@ -1309,7 +1829,7 @@ mod tests {
     }
 
     #[test]
-    fn user_rate_prices_exact_model_but_provider_cost_wins() {
+    fn user_rate_prices_exact_model_even_when_provider_reports_cost() {
         let tokens = UsageTokens {
             uncached_input: 1_000_000,
             cached_input: 1_000_000,
@@ -1373,9 +1893,9 @@ mod tests {
         assert_eq!(buckets[0].api_equivalent_cost_usd, Some(2.0));
         assert_eq!(buckets[0].cache_savings_usd, Some(2.0));
         assert_eq!(buckets[0].cost_quality, CostQuality::UserOverride);
-        assert_eq!(buckets[1].api_equivalent_cost_usd, Some(0.5));
+        assert_eq!(buckets[1].api_equivalent_cost_usd, Some(2.0));
         assert_eq!(buckets[1].cache_savings_usd, Some(2.0));
-        assert_eq!(buckets[1].cost_quality, CostQuality::ProviderReported);
+        assert_eq!(buckets[1].cost_quality, CostQuality::UserOverride);
         assert_eq!(buckets[2].api_equivalent_cost_usd, None);
         assert_eq!(buckets[2].cache_savings_usd, None);
         assert_eq!(buckets[2].cost_quality, CostQuality::Unpriced);
@@ -1472,6 +1992,200 @@ mod tests {
             result.err().unwrap().kind(),
             std::io::ErrorKind::Unsupported
         );
+    }
+
+    #[test]
+    fn explicit_live_homes_scan_and_resume_without_provider_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let codex = root.path().join("codex");
+        let claude = root.path().join("claude");
+        let data = root.path().join("luna-data");
+        fs::create_dir_all(codex.join("sessions")).unwrap();
+        fs::create_dir_all(claude.join("projects")).unwrap();
+        fs::create_dir_all(&data).unwrap();
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let codex_rows = format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"fake-codex\"}}}}\n\
+             {{\"type\":\"turn_context\",\"payload\":{{\"model\":\"fake-model\"}}}}\n\
+             {{\"type\":\"event_msg\",\"timestamp\":\"{timestamp}\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"input_tokens\":12,\"cached_input_tokens\":2,\"output_tokens\":3}}}}}}}}\n"
+        );
+        fs::write(codex.join("sessions/fake.jsonl"), codex_rows).unwrap();
+        let claude_row = format!(
+            "{{\"type\":\"assistant\",\"timestamp\":\"{timestamp}\",\"sessionId\":\"fake-claude\",\"message\":{{\"id\":\"fake-message\",\"model\":\"fake-claude-model\",\"usage\":{{\"input_tokens\":4,\"output_tokens\":2}}}}}}\n"
+        );
+        fs::write(claude.join("projects/fake.jsonl"), claude_row).unwrap();
+        let request = UsageRequest {
+            days: 7,
+            price_overrides: HashMap::new(),
+        };
+        let first = snapshot_live(
+            request.clone(),
+            Some(codex.clone()),
+            claude.clone(),
+            data.clone(),
+            vec![
+                UsageProvider::Codex,
+                UsageProvider::Claude,
+                UsageProvider::OpenCodeGo,
+            ],
+        );
+        assert!(
+            first.summary.sources[..2]
+                .iter()
+                .all(|source| source.status == UsageSourceStatus::Ready)
+        );
+        assert_eq!(
+            first
+                .summary
+                .buckets
+                .iter()
+                .map(|bucket| bucket.tokens.total())
+                .sum::<u64>(),
+            21
+        );
+        assert!(data.join("usage-scan-v2.json").is_file());
+        let second = snapshot_live(
+            request.clone(),
+            Some(codex.clone()),
+            claude.clone(),
+            data.clone(),
+            vec![
+                UsageProvider::Codex,
+                UsageProvider::Claude,
+                UsageProvider::OpenCodeGo,
+            ],
+        );
+        assert!(
+            second.summary.sources[..2]
+                .iter()
+                .all(|source| source.files_cached == 1)
+        );
+        assert_eq!(
+            second
+                .summary
+                .buckets
+                .iter()
+                .map(|bucket| bucket.tokens.total())
+                .sum::<u64>(),
+            21
+        );
+        let codex_only = snapshot_live(
+            request,
+            Some(codex),
+            claude,
+            data,
+            vec![UsageProvider::Codex],
+        );
+        assert_eq!(codex_only.summary.sources.len(), 1);
+        assert_eq!(codex_only.summary.sources[0].provider, UsageProvider::Codex);
+        assert!(
+            codex_only
+                .summary
+                .buckets
+                .iter()
+                .all(|bucket| bucket.provider == UsageProvider::Codex)
+        );
+        assert_eq!(codex_only.limits.len(), 1);
+        assert_eq!(codex_only.limits[0].provider, UsageProvider::Codex);
+        let none_enabled = snapshot_live(
+            UsageRequest {
+                days: 7,
+                price_overrides: HashMap::new(),
+            },
+            None,
+            root.path().join("unread-claude-home"),
+            root.path().join("luna-data"),
+            vec![],
+        );
+        assert!(none_enabled.summary.sources.is_empty());
+        assert!(none_enabled.summary.buckets.is_empty());
+        assert!(none_enabled.summary.warnings.is_empty());
+        assert!(none_enabled.limits.is_empty());
+    }
+
+    #[test]
+    #[ignore = "explicit opt-in read-only provider transcript check"]
+    fn selected_provider_history_readback() {
+        if std::env::var_os("LUNA_USAGE_REAL_READBACK").as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+        {
+            return;
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        let codex = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex"));
+        let claude = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".claude"));
+        let data = tempfile::tempdir().unwrap();
+        let request = UsageRequest {
+            days: 7,
+            price_overrides: HashMap::new(),
+        };
+        let snapshot = snapshot_live(
+            request.clone(),
+            Some(codex.clone()),
+            claude.clone(),
+            data.path().to_path_buf(),
+            vec![
+                UsageProvider::Codex,
+                UsageProvider::Claude,
+                UsageProvider::OpenCodeGo,
+            ],
+        );
+        let tokens: u64 = snapshot
+            .summary
+            .buckets
+            .iter()
+            .map(|bucket| bucket.tokens.total())
+            .sum();
+        eprintln!(
+            "History readback: {} buckets, {tokens} tokens, source statuses {:?}/{:?}, scanned {}/{}, failed {}/{}",
+            snapshot.summary.buckets.len(),
+            snapshot.summary.sources[0].status,
+            snapshot.summary.sources[1].status,
+            snapshot.summary.sources[0].files_scanned,
+            snapshot.summary.sources[1].files_scanned,
+            snapshot.summary.sources[0].failed_files,
+            snapshot.summary.sources[1].failed_files
+        );
+        assert!(snapshot.summary.sources[0].status != UsageSourceStatus::Unsupported);
+        assert!(tokens > 0);
+        let resumed = snapshot_live(
+            request,
+            Some(codex),
+            claude,
+            data.path().to_path_buf(),
+            vec![
+                UsageProvider::Codex,
+                UsageProvider::Claude,
+                UsageProvider::OpenCodeGo,
+            ],
+        );
+        eprintln!(
+            "History second pass: {} cached files, {} newly scanned, {:?}",
+            resumed.summary.sources[0].files_cached,
+            resumed.summary.sources[0].files_scanned,
+            resumed.summary.sources[0].status
+        );
+        assert!(resumed.summary.sources[0].files_cached > 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "explicit opt-in public LiteLLM price refresh"]
+    async fn current_litellm_price_readback() {
+        if std::env::var_os("LUNA_USAGE_REAL_READBACK").as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+        {
+            return;
+        }
+        let data = tempfile::tempdir().unwrap();
+        refresh_live_prices(data.path()).await;
+        let rates = live_prices(data.path());
+        eprintln!("LiteLLM readback: {} priced model keys", rates.len());
+        assert!(!rates.is_empty());
+        assert!(data.path().join("usage-model-rates.json").is_file());
     }
 
     #[cfg(unix)]

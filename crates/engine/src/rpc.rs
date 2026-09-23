@@ -1075,6 +1075,8 @@ pub struct EngineRpc {
     uploads: Uploads,
     agent_accounts: AgentAccounts,
     codex_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
+    opencode_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
+    claude_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
     task_identity: crate::TaskIdentityService,
     auth: Option<Auth>,
     links: Option<std::sync::Arc<LinkCache>>,
@@ -1091,6 +1093,81 @@ impl Drop for EngineRpc {
 }
 
 impl EngineRpc {
+    /// Settings → Agents is authoritative for which providers Usage exposes
+    /// on this device, including historical buckets and cached quota rows.
+    fn retain_enabled_usage(
+        snapshot: &mut zeron_proto::UsageSnapshot,
+        enabled: &[zeron_proto::UsageProvider],
+    ) {
+        snapshot
+            .summary
+            .sources
+            .retain(|source| enabled.contains(&source.provider));
+        snapshot
+            .summary
+            .buckets
+            .retain(|bucket| enabled.contains(&bucket.provider));
+        snapshot
+            .limits
+            .retain(|limit| enabled.contains(&limit.provider));
+        snapshot.summary.partial = snapshot
+            .summary
+            .sources
+            .iter()
+            .any(|source| source.status == zeron_proto::UsageSourceStatus::Partial);
+    }
+
+    fn attach_account_live_limits(
+        snapshot: &mut zeron_proto::UsageSnapshot,
+        observed: zeron_proto::UsageLimitSnapshot,
+        last_good: &std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
+        failure_detail: &'static str,
+    ) {
+        let Some(index) = snapshot
+            .limits
+            .iter()
+            .position(|limit| limit.provider == observed.provider)
+        else {
+            return;
+        };
+        match observed.availability {
+            zeron_proto::LimitAvailability::Ready => {
+                *last_good
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = observed
+                    .verified_account_id
+                    .as_ref()
+                    .map(|_| observed.clone());
+                snapshot.limits[index] = observed;
+            }
+            zeron_proto::LimitAvailability::Unsupported => {
+                *last_good
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                snapshot.limits[index] = observed;
+            }
+            zeron_proto::LimitAvailability::ProbeFailed => {
+                let last_good = last_good
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                if let Some(mut last_good) = last_good.filter(|last_good| {
+                    observed.verified_account_id.is_some()
+                        && last_good.verified_account_id == observed.verified_account_id
+                }) {
+                    last_good.availability = zeron_proto::LimitAvailability::ProbeFailed;
+                    last_good.detail = Some(failure_detail.into());
+                    snapshot.limits[index] = last_good;
+                } else {
+                    snapshot.limits[index] = observed;
+                }
+            }
+            zeron_proto::LimitAvailability::Unverified => {
+                snapshot.limits[index] = observed;
+            }
+        }
+    }
+
     async fn attach_codex_live_limits(&self, snapshot: &mut zeron_proto::UsageSnapshot) {
         if crate::usage::synthetic_mode_requested() {
             return;
@@ -1212,6 +1289,8 @@ impl EngineRpc {
             uploads,
             agent_accounts,
             codex_usage_last_good: std::sync::Mutex::new(None),
+            opencode_usage_last_good: std::sync::Mutex::new(None),
+            claude_usage_last_good: std::sync::Mutex::new(None),
             task_identity,
             auth: None,
             links: None,
@@ -6470,11 +6549,66 @@ impl RpcService for EngineRpc {
             }
             methods::GET_USAGE_SNAPSHOT => {
                 let request: UsageRequest = parse_params(params)?;
-                let mut snapshot =
-                    tokio::task::spawn_blocking(move || crate::usage::snapshot(request))
-                        .await
-                        .map_err(|error| RpcError::Failed(error.to_string()))?;
-                self.attach_codex_live_limits(&mut snapshot).await;
+                let synthetic = crate::usage::synthetic_mode_requested();
+                let enabled_harnesses = self.registry.enabled_set();
+                let enabled: Vec<_> = [
+                    (HarnessId::Codex, zeron_proto::UsageProvider::Codex),
+                    (HarnessId::Opencode, zeron_proto::UsageProvider::OpenCodeGo),
+                    (HarnessId::ClaudeCode, zeron_proto::UsageProvider::Claude),
+                ]
+                .into_iter()
+                .filter_map(|(harness, provider)| {
+                    enabled_harnesses.contains(&harness).then_some(provider)
+                })
+                .collect();
+                let homes = (!synthetic).then(|| self.agent_accounts.usage_history_paths());
+                let opencode = (!synthetic
+                    && enabled.contains(&zeron_proto::UsageProvider::OpenCodeGo))
+                .then(|| tokio::spawn(crate::usage_opencode::read_go_limits()));
+                let claude_accounts = self.agent_accounts.clone();
+                let claude = (!synthetic && enabled.contains(&zeron_proto::UsageProvider::Claude))
+                    .then(|| {
+                        tokio::spawn(async move { claude_accounts.read_claude_usage_limit().await })
+                    });
+                if let Some((_, _, data_dir)) = homes.as_ref().filter(|_| {
+                    enabled.contains(&zeron_proto::UsageProvider::Codex)
+                        || enabled.contains(&zeron_proto::UsageProvider::Claude)
+                }) {
+                    crate::usage::refresh_live_prices(data_dir).await;
+                }
+                let scan_enabled = enabled.clone();
+                let mut snapshot = tokio::task::spawn_blocking(move || match homes {
+                    Some((codex, claude, data_dir)) => {
+                        crate::usage::snapshot_live(request, codex, claude, data_dir, scan_enabled)
+                    }
+                    None => crate::usage::snapshot(request),
+                })
+                .await
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                if enabled.contains(&zeron_proto::UsageProvider::Codex) {
+                    self.attach_codex_live_limits(&mut snapshot).await;
+                }
+                if let Some(opencode) = opencode
+                    && let Ok(limit) = opencode.await
+                {
+                    Self::attach_account_live_limits(
+                        &mut snapshot,
+                        limit,
+                        &self.opencode_usage_last_good,
+                        "OpenCode Go refresh failed · last good values",
+                    );
+                }
+                if let Some(claude) = claude
+                    && let Ok(limit) = claude.await
+                {
+                    Self::attach_account_live_limits(
+                        &mut snapshot,
+                        limit,
+                        &self.claude_usage_last_good,
+                        "Claude refresh failed · last good values",
+                    );
+                }
+                Self::retain_enabled_usage(&mut snapshot, &enabled);
                 for source in &mut snapshot.summary.sources {
                     source.environment_id = self.engine_info.device_id.clone();
                 }
@@ -8433,6 +8567,42 @@ impl RpcService for EngineRpc {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn disabled_agent_usage_is_removed_from_all_snapshot_sections() {
+        let mut snapshot = crate::usage::snapshot(UsageRequest {
+            days: 7,
+            price_overrides: std::collections::HashMap::new(),
+        });
+        assert_eq!(snapshot.summary.sources.len(), 3);
+        assert_eq!(snapshot.limits.len(), 3);
+        snapshot.summary.buckets.push(zeron_proto::UsageBucket {
+            start_ms: 0,
+            provider: zeron_proto::UsageProvider::Claude,
+            model: "synthetic-model".into(),
+            tokens: zeron_proto::UsageTokens::default(),
+            records: 1,
+            sessions: 1,
+            api_equivalent_cost_usd: None,
+            cache_savings_usd: None,
+            cost_quality: zeron_proto::CostQuality::Unpriced,
+        });
+        EngineRpc::retain_enabled_usage(&mut snapshot, &[zeron_proto::UsageProvider::Codex]);
+        assert!(
+            snapshot
+                .summary
+                .sources
+                .iter()
+                .all(|source| source.provider == zeron_proto::UsageProvider::Codex)
+        );
+        assert!(snapshot.summary.buckets.is_empty());
+        assert!(
+            snapshot
+                .limits
+                .iter()
+                .all(|limit| limit.provider == zeron_proto::UsageProvider::Codex)
+        );
+    }
 
     #[tokio::test]
     async fn control_evidence_backend_uses_only_local_synthetic_task_state() {
