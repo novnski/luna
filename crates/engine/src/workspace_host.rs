@@ -36,7 +36,7 @@ use zeron_proto::{
 use zeron_sync::registry::{RegistryAdmission, RegistryWritePermit};
 use zeron_sync::{DocsStore, RegistryClient, RegistryTuning, TaskRecoveryTransition};
 
-use crate::device_write::DeviceWriteHandle;
+use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 use crate::doc_host::EdgeConfig;
 use crate::http_error::describe_http_error;
 use crate::{EngineError, now_ms};
@@ -166,6 +166,7 @@ struct WorkspaceHostInner {
     store: Arc<DocsStore>,
     config: WorkspaceHostConfig,
     registry_admission: Option<RegistryAdmission>,
+    snapshot_write_handle: Option<DeviceWriteHandle>,
     reg: Arc<Mutex<RegistryDoc>>,
     /// Serialize every registry snapshot's byte capture through SQLite
     /// commit, including task projections and the delayed worker. Otherwise
@@ -276,29 +277,44 @@ impl WorkspaceHost {
     /// Load (or migrate, or init) the registry, upsert this device's row, start
     /// the change-driven task, and join the edge registry room when configured.
     pub fn open(store: Arc<DocsStore>, config: WorkspaceHostConfig) -> Result<Self, EngineError> {
-        Self::open_registry_mode(store, config, None)
+        Self::open_registry_mode(store, config, None, None, None)
     }
 
-    /// Guard only RegistryClient-owned mutations with the engine's device-root
-    /// lease. Boot, local registry, and DocsStore writes still need admission
-    /// before this can become a complete product freeze boundary.
+    /// Guard RegistryClient-owned mutations plus this host's boot and snapshot
+    /// writes with the engine's device-root lease. Local registry mutations
+    /// and other DocsStore writers still need admission before a product freeze.
     pub(crate) fn open_with_registry_write_handle(
         store: Arc<DocsStore>,
         config: WorkspaceHostConfig,
         handle: DeviceWriteHandle,
     ) -> Result<Self, EngineError> {
+        // Admission precedes migration, legacy-row deletion, and device upsert.
+        // Keep this ticket through the first durable registry snapshot even if
+        // the owner retires while boot is in progress.
+        let boot_permit = handle.try_admit().map_err(|error| {
+            EngineError::Other(format!("registry boot admission denied ({error:?})"))
+        })?;
+        let admission_handle = handle.clone();
         let admission: RegistryAdmission = Arc::new(move || {
-            handle
+            admission_handle
                 .try_admit()
                 .map(|permit| Box::new(permit) as RegistryWritePermit)
         });
-        Self::open_registry_mode(store, config, Some(admission))
+        Self::open_registry_mode(
+            store,
+            config,
+            Some(admission),
+            Some(handle),
+            Some(boot_permit),
+        )
     }
 
     fn open_registry_mode(
         store: Arc<DocsStore>,
         config: WorkspaceHostConfig,
         registry_admission: Option<RegistryAdmission>,
+        snapshot_write_handle: Option<DeviceWriteHandle>,
+        boot_permit: Option<DeviceWritePermit>,
     ) -> Result<Self, EngineError> {
         let mut doc = match store.load_snapshot(REGISTRY_DOC_ID)? {
             Some(bytes) => RegistryDoc::from_bytes(&bytes, &config.device_id)
@@ -388,6 +404,7 @@ impl WorkspaceHost {
                 store,
                 config,
                 registry_admission,
+                snapshot_write_handle,
                 reg: Arc::new(Mutex::new(doc)),
                 snapshot_persist: Mutex::new(()),
                 #[cfg(test)]
@@ -409,7 +426,11 @@ impl WorkspaceHost {
         // Persist immediately: after this boot the migration source is never
         // read again, so the registry snapshot must exist even if the process
         // dies before the first debounced save.
-        host.inner.save_snapshot();
+        if let Some(permit) = boot_permit.as_ref() {
+            host.inner.save_snapshot_with_permit(permit)?;
+        } else {
+            host.inner.save_snapshot();
+        }
         host.join_room();
         let lifecycle = lock(&host.inner.lifecycle);
         let worker_stop = lifecycle.worker_stop.clone();
@@ -1895,6 +1916,33 @@ impl WorkspaceHostInner {
     }
 
     fn save_snapshot_checked(&self) -> Result<(), EngineError> {
+        // Admission precedes the serialization/SQLite ordering lock so a
+        // freeze waits for even a writer queued behind another snapshot.
+        let _permit = self
+            .snapshot_write_handle
+            .as_ref()
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(|error| {
+                EngineError::Other(format!("registry snapshot admission denied ({error:?})"))
+            })?;
+        self.save_snapshot_under_admission()
+    }
+
+    fn save_snapshot_with_permit(&self, permit: &DeviceWritePermit) -> Result<(), EngineError> {
+        if !self
+            .snapshot_write_handle
+            .as_ref()
+            .is_some_and(|handle| handle.owns(permit))
+        {
+            return Err(EngineError::Other(
+                "registry boot permit does not belong to this device root".into(),
+            ));
+        }
+        self.save_snapshot_under_admission()
+    }
+
+    fn save_snapshot_under_admission(&self) -> Result<(), EngineError> {
         // Lock before serialization, not only at the SQLite call: a worker
         // that captured older bytes must commit before a newer flush captures
         // its bytes. No registry lock is held while SQLite commits.
@@ -2236,6 +2284,40 @@ impl zeron_sync::RegistryTransport for WsDerivedRegistryTransport {
 #[cfg(test)]
 mod tests {
     use super::{device_name_on_boot, linked_worktree_root};
+
+    fn synthetic_config() -> super::WorkspaceHostConfig {
+        super::WorkspaceHostConfig {
+            device_id: "synthetic-device".into(),
+            device_name: "Synthetic device".into(),
+            platform: "test".into(),
+            org_id: "synthetic-org".into(),
+            user_id: "synthetic-user".into(),
+            edge: None,
+        }
+    }
+
+    fn guarded_host(
+        root: &std::path::Path,
+    ) -> (
+        crate::device_write::DeviceWriteOwner,
+        std::sync::Arc<zeron_sync::DocsStore>,
+        super::WorkspaceHost,
+    ) {
+        use super::*;
+        use crate::InstanceLock;
+
+        let owner =
+            crate::device_write::DeviceWriteOwner::new(root, InstanceLock::acquire(root).unwrap())
+                .unwrap();
+        let store = Arc::new(DocsStore::open(root.join("store")).unwrap());
+        let host = WorkspaceHost::open_with_registry_write_handle(
+            store.clone(),
+            synthetic_config(),
+            owner.handle(),
+        )
+        .unwrap();
+        (owner, store, host)
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_worker_cannot_overwrite_newer_checked_flush() {
@@ -2857,6 +2939,202 @@ mod tests {
             .unwrap();
         drop(reopened_admission().unwrap());
         reopened.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn guarded_snapshot_ticket_drains_before_freeze_and_denies_flush_phase() {
+        use super::*;
+        use std::time::Duration;
+        use zeron_sync::write_epoch::Phase;
+
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, host) = guarded_host(root.path());
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first_capture = Mutex::new(Some((captured_tx, release_rx)));
+        *lock(&host.inner.snapshot_after_capture) = Some(Arc::new(move || {
+            if let Some((captured_tx, release_rx)) = lock(&first_capture).take() {
+                captured_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        }));
+
+        assert!(host.rename_device("synthetic-device", "Frozen").unwrap());
+        tokio::task::spawn_blocking(move || captured_rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        let epoch = owner.epoch_for_tests();
+        let freeze_epoch = epoch.clone();
+        let freeze = tokio::spawn(async move { freeze_epoch.freeze(Duration::from_secs(2)).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while epoch.phase() != Phase::Quiescing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!freeze.is_finished());
+        assert!(host.inner.snapshot_persist.try_lock().is_err());
+        let error = host.flush_checked().unwrap_err().to_string();
+        assert!(error.contains("admission denied (Busy)"), "{error}");
+
+        release_tx.send(()).unwrap();
+        let flush = freeze.await.unwrap().unwrap();
+        assert_eq!(epoch.phase(), Phase::Flushing);
+        let bytes = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let saved = RegistryDoc::from_bytes(&bytes, "synthetic-device").unwrap();
+        assert_eq!(
+            saved
+                .read_devices()
+                .unwrap()
+                .into_iter()
+                .find(|device| device.id == "synthetic-device")
+                .unwrap()
+                .name,
+            "Frozen"
+        );
+        let error = host.flush_checked().unwrap_err().to_string();
+        assert!(error.contains("admission denied (Busy)"), "{error}");
+        drop(flush);
+        assert_eq!(epoch.phase(), Phase::Open);
+        host.flush_checked().unwrap();
+        host.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_boot_reports_initial_sqlite_failure_before_join_and_can_retry() {
+        use super::*;
+        use crate::InstanceLock;
+        use crate::device_write::DeviceWriteOwner;
+
+        let root = tempfile::tempdir().unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let store = Arc::new(DocsStore::open(root.path().join("store")).unwrap());
+        let connection =
+            rusqlite::Connection::open(root.path().join("store/docs.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_first_registry_snapshot BEFORE INSERT ON snapshots
+                 WHEN NEW.doc_id = 'registry1'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic boot snapshot failure'); END;",
+            )
+            .unwrap();
+
+        let error = WorkspaceHost::open_with_registry_write_handle(
+            store.clone(),
+            synthetic_config(),
+            owner.handle(),
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("synthetic boot snapshot failure"), "{error}");
+        assert!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().is_none());
+        connection
+            .execute_batch("DROP TRIGGER reject_first_registry_snapshot")
+            .unwrap();
+
+        let host = WorkspaceHost::open_with_registry_write_handle(
+            store.clone(),
+            synthetic_config(),
+            owner.handle(),
+        )
+        .unwrap();
+        assert!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().is_some());
+        host.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_snapshot_sqlite_failure_retries_and_reopens_latest_row() {
+        use super::*;
+
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, host) = guarded_host(root.path());
+        let before = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let connection =
+            rusqlite::Connection::open(root.path().join("store/docs.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_guarded_registry_snapshot BEFORE UPDATE ON snapshots
+                 WHEN NEW.doc_id = 'registry1'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic guarded snapshot failure'); END;",
+            )
+            .unwrap();
+        assert!(host.rename_device("synthetic-device", "Latest").unwrap());
+        let error = host.flush_checked().unwrap_err().to_string();
+        assert!(
+            error.contains("synthetic guarded snapshot failure"),
+            "{error}"
+        );
+        assert_eq!(
+            store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
+            before
+        );
+
+        connection
+            .execute_batch("DROP TRIGGER reject_guarded_registry_snapshot")
+            .unwrap();
+        host.flush_checked().unwrap();
+        host.drain_tasks_checked().await.unwrap();
+        drop(host);
+        drop(store);
+        drop(connection);
+        drop(owner);
+
+        let (_replacement, _store, workspace) = guarded_host(root.path());
+        let device = workspace
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "synthetic-device")
+            .unwrap();
+        assert_eq!(device.name, "Latest");
+        workspace.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retired_guarded_boot_preserves_legacy_row_and_root_lease() {
+        use super::*;
+        use crate::InstanceLock;
+        use crate::device_write::DeviceWriteOwner;
+
+        let root = tempfile::tempdir().unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let store = Arc::new(DocsStore::open(root.path().join("store")).unwrap());
+        let old_bytes = b"synthetic pre-spaces legacy row";
+        store
+            .save_snapshot(LEGACY_WORKSPACE_DOC_ID, old_bytes)
+            .unwrap();
+        let held = owner.handle().try_admit().unwrap();
+        owner.retire();
+
+        let error = WorkspaceHost::open_with_registry_write_handle(
+            store.clone(),
+            synthetic_config(),
+            owner.handle(),
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("boot admission denied (Retired)"), "{error}");
+        assert_eq!(
+            store
+                .load_snapshot(LEGACY_WORKSPACE_DOC_ID)
+                .unwrap()
+                .unwrap(),
+            old_bytes.to_vec()
+        );
+        assert!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().is_none());
+
+        drop(store);
+        drop(owner);
+        assert!(InstanceLock::acquire(root.path()).is_err());
+        drop(held);
+        let replacement = InstanceLock::acquire(root.path()).unwrap();
+        drop(replacement);
     }
 
     #[tokio::test(flavor = "current_thread")]
