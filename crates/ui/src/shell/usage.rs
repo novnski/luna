@@ -504,7 +504,13 @@ impl Shell {
     fn render_usage_price_editor(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let mut saved: Vec<_> = self.settings.usage_price_overrides.iter().collect();
         saved.sort_by(|left, right| left.0.cmp(right.0));
-        let inputs = self.usage_price_inputs.clone();
+        let [
+            model_input,
+            input_rate,
+            cached_rate,
+            creation_rate,
+            output_rate,
+        ] = self.usage_price_inputs.clone();
         let mut card = div()
             .w_full()
             .rounded(px(Theme::CONTROL_RADIUS))
@@ -530,14 +536,25 @@ impl Shell {
             )
             .child(
                 div()
+                    .w_full()
+                    .child(crate::popover::dialog_field(
+                        model_input.into_any_element(),
+                    )),
+            )
+            .child(
+                div()
                     .flex()
                     .flex_wrap()
                     .gap(px(7.0))
-                    .children(inputs.into_iter().enumerate().map(|(index, input)| {
-                        div()
-                            .w(px(if index == 0 { 190.0 } else { 105.0 }))
-                            .child(crate::popover::dialog_field(input.into_any_element()))
-                    })),
+                    .children(
+                        [input_rate, cached_rate, creation_rate, output_rate]
+                            .into_iter()
+                            .map(|input| {
+                                div()
+                                    .w(px(160.0))
+                                    .child(crate::popover::dialog_field(input.into_any_element()))
+                            }),
+                    ),
             )
             .child(
                 div()
