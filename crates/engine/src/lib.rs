@@ -743,9 +743,12 @@ impl EngineCore {
         self.diff_sync.shutdown().await;
         self.workspace_files.shutdown().await;
         self.spaces_sync.shutdown().await;
-        self.doc_host.shutdown_workers().await;
-        self.doc_host.flush_all();
-        self.workspace.shutdown();
+        if let Err(error) = self.doc_host.shutdown_workers_checked().await {
+            tracing::error!(%error, "doc host final snapshot flush failed during shutdown");
+        }
+        if let Err(error) = self.workspace.shutdown_checked().await {
+            tracing::error!(%error, "workspace final snapshot or task drain failed during shutdown");
+        }
         // Break the sessions ⇄ doc-host retain cycle so the replaced graph can
         // actually be freed once the last handle drops.
         self.sessions.clear_doc_host();

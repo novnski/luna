@@ -1782,6 +1782,22 @@ impl WorkspaceHost {
         self.flush_checked()
     }
 
+    /// Product teardown keeps the last-seen stamp and final registry snapshot
+    /// in the checked path, then waits for host-owned writers to drain.
+    pub(crate) async fn shutdown_checked(&self) -> Result<(), EngineError> {
+        let stamp = if lock(&self.inner.lifecycle).shutting_down {
+            Ok(())
+        } else {
+            let now = Utc::now();
+            let device_id = self.inner.config.device_id.clone();
+            self.mutate(|doc| doc.set_device_last_seen(&device_id, now))
+                .map(|_| ())
+        };
+        let drain = self.drain_tasks_checked().await;
+        stamp?;
+        drain
+    }
+
     /// Shutdown: stamp our `lastSeenAt` (the only periodic-ish row write besides
     /// boot) and flush the snapshot.
     pub fn shutdown(&self) {
@@ -2750,7 +2766,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn checked_drain_retries_failed_final_snapshot_without_new_change() {
+    async fn checked_shutdown_retries_failed_final_snapshot_without_new_change() {
         use super::*;
 
         let root = tempfile::tempdir().unwrap();
@@ -2778,7 +2794,7 @@ mod tests {
             .unwrap();
         assert!(host.rename_device("test-device", "Latest").unwrap());
 
-        let error = host.drain_tasks_checked().await.unwrap_err().to_string();
+        let error = host.shutdown_checked().await.unwrap_err().to_string();
         assert!(error.contains("synthetic snapshot failure"), "{error}");
         assert_eq!(
             store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
@@ -2787,7 +2803,7 @@ mod tests {
         connection
             .execute_batch("DROP TRIGGER reject_registry_snapshot")
             .unwrap();
-        host.drain_tasks_checked().await.unwrap();
+        host.shutdown_checked().await.unwrap();
         let bytes = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
         let saved = RegistryDoc::from_bytes(&bytes, "test-device").unwrap();
         let device = saved

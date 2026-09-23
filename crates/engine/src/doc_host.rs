@@ -1418,6 +1418,21 @@ impl DocHost {
         lock(&self.inner.sessions).take();
     }
 
+    /// Stop workers and retain open docs if a final snapshot cannot be
+    /// persisted. A caller may repair the storage error and retry the flush.
+    pub(crate) async fn shutdown_workers_checked(&self) -> Result<(), EngineError> {
+        self.inner.shutdown.cancel();
+        self.inner.tasks.close();
+        self.inner.tasks.wait().await;
+        self.flush_all_checked()?;
+        let handles = std::mem::take(&mut *lock(&self.inner.handles));
+        drop(handles);
+        lock(&self.inner.seeding).clear();
+        lock(&self.inner.seed_waiting).clear();
+        lock(&self.inner.sessions).take();
+        Ok(())
+    }
+
     /// Freeze every open queue before settling live runs during shutdown.
     /// Interrupting a run publishes Idle, which normally wakes the turn-end
     /// queue drainer; without this barrier quitting the host could promote a
@@ -6669,14 +6684,20 @@ impl DocHost {
     }
 
     fn save_snapshot(&self, handle: &ChatDocHandle) {
+        if let Err(error) = self.save_snapshot_checked(handle) {
+            tracing::warn!(chat = %handle.chat_id, %error, "snapshot save failed");
+        }
+    }
+
+    fn save_snapshot_checked(&self, handle: &ChatDocHandle) -> Result<(), EngineError> {
         let _projection = lock(&handle.queue_projection_lock);
         if handle
             .durable_projection_uninstalled
             .load(Ordering::Acquire)
         {
-            tracing::warn!(chat = %handle.chat_id,
-                "snapshot save skipped after an uninstalled durable projection");
-            return;
+            return Err(EngineError::Other(
+                "snapshot save skipped after an uninstalled durable projection".into(),
+            ));
         }
         if handle.retired.load(Ordering::Relaxed) {
             // A chat2 seed replaced this lineage on disk; persisting this
@@ -6686,24 +6707,17 @@ impl DocHost {
             // the save turned an app quit into total loss (2026-08-11);
             // persist it, and let the adopt path convert it on reopen.
             let thin_on_disk = matches!(
-                self.inner.store.load_snapshot_with_cursor(&handle.chat_id),
-                Ok(Some((_, _, epoch))) if epoch >= crate::chat2_host::CHAT2_DOC_EPOCH
+                self.inner.store.load_snapshot_with_cursor(&handle.chat_id)?,
+                Some((_, _, epoch)) if epoch >= crate::chat2_host::CHAT2_DOC_EPOCH
             );
             if thin_on_disk {
-                return;
+                return Ok(());
             }
         }
-        match handle.doc.export_snapshot() {
-            Ok(bytes) => {
-                handle.snapshot_bytes.store(bytes.len(), Ordering::Relaxed);
-                if let Err(err) = self.inner.store.save_snapshot(&handle.chat_id, &bytes) {
-                    tracing::warn!(chat = %handle.chat_id, error = %err, "snapshot save failed");
-                }
-            }
-            Err(err) => {
-                tracing::warn!(chat = %handle.chat_id, error = %err, "snapshot export failed");
-            }
-        }
+        let bytes = handle.doc.export_snapshot()?;
+        self.inner.store.save_snapshot(&handle.chat_id, &bytes)?;
+        handle.snapshot_bytes.store(bytes.len(), Ordering::Relaxed);
+        Ok(())
     }
 
     /// Persist every open doc now (shutdown path; bypasses the debounce).
@@ -6712,6 +6726,17 @@ impl DocHost {
         for handle in handles {
             self.save_snapshot(&handle);
         }
+    }
+
+    pub(crate) fn flush_all_checked(&self) -> Result<(), EngineError> {
+        let handles: Vec<_> = lock(&self.inner.handles).values().cloned().collect();
+        let mut first_error = None;
+        for handle in handles {
+            if let Err(error) = self.save_snapshot_checked(&handle) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Close all account-scoped room memberships before graceful engine
@@ -7421,6 +7446,24 @@ mod unwired_interrupt_projection_tests {
             .unwrap()
             .read_commands()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn checked_shutdown_retains_open_doc_after_synthetic_sql_failure() {
+        let (root, _store, host, _handle) = fixture();
+        let db = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_shutdown_snapshot BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='target'
+             BEGIN SELECT RAISE(ABORT, 'synthetic shutdown failure'); END;",
+        )
+        .unwrap();
+        assert!(host.shutdown_workers_checked().await.is_err());
+        assert!(lock(&host.inner.handles).contains_key("target"));
+        db.execute_batch("DROP TRIGGER fail_shutdown_snapshot;")
+            .unwrap();
+        host.shutdown_workers_checked().await.unwrap();
+        assert!(!lock(&host.inner.handles).contains_key("target"));
     }
 
     #[tokio::test]
