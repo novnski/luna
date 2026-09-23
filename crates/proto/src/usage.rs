@@ -4,13 +4,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const USAGE_CONTRACT_VERSION: u32 = 1;
+/// v2 adds a distinct OpenCode Go provider that older clients cannot decode.
+pub const USAGE_CONTRACT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsageProvider {
     Codex,
     Claude,
+    /// OpenCode Go subscription quotas. No historical transcript adapter yet.
+    OpenCodeGo,
 }
 
 impl UsageProvider {
@@ -18,6 +21,7 @@ impl UsageProvider {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
+            Self::OpenCodeGo => "OpenCode Go",
         }
     }
 }
@@ -93,6 +97,10 @@ pub struct UsageBucket {
     pub sessions: u64,
     /// Sum only when every record in this bucket is priced.
     pub api_equivalent_cost_usd: Option<f64>,
+    /// Modeled uncached-vs-cached input discount; unknown when any cached
+    /// record lacks an exact model rate. Not a subscription billing amount.
+    #[serde(default)]
+    pub cache_savings_usd: Option<f64>,
     pub cost_quality: CostQuality,
 }
 
@@ -300,6 +308,7 @@ mod tests {
                     records: 1,
                     sessions: 1,
                     api_equivalent_cost_usd: None,
+                    cache_savings_usd: None,
                     cost_quality: CostQuality::Unpriced,
                 }],
                 sources: vec![UsageSource {
@@ -345,5 +354,47 @@ mod tests {
             merge_usage_snapshots(vec![snapshot("one", "one", 1), snapshot("two", "two", 2)])
                 .unwrap();
         assert_eq!(distinct.summary.buckets.len(), 2);
+    }
+
+    #[test]
+    fn opencode_go_limits_merge_only_verified_matching_accounts() {
+        let snapshot = |id: Option<&str>, checked, availability| UsageSnapshot {
+            summary: UsageSummary {
+                contract_version: USAGE_CONTRACT_VERSION,
+                read_at_ms: checked,
+                time_zone: "UTC".into(),
+                days: 7,
+                resolution: "day".into(),
+                buckets: vec![],
+                sources: vec![],
+                scan_duration_ms: 0,
+                partial: false,
+                warnings: vec![],
+            },
+            limits: vec![UsageLimitSnapshot {
+                provider: UsageProvider::OpenCodeGo,
+                verified_account_id: id.map(str::to_owned),
+                account_label: Some("synthetic Go".into()),
+                plan: Some("Go".into()),
+                checked_at_ms: Some(checked),
+                availability,
+                windows: vec![],
+                reset_credits: None,
+                detail: None,
+            }],
+        };
+        let merged = merge_usage_snapshots(vec![
+            snapshot(Some("same"), 20, LimitAvailability::ProbeFailed),
+            snapshot(Some("same"), 10, LimitAvailability::Ready),
+        ])
+        .unwrap();
+        assert_eq!(merged.limits.len(), 1);
+        assert_eq!(merged.limits[0].availability, LimitAvailability::Ready);
+        let unknown = merge_usage_snapshots(vec![
+            snapshot(None, 10, LimitAvailability::Ready),
+            snapshot(None, 20, LimitAvailability::Ready),
+        ])
+        .unwrap();
+        assert_eq!(unknown.limits.len(), 2);
     }
 }

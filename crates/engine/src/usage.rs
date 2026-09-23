@@ -69,6 +69,11 @@ fn price_cost(rate: UsagePriceRate, tokens: UsageTokens) -> f64 {
         / 1_000_000.0
 }
 
+fn modeled_cache_savings(rate: UsagePriceRate, tokens: UsageTokens) -> f64 {
+    tokens.cached_input as f64 * (rate.input_per_million - rate.cached_per_million).max(0.0)
+        / 1_000_000.0
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -234,6 +239,12 @@ fn scan_file(
     previous: Option<&CachedFile>,
     deadline: Instant,
 ) -> std::io::Result<(CachedFile, bool)> {
+    if provider == UsageProvider::OpenCodeGo {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "OpenCode history has no verified synthetic transcript adapter",
+        ));
+    }
     let metadata = fs::metadata(path)?;
     if metadata.len() > MAX_FILE_BYTES {
         return Err(std::io::Error::other("file exceeds bounded scan size"));
@@ -294,6 +305,7 @@ fn scan_file(
                     || line.contains("\"turn_context\"")
                     || line.contains("\"session_meta\"")
             }
+            UsageProvider::OpenCodeGo => false,
         };
         if !likely_usage {
             continue;
@@ -301,6 +313,7 @@ fn scan_file(
         let record = match provider {
             UsageProvider::Claude => parse_claude(&line),
             UsageProvider::Codex => parse_codex(&line, &mut result.codex),
+            UsageProvider::OpenCodeGo => None,
         };
         if let Some(record) = record {
             result.records.push(record);
@@ -364,8 +377,16 @@ fn actual_provider_homes() -> Vec<PathBuf> {
         let home = PathBuf::from(home);
         homes.push(home.join(".codex"));
         homes.push(home.join(".claude"));
+        homes.push(home.join(".config/opencode"));
+        homes.push(home.join(".local/share/opencode"));
+        homes.push(home.join(".cache/opencode"));
     }
-    for variable in ["CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+    for variable in [
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "OPENCODE_CONFIG_DIR",
+        "OPENCODE_HOME",
+    ] {
         if let Some(path) = std::env::var_os(variable) {
             let path = PathBuf::from(path);
             if path.is_absolute() {
@@ -373,6 +394,15 @@ fn actual_provider_homes() -> Vec<PathBuf> {
             } else if let Ok(cwd) = std::env::current_dir() {
                 homes.push(cwd.join(path));
             }
+        }
+    }
+    for (variable, child) in [
+        ("XDG_CONFIG_HOME", "opencode"),
+        ("XDG_DATA_HOME", "opencode"),
+        ("XDG_CACHE_HOME", "opencode"),
+    ] {
+        if let Some(path) = std::env::var_os(variable) {
+            homes.push(PathBuf::from(path).join(child));
         }
     }
     homes
@@ -463,7 +493,28 @@ fn cache_path() -> Option<PathBuf> {
             return None;
         }
     }
-    Some(root.join("usage-scan-v2.json"))
+    let path = root.join("usage-scan-v2.json");
+    safe_cache_file(&path).then_some(path)
+}
+
+fn safe_cache_file(path: &Path) -> bool {
+    match path.symlink_metadata() {
+        Ok(metadata) => metadata.file_type().is_file(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
+fn write_cache_bytes(path: &Path, bytes: &[u8]) {
+    let Some(parent) = path.parent() else { return };
+    if !safe_cache_file(path) {
+        return;
+    }
+    let Ok(mut temporary) = tempfile::NamedTempFile::new_in(parent) else {
+        return;
+    };
+    if temporary.write_all(bytes).is_ok() && temporary.as_file().sync_all().is_ok() {
+        let _ = temporary.persist(path);
+    }
 }
 
 fn synthetic_file(variable: &str) -> Option<PathBuf> {
@@ -491,7 +542,8 @@ fn prices() -> HashMap<String, (UsagePriceRate, CostQuality)> {
 }
 
 fn load_cache(path: Option<&Path>) -> ScanCache {
-    path.and_then(|path| fs::read(path).ok())
+    path.filter(|path| safe_cache_file(path))
+        .and_then(|path| fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice::<ScanCache>(&bytes).ok())
         .filter(|cache| cache.version == CACHE_VERSION)
         .unwrap_or_default()
@@ -502,16 +554,7 @@ fn save_cache(path: Option<&Path>, cache: &ScanCache) {
     let Ok(bytes) = serde_json::to_vec(cache) else {
         return;
     };
-    let temporary = path.with_extension("tmp");
-    if File::create(&temporary)
-        .and_then(|mut file| {
-            file.write_all(&bytes)?;
-            file.sync_all()
-        })
-        .is_ok()
-    {
-        let _ = fs::rename(&temporary, path);
-    }
+    write_cache_bytes(path, &bytes);
 }
 
 fn add_source(
@@ -599,68 +642,148 @@ fn add_source_configured(
     source
 }
 
-fn limits() -> Vec<UsageLimitSnapshot> {
-    let default: Vec<UsageLimitSnapshot> = [UsageProvider::Codex, UsageProvider::Claude]
-        .into_iter()
-        .map(|provider| UsageLimitSnapshot {
-            provider,
-            verified_account_id: None,
-            account_label: None,
-            plan: None,
-            checked_at_ms: None,
-            availability: LimitAvailability::Unsupported,
-            windows: Vec::new(),
-            reset_credits: None,
-            detail: Some("Live account probes are disabled for isolated L16 validation".into()),
-        })
-        .collect();
-    let Some(path) = synthetic_file("LUNA_USAGE_SYNTHETIC_LIMITS_JSON") else {
-        return default;
-    };
-    let last_good = cache_path().map(|path| path.with_file_name("usage-limits-last-good.json"));
-    let parsed = fs::read(&path)
+fn unsupported_limit(provider: UsageProvider) -> UsageLimitSnapshot {
+    UsageLimitSnapshot {
+        provider,
+        verified_account_id: None,
+        account_label: None,
+        plan: None,
+        checked_at_ms: None,
+        availability: LimitAvailability::Unsupported,
+        windows: Vec::new(),
+        reset_credits: None,
+        detail: Some(match provider {
+            UsageProvider::OpenCodeGo => "OpenCode Go limits require a marked, verified synthetic Go fixture; external OpenCode servers and other OpenCode/Zen spending are unsupported",
+            _ => "Live account probes are disabled for isolated L16 validation",
+        }.into()),
+    }
+}
+
+fn with_unsupported_limits(mut items: Vec<UsageLimitSnapshot>) -> Vec<UsageLimitSnapshot> {
+    for provider in [
+        UsageProvider::Codex,
+        UsageProvider::OpenCodeGo,
+        UsageProvider::Claude,
+    ] {
+        if !items.iter().any(|item| item.provider == provider) {
+            items.push(unsupported_limit(provider));
+        }
+    }
+    items
+}
+
+fn normalize_limit_fixture(mut items: Vec<UsageLimitSnapshot>) -> Option<Vec<UsageLimitSnapshot>> {
+    for item in &mut items {
+        if item.availability != LimitAvailability::Ready || item.checked_at_ms.is_none() {
+            return None;
+        }
+        if item.windows.iter().any(|window| {
+            !window.used_percent.is_finite() || !(0.0..=100.0).contains(&window.used_percent)
+        }) {
+            return None;
+        }
+        if item.provider == UsageProvider::OpenCodeGo {
+            if item
+                .verified_account_id
+                .as_deref()
+                .is_none_or(|id| id.trim().is_empty())
+                || item
+                    .plan
+                    .as_deref()
+                    .is_none_or(|plan| plan.trim().is_empty())
+                || item.windows.is_empty()
+                || item
+                    .windows
+                    .iter()
+                    .any(|window| window.duration_minutes == Some(0))
+            {
+                return None;
+            }
+            let mut kinds = HashSet::new();
+            for window in &mut item.windows {
+                let kind = window.id.to_ascii_lowercase().replace(['-', '_'], "");
+                let (id, label) = match kind.as_str() {
+                    "session" | "fivehour" => ("fiveHour", "Five-hour"),
+                    "weekly" => ("weekly", "Weekly"),
+                    "monthly" => ("monthly", "Monthly"),
+                    _ => return None,
+                };
+                if !kinds.insert(id) {
+                    return None;
+                }
+                window.id = id.into();
+                window.label = label.into();
+            }
+            // A marked fixture is evidence for UI behavior, not a live login.
+            item.reset_credits = None;
+            item.detail =
+                Some("Marked synthetic OpenCode Go quota fixture · no live account probe".into());
+        }
+    }
+    Some(items)
+}
+
+fn default_limits() -> Vec<UsageLimitSnapshot> {
+    [
+        UsageProvider::Codex,
+        UsageProvider::OpenCodeGo,
+        UsageProvider::Claude,
+    ]
+    .into_iter()
+    .map(unsupported_limit)
+    .collect()
+}
+
+fn limits_from_fixture(path: &Path, last_good: Option<&Path>) -> Vec<UsageLimitSnapshot> {
+    let last_good = last_good.filter(|path| safe_cache_file(path));
+    let parsed = fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Vec<UsageLimitSnapshot>>(&bytes).ok())
-        .filter(|items| {
-            items.iter().all(|item| {
-                item.availability == LimitAvailability::Ready
-                    && item.checked_at_ms.is_some()
-                    && item.windows.iter().all(|window| {
-                        window.used_percent.is_finite()
-                            && (0.0..=100.0).contains(&window.used_percent)
-                    })
-            })
-        });
+        .and_then(normalize_limit_fixture);
     if let Some(items) = parsed {
         if let Some(path) = last_good
             && let Ok(bytes) = serde_json::to_vec(&items)
         {
-            let _ = fs::write(path, bytes);
+            write_cache_bytes(path, &bytes);
         }
-        return items;
+        return with_unsupported_limits(items);
     }
     if let Some(items) = last_good
         .and_then(|path| fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice::<Vec<UsageLimitSnapshot>>(&bytes).ok())
+        .and_then(normalize_limit_fixture)
     {
-        return items
-            .into_iter()
-            .map(|mut item| {
-                item.availability = LimitAvailability::ProbeFailed;
-                item.detail =
-                    Some("Synthetic limit refresh failed; showing last good values".into());
-                item
-            })
-            .collect();
+        return with_unsupported_limits(
+            items
+                .into_iter()
+                .map(|mut item| {
+                    item.availability = LimitAvailability::ProbeFailed;
+                    item.detail =
+                        Some("Synthetic limit refresh failed; showing last good values".into());
+                    item
+                })
+                .collect(),
+        );
     }
-    default
+    default_limits()
         .into_iter()
         .map(|mut item| {
-            item.availability = LimitAvailability::ProbeFailed;
-            item.detail = Some("Synthetic limit fixture could not be read".into());
+            if item.provider != UsageProvider::OpenCodeGo {
+                item.availability = LimitAvailability::ProbeFailed;
+                item.detail =
+                    Some("Marked synthetic limit fixture could not be read or validated".into());
+            }
             item
         })
         .collect()
+}
+
+fn limits() -> Vec<UsageLimitSnapshot> {
+    let Some(path) = synthetic_file("LUNA_USAGE_SYNTHETIC_LIMITS_JSON") else {
+        return default_limits();
+    };
+    let last_good = cache_path().map(|path| path.with_file_name("usage-limits-last-good.json"));
+    limits_from_fixture(&path, last_good.as_deref())
 }
 
 fn aggregate_records(
@@ -693,6 +816,7 @@ fn aggregate_records(
                     records: 0,
                     sessions: 0,
                     api_equivalent_cost_usd: Some(0.0),
+                    cache_savings_usd: Some(0.0),
                     cost_quality: CostQuality::ProviderReported,
                 },
                 HashSet::new(),
@@ -700,6 +824,16 @@ fn aggregate_records(
         });
         bucket.tokens.add(record.tokens);
         bucket.records += 1;
+        let savings = if record.tokens.cached_input == 0 {
+            Some(0.0)
+        } else {
+            prices
+                .get(&record.model)
+                .map(|(rate, _)| modeled_cache_savings(*rate, record.tokens))
+        };
+        bucket.cache_savings_usd = bucket
+            .cache_savings_usd
+            .and_then(|known| savings.map(|saved| known + saved));
         if !record.session.is_empty() {
             sessions.insert(record.session);
         }
@@ -773,6 +907,17 @@ pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
             &mut cache,
             &mut records,
         ),
+        UsageSource {
+            provider: UsageProvider::OpenCodeGo,
+            environment_id: "local-synthetic".into(),
+            fingerprint: String::new(),
+            status: UsageSourceStatus::Unsupported,
+            distinct_sessions: 0,
+            files_scanned: 0,
+            files_cached: 0,
+            failed_files: 0,
+            detail: Some("OpenCode history and Zen spending have no verified copy-isolated transcript adapter".into()),
+        },
     ];
     // Longest supported window plus one day of boundary slack.
     let retention = read_at - 91 * 86_400_000;
@@ -1052,6 +1197,7 @@ mod tests {
     fn user_rate_prices_exact_model_but_provider_cost_wins() {
         let tokens = UsageTokens {
             uncached_input: 1_000_000,
+            cached_input: 1_000_000,
             ..UsageTokens::default()
         };
         let base = Record {
@@ -1110,10 +1256,119 @@ mod tests {
             &rates,
         );
         assert_eq!(buckets[0].api_equivalent_cost_usd, Some(2.0));
+        assert_eq!(buckets[0].cache_savings_usd, Some(2.0));
         assert_eq!(buckets[0].cost_quality, CostQuality::UserOverride);
         assert_eq!(buckets[1].api_equivalent_cost_usd, Some(0.5));
+        assert_eq!(buckets[1].cache_savings_usd, Some(2.0));
         assert_eq!(buckets[1].cost_quality, CostQuality::ProviderReported);
         assert_eq!(buckets[2].api_equivalent_cost_usd, None);
+        assert_eq!(buckets[2].cache_savings_usd, None);
         assert_eq!(buckets[2].cost_quality, CostQuality::Unpriced);
+    }
+
+    #[test]
+    fn opencode_go_fixture_accepts_only_named_windows_with_account_provenance() {
+        let fixture = UsageLimitSnapshot {
+            provider: UsageProvider::OpenCodeGo,
+            verified_account_id: Some("fake-go-account".into()),
+            account_label: Some("Synthetic Go account".into()),
+            plan: Some("Go".into()),
+            checked_at_ms: Some(1_000_000),
+            availability: LimitAvailability::Ready,
+            windows: ["session", "weekly", "monthly"]
+                .into_iter()
+                .map(|id| zeron_proto::UsageLimitWindow {
+                    id: id.into(),
+                    label: "fixture label".into(),
+                    used_percent: 25.0,
+                    resets_at_ms: Some(2_000_000),
+                    duration_minutes: Some(300),
+                })
+                .collect(),
+            reset_credits: Some(7),
+            detail: None,
+        };
+        let encoded = serde_json::to_value(&fixture).unwrap();
+        assert_eq!(encoded["provider"], "openCodeGo");
+        let fixture: UsageLimitSnapshot = serde_json::from_value(encoded).unwrap();
+        let normalized = normalize_limit_fixture(vec![fixture.clone()]).unwrap();
+        assert_eq!(normalized[0].windows[0].id, "fiveHour");
+        assert_eq!(normalized[0].windows[0].label, "Five-hour");
+        assert_eq!(normalized[0].windows.len(), 3);
+        assert_eq!(normalized[0].reset_credits, None);
+        assert!(
+            normalized[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("synthetic")
+        );
+        let with_defaults = with_unsupported_limits(normalized);
+        assert_eq!(with_defaults.len(), 3);
+        assert!(
+            with_defaults
+                .iter()
+                .any(|item| item.provider == UsageProvider::Codex
+                    && item.availability == LimitAvailability::Unsupported)
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(SYNTHETIC_MARKER), b"synthetic").unwrap();
+        let path = root.path().join("limits.json");
+        let last_good = root.path().join("usage-limits-last-good.json");
+        fs::write(&path, serde_json::to_vec(&vec![fixture.clone()]).unwrap()).unwrap();
+        let fresh = limits_from_fixture(&path, Some(&last_good));
+        assert_eq!(fresh[0].availability, LimitAvailability::Ready);
+        assert!(last_good.is_file());
+        fs::write(&path, b"invalid synthetic refresh").unwrap();
+        let stale = limits_from_fixture(&path, Some(&last_good));
+        assert_eq!(stale[0].availability, LimitAvailability::ProbeFailed);
+        assert_eq!(stale[0].windows.len(), 3);
+        fs::remove_file(&last_good).unwrap();
+        let unavailable = limits_from_fixture(&path, Some(&last_good));
+        assert!(
+            unavailable
+                .iter()
+                .any(|item| item.provider == UsageProvider::OpenCodeGo
+                    && item.availability == LimitAvailability::Unsupported)
+        );
+
+        let mut invalid = fixture.clone();
+        invalid.verified_account_id = None;
+        assert!(normalize_limit_fixture(vec![invalid]).is_none());
+        let mut invalid = fixture.clone();
+        invalid.windows[0].id = "zen".into();
+        assert!(normalize_limit_fixture(vec![invalid]).is_none());
+        let mut invalid = fixture;
+        invalid.windows[1].id = "five-hour".into();
+        assert!(normalize_limit_fixture(vec![invalid]).is_none());
+    }
+
+    #[test]
+    fn opencode_history_fails_before_opening_a_transcript() {
+        let missing = Path::new("/does-not-exist/open-code.jsonl");
+        let result = scan_file(
+            missing,
+            UsageProvider::OpenCodeGo,
+            None,
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert_eq!(
+            result.err().unwrap().kind(),
+            std::io::ErrorKind::Unsupported
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn synthetic_cache_rejects_symlinked_files() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("fake-private-data.json");
+        fs::write(&target, b"fixture only").unwrap();
+        let link = root.path().join("usage-limits-last-good.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(!safe_cache_file(&link));
+        assert!(load_cache(Some(&link)).files.is_empty());
     }
 }

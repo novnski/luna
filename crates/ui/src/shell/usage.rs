@@ -17,6 +17,49 @@ use super::{SettingsSection, Shell};
 use crate::icons::{self, icon};
 use crate::theme::Theme;
 
+fn provider_mark(provider: UsageProvider) -> &'static str {
+    match provider {
+        UsageProvider::Codex => icons::OPENAI_MARK,
+        UsageProvider::OpenCodeGo => icons::OPENCODE_MARK,
+        UsageProvider::Claude => icons::CLAUDE_MARK,
+    }
+}
+
+fn provider_tone(provider: UsageProvider, theme: &Theme) -> gpui::Hsla {
+    match provider {
+        UsageProvider::Codex => theme.accent,
+        UsageProvider::OpenCodeGo => theme.success,
+        UsageProvider::Claude => theme.text_muted,
+    }
+}
+
+fn metric_cell(theme: &Theme, label: &'static str, value: String) -> AnyElement {
+    div()
+        .min_w(px(112.0))
+        .flex_1()
+        .rounded(px(Theme::CONTROL_RADIUS))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.glass_hover().opacity(0.18))
+        .p(px(9.0))
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .child(
+            div()
+                .text_size(crate::typography::ui_rems(10.0))
+                .text_color(theme.text_muted)
+                .child(label),
+        )
+        .child(
+            div()
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text)
+                .child(value),
+        )
+        .into_any_element()
+}
+
 fn count(value: u64) -> String {
     let text = value.to_string();
     let mut grouped = String::new();
@@ -41,6 +84,31 @@ fn cost_of(buckets: &[&UsageBucket]) -> Option<f64> {
     buckets.iter().try_fold(0.0, |sum, bucket| {
         bucket.api_equivalent_cost_usd.map(|cost| sum + cost)
     })
+}
+
+fn cache_savings_label(buckets: &[&UsageBucket]) -> String {
+    let cached = buckets.iter().fold(0_u64, |total, bucket| {
+        total.saturating_add(bucket.tokens.cached_input)
+    });
+    if cached == 0 {
+        return "No reuse".into();
+    }
+    let known: f64 = buckets
+        .iter()
+        .filter_map(|bucket| bucket.cache_savings_usd)
+        .sum();
+    if buckets
+        .iter()
+        .any(|bucket| bucket.cache_savings_usd.is_none())
+    {
+        if known > 0.0 {
+            format!("{} known · partial", money(known))
+        } else {
+            "Unknown".into()
+        }
+    } else {
+        money(known)
+    }
 }
 
 fn period_label(start_ms: i64, hourly: bool) -> String {
@@ -205,9 +273,13 @@ fn limit_window_row(
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .justify_between()
+                .gap(px(6.0))
                 .child(
                     div()
+                        .min_w(px(100.0))
+                        .flex_1()
                         .text_size(crate::typography::ui_rems(if compact {
                             11.0
                         } else {
@@ -218,6 +290,7 @@ fn limit_window_row(
                 )
                 .child(
                     div()
+                        .flex_none()
                         .text_size(crate::typography::ui_rems(if compact {
                             11.0
                         } else {
@@ -284,10 +357,14 @@ fn limit_card(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64, compact: b
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .justify_between()
+                .gap(px(6.0))
                 .items_center()
                 .child(
                     div()
+                        .min_w(px(110.0))
+                        .flex_1()
                         .text_size(crate::typography::ui_rems(if compact {
                             12.0
                         } else {
@@ -299,6 +376,7 @@ fn limit_card(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64, compact: b
                 )
                 .child(
                     div()
+                        .flex_none()
                         .text_size(crate::typography::ui_rems(10.0))
                         .text_color(if limit.availability == LimitAvailability::ProbeFailed {
                             theme.warning
@@ -322,16 +400,23 @@ fn limit_card(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64, compact: b
                 .iter()
                 .map(|window| limit_window_row(limit, window, theme, now_ms, compact)),
         )
-        .when_some(limit.reset_credits, |card, credits| {
-            card.child(
-                div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .child(format!(
-                        "Reset credits: {credits} · redemption unavailable in this build"
-                    )),
-            )
-        })
+        .when_some(
+            if limit.provider == UsageProvider::Codex {
+                limit.reset_credits
+            } else {
+                None
+            },
+            |card, credits| {
+                card.child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_muted)
+                        .child(format!(
+                            "Reset credits: {credits} · redemption unavailable in this build"
+                        )),
+                )
+            },
+        )
         .into_any_element()
 }
 
@@ -356,10 +441,7 @@ fn compact_limit_status(limit: &UsageLimitSnapshot, now_ms: i64) -> Option<&'sta
 }
 
 fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> AnyElement {
-    let mark = match limit.provider {
-        UsageProvider::Codex => icons::OPENAI_MARK,
-        UsageProvider::Claude => icons::CLAUDE_MARK,
-    };
+    let mark = provider_mark(limit.provider);
     let heading = match limit.plan.as_deref().filter(|plan| !plan.trim().is_empty()) {
         Some(plan) => format!("{} · {plan}", limit.provider.label()),
         None => limit.provider.label().to_owned(),
@@ -630,17 +712,21 @@ impl Shell {
     ) -> AnyElement {
         div()
             .flex()
+            .flex_wrap()
             .gap(px(5.0))
             .children(
                 [
                     (None, "All providers"),
                     (Some(UsageProvider::Codex), "Codex"),
+                    (Some(UsageProvider::OpenCodeGo), "OpenCode Go"),
                     (Some(UsageProvider::Claude), "Claude"),
                 ]
                 .into_iter()
                 .map(|(provider, label)| {
                     let label = if compact && provider.is_none() {
                         "All"
+                    } else if compact && provider == Some(UsageProvider::OpenCodeGo) {
+                        "Go"
                     } else {
                         label
                     };
@@ -851,6 +937,7 @@ impl Shell {
 
     pub(super) fn render_usage_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
+        let environment_label = self.compact_usage_environment_label(cx);
         let now_ms = Utc::now().timestamp_millis();
         let metric = self.settings.usage_metric.clone();
         let limits_view = metric == "limits";
@@ -866,7 +953,9 @@ impl Shell {
                     matches!(
                         source.status,
                         UsageSourceStatus::Ready | UsageSourceStatus::Partial
-                    )
+                    ) && self
+                        .usage_provider_filter
+                        .is_none_or(|provider| provider == source.provider)
                 });
                 let selected: Vec<_> = snapshot
                     .summary
@@ -881,7 +970,9 @@ impl Shell {
                     .iter()
                     .map(|bucket| bucket.tokens.total())
                     .sum::<u64>();
-                if !ready {
+                if self.usage_provider_filter == Some(UsageProvider::OpenCodeGo) {
+                    "OpenCode Go history unavailable".into()
+                } else if !ready {
                     "Historical usage unavailable".into()
                 } else if metric == "tokens" {
                     format!("{} tokens", count(tokens))
@@ -975,13 +1066,29 @@ impl Shell {
         let mut content = div().w_full().flex().flex_col().gap(px(14.0));
         if let Some(snapshot) = snapshot {
             if limits_view {
-                content = content.child(div().text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.text_muted)
-                    .child("Subscription limits are separate from historical tokens and API-equivalent cost."));
-                for limit in &snapshot.limits {
+                content = content
+                    .child(div().text_size(crate::typography::ui_rems(17.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child("Subscription limits"))
+                    .child(div().text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text_muted)
+                        .child("Account allowance and reset windows are separate from historical tokens and API-equivalent cost. OpenCode Go is shown only from a marked synthetic Go fixture."));
+                for provider in [
+                    UsageProvider::Codex,
+                    UsageProvider::OpenCodeGo,
+                    UsageProvider::Claude,
+                ] {
                     if self
                         .usage_provider_filter
-                        .is_none_or(|provider| limit.provider == provider)
+                        .is_some_and(|filter| filter != provider)
+                    {
+                        continue;
+                    }
+                    for limit in snapshot
+                        .limits
+                        .iter()
+                        .filter(|limit| limit.provider == provider)
                     {
                         content = content.child(limit_card(limit, &theme, now_ms, false));
                     }
@@ -1036,125 +1143,153 @@ impl Shell {
                             .child("Partial coverage · totals may be incomplete"),
                     );
                 }
-                if metric == "tokens" {
+                if selected.is_empty() {
+                    content = content.child(div()
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text_muted)
+                        .child(if self.usage_provider_filter == Some(UsageProvider::OpenCodeGo) {
+                            "OpenCode Go historical tokens and Zen spending are unsupported; its subscription windows appear under Limits only when a marked Go fixture supplies them."
+                        } else {
+                            "No historical buckets are available for this provider and window."
+                        }));
+                } else {
                     let mut mix = zeron_proto::UsageTokens::default();
                     for bucket in &selected {
                         mix.add(bucket.tokens);
                     }
-                    content = content.child(div().text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted)
-                        .child(format!("Input {} · Cached {} · Cache creation {} · Output {} · Reasoning {} (inside output)",
-                            count(mix.uncached_input), count(mix.cached_input), count(mix.cache_creation), count(mix.output), count(mix.reasoning))));
-                }
-                let mut providers = BTreeMap::<&str, Vec<&UsageBucket>>::new();
-                for bucket in &selected {
-                    providers
-                        .entry(bucket.provider.label())
-                        .or_default()
-                        .push(bucket);
-                }
-                let all_tokens = selected
-                    .iter()
-                    .map(|bucket| bucket.tokens.total())
-                    .sum::<u64>();
-                let all_cost = cost_of(&selected);
-                for (provider, buckets) in providers {
-                    let tokens = buckets
+                    let all_tokens = selected
                         .iter()
                         .map(|bucket| bucket.tokens.total())
                         .sum::<u64>();
-                    let value = if metric == "tokens" {
-                        format!("{} tokens", count(tokens))
-                    } else {
-                        cost_of(&buckets).map_or("Cost unknown · unpriced records".into(), money)
+                    let all_cost = cost_of(&selected);
+                    for provider in [
+                        UsageProvider::Codex,
+                        UsageProvider::OpenCodeGo,
+                        UsageProvider::Claude,
+                    ] {
+                        let buckets: Vec<_> = selected
+                            .iter()
+                            .copied()
+                            .filter(|bucket| bucket.provider == provider)
+                            .collect();
+                        if buckets.is_empty() {
+                            continue;
+                        }
+                        let tokens = buckets
+                            .iter()
+                            .map(|bucket| bucket.tokens.total())
+                            .sum::<u64>();
+                        let value = if metric == "tokens" {
+                            format!("{} tokens", count(tokens))
+                        } else {
+                            cost_of(&buckets)
+                                .map_or("Cost unknown · unpriced records".into(), money)
+                        };
+                        let share = if metric == "tokens" && all_tokens > 0 {
+                            Some(tokens as f64 / all_tokens as f64)
+                        } else if metric == "cost" {
+                            all_cost
+                                .filter(|total| *total > 0.0)
+                                .and_then(|total| cost_of(&buckets).map(|cost| cost / total))
+                        } else {
+                            None
+                        };
+                        let provider_sessions: u64 = snapshot
+                            .summary
+                            .sources
+                            .iter()
+                            .filter(|source| {
+                                source.provider == provider
+                                    && matches!(
+                                        source.status,
+                                        UsageSourceStatus::Ready | UsageSourceStatus::Partial
+                                    )
+                            })
+                            .map(|source| source.distinct_sessions)
+                            .sum();
+                        content = content.child(
+                            div()
+                                .w_full()
+                                .rounded(px(Theme::CONTROL_RADIUS))
+                                .border_1()
+                                .border_color(theme.border)
+                                .p(px(12.0))
+                                .flex()
+                                .flex_wrap()
+                                .justify_between()
+                                .gap(px(7.0))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .child(
+                                            icon(provider_mark(provider))
+                                                .size(px(15.0))
+                                                .text_color(provider_tone(provider, &theme)),
+                                        )
+                                        .child(div().text_color(theme.text).child(format!(
+                                            "{} · {} sessions · {}",
+                                            provider.label(),
+                                            count(provider_sessions),
+                                            share.map_or("share unknown".into(), |share| format!(
+                                                "{:.0}% share",
+                                                share * 100.0
+                                            ))
+                                        ))),
+                                )
+                                .child(div().text_color(theme.text_muted).child(value)),
+                        );
+                    }
+                    let mut periods = BTreeMap::<i64, Vec<&UsageBucket>>::new();
+                    for bucket in &selected {
+                        periods.entry(bucket.start_ms).or_default().push(bucket);
+                    }
+                    let period_value = |items: &Vec<&UsageBucket>| -> f64 {
+                        if metric == "tokens" {
+                            items
+                                .iter()
+                                .map(|bucket| bucket.tokens.total() as f64)
+                                .sum()
+                        } else {
+                            cost_of(items).unwrap_or(0.0)
+                        }
                     };
-                    let share = if metric == "tokens" && all_tokens > 0 {
-                        Some(tokens as f64 / all_tokens as f64)
-                    } else if metric == "cost" {
-                        all_cost
-                            .filter(|total| *total > 0.0)
-                            .and_then(|total| cost_of(&buckets).map(|cost| cost / total))
-                    } else {
-                        None
-                    };
-                    let mark = if provider == "Codex" {
-                        icons::OPENAI_MARK
-                    } else {
-                        icons::CLAUDE_MARK
-                    };
+                    let max_value = periods
+                        .values()
+                        .map(period_value)
+                        .fold(0.0_f64, f64::max)
+                        .max(0.000_001);
                     content = content.child(
                         div()
-                            .w_full()
-                            .rounded(px(Theme::CONTROL_RADIUS))
-                            .border_1()
-                            .border_color(theme.border)
-                            .p(px(12.0))
-                            .flex()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(icon(mark).size(px(15.0)).text_color(
-                                        if provider == "Codex" {
-                                            theme.accent
-                                        } else {
-                                            theme.text_muted
-                                        },
-                                    ))
-                                    .child(div().text_color(theme.text).child(format!(
-                                        "{} · {}",
-                                        provider,
-                                        share.map_or("share unknown".into(), |share| format!(
-                                            "{:.0}% share",
-                                            share * 100.0
-                                        ))
-                                    ))),
-                            )
-                            .child(div().text_color(theme.text_muted).child(value)),
+                            .text_size(crate::typography::ui_rems(14.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child("By time"),
                     );
-                }
-                let mut periods = BTreeMap::<i64, Vec<&UsageBucket>>::new();
-                for bucket in &selected {
-                    periods.entry(bucket.start_ms).or_default().push(bucket);
-                }
-                let period_value = |items: &Vec<&UsageBucket>| -> f64 {
-                    if metric == "tokens" {
-                        items
+                    for (start, buckets) in periods.into_iter().rev() {
+                        let tokens = buckets
                             .iter()
-                            .map(|bucket| bucket.tokens.total() as f64)
-                            .sum()
-                    } else {
-                        cost_of(items).unwrap_or(0.0)
-                    }
-                };
-                let max_value = periods
-                    .values()
-                    .map(period_value)
-                    .fold(0.0_f64, f64::max)
-                    .max(0.000_001);
-                content = content.child(
-                    div()
-                        .text_size(crate::typography::ui_rems(14.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child("By time"),
-                );
-                for (start, buckets) in periods.into_iter().rev() {
-                    let tokens = buckets
-                        .iter()
-                        .map(|bucket| bucket.tokens.total())
-                        .sum::<u64>();
-                    let label = if metric == "tokens" {
-                        format!("{} tokens", count(tokens))
-                    } else {
-                        cost_of(&buckets).map_or("Unknown cost".into(), money)
-                    };
-                    let cost_known = metric == "tokens" || cost_of(&buckets).is_some();
-                    let detail =
-                        period_detail(start, snapshot.summary.days == 1, tokens, cost_of(&buckets));
-                    let segments: Vec<AnyElement> = [UsageProvider::Codex, UsageProvider::Claude]
+                            .map(|bucket| bucket.tokens.total())
+                            .sum::<u64>();
+                        let label = if metric == "tokens" {
+                            format!("{} tokens", count(tokens))
+                        } else {
+                            cost_of(&buckets).map_or("Unknown cost".into(), money)
+                        };
+                        let cost_known = metric == "tokens" || cost_of(&buckets).is_some();
+                        let detail = period_detail(
+                            start,
+                            snapshot.summary.days == 1,
+                            tokens,
+                            cost_of(&buckets),
+                        );
+                        let segments: Vec<AnyElement> = [
+                            UsageProvider::Codex,
+                            UsageProvider::OpenCodeGo,
+                            UsageProvider::Claude,
+                        ]
                         .into_iter()
                         .filter_map(|provider| {
                             let amount: f64 = buckets
@@ -1172,114 +1307,160 @@ impl Shell {
                                 div()
                                     .h_full()
                                     .w(gpui::relative((amount / max_value) as f32))
-                                    .bg(if provider == UsageProvider::Codex {
-                                        theme.accent
-                                    } else {
-                                        theme.text_muted
-                                    })
+                                    .bg(provider_tone(provider, &theme))
                                     .into_any_element()
                             })
                         })
                         .collect();
+                        content = content.child(
+                            div()
+                                .id(SharedString::from(format!("usage-period-{start}")))
+                                .tooltip(move |_, cx| {
+                                    cx.new(|_| super::SurfaceTabTooltip {
+                                        text: detail.clone().into(),
+                                    })
+                                    .into()
+                                })
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .justify_between()
+                                        .gap(px(5.0))
+                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .text_color(theme.text_muted)
+                                        .child(period_label(start, snapshot.summary.days == 1))
+                                        .child(label),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(5.0))
+                                        .w_full()
+                                        .rounded(px(3.0))
+                                        .bg(theme.border)
+                                        .flex()
+                                        .overflow_hidden()
+                                        .children(segments),
+                                ),
+                        );
+                    }
+                    let processed = mix
+                        .uncached_input
+                        .saturating_add(mix.cached_input)
+                        .saturating_add(mix.cache_creation);
                     content = content.child(
                         div()
-                            .id(SharedString::from(format!("usage-period-{start}")))
-                            .tooltip(move |_, cx| {
-                                cx.new(|_| super::SurfaceTabTooltip {
-                                    text: detail.clone().into(),
-                                })
-                                .into()
-                            })
                             .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .justify_between()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
-                                    .child(period_label(start, snapshot.summary.days == 1))
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .h(px(5.0))
-                                    .w_full()
-                                    .rounded(px(3.0))
-                                    .bg(theme.border)
-                                    .flex()
-                                    .overflow_hidden()
-                                    .children(segments),
-                            ),
+                            .flex_wrap()
+                            .gap(px(6.0))
+                            .child(metric_cell(&theme, "Input processed", count(processed)))
+                            .child(metric_cell(&theme, "Cache reused", count(mix.cached_input)))
+                            .child(metric_cell(
+                                &theme,
+                                "Cache created",
+                                count(mix.cache_creation),
+                            ))
+                            .child(metric_cell(&theme, "Output", count(mix.output)))
+                            .child(metric_cell(
+                                &theme,
+                                "Cache savings",
+                                cache_savings_label(&selected),
+                            )),
                     );
+                    content = content.child(div().text_size(crate::typography::ui_rems(10.0))
+                        .text_color(theme.text_muted)
+                        .child("Cache savings model the uncached-versus-cached input rate when known; subscription billing is separate."));
+                    if mix.reasoning > 0 {
+                        content = content.child(
+                            div()
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(theme.text_muted)
+                                .child(format!(
+                                    "{} reasoning tokens are included in output",
+                                    count(mix.reasoning)
+                                )),
+                        );
+                    }
+                    let mut models = BTreeMap::<String, Vec<&UsageBucket>>::new();
+                    for bucket in &selected {
+                        models.entry(bucket.model.clone()).or_default().push(bucket);
+                    }
+                    content = content.child(
+                        div()
+                            .text_size(crate::typography::ui_rems(14.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child("By model"),
+                    );
+                    for (model, buckets) in models {
+                        let quality = buckets.first().map(|bucket| bucket.cost_quality);
+                        let quality = if quality.is_some_and(|quality| {
+                            buckets.iter().all(|bucket| bucket.cost_quality == quality)
+                        }) {
+                            quality.unwrap()
+                        } else {
+                            CostQuality::Mixed
+                        };
+                        let provenance = match quality {
+                            CostQuality::ProviderReported => "provider reported",
+                            CostQuality::ModelPriced => "exact model price",
+                            CostQuality::UserOverride => "your exact-model rate",
+                            CostQuality::Unpriced => "unpriced",
+                            CostQuality::Mixed => "mixed provenance",
+                        };
+                        content = content.child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .justify_between()
+                                .gap(px(12.0))
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(theme.text_muted)
+                                .child(model)
+                                .child(format!(
+                                    "{} tokens · {} · {provenance}",
+                                    count(buckets.iter().map(|bucket| bucket.tokens.total()).sum()),
+                                    cost_of(&buckets).map_or("Unpriced".into(), money)
+                                )),
+                        );
+                    }
                 }
-                let mut models = BTreeMap::<String, Vec<&UsageBucket>>::new();
-                for bucket in &selected {
-                    models.entry(bucket.model.clone()).or_default().push(bucket);
-                }
+            }
+            if !limits_view {
                 content = content.child(
                     div()
                         .text_size(crate::typography::ui_rems(14.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text)
-                        .child("By model"),
+                        .child("History coverage"),
                 );
-                for (model, buckets) in models {
-                    let quality = buckets.first().map(|bucket| bucket.cost_quality);
-                    let quality = if quality.is_some_and(|quality| {
-                        buckets.iter().all(|bucket| bucket.cost_quality == quality)
-                    }) {
-                        quality.unwrap()
-                    } else {
-                        CostQuality::Mixed
-                    };
-                    let provenance = match quality {
-                        CostQuality::ProviderReported => "provider reported",
-                        CostQuality::ModelPriced => "exact model price",
-                        CostQuality::UserOverride => "your exact-model rate",
-                        CostQuality::Unpriced => "unpriced",
-                        CostQuality::Mixed => "mixed provenance",
+                for source in &snapshot.summary.sources {
+                    let status = match source.status {
+                        UsageSourceStatus::Ready => "Ready",
+                        UsageSourceStatus::Missing => "Missing",
+                        UsageSourceStatus::Partial => "Partial",
+                        UsageSourceStatus::Unsupported => "Unsupported",
+                        UsageSourceStatus::Duplicate => "Duplicate · excluded",
                     };
                     content = content.child(
                         div()
-                            .flex()
-                            .justify_between()
-                            .gap(px(12.0))
                             .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_muted)
-                            .child(model)
                             .child(format!(
-                                "{} tokens · {} · {provenance}",
-                                count(buckets.iter().map(|bucket| bucket.tokens.total()).sum()),
-                                cost_of(&buckets).map_or("Unpriced".into(), money)
+                                "{} history: {status} · {} scanned · {} cached{}",
+                                source.provider.label(),
+                                source.files_scanned,
+                                source.files_cached,
+                                source
+                                    .detail
+                                    .as_ref()
+                                    .map_or(String::new(), |detail| format!(" · {detail}"))
                             )),
                     );
                 }
-            }
-            for source in &snapshot.summary.sources {
-                let status = match source.status {
-                    UsageSourceStatus::Ready => "Ready",
-                    UsageSourceStatus::Missing => "Missing",
-                    UsageSourceStatus::Partial => "Partial",
-                    UsageSourceStatus::Unsupported => "Unsupported",
-                    UsageSourceStatus::Duplicate => "Duplicate · excluded",
-                };
-                content = content.child(
-                    div()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .child(format!(
-                            "{} history: {status} · {} scanned · {} cached{}",
-                            source.provider.label(),
-                            source.files_scanned,
-                            source.files_cached,
-                            source
-                                .detail
-                                .as_ref()
-                                .map_or(String::new(), |detail| format!(" · {detail}"))
-                        )),
-                );
             }
             for warning in &snapshot.summary.warnings {
                 content = content.child(
@@ -1311,7 +1492,9 @@ impl Shell {
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .justify_between()
+                            .gap(px(8.0))
                             .items_center()
                             .child(
                                 div()
@@ -1322,69 +1505,62 @@ impl Shell {
                             )
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(12.0))
-                                    .child(
-                                        div()
-                                            .id("usage-sidebar-visibility")
-                                            .cursor_pointer()
-                                            .text_size(crate::typography::ui_rems(11.0))
-                                            .text_color(theme.text_muted)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.settings.usage_sidebar_hidden =
-                                                    !this.settings.usage_sidebar_hidden;
-                                                this.usage_card_open = false;
-                                                this.schedule_save(cx);
-                                                cx.notify();
-                                            }))
-                                            .child(if self.settings.usage_sidebar_hidden {
-                                                "Show sidebar action"
-                                            } else {
-                                                "Hide sidebar action"
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("usage-refresh")
-                                            .cursor_pointer()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(5.0))
-                                            .text_color(theme.text_muted)
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.refresh_usage(cx)
-                                                }),
-                                            )
-                                            .child(icon(icons::REFRESH).size(px(14.0)))
-                                            .child(if self.usage_refreshing {
-                                                "Refreshing…"
-                                            } else {
-                                                "Refresh"
-                                            }),
-                                    ),
+                                    .id("usage-sidebar-visibility")
+                                    .cursor_pointer()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.settings.usage_sidebar_hidden =
+                                            !this.settings.usage_sidebar_hidden;
+                                        this.usage_card_open = false;
+                                        this.schedule_save(cx);
+                                        cx.notify();
+                                    }))
+                                    .child(if self.settings.usage_sidebar_hidden {
+                                        "Show sidebar action"
+                                    } else {
+                                        "Hide sidebar action"
+                                    }),
                             ),
                     )
                     .child(toolbar)
-                    .child(periods)
-                    .child(provider_tabs)
                     .child(
                         div()
-                            .id("usage-environment")
-                            .cursor_pointer()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)),
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(10.0))
+                            .child(periods)
+                            .child(
+                                div()
+                                    .id("usage-environment")
+                                    .cursor_pointer()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cycle_usage_environment(cx)
+                                    }))
+                                    .child(format!("Environment: {environment_label} · change")),
                             )
-                            .child(format!(
-                                "Environment: {} · click to change",
-                                self.usage_environment_filter
-                                    .as_deref()
-                                    .unwrap_or("All environments")
-                            )),
+                            .child(
+                                div()
+                                    .id("usage-refresh")
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
+                                    .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
+                                    .child(icon(icons::REFRESH).size(px(14.0)))
+                                    .child(if self.usage_refreshing {
+                                        "Refreshing…"
+                                    } else {
+                                        "Refresh"
+                                    }),
+                            ),
                     )
+                    .child(provider_tabs)
                     .when(stale, |el| {
                         el.child(div().text_color(theme.warning).child("Snapshot is stale"))
                     })
@@ -1556,10 +1732,37 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::{
-        compact_limit_status, format_local_hour, parse_price_override, quota_pace, reset_label,
+        cache_savings_label, compact_limit_status, format_local_hour, parse_price_override,
+        quota_pace, reset_label,
     };
     use chrono::{FixedOffset, TimeZone};
-    use zeron_proto::{LimitAvailability, UsageLimitSnapshot, UsageLimitWindow, UsageProvider};
+    use zeron_proto::{
+        CostQuality, LimitAvailability, UsageBucket, UsageLimitSnapshot, UsageLimitWindow,
+        UsageProvider, UsageTokens,
+    };
+
+    #[test]
+    fn cache_savings_keeps_partial_price_coverage_visible() {
+        let bucket = |savings| UsageBucket {
+            start_ms: 0,
+            provider: UsageProvider::Codex,
+            model: "synthetic".into(),
+            tokens: UsageTokens {
+                cached_input: 1_000,
+                ..UsageTokens::default()
+            },
+            records: 1,
+            sessions: 1,
+            api_equivalent_cost_usd: None,
+            cache_savings_usd: savings,
+            cost_quality: CostQuality::Unpriced,
+        };
+        let priced = bucket(Some(0.02));
+        let unknown = bucket(None);
+        assert_eq!(cache_savings_label(&[&priced]), "$0.02");
+        assert_eq!(cache_savings_label(&[&unknown]), "Unknown");
+        assert!(cache_savings_label(&[&priced, &unknown]).contains("known · partial"));
+    }
 
     #[test]
     fn reset_countdown_does_not_claim_a_past_window_is_current() {
