@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use zeron_harness::codex::native::{CodexMcpConfigEntry, CodexSkillCatalogEntry};
 use zeron_proto::{
     HarnessId, InstructionSettingsView, IntegrationActionAvailability, IntegrationActionFacts,
     IntegrationHelpRoute, IntegrationInventoryItem, IntegrationInventoryView, IntegrationKind,
@@ -288,6 +289,155 @@ pub fn codex_inventory(
     }
 }
 
+/// Enrich file discovery only with an exact native `skills/list` observation.
+/// The catalog process is separate from the selected task, so attachment stays
+/// unknown even for an enabled skill. Provider paths are used only for matching
+/// and opaque identity; they never enter the returned view.
+pub fn apply_codex_skill_catalog(
+    view: &mut IntegrationInventoryView,
+    catalog: &[CodexSkillCatalogEntry],
+    codex_home: &Path,
+    project_root: Option<&Path>,
+) {
+    fn same_file(left: &Path, right: &Path) -> bool {
+        left == right
+            || matches!((left.canonicalize(), right.canonicalize()), (Ok(a), Ok(b)) if a == b)
+    }
+    for skill in catalog {
+        let global_file = codex_home.join("skills").join(&skill.name).join("SKILL.md");
+        let project_file = project_root.map(|root| {
+            root.join(".agents/skills")
+                .join(&skill.name)
+                .join("SKILL.md")
+        });
+        let source_id = if same_file(&skill.path, &global_file) {
+            Some(("codex-home-skill", codex_home.join("skills")))
+        } else if project_file
+            .as_deref()
+            .is_some_and(|file| same_file(&skill.path, file))
+        {
+            project_root.map(|root| ("project-agents-skill", root.join(".agents/skills")))
+        } else {
+            None
+        };
+        if let Some((source, root)) = source_id {
+            let identity = inventory_identity(&view.machine_id, source, &root, &skill.name);
+            if let Some(item) = view
+                .items
+                .iter_mut()
+                .find(|item| item.identity.as_deref() == Some(identity.as_str()))
+            {
+                item.available = Some(skill.enabled);
+                item.reason = Some(if skill.enabled {
+                    "Codex skills/list reports this skill enabled for the selected workspace; selected-session inclusion is unverified.".into()
+                } else {
+                    "Codex skills/list reports this skill disabled for the selected workspace."
+                        .into()
+                });
+                continue;
+            }
+        }
+        let identity = inventory_identity(
+            &view.machine_id,
+            "codex-native-catalog-skill",
+            &skill.path,
+            &skill.name,
+        );
+        if view
+            .items
+            .iter()
+            .any(|item| item.identity.as_deref() == Some(identity.as_str()))
+        {
+            continue;
+        }
+        view.items.push(IntegrationInventoryItem {
+            identity: Some(identity),
+            name: skill.name.clone(),
+            kind: IntegrationKind::Skill,
+            source: "Codex app-server / skills/list".into(),
+            scope: "provider".into(),
+            configured: true,
+            available: Some(skill.enabled),
+            attached: None,
+            reason: Some(if skill.enabled {
+                "Reported enabled by Codex; selected-session inclusion is unverified.".into()
+            } else {
+                "Reported disabled by Codex.".into()
+            }),
+            owner: IntegrationOwner::ProviderNative,
+            actions: unsupported_actions(),
+            help_route: IntegrationHelpRoute::Unknown,
+        });
+    }
+    view.items.sort_by(|a, b| {
+        (&a.kind, &a.scope, &a.name, &a.identity).cmp(&(&b.kind, &b.scope, &b.name, &b.identity))
+    });
+    view.help = "Codex skills/list was read for the selected workspace and account. File discovery and provider-reported enablement are separate; neither proves selected-session attachment. MCP server health and attachment remain unverified. Manage integrations with Codex or the chosen gateway.".into();
+}
+
+pub fn mark_codex_catalog_unavailable(view: &mut IntegrationInventoryView) {
+    let reason = "Codex skills/list could not be read for the selected workspace; provider availability remains unknown.";
+    view.unavailable_reason = Some(match view.unavailable_reason.take() {
+        Some(existing) => format!("{existing} {reason}"),
+        None => reason.into(),
+    });
+}
+
+pub fn apply_codex_mcp_config(
+    view: &mut IntegrationInventoryView,
+    servers: &[CodexMcpConfigEntry],
+    codex_home: &Path,
+) {
+    for server in servers {
+        let identity = inventory_identity(
+            &view.machine_id,
+            "codex-mcp-config",
+            &codex_home.join("config.toml"),
+            &server.name,
+        );
+        let reason = if server.enabled {
+            "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified."
+        } else {
+            "Codex config/read reports this MCP server disabled."
+        };
+        if let Some(item) = view
+            .items
+            .iter_mut()
+            .find(|item| item.kind == IntegrationKind::McpServer && item.name == server.name)
+        {
+            item.available = if server.enabled { None } else { Some(false) };
+            item.attached = if server.enabled { None } else { Some(false) };
+            item.reason = Some(reason.into());
+            continue;
+        }
+        view.items.push(IntegrationInventoryItem {
+            identity: Some(identity),
+            name: server.name.clone(),
+            kind: IntegrationKind::McpServer,
+            source: "Codex app-server / config/read".into(),
+            scope: "provider".into(),
+            configured: true,
+            available: if server.enabled { None } else { Some(false) },
+            attached: if server.enabled { None } else { Some(false) },
+            reason: Some(reason.into()),
+            owner: IntegrationOwner::ProviderNative,
+            actions: unsupported_actions(),
+            help_route: IntegrationHelpRoute::ProviderMcpConfig,
+        });
+    }
+    view.items.sort_by(|a, b| {
+        (&a.kind, &a.scope, &a.name, &a.identity).cmp(&(&b.kind, &b.scope, &b.name, &b.identity))
+    });
+}
+
+pub fn mark_codex_mcp_config_unavailable(view: &mut IntegrationInventoryView) {
+    let reason = "Codex config/read could not be read; effective provider MCP configuration remains unverified.";
+    view.unavailable_reason = Some(match view.unavailable_reason.take() {
+        Some(existing) => format!("{existing} {reason}"),
+        None => reason.into(),
+    });
+}
+
 pub fn unavailable_inventory(provider: HarnessId, machine_id: &str) -> IntegrationInventoryView {
     let reason = match provider {
         HarnessId::ClaudeCode => {
@@ -323,6 +473,115 @@ pub fn unavailable_inventory(provider: HarnessId, machine_id: &str) -> Integrati
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_catalog_enriches_exact_files_without_claiming_session_attachment() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("PRIVATE_HOME_SENTINEL");
+        let project = dir.path().join("PRIVATE_PROJECT_SENTINEL");
+        for skill in [
+            home.join("skills/global/SKILL.md"),
+            project.join(".agents/skills/project/SKILL.md"),
+        ] {
+            std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+            std::fs::write(skill, "synthetic").unwrap();
+        }
+        let mut view = codex_inventory(&home, Some(&project), "fake-device");
+        apply_codex_skill_catalog(
+            &mut view,
+            &[
+                CodexSkillCatalogEntry {
+                    name: "global".into(),
+                    path: home.join("skills/global/SKILL.md"),
+                    enabled: true,
+                },
+                CodexSkillCatalogEntry {
+                    name: "project".into(),
+                    path: project.join(".agents/skills/project/SKILL.md"),
+                    enabled: false,
+                },
+                CodexSkillCatalogEntry {
+                    name: "managed".into(),
+                    path: home.join("managed/managed/SKILL.md"),
+                    enabled: true,
+                },
+            ],
+            &home,
+            Some(&project),
+        );
+        apply_codex_mcp_config(
+            &mut view,
+            &[
+                CodexMcpConfigEntry {
+                    name: "gateway".into(),
+                    enabled: true,
+                },
+                CodexMcpConfigEntry {
+                    name: "off".into(),
+                    enabled: false,
+                },
+            ],
+            &home,
+        );
+        assert_eq!(view.items.len(), 5);
+        assert_eq!(
+            view.items
+                .iter()
+                .find(|item| item.name == "global")
+                .unwrap()
+                .available,
+            Some(true)
+        );
+        assert_eq!(
+            view.items
+                .iter()
+                .find(|item| item.name == "project")
+                .unwrap()
+                .available,
+            Some(false)
+        );
+        assert_eq!(
+            view.items
+                .iter()
+                .find(|item| item.name == "managed")
+                .unwrap()
+                .source,
+            "Codex app-server / skills/list"
+        );
+        assert!(
+            view.items
+                .iter()
+                .filter(|item| item.kind == IntegrationKind::Skill)
+                .all(|item| item.attached.is_none())
+        );
+        assert_eq!(
+            view.items
+                .iter()
+                .find(|item| item.name == "gateway")
+                .unwrap()
+                .available,
+            None
+        );
+        assert_eq!(
+            view.items
+                .iter()
+                .find(|item| item.name == "off")
+                .unwrap()
+                .attached,
+            Some(false)
+        );
+        let serialized = serde_json::to_string(&view).unwrap();
+        assert!(!serialized.contains("PRIVATE_HOME_SENTINEL"));
+        assert!(!serialized.contains("PRIVATE_PROJECT_SENTINEL"));
+
+        mark_codex_catalog_unavailable(&mut view);
+        mark_codex_mcp_config_unavailable(&mut view);
+        assert!(
+            view.unavailable_reason
+                .unwrap()
+                .contains("availability remains unknown")
+        );
+    }
 
     #[test]
     fn settings_are_scoped_and_revision_guarded() {

@@ -144,6 +144,8 @@ struct IntegrationInventoryParams {
     project_id: Option<String>,
     #[serde(default)]
     target_device_id: Option<String>,
+    #[serde(default)]
+    probe_provider: bool,
 }
 
 fn require_local_integration_target(target: Option<&str>, local: &str) -> Result<(), RpcError> {
@@ -7611,15 +7613,72 @@ impl RpcService for EngineRpc {
                     None
                 };
                 let view = if p.provider == HarnessId::Codex {
-                    let home = self
+                    let (home, force_file_auth) = self
                         .agent_accounts
-                        .codex_home_for_inventory()
+                        .codex_usage_target()
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
-                    crate::integration_settings::codex_inventory(
+                    let mut view = crate::integration_settings::codex_inventory(
                         &home,
                         project_root.as_deref().map(std::path::Path::new),
                         &self.engine_info.device_id,
-                    )
+                    );
+                    let workspace = project_root
+                        .as_deref()
+                        .map(std::path::Path::new)
+                        .unwrap_or(&home);
+                    // The ordinary Settings read is filesystem-only. A native
+                    // app-server process starts only on explicit Refresh.
+                    if p.probe_provider && home.is_dir() && workspace.is_dir() {
+                        // Catalog reads never need a native login prompt.
+                        // Force the file-auth transport even for the native
+                        // account; an unavailable catalog stays unavailable.
+                        let client = zeron_harness::codex::native::CodexNativeClient::new(&home)
+                            .for_execution_home(&home, true);
+                        let (catalog, mcp_config) = tokio::join!(
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(8),
+                                client.read_skill_catalog(workspace),
+                            ),
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(8),
+                                client.read_mcp_config(),
+                            ),
+                        );
+                        // A selection change while the provider responds must
+                        // not be published under the previous account's home.
+                        if self.agent_accounts.codex_usage_target().ok()
+                            != Some((home.clone(), force_file_auth))
+                        {
+                            return Err(RpcError::Failed(
+                                "Codex account selection changed during inventory refresh".into(),
+                            ));
+                        }
+                        if let Ok(Ok(catalog)) = catalog {
+                            crate::integration_settings::apply_codex_skill_catalog(
+                                &mut view,
+                                &catalog,
+                                &home,
+                                project_root.as_deref().map(std::path::Path::new),
+                            );
+                        } else {
+                            crate::integration_settings::mark_codex_catalog_unavailable(&mut view);
+                        }
+                        if let Ok(Ok(mcp_config)) = mcp_config {
+                            crate::integration_settings::apply_codex_mcp_config(
+                                &mut view,
+                                &mcp_config,
+                                &home,
+                            );
+                        } else {
+                            crate::integration_settings::mark_codex_mcp_config_unavailable(
+                                &mut view,
+                            );
+                        }
+                    } else if p.probe_provider {
+                        crate::integration_settings::mark_codex_catalog_unavailable(&mut view);
+                        crate::integration_settings::mark_codex_mcp_config_unavailable(&mut view);
+                    }
+                    view
                 } else {
                     crate::integration_settings::unavailable_inventory(
                         p.provider,
@@ -9883,6 +9942,16 @@ mod tests {
         assert!(require_local_integration_target(None, "local").is_ok());
         assert!(require_local_integration_target(Some("local"), "local").is_ok());
         assert!(require_local_integration_target(Some("remote"), "local").is_err());
+        let ordinary: IntegrationInventoryParams =
+            serde_json::from_value(serde_json::json!({"provider":"codex"})).unwrap();
+        assert!(
+            !ordinary.probe_provider,
+            "ordinary Settings reads remain filesystem-only"
+        );
+        let refresh: IntegrationInventoryParams =
+            serde_json::from_value(serde_json::json!({"provider":"codex","probeProvider":true}))
+                .unwrap();
+        assert!(refresh.probe_provider);
     }
 
     fn move_test_space(path: &str) -> zeron_proto::Space {
