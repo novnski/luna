@@ -98,12 +98,13 @@ enum PendingInputKind {
         proposal: Box<LunaSyntheticArchiveProposal>,
         grant_tx: oneshot::Sender<LunaSyntheticArchiveGrant>,
     },
-    /// Dormant prospective Interrupt question. It has no grant channel or
-    /// command, and no current provider or UI path may answer it as allowed.
+    /// Dormant prospective Interrupt question. Only the private local-UI
+    /// response seam can send its one-shot grant; no command path consumes it.
     #[allow(dead_code)]
     LunaProspectiveInterrupt {
         run_id: String,
         proposal: Box<LunaProspectiveInterruptProposal>,
+        grant_tx: oneshot::Sender<LunaProspectiveInterruptGrant>,
     },
 }
 
@@ -225,6 +226,14 @@ impl LunaSyntheticArchiveProposal {
 struct LunaSyntheticArchiveGrant {
     #[allow(dead_code)]
     proposal: LunaSyntheticArchiveProposal,
+}
+
+/// One private, non-cloneable AllowOnce result. It contains no command ID or
+/// dispatcher and cannot be reconstructed from a serialized UI answer.
+#[derive(Debug)]
+#[allow(dead_code)]
+struct LunaProspectiveInterruptGrant {
+    proposal: LunaProspectiveInterruptProposal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -502,6 +511,20 @@ struct PreparedControlEvidence {
     target_snapshot: zeron_proto::TaskCommandSnapshot,
 }
 
+impl PreparedControlEvidence {
+    fn read_only_authority(&self) -> crate::cross_task_tools::CrossTaskAuthority {
+        crate::cross_task_tools::CrossTaskAuthority {
+            caller_task_id: self.claim.source_task_id.clone(),
+            local_environment_id: self.source_environment_id.clone(),
+            visible_project_ids: HashSet::from([self.source_project_id.clone()]),
+            allow_projectless: false,
+            granted_scopes: HashSet::from(["threads.read".into()]),
+            explicit_user_request: false,
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+        }
+    }
+}
+
 /// One exact, read-only proposal. Keeping the full snapshot and source claim
 /// private prevents a serialized question from becoming control authority.
 #[derive(Debug)]
@@ -570,6 +593,26 @@ impl LunaProspectiveInterruptProposal {
                 .is_some_and(|turn| !turn.is_empty())
             && self.expires_at_ms > now_ms()
             && question == &self.question()
+    }
+
+    fn matches_local_ui_allow_once(
+        &self,
+        run: &RunHandle,
+        binding: Option<&ProviderBindingKey>,
+        source_task_id: &str,
+        request_id: &str,
+        question: &UserInputQuestion,
+    ) -> bool {
+        let Some(approval) = question.approval.as_ref() else {
+            return false;
+        };
+        self.matches_pending(source_task_id, &run.run_id, request_id, question)
+            && approval.is_luna_cross_task()
+            && !approval.supports_task_allowance
+            && approval.provider_request_id == self.evidence.claim.provider_call_id
+            && approval.turn_id.as_deref() == Some(self.evidence.claim.provider_turn_id.as_str())
+            && self.expires_at_ms <= now_ms().saturating_add(30_000)
+            && self.evidence.claim.matches_live(run, binding)
     }
 }
 
@@ -1235,7 +1278,10 @@ impl SessionsEngine {
         let Some(entry) = entries.get(request_id) else {
             return false;
         };
-        let PendingInputKind::LunaProspectiveInterrupt { run_id, proposal } = &entry.kind else {
+        let PendingInputKind::LunaProspectiveInterrupt {
+            run_id, proposal, ..
+        } = &entry.kind
+        else {
             return false;
         };
         entry.questions.len() == 1
@@ -1244,16 +1290,20 @@ impl SessionsEngine {
     }
 
     /// Dormant registration proof. No provider callback or catalog calls it;
-    /// an AllowOnce reply has no grant consumer until a later reviewed stage.
+    /// the private grant receiver has no production consumer in this stage.
     #[allow(dead_code)]
     async fn register_luna_prospective_interrupt(
         &self,
         evidence: PreparedControlEvidence,
     ) -> Result<
-        (String, oneshot::Receiver<Vec<UserInputAnswer>>),
+        (
+            String,
+            oneshot::Receiver<Vec<UserInputAnswer>>,
+            oneshot::Receiver<LunaProspectiveInterruptGrant>,
+        ),
         crate::cross_task_tools::CrossTaskError,
     > {
-        use crate::cross_task_tools::{CrossTaskAuthority, CrossTaskError, CrossTaskTools};
+        use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
         if evidence.source_project_id.is_empty()
             || evidence.source_environment_id != self.inner.device_id
             || evidence.target_task_id == evidence.claim.source_task_id
@@ -1266,15 +1316,7 @@ impl SessionsEngine {
         {
             return Err(CrossTaskError::TargetScope);
         }
-        let authority = CrossTaskAuthority {
-            caller_task_id: evidence.claim.source_task_id.clone(),
-            local_environment_id: evidence.source_environment_id.clone(),
-            visible_project_ids: HashSet::from([evidence.source_project_id.clone()]),
-            allow_projectless: false,
-            granted_scopes: HashSet::from(["threads.read".into()]),
-            explicit_user_request: false,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
-        };
+        let authority = evidence.read_only_authority();
         let (interrupt, mut cancel) = self
             .claimed_call_cancel_state(&evidence.claim)
             .ok_or(CrossTaskError::Unavailable)?;
@@ -1310,6 +1352,7 @@ impl SessionsEngine {
         let expires_at_ms = proposal.expires_at_ms;
         let question = proposal.question();
         let (resolver, answer) = oneshot::channel();
+        let (grant_tx, grant) = oneshot::channel();
         let binding = self.inner.current_codex_binding_key(&source_task_id);
         let (pending, engine_tx, readiness, interrupt, cancel) = {
             let runs = lock(&self.inner.runs);
@@ -1328,6 +1371,7 @@ impl SessionsEngine {
                     kind: PendingInputKind::LunaProspectiveInterrupt {
                         run_id: source_run_id,
                         proposal: Box::new(proposal),
+                        grant_tx,
                     },
                     questions: vec![question.clone()],
                     resolver,
@@ -1376,7 +1420,256 @@ impl SessionsEngine {
             cancel,
             readiness,
         );
-        Ok((request_id, answer))
+        Ok((request_id, answer, grant))
+    }
+
+    fn deny_luna_prospective_interrupt_local_ui(
+        &self,
+        source_task_id: &str,
+        request_id: &str,
+        decision: zeron_proto::ApprovalDecision,
+    ) -> LunaApprovalOutcome {
+        let runs = lock(&self.inner.runs);
+        let Some(run) = runs.get(source_task_id) else {
+            return LunaApprovalOutcome::Stale;
+        };
+        let mut entries = lock(&run.pending_inputs);
+        let Some(entry) = entries.get(request_id) else {
+            return LunaApprovalOutcome::Stale;
+        };
+        let PendingInputKind::LunaProspectiveInterrupt {
+            run_id, proposal, ..
+        } = &entry.kind
+        else {
+            return LunaApprovalOutcome::Stale;
+        };
+        if run_id != &run.run_id || entry.questions.len() != 1 {
+            return LunaApprovalOutcome::Stale;
+        }
+        let expired = proposal.expires_at_ms <= now_ms();
+        let pending = entries
+            .remove(request_id)
+            .expect("checked prospective input");
+        drop(entries);
+        let _ = run.engine_tx.send(AgentEvent::InputResolved {
+            request_id: request_id.to_owned(),
+        });
+        let answer = if expired {
+            Vec::new()
+        } else {
+            vec![UserInputAnswer {
+                question_id: pending.questions[0].id.clone(),
+                labels: vec![if decision == zeron_proto::ApprovalDecision::Cancel {
+                    "Cancel".into()
+                } else {
+                    "Deny".into()
+                }],
+            }]
+        };
+        if pending.resolver.send(answer).is_err() {
+            return LunaApprovalOutcome::RunEnded;
+        }
+        if expired {
+            LunaApprovalOutcome::Expired
+        } else {
+            LunaApprovalOutcome::Denied
+        }
+    }
+
+    /// Private, dormant local-UI proof. Nothing in the provider, RPC, or UI
+    /// calls this yet. It only moves one exact proposal into a private grant.
+    #[allow(dead_code)]
+    async fn respond_luna_prospective_interrupt_local_ui(
+        &self,
+        source_task_id: &str,
+        request_id: &str,
+        decision: zeron_proto::ApprovalDecision,
+    ) -> LunaApprovalOutcome {
+        use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
+        if decision != zeron_proto::ApprovalDecision::AllowOnce {
+            return self.deny_luna_prospective_interrupt_local_ui(
+                source_task_id,
+                request_id,
+                decision,
+            );
+        }
+        let binding = self.inner.current_codex_binding_key(source_task_id);
+        let (pending, engine_tx, authority, target_task_id, snapshot, interrupt, mut cancel) = {
+            let runs = lock(&self.inner.runs);
+            let Some(run) = runs.get(source_task_id) else {
+                return LunaApprovalOutcome::Stale;
+            };
+            let pending = run.pending_inputs.clone();
+            let entries = lock(&pending);
+            let Some(entry) = entries.get(request_id) else {
+                return LunaApprovalOutcome::Stale;
+            };
+            let PendingInputKind::LunaProspectiveInterrupt {
+                run_id,
+                proposal,
+                grant_tx,
+            } = &entry.kind
+            else {
+                return LunaApprovalOutcome::Stale;
+            };
+            if run_id != &run.run_id || entry.questions.len() != 1 {
+                return LunaApprovalOutcome::Stale;
+            }
+            if proposal.expires_at_ms <= now_ms() {
+                return LunaApprovalOutcome::Expired;
+            }
+            if !proposal.matches_local_ui_allow_once(
+                run,
+                binding.as_ref(),
+                source_task_id,
+                request_id,
+                &entry.questions[0],
+            ) {
+                return LunaApprovalOutcome::Stale;
+            }
+            if grant_tx.is_closed() || entry.resolver.is_closed() {
+                return LunaApprovalOutcome::RunEnded;
+            }
+            (
+                pending.clone(),
+                run.engine_tx.clone(),
+                proposal.evidence.read_only_authority(),
+                proposal.evidence.target_task_id.clone(),
+                proposal.evidence.target_snapshot.clone(),
+                run.interrupt_token.clone(),
+                run.cancel.subscribe(),
+            )
+        };
+        let Some(backend) = self.cross_task_backend() else {
+            expire_pending_approval(&pending, &engine_tx, request_id);
+            return LunaApprovalOutcome::Stale;
+        };
+        let tools = CrossTaskTools::new(backend);
+        let result = tokio::select! {
+            biased;
+            _ = interrupt.cancelled() => Err(CrossTaskError::Cancelled),
+            _ = cancel.wait_for(|value| *value) => Err(CrossTaskError::Cancelled),
+            result = tools.revalidate_control_target_snapshot(
+                &authority,
+                &target_task_id,
+                &snapshot,
+                &interrupt,
+            ) => result,
+        };
+        if result.is_err()
+            || !self.luna_prospective_pending_is_live(source_task_id, request_id, &pending)
+        {
+            expire_pending_approval(&pending, &engine_tx, request_id);
+            return if matches!(result, Err(CrossTaskError::Cancelled)) {
+                LunaApprovalOutcome::RunEnded
+            } else {
+                LunaApprovalOutcome::Stale
+            };
+        }
+
+        let binding = self.inner.current_codex_binding_key(source_task_id);
+        // Keep the run map locked through one-shot delivery so a replacement
+        // cannot inherit this answer or grant after the final source check.
+        let runs = lock(&self.inner.runs);
+        let Some(run) = runs.get(source_task_id) else {
+            return LunaApprovalOutcome::Stale;
+        };
+        if !Arc::ptr_eq(&run.pending_inputs, &pending) {
+            return LunaApprovalOutcome::Stale;
+        }
+        let mut entries = lock(&pending);
+        let Some(entry) = entries.get(request_id) else {
+            return LunaApprovalOutcome::Stale;
+        };
+        let PendingInputKind::LunaProspectiveInterrupt {
+            run_id,
+            proposal,
+            grant_tx,
+        } = &entry.kind
+        else {
+            return LunaApprovalOutcome::Stale;
+        };
+        if run_id != &run.run_id
+            || entry.questions.len() != 1
+            || proposal.evidence.target_snapshot != snapshot
+            || !proposal.matches_local_ui_allow_once(
+                run,
+                binding.as_ref(),
+                source_task_id,
+                request_id,
+                &entry.questions[0],
+            )
+        {
+            return LunaApprovalOutcome::Stale;
+        }
+        if grant_tx.is_closed() || entry.resolver.is_closed() {
+            let pending = entries
+                .remove(request_id)
+                .expect("checked prospective input");
+            drop(entries);
+            let _ = pending.resolver.send(Vec::new());
+            let _ = run.engine_tx.send(AgentEvent::InputResolved {
+                request_id: request_id.to_owned(),
+            });
+            return LunaApprovalOutcome::RunEnded;
+        }
+        let pending = entries
+            .remove(request_id)
+            .expect("checked prospective input");
+        drop(entries);
+        let PendingInput {
+            kind,
+            questions,
+            resolver,
+        } = pending;
+        let PendingInputKind::LunaProspectiveInterrupt {
+            proposal, grant_tx, ..
+        } = kind
+        else {
+            unreachable!("checked prospective kind")
+        };
+        let final_binding = self.inner.current_codex_binding_key(source_task_id);
+        if !proposal
+            .evidence
+            .claim
+            .matches_live(run, final_binding.as_ref())
+        {
+            let _ = resolver.send(Vec::new());
+            let _ = run.engine_tx.send(AgentEvent::InputResolved {
+                request_id: request_id.to_owned(),
+            });
+            return LunaApprovalOutcome::Stale;
+        }
+        if run
+            .engine_tx
+            .send(AgentEvent::InputResolved {
+                request_id: request_id.to_owned(),
+            })
+            .is_err()
+        {
+            let _ = resolver.send(Vec::new());
+            return LunaApprovalOutcome::RunEnded;
+        }
+        if resolver
+            .send(vec![UserInputAnswer {
+                question_id: questions[0].id.clone(),
+                labels: vec!["Allow once".into()],
+            }])
+            .is_err()
+        {
+            return LunaApprovalOutcome::RunEnded;
+        }
+        // Two oneshot channels cannot commit atomically. A receiver closing
+        // after the answer succeeds drops the grant; this is not product success.
+        if grant_tx
+            .send(LunaProspectiveInterruptGrant {
+                proposal: *proposal,
+            })
+            .is_err()
+        {
+            return LunaApprovalOutcome::RunEnded;
+        }
+        LunaApprovalOutcome::AllowedOnce
     }
 
     pub fn task_binding_generation(&self, chat_id: &str) -> Option<u32> {
@@ -2584,8 +2877,8 @@ impl SessionsEngine {
             let Some(pending) = pending_inputs.get(request_id) else {
                 return LunaApprovalOutcome::Stale;
             };
-            // Prospective Interrupt is intentionally inert in A2b: even a
-            // trusted local AllowOnce cannot acknowledge or mint a grant yet.
+            // This synchronous Archive responder cannot consume a prospective
+            // Interrupt; its private async path performs target revalidation.
             if !matches!(&pending.kind, PendingInputKind::LunaCrossTask { run_id: bound, .. } if bound == &handle.run_id)
                 || pending.questions.len() != 1
             {
@@ -7468,7 +7761,7 @@ mod tests {
         evidence.target_snapshot.active_turn_id = Some("private-turn-sentinel".into());
         *lock(&backend.snapshots) = VecDeque::from([evidence.target_snapshot.clone()]);
         let expected_snapshot = evidence.target_snapshot.clone();
-        let (request_id, answer) = core
+        let (request_id, answer, grant) = core
             .sessions
             .register_luna_prospective_interrupt(evidence)
             .await
@@ -7523,8 +7816,9 @@ mod tests {
         {
             let entries = lock(&pending);
             let stored = entries.get(&request_id).unwrap();
-            let super::PendingInputKind::LunaProspectiveInterrupt { run_id, proposal } =
-                &stored.kind
+            let super::PendingInputKind::LunaProspectiveInterrupt {
+                run_id, proposal, ..
+            } = &stored.kind
             else {
                 panic!("expected server-owned prospective kind");
             };
@@ -7585,6 +7879,7 @@ mod tests {
             &request_id,
         ));
         assert!(answer.await.unwrap().is_empty());
+        assert!(grant.await.is_err());
         assert!(matches!(
             events.try_recv(),
             Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
@@ -7598,6 +7893,459 @@ mod tests {
                 .engine_tx,
             &request_id,
         ));
+    }
+
+    #[tokio::test]
+    async fn prospective_interrupt_local_allow_once_mints_only_one_private_grant() {
+        let (_root, core, source_task_id, backend, evidence, mut events) =
+            prospective_interrupt_fixture().await;
+        let expected_snapshot = evidence.target_snapshot.clone();
+        let (request_id, answer, grant) = core
+            .sessions
+            .register_luna_prospective_interrupt(evidence)
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.try_recv(),
+            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+        ));
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let responders = (0..2)
+            .map(|_| {
+                let sessions = core.sessions.clone();
+                let task = source_task_id.clone();
+                let request = request_id.clone();
+                let barrier = barrier.clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    sessions
+                        .respond_luna_prospective_interrupt_local_ui(
+                            &task,
+                            &request,
+                            zeron_proto::ApprovalDecision::AllowOnce,
+                        )
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait().await;
+        let outcomes = futures::future::join_all(responders)
+            .await
+            .into_iter()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == LunaApprovalOutcome::AllowedOnce)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == LunaApprovalOutcome::Stale)
+                .count(),
+            1
+        );
+        assert_eq!(answer.await.unwrap()[0].labels, vec!["Allow once"]);
+        let grant = grant.await.unwrap();
+        assert_eq!(grant.proposal.request_id, request_id);
+        assert_eq!(grant.proposal.evidence.target_snapshot, expected_snapshot);
+        assert_eq!(
+            grant.proposal.action,
+            zeron_proto::CrossTaskControlAction::Interrupt
+        );
+        assert!(matches!(
+            events.try_recv(),
+            Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
+                if resolved == request_id
+        ));
+        assert!(
+            !core
+                .sessions
+                .is_luna_pending_approval(&source_task_id, &request_id)
+        );
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn prospective_interrupt_local_denial_and_lost_receivers_mint_no_grant() {
+        for decision in [
+            zeron_proto::ApprovalDecision::Deny,
+            zeron_proto::ApprovalDecision::Cancel,
+            zeron_proto::ApprovalDecision::AllowTask,
+        ] {
+            let (_root, core, source_task_id, backend, evidence, mut events) =
+                prospective_interrupt_fixture().await;
+            let (request_id, answer, grant) = core
+                .sessions
+                .register_luna_prospective_interrupt(evidence)
+                .await
+                .unwrap();
+            assert!(matches!(
+                events.try_recv(),
+                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            ));
+            assert_eq!(
+                core.sessions
+                    .respond_luna_prospective_interrupt_local_ui(
+                        &source_task_id,
+                        &request_id,
+                        decision,
+                    )
+                    .await,
+                LunaApprovalOutcome::Denied
+            );
+            let label = if decision == zeron_proto::ApprovalDecision::Cancel {
+                "Cancel"
+            } else {
+                "Deny"
+            };
+            assert_eq!(answer.await.unwrap()[0].labels, vec![label]);
+            assert!(grant.await.is_err());
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
+
+        let (_root, core, source_task_id, backend, evidence, _events) =
+            prospective_interrupt_fixture().await;
+        let (request_id, answer, grant) = core
+            .sessions
+            .register_luna_prospective_interrupt(evidence)
+            .await
+            .unwrap();
+        drop(answer);
+        assert_eq!(
+            core.sessions
+                .respond_luna_prospective_interrupt_local_ui(
+                    &source_task_id,
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .await,
+            LunaApprovalOutcome::RunEnded
+        );
+        let pending = lock(&core.sessions.inner.runs)
+            .get(&source_task_id)
+            .unwrap()
+            .pending_inputs
+            .clone();
+        let engine_tx = lock(&core.sessions.inner.runs)
+            .get(&source_task_id)
+            .unwrap()
+            .engine_tx
+            .clone();
+        assert!(expire_pending_approval(&pending, &engine_tx, &request_id));
+        assert!(grant.await.is_err());
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+
+        let (_root, core, source_task_id, backend, evidence, _events) =
+            prospective_interrupt_fixture().await;
+        let (request_id, answer, grant) = core
+            .sessions
+            .register_luna_prospective_interrupt(evidence)
+            .await
+            .unwrap();
+        drop(grant);
+        assert_eq!(
+            core.sessions
+                .respond_luna_prospective_interrupt_local_ui(
+                    &source_task_id,
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .await,
+            LunaApprovalOutcome::RunEnded
+        );
+        let pending = lock(&core.sessions.inner.runs)
+            .get(&source_task_id)
+            .unwrap()
+            .pending_inputs
+            .clone();
+        let engine_tx = lock(&core.sessions.inner.runs)
+            .get(&source_task_id)
+            .unwrap()
+            .engine_tx
+            .clone();
+        assert!(expire_pending_approval(&pending, &engine_tx, &request_id));
+        assert!(answer.await.unwrap().is_empty());
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn prospective_interrupt_local_allow_once_rejects_every_changed_target_field() {
+        for field in [
+            "revision",
+            "sequence",
+            "binding-id",
+            "binding-generation",
+            "active-turn",
+            "project",
+            "environment",
+        ] {
+            let (_root, core, source_task_id, backend, evidence, mut events) =
+                prospective_interrupt_fixture().await;
+            let (request_id, answer, grant) = core
+                .sessions
+                .register_luna_prospective_interrupt(evidence)
+                .await
+                .unwrap();
+            assert!(matches!(
+                events.try_recv(),
+                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            ));
+            match field {
+                "project" => lock(&backend.target).project_id = Some("project-b".into()),
+                "environment" => lock(&backend.target).environment_id = "remote".into(),
+                _ => {
+                    let mut changed = lock(&backend.snapshots).front().unwrap().clone();
+                    match field {
+                        "revision" => changed.task_revision += 1,
+                        "sequence" => changed.task_sequence += 1,
+                        "binding-id" => changed.binding_id = Some("new-binding".into()),
+                        "binding-generation" => changed.binding_generation = Some(3),
+                        "active-turn" => changed.active_turn_id = Some("new-target-turn".into()),
+                        _ => unreachable!(),
+                    }
+                    *lock(&backend.snapshots) = VecDeque::from([changed]);
+                }
+            }
+            assert_eq!(
+                core.sessions
+                    .respond_luna_prospective_interrupt_local_ui(
+                        &source_task_id,
+                        &request_id,
+                        zeron_proto::ApprovalDecision::AllowOnce,
+                    )
+                    .await,
+                LunaApprovalOutcome::Stale,
+                "{field}"
+            );
+            assert!(answer.await.unwrap().is_empty(), "{field}");
+            assert!(grant.await.is_err(), "{field}");
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn prospective_interrupt_local_allow_once_rejects_source_or_question_drift() {
+        for drift in ["rebind", "turn", "question", "expired"] {
+            let (_root, core, source_task_id, backend, evidence, _events) =
+                prospective_interrupt_fixture().await;
+            let (request_id, answer, grant) = core
+                .sessions
+                .register_luna_prospective_interrupt(evidence)
+                .await
+                .unwrap();
+            match drift {
+                "rebind" => {
+                    core.task_identity
+                        .advance_binding(
+                            &source_task_id,
+                            HarnessId::Codex,
+                            "provider-thread-b",
+                            zeron_proto::BindingOrigin::ContextReset,
+                            "synthetic rebind after question",
+                        )
+                        .unwrap();
+                }
+                "turn" => assert!(core.sessions.inner.observe_codex_checkpoint(
+                    &source_task_id,
+                    "run-a",
+                    Some("provider-thread-a"),
+                    "turn-b",
+                )),
+                "question" | "expired" => {
+                    let pending = lock(&core.sessions.inner.runs)
+                        .get(&source_task_id)
+                        .unwrap()
+                        .pending_inputs
+                        .clone();
+                    let mut entries = lock(&pending);
+                    let entry = entries.get_mut(&request_id).unwrap();
+                    if drift == "question" {
+                        entry.questions[0].question = "forged target".into();
+                    } else if let super::PendingInputKind::LunaProspectiveInterrupt {
+                        proposal,
+                        ..
+                    } = &mut entry.kind
+                    {
+                        proposal.expires_at_ms = crate::now_ms() - 1;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let outcome = core
+                .sessions
+                .respond_luna_prospective_interrupt_local_ui(
+                    &source_task_id,
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .await;
+            assert_eq!(
+                outcome,
+                if drift == "expired" {
+                    LunaApprovalOutcome::Expired
+                } else {
+                    LunaApprovalOutcome::Stale
+                },
+                "{drift}"
+            );
+            let pending = lock(&core.sessions.inner.runs)
+                .get(&source_task_id)
+                .unwrap()
+                .pending_inputs
+                .clone();
+            let engine_tx = lock(&core.sessions.inner.runs)
+                .get(&source_task_id)
+                .unwrap()
+                .engine_tx
+                .clone();
+            expire_pending_approval(&pending, &engine_tx, &request_id);
+            assert!(answer.await.unwrap().is_empty(), "{drift}");
+            assert!(grant.await.is_err(), "{drift}");
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn prospective_interrupt_local_allow_once_rejects_changes_during_target_read() {
+        for change in ["source-rebind", "target-turn", "cancel", "run-drop"] {
+            let (root, core, source_task_id) = managed_codex_wait_fixture();
+            let claim = ready_control_evidence_claim(&root, &core, &source_task_id);
+            let mut backend = control_evidence_backend(&core, &source_task_id);
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let fake = Arc::get_mut(&mut backend).unwrap();
+            fake.gate_on_read = 4;
+            fake.entered_snapshot = Some(entered.clone());
+            fake.release_snapshot = Some(release.clone());
+            register_control_evidence_backend(&core, &backend);
+            let evidence = core
+                .sessions
+                .prepare_luna_control_evidence(
+                    claim,
+                    &control_evidence_authority(&core, &source_task_id),
+                    "target-a",
+                )
+                .await
+                .unwrap();
+            let (engine_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+            lock(&core.sessions.inner.runs)
+                .get_mut(&source_task_id)
+                .unwrap()
+                .engine_tx = engine_tx;
+            let (request_id, answer, grant) = core
+                .sessions
+                .register_luna_prospective_interrupt(evidence)
+                .await
+                .unwrap();
+            assert!(matches!(
+                events.try_recv(),
+                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            ));
+            let sessions = core.sessions.clone();
+            let task = source_task_id.clone();
+            let request = request_id.clone();
+            let responding = tokio::spawn(async move {
+                sessions
+                    .respond_luna_prospective_interrupt_local_ui(
+                        &task,
+                        &request,
+                        zeron_proto::ApprovalDecision::AllowOnce,
+                    )
+                    .await
+            });
+            tokio::time::timeout(Duration::from_secs(2), entered.notified())
+                .await
+                .expect("approval reached target read");
+            match change {
+                "source-rebind" => {
+                    core.task_identity
+                        .advance_binding(
+                            &source_task_id,
+                            HarnessId::Codex,
+                            "provider-thread-b",
+                            zeron_proto::BindingOrigin::ContextReset,
+                            "synthetic rebind during approval",
+                        )
+                        .unwrap();
+                }
+                "target-turn" => {
+                    let mut snapshot = lock(&backend.snapshots).front().unwrap().clone();
+                    snapshot.active_turn_id = Some("new-target-turn".into());
+                    *lock(&backend.snapshots) = VecDeque::from([snapshot]);
+                }
+                "cancel" => {
+                    lock(&core.sessions.inner.runs)
+                        .get(&source_task_id)
+                        .unwrap()
+                        .cancel
+                        .send_replace(true);
+                }
+                "run-drop" => core.sessions.inner.remove_run(&source_task_id, "run-a"),
+                _ => unreachable!(),
+            }
+            release.notify_one();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), responding)
+                    .await
+                    .expect("approval settled")
+                    .unwrap(),
+                if matches!(change, "cancel" | "run-drop") {
+                    LunaApprovalOutcome::RunEnded
+                } else {
+                    LunaApprovalOutcome::Stale
+                },
+                "{change}"
+            );
+            assert!(answer.await.unwrap().is_empty(), "{change}");
+            assert!(grant.await.is_err(), "{change}");
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn prospective_interrupt_local_allow_once_rejects_missing_backend_and_replay() {
+        let (_root, core, source_task_id, backend, evidence, _events) =
+            prospective_interrupt_fixture().await;
+        let (request_id, answer, grant) = core
+            .sessions
+            .register_luna_prospective_interrupt(evidence)
+            .await
+            .unwrap();
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+        drop(backend);
+        assert_eq!(
+            core.sessions
+                .respond_luna_prospective_interrupt_local_ui(
+                    &source_task_id,
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .await,
+            LunaApprovalOutcome::Stale
+        );
+        assert!(answer.await.unwrap().is_empty());
+        assert!(grant.await.is_err());
+        assert_eq!(
+            core.sessions
+                .respond_luna_prospective_interrupt_local_ui(
+                    &source_task_id,
+                    &request_id,
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .await,
+            LunaApprovalOutcome::Stale
+        );
     }
 
     #[tokio::test]
@@ -7784,7 +8532,7 @@ mod tests {
         for end in ["deadline", "cancel", "readiness"] {
             let (_root, core, source_task_id, backend, evidence, mut events) =
                 prospective_interrupt_fixture().await;
-            let (request_id, answer) = core
+            let (request_id, answer, grant) = core
                 .sessions
                 .register_luna_prospective_interrupt(evidence)
                 .await
@@ -7836,6 +8584,7 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
+            assert!(grant.await.is_err());
             assert!(matches!(
                 events.try_recv(),
                 Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
@@ -7852,7 +8601,7 @@ mod tests {
 
         let (root, core, source_task_id, backend, evidence, mut events) =
             prospective_interrupt_fixture().await;
-        let (request_id, answer) = core
+        let (request_id, answer, grant) = core
             .sessions
             .register_luna_prospective_interrupt(evidence)
             .await
@@ -7868,6 +8617,7 @@ mod tests {
                 .expect("run drop settled")
                 .is_err()
         );
+        assert!(grant.await.is_err());
         assert!(
             !core
                 .sessions
