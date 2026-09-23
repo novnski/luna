@@ -11771,10 +11771,12 @@ name = "zeron"
 version = "0.2.73"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "embed-resource",
  "libc",
  "mimalloc",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -11782,6 +11784,7 @@ dependencies = [
  "tracing-subscriber",
  "windows-sys 0.61.2",
  "zeron-engine",
+ "zeron-proto",
  "zeron-rpc",
  "zeron-ui",
  "zeron-update",

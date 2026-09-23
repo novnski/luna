@@ -6,6 +6,7 @@
 
 mod auth_cli;
 mod daemon;
+mod inspect_cli;
 mod paths;
 mod update_cli;
 
@@ -38,6 +39,8 @@ enum Command {
     Logout,
     /// Show workspace mode, optional auth, and engine status.
     Status,
+    /// Inspect the running local engine through its typed RPC (read only).
+    Inspect(inspect_cli::InspectArgs),
     /// Live sync introspection from the running engine: per-room connection
     /// state, last pushed-frame/ack ages, rejoin/probe/resync counters.
     Sync,
@@ -132,7 +135,23 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     attach_parent_console();
-    let cli = Cli::parse();
+    let argv: Vec<_> = std::env::args_os().collect();
+    let inspect_json = argv.get(1).is_some_and(|arg| arg == "inspect")
+        && argv.iter().skip(2).any(|arg| arg == "--json");
+    let cli = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) => {
+            if inspect_json
+                && !matches!(
+                    error.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                )
+            {
+                std::process::exit(inspect_cli::print_parse_error(&error));
+            }
+            error.exit();
+        }
+    };
     #[cfg(windows)]
     if let Some(pid) = cli.wait_for_exit {
         zeron_update::windows::wait_for_exit(pid)?;
@@ -215,6 +234,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Status) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(auth_cli::status(engine_config_from_env()))
+        }
+        Some(Command::Inspect(args)) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            let code = runtime.block_on(inspect_cli::run(args));
+            std::process::exit(code);
         }
         Some(Command::Sync) => {
             let runtime = tokio::runtime::Runtime::new()?;
