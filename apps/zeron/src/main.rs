@@ -6,6 +6,7 @@
 
 mod auth_cli;
 mod daemon;
+mod inspect_cli;
 mod paths;
 mod update_cli;
 
@@ -38,6 +39,8 @@ enum Command {
     Logout,
     /// Show workspace mode, optional auth, and engine status.
     Status,
+    /// Inspect the running local engine through its typed RPC (read only).
+    Inspect(inspect_cli::InspectArgs),
     /// Live sync introspection from the running engine: per-room connection
     /// state, last pushed-frame/ack ages, rejoin/probe/resync counters.
     Sync,
@@ -215,6 +218,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Status) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(auth_cli::status(engine_config_from_env()))
+        }
+        Some(Command::Inspect(args)) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            let code = runtime.block_on(inspect_cli::run(args));
+            std::process::exit(code);
         }
         Some(Command::Sync) => {
             let runtime = tokio::runtime::Runtime::new()?;
