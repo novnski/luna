@@ -1341,7 +1341,10 @@ impl WorkspaceHost {
             Some(cwd) => Some(self.space_for_path(cwd)?),
             None => None,
         };
-        self.mutate(|doc| doc.claim_chat(chat_id, cwd, space_id.as_deref(), Utc::now()))?;
+        self.mutate(|doc| {
+            doc.claim_chat(chat_id, cwd, space_id.as_deref(), Utc::now());
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -2391,10 +2394,16 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(busy.contains("admission denied (Busy)"), "{busy}");
-        let claim = host.claim_chat("rejected-chat", None).unwrap_err().to_string();
+        let claim = host
+            .claim_chat("rejected-chat", None)
+            .unwrap_err()
+            .to_string();
         assert!(claim.contains("admission denied (Busy)"), "{claim}");
         assert_eq!(*host.inner.changed_tx.borrow(), changed);
-        assert_eq!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(), before);
+        assert_eq!(
+            store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
+            before
+        );
         assert!(host.chat("rejected-chat").unwrap().is_none());
         drop(snapshot);
 
@@ -2405,7 +2414,10 @@ mod tests {
             .to_string();
         assert!(retired.contains("admission denied (Retired)"), "{retired}");
         assert_eq!(*host.inner.changed_tx.borrow(), changed);
-        assert_eq!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(), before);
+        assert_eq!(
+            store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
+            before
+        );
         let name = host
             .read_devices()
             .unwrap()
@@ -2434,7 +2446,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn admitted_mutation_drains_before_freeze_and_reopens_latest_row() {
-        use super::*;
         use std::time::Duration;
         use zeron_sync::write_epoch::Phase;
 
@@ -2453,7 +2464,10 @@ mod tests {
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let epoch = owner.epoch_for_tests();
         let mut freeze = Box::pin(epoch.freeze(Duration::from_secs(5)));
-        assert!(matches!(futures::poll!(freeze.as_mut()), std::task::Poll::Pending));
+        assert!(matches!(
+            futures::poll!(freeze.as_mut()),
+            std::task::Poll::Pending
+        ));
         assert_eq!(epoch.phase(), Phase::Quiescing);
         release_tx.send(()).unwrap();
         assert!(write.join().unwrap().unwrap());
@@ -2502,7 +2516,10 @@ mod tests {
             .import_space_row_admitted(&space, &foreign_ticket)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("does not belong to this device root"), "{error}");
+        assert!(
+            error.contains("does not belong to this device root"),
+            "{error}"
+        );
         assert!(host.space(&space.id).unwrap().is_none());
         assert_eq!(*host.inner.changed_tx.borrow(), changed);
         drop(foreign_ticket);

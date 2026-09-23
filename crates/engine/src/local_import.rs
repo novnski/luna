@@ -631,7 +631,10 @@ impl LocalImporter {
         let mut row = chat.clone();
         row.room_gen = Some(CHAT2_DOC_EPOCH);
         match permit {
-            Some(permit) => self.inner.workspace.import_chat_row_admitted(&row, permit)?,
+            Some(permit) => self
+                .inner
+                .workspace
+                .import_chat_row_admitted(&row, permit)?,
             None => self.inner.workspace.import_chat_row(&row)?,
         }
         Ok(copied)
@@ -650,6 +653,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
+    use zeron_doc::REGISTRY_DOC_ID;
     use zeron_sync::DocsStore;
 
     fn synthetic_target(
@@ -781,7 +785,10 @@ mod tests {
             .unwrap();
         let epoch = owner.epoch_for_tests();
         let mut freeze = Box::pin(epoch.freeze(Duration::from_secs(5)));
-        assert!(matches!(futures::poll!(freeze.as_mut()), std::task::Poll::Pending));
+        assert!(matches!(
+            futures::poll!(freeze.as_mut()),
+            std::task::Poll::Pending
+        ));
         assert_eq!(epoch.phase(), Phase::Quiescing);
         resume_tx.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(5), summary_rx)
@@ -789,7 +796,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(root.path().join("local-import.json").is_file());
-        assert!(matches!(futures::poll!(freeze.as_mut()), std::task::Poll::Pending));
+        assert!(matches!(
+            futures::poll!(freeze.as_mut()),
+            std::task::Poll::Pending
+        ));
         finish_tx.send(()).unwrap();
         let events = run.await.unwrap().unwrap();
         assert!(summary_errors(&events).is_empty(), "{events:?}");
@@ -852,11 +862,9 @@ mod tests {
         let _ = workspace.drain_tasks_checked().await;
         drop(workspace);
         drop(store);
-        let replacement = DeviceWriteOwner::new(
-            root.path(),
-            InstanceLock::acquire(root.path()).unwrap(),
-        )
-        .unwrap();
+        let replacement =
+            DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+                .unwrap();
         let (_, reopened, _) = synthetic_target(root.path(), &replacement);
         assert!(reopened.chat("chat-1").unwrap().is_some());
         reopened.drain_tasks_checked().await.unwrap();
