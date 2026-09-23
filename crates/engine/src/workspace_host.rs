@@ -73,6 +73,9 @@ const RELAY_PROBE_INTERVAL_MS: u64 = 30_000;
 const RELAY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Debounce window for local snapshot saves after a change.
 const SNAPSHOT_DEBOUNCE_MS: u64 = 1_000;
+/// Delay between failed snapshot attempts. Keep the dirty snapshot pending
+/// without retrying continuously when SQLite cannot accept a write.
+const SNAPSHOT_RETRY_MS: u64 = 1_000;
 /// Initial-join retry backoff (base, cap). A first registry-room join that
 /// fails must not strand the device offline until an app restart — retry until
 /// it lands. Jittered so N devices restarting together don't resynchronize
@@ -1778,9 +1781,17 @@ async fn workspace_task(weak: Weak<WorkspaceHostInner>, mut changed_rx: watch::R
                 }
             }
             _ = tokio::time::sleep_until(sleep_until), if save_deadline.is_some() => {
-                save_deadline = None;
                 let Some(inner) = weak.upgrade() else { break };
-                inner.save_snapshot();
+                match inner.save_snapshot_checked() {
+                    Ok(()) => save_deadline = None,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "registry snapshot save failed; retrying");
+                        save_deadline = Some(
+                            tokio::time::Instant::now()
+                                + std::time::Duration::from_millis(SNAPSHOT_RETRY_MS),
+                        );
+                    }
+                }
             }
             _ = presence.tick() => {
                 let Some(inner) = weak.upgrade() else { break };
@@ -2034,6 +2045,72 @@ mod tests {
             store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
             before
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn debounced_worker_retries_failed_snapshot_without_another_change() {
+        use super::*;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path()).unwrap());
+        let host = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let before = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let connection = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_registry_snapshot BEFORE UPDATE ON snapshots
+                 WHEN NEW.doc_id = 'registry1'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic snapshot failure'); END;",
+            )
+            .unwrap();
+        let (attempt_tx, mut attempt_rx) = tokio::sync::mpsc::unbounded_channel();
+        *lock(&host.inner.snapshot_after_capture) = Some(Arc::new(move || {
+            let _ = attempt_tx.send(());
+        }));
+
+        assert!(host.rename_device("test-device", "Older").unwrap());
+        assert!(host.rename_device("test-device", "Latest").unwrap());
+        // Both changes precede the debounce. The first worker attempt reaches
+        // SQLite after byte capture, then the trigger rejects its update.
+        tokio::time::timeout(Duration::from_secs(5), attempt_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
+            before
+        );
+
+        connection
+            .execute_batch("DROP TRIGGER reject_registry_snapshot")
+            .unwrap();
+        // No further mutation wakes the worker: only its retained dirty retry
+        // can save the latest registry state.
+        tokio::time::timeout(Duration::from_secs(5), attempt_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let bytes = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let saved = RegistryDoc::from_bytes(&bytes, "test-device").unwrap();
+        let device = saved
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "test-device")
+            .unwrap();
+        assert_eq!(device.name, "Latest");
     }
 
     #[tokio::test]
