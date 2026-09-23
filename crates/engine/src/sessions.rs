@@ -516,22 +516,15 @@ struct LunaProspectiveInterruptProposal {
 impl LunaProspectiveInterruptProposal {
     fn question(&self) -> UserInputQuestion {
         let evidence = &self.evidence;
-        let turn = evidence
-            .target_snapshot
-            .active_turn_id
-            .as_deref()
-            .expect("prospective Interrupt requires an active target turn");
         UserInputQuestion {
             id: format!("question-{}", self.request_id),
             header: "LUNA approval".into(),
             question: format!(
-                "Prospective Interrupt of active turn {turn} of task {} in project {} on local environment {} at revision {}, sequence {}, binding {:?} generation {:?}. This approval preview cannot execute the interruption yet.",
+                "Prospective Interrupt of the active turn in task {} in project {} at revision {}, sequence {}, binding generation {:?}. This approval preview cannot execute the interruption yet.",
                 evidence.target_task_id,
                 evidence.source_project_id,
-                evidence.source_environment_id,
                 evidence.target_snapshot.task_revision,
                 evidence.target_snapshot.task_sequence,
-                evidence.target_snapshot.binding_id,
                 evidence.target_snapshot.binding_generation,
             ),
             options: vec!["Deny".into(), "Allow once".into()],
@@ -543,7 +536,7 @@ impl LunaProspectiveInterruptProposal {
                 machine_name: evidence.source_environment_id.clone(),
                 action_kind: zeron_proto::ApprovalActionKind::LunaCrossTask,
                 summary: format!(
-                    "Prospective Interrupt of task {} active turn {turn} (preview only)",
+                    "Prospective Interrupt of the active turn in task {} (preview only)",
                     evidence.target_task_id
                 ),
                 requested_scope: zeron_proto::PermissionScope::Workspace,
@@ -7469,8 +7462,11 @@ mod tests {
 
     #[tokio::test]
     async fn prospective_interrupt_registers_one_exact_inert_pending_event() {
-        let (_root, core, source_task_id, backend, evidence, mut events) =
+        let (_root, core, source_task_id, backend, mut evidence, mut events) =
             prospective_interrupt_fixture().await;
+        evidence.target_snapshot.binding_id = Some("private-binding-sentinel".into());
+        evidence.target_snapshot.active_turn_id = Some("private-turn-sentinel".into());
+        *lock(&backend.snapshots) = VecDeque::from([evidence.target_snapshot.clone()]);
         let expected_snapshot = evidence.target_snapshot.clone();
         let (request_id, answer) = core
             .sessions
@@ -7505,7 +7501,7 @@ mod tests {
         assert!(
             questions[0]
                 .question
-                .contains("active turn target-run of task target-a")
+                .contains("active turn in task target-a")
         );
         assert!(questions[0].question.contains("task target-a"));
         assert!(questions[0].question.contains("revision 7, sequence 12"));
@@ -7514,6 +7510,11 @@ mod tests {
                 .question
                 .contains("cannot execute the interruption yet")
         );
+        let serialized_question = serde_json::to_string(&questions[0]).unwrap();
+        assert!(!serialized_question.contains("private-binding-sentinel"));
+        assert!(!serialized_question.contains("private-turn-sentinel"));
+        assert!(!approval.summary.contains("private-binding-sentinel"));
+        assert!(!approval.summary.contains("private-turn-sentinel"));
         let pending = lock(&core.sessions.inner.runs)
             .get(&source_task_id)
             .unwrap()
