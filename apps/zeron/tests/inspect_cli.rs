@@ -117,7 +117,7 @@ async fn reads_exact_synthetic_engine_and_reports_bounded_targets() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server = tokio::spawn(zeron_rpc::serve_ws_listener(listener, service));
+    let server = tokio::spawn(zeron_rpc::serve_ws_listener(listener, service.clone()));
 
     let (code, status) = cli(root.path(), port, &["status"]).await;
     assert_eq!(code, 0);
@@ -233,7 +233,19 @@ async fn reads_exact_synthetic_engine_and_reports_bounded_targets() {
     .await;
     assert_eq!(code, 0);
     assert_eq!(read["data"]["task"]["id"], task);
-    assert!(read["data"]["commands"]["events"].as_array().unwrap().len() <= 1);
+    assert_eq!(read["data"]["commands"]["snapshot"]["taskId"], task);
+    assert_eq!(
+        read["data"]["commands"]["events"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        read["data"]["commands"]["events"][0]["receipt"]["taskId"],
+        task
+    );
+    assert_eq!(
+        read["data"]["commands"]["events"][0]["receipt"]["snapshot"]["taskId"],
+        task
+    );
     assert_eq!(read["data"]["transcript"]["available"], false);
     println!("read: {}", read);
     let human = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
@@ -257,6 +269,137 @@ async fn reads_exact_synthetic_engine_and_reports_bounded_targets() {
     assert!(human.status.success());
     assert!(String::from_utf8_lossy(&human.stdout).contains("Command receipts:"));
     assert!(String::from_utf8_lossy(&human.stdout).contains("Transcript: unavailable"));
+
+    let identity = client
+        .call(
+            methods::GET_TASK_IDENTITY,
+            serde_json::json!({ "taskId": task }),
+        )
+        .await
+        .unwrap();
+    let commands = client
+        .call(
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            serde_json::json!({
+                "taskId": task, "afterTaskSequence": 0, "limit": 1
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(commands["events"].as_array().unwrap().len(), 1);
+    let mut wrong_identity = identity.clone();
+    wrong_identity["task"]["taskId"] = serde_json::json!("foreign-task");
+    let mut wrong_environment = identity.clone();
+    wrong_environment["workspace"]["environmentId"] = serde_json::json!("foreign-environment");
+    let mut wrong_binding = identity.clone();
+    wrong_binding["task"]["currentBindingId"] = serde_json::json!("fixture-binding");
+    wrong_binding["currentBinding"] = serde_json::json!({
+        "schemaVersion": 1, "bindingId": "fixture-binding", "taskId": "foreign-task",
+        "generation": 1, "providerId": "mock", "providerInstanceId": "fixture-provider",
+        "providerTaskId": "fixture-provider-task", "environmentId": machine,
+        "workspaceId": project, "origin": "lunaCreated", "provenance": "fixture",
+        "reconciliation": { "state": "current", "reason": "fixture", "observedAtMs": 1 },
+        "createdAtMs": 1, "lastObservedAtMs": 1
+    });
+    wrong_binding["bindings"] = serde_json::json!([wrong_binding["currentBinding"].clone()]);
+    assert!(serde_json::from_value::<zeron_proto::TaskIdentityView>(wrong_binding.clone()).is_ok());
+    let mut wrong_binding_environment = wrong_binding.clone();
+    wrong_binding_environment["currentBinding"]["taskId"] = serde_json::json!(task);
+    wrong_binding_environment["currentBinding"]["environmentId"] =
+        serde_json::json!("foreign-environment");
+    wrong_binding_environment["bindings"] =
+        serde_json::json!([wrong_binding_environment["currentBinding"].clone()]);
+    let mut wrong_history_binding = identity.clone();
+    wrong_history_binding["bindings"] =
+        serde_json::json!([wrong_binding["currentBinding"].clone()]);
+    let mut wrong_snapshot = commands.clone();
+    wrong_snapshot["snapshot"]["taskId"] = serde_json::json!("foreign-task");
+    let mut wrong_snapshot_binding = commands.clone();
+    wrong_snapshot_binding["snapshot"]["bindingId"] = serde_json::json!("foreign-binding");
+    let mut wrong_receipt = commands.clone();
+    wrong_receipt["events"][0]["receipt"]["taskId"] = serde_json::json!("foreign-task");
+    let mut wrong_receipt_snapshot = commands.clone();
+    wrong_receipt_snapshot["events"][0]["receipt"]["snapshot"]["taskId"] =
+        serde_json::json!("foreign-task");
+    let mut wrong_receipt_binding = commands.clone();
+    wrong_receipt_binding["events"][0]["receipt"]["snapshot"]["bindingId"] =
+        serde_json::json!("foreign-binding");
+    for (method, reply, code, kind) in [
+        (
+            methods::GET_TASK_IDENTITY,
+            wrong_identity,
+            7,
+            "malformedResponse",
+        ),
+        (
+            methods::GET_TASK_IDENTITY,
+            wrong_environment,
+            4,
+            "targetMismatch",
+        ),
+        (
+            methods::GET_TASK_IDENTITY,
+            wrong_binding,
+            7,
+            "malformedResponse",
+        ),
+        (
+            methods::GET_TASK_IDENTITY,
+            wrong_binding_environment,
+            4,
+            "targetMismatch",
+        ),
+        (
+            methods::GET_TASK_IDENTITY,
+            wrong_history_binding,
+            7,
+            "malformedResponse",
+        ),
+        (
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            wrong_snapshot,
+            7,
+            "malformedResponse",
+        ),
+        (
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            wrong_snapshot_binding,
+            4,
+            "targetMismatch",
+        ),
+        (
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            wrong_receipt,
+            7,
+            "malformedResponse",
+        ),
+        (
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            wrong_receipt_snapshot,
+            7,
+            "malformedResponse",
+        ),
+        (
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            wrong_receipt_binding,
+            7,
+            "malformedResponse",
+        ),
+    ] {
+        let (actual_code, body) = corrupt_read(
+            root.path(),
+            service.clone(),
+            method,
+            reply,
+            &machine,
+            project,
+            task,
+        )
+        .await;
+        assert_eq!(actual_code, code, "{method}: {body}");
+        assert_eq!(body["error"]["kind"], kind);
+        println!("corrupt {method}: code={code} kind={kind}");
+    }
 
     let (code, mismatch) = cli(
         root.path(),
@@ -321,6 +464,65 @@ async fn reads_exact_synthetic_engine_and_reports_bounded_targets() {
     println!("exit kinds: targetMismatch=4 notFound=5 invalidArgument=2 offline=3");
 }
 
+struct CorruptingReadService {
+    inner: Arc<dyn RpcService>,
+    method: &'static str,
+    reply: serde_json::Value,
+}
+
+#[async_trait::async_trait]
+impl RpcService for CorruptingReadService {
+    async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if method == self.method {
+            Ok(RpcReply::Value(self.reply.clone()))
+        } else {
+            self.inner.handle(method, params).await
+        }
+    }
+}
+
+async fn corrupt_read(
+    root: &Path,
+    inner: Arc<dyn RpcService>,
+    method: &'static str,
+    reply: serde_json::Value,
+    machine: &str,
+    project: &str,
+    task: &str,
+) -> (i32, serde_json::Value) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(zeron_rpc::serve_ws_listener(
+        listener,
+        Arc::new(CorruptingReadService {
+            inner,
+            method,
+            reply,
+        }),
+    ));
+    let result = cli(
+        root,
+        port,
+        &[
+            "read",
+            "--machine",
+            machine,
+            "--environment",
+            machine,
+            "--project",
+            project,
+            "--task",
+            task,
+            "--limit",
+            "1",
+        ],
+    )
+    .await;
+    server.abort();
+    let _ = server.await;
+    result
+}
+
 #[derive(Clone, Copy)]
 enum FailureKind {
     Unavailable,
@@ -372,4 +574,61 @@ async fn reports_unavailable_malformed_and_engine_failures() {
         println!("failure: code={code} kind={expected_kind}");
         server.abort();
     }
+}
+
+#[tokio::test]
+async fn inspect_json_parse_errors_are_machine_readable_without_changing_help_or_other_commands() {
+    let root = TempDir::new().unwrap();
+    for args in [
+        vec!["tasks", "--project", "fixture-project"],
+        vec![
+            "tasks",
+            "--machine",
+            "fixture",
+            "--environment",
+            "fixture",
+            "--project",
+            "fixture-project",
+            "--limit",
+            "nope",
+        ],
+        vec!["status", "--unknown-flag"],
+        vec!["unknown-subcommand"],
+    ] {
+        let (code, body) = cli(root.path(), 0, &args).await;
+        assert_eq!(code, 2, "{args:?}: {body}");
+        assert_eq!(body["schemaVersion"], 1);
+        assert_eq!(body["error"]["kind"], "invalidArgument");
+        println!("parse {:?}: code={code} kind=invalidArgument", args);
+    }
+    let help = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .args(["inspect", "--json", "--help"])
+        .output()
+        .await
+        .unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("Usage:"));
+    let version = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .arg("--version")
+        .output()
+        .await
+        .unwrap();
+    assert!(version.status.success());
+    assert!(String::from_utf8_lossy(&version.stdout).contains("luna"));
+    let plain_error = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .args(["inspect", "tasks", "--limit", "nope"])
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(plain_error.status.code(), Some(2));
+    assert!(plain_error.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&plain_error.stderr).contains("error:"));
+    let other_command_error = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .args(["status", "--unknown-flag"])
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(other_command_error.status.code(), Some(2));
+    assert!(other_command_error.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&other_command_error.stderr).contains("error:"));
 }

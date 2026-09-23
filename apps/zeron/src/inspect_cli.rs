@@ -149,6 +149,22 @@ struct Output {
     human: String,
 }
 
+/// Clap runs before `InspectArgs` exists. Keep its parse failures on the same
+/// JSON envelope as runtime errors when this exact subcommand requests JSON.
+pub fn print_parse_error(error: &clap::Error) -> i32 {
+    println!(
+        "{}",
+        json!({
+            "schemaVersion": 1,
+            "error": {
+                "kind": "invalidArgument",
+                "message": error.to_string().trim(),
+            },
+        })
+    );
+    2
+}
+
 pub async fn run(args: InspectArgs) -> i32 {
     let json_mode = args.json;
     match execute(args).await {
@@ -411,14 +427,8 @@ async fn execute(args: InspectArgs) -> Result<Output, CliError> {
                 json!({ "taskId": target.task }),
             )
             .await?;
-            if let Some(identity) = &identity
-                && (identity.workspace.environment_id != target.project.environment.environment
-                    || identity.workspace.source_space_id.as_deref()
-                        != Some(&target.project.project))
-            {
-                return Err(CliError::mismatch(
-                    "task identity no longer matches the requested environment/project; refresh the list",
-                ));
+            if let Some(identity) = &identity {
+                validate_identity(&target, identity)?;
             }
             let commands: TaskCommandRead = call(
                 &client,
@@ -426,6 +436,18 @@ async fn execute(args: InspectArgs) -> Result<Output, CliError> {
                 json!({ "taskId": target.task, "afterTaskSequence": after_task_sequence.unwrap_or(0), "limit": limit.expect("validated read limit") }),
             )
             .await?;
+            validate_command_page(&target, &commands, limit.expect("validated read limit"))?;
+            if let Some(identity) = &identity {
+                validate_receipt_bindings(identity, &commands)?;
+            }
+            if let (Some(identity), Some(snapshot_binding)) =
+                (&identity, commands.snapshot.binding_id.as_deref())
+                && identity.task.current_binding_id.as_deref() != Some(snapshot_binding)
+            {
+                return Err(CliError::mismatch(
+                    "task binding changed during read; refresh the task and retry",
+                ));
+            }
             let identity_summary = identity.as_ref().map(|view| {
                 json!({
                     "taskId": view.task.task_id,
@@ -488,6 +510,100 @@ fn checked_limit(limit: u16) -> Result<usize, CliError> {
         ));
     }
     Ok(usize::from(limit))
+}
+
+fn validate_identity(target: &TaskTarget, view: &TaskIdentityView) -> Result<(), CliError> {
+    if view.task.task_id != target.task || view.task.workspace_id != view.workspace.workspace_id {
+        return Err(CliError::protocol(
+            "GetTaskIdentity returned an identity for another task or workspace",
+        ));
+    }
+    if view.workspace.environment_id != target.project.environment.environment
+        || view.workspace.source_space_id.as_deref() != Some(&target.project.project)
+    {
+        return Err(CliError::mismatch(
+            "task identity no longer matches the requested environment/project; refresh the list",
+        ));
+    }
+    if view
+        .bindings
+        .iter()
+        .any(|binding| binding.task_id != target.task)
+    {
+        return Err(CliError::protocol(
+            "GetTaskIdentity contains a binding for another task",
+        ));
+    }
+    if let Some(binding) = &view.current_binding {
+        if binding.task_id != target.task
+            || view.task.current_binding_id.as_deref() != Some(&binding.binding_id)
+        {
+            return Err(CliError::protocol(
+                "GetTaskIdentity returned a current binding for another task",
+            ));
+        }
+        if binding.environment_id != target.project.environment.environment
+            || binding.workspace_id != view.workspace.workspace_id
+        {
+            return Err(CliError::mismatch(
+                "current task binding no longer matches the requested environment/project; refresh the task",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_command_page(
+    target: &TaskTarget,
+    page: &TaskCommandRead,
+    limit: usize,
+) -> Result<(), CliError> {
+    if page.snapshot.task_id != target.task || page.events.len() > limit {
+        return Err(CliError::protocol(
+            "GetTaskCommandSnapshot returned another task or exceeded the requested limit",
+        ));
+    }
+    if page.events.iter().any(|event| {
+        event.receipt.task_id != target.task
+            || event.receipt.snapshot.task_id != target.task
+            || event.command_id != event.receipt.command_id
+    }) {
+        return Err(CliError::protocol(
+            "GetTaskCommandSnapshot contains a receipt for another task or command",
+        ));
+    }
+    // A receipt's execution_environment records where that historical command
+    // ran; it may legitimately differ after a task handoff.
+    Ok(())
+}
+
+fn validate_receipt_bindings(
+    identity: &TaskIdentityView,
+    page: &TaskCommandRead,
+) -> Result<(), CliError> {
+    for event in &page.events {
+        let snapshot = &event.receipt.snapshot;
+        let Some(binding_id) = snapshot.binding_id.as_deref() else {
+            continue;
+        };
+        let binding = identity
+            .bindings
+            .iter()
+            .chain(identity.current_binding.iter())
+            .find(|binding| binding.binding_id == binding_id)
+            .ok_or_else(|| {
+                CliError::protocol("command receipt references a binding outside this task")
+            })?;
+        if snapshot
+            .binding_generation
+            .is_some_and(|generation| generation != binding.generation)
+        {
+            return Err(CliError::protocol(
+                "command receipt binding generation does not match task identity",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn one_line(value: &str, max_chars: usize) -> String {

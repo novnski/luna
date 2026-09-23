@@ -135,7 +135,23 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     attach_parent_console();
-    let cli = Cli::parse();
+    let argv: Vec<_> = std::env::args_os().collect();
+    let inspect_json = argv.get(1).is_some_and(|arg| arg == "inspect")
+        && argv.iter().skip(2).any(|arg| arg == "--json");
+    let cli = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) => {
+            if inspect_json
+                && !matches!(
+                    error.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                )
+            {
+                std::process::exit(inspect_cli::print_parse_error(&error));
+            }
+            error.exit();
+        }
+    };
     #[cfg(windows)]
     if let Some(pid) = cli.wait_for_exit {
         zeron_update::windows::wait_for_exit(pid)?;
