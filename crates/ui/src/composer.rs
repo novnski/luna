@@ -27,6 +27,7 @@ use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
 use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
+use zeron_engine::sessions::LunaApprovalOutcome;
 use zeron_proto::{
     CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot, DraftBlob,
     DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState, FileSearchMatch,
@@ -669,6 +670,41 @@ pub fn pending_input_request(
                 _ => None,
             })
         })
+}
+
+fn approval_decision(
+    question: &UserInputQuestion,
+    answers: &[UserInputAnswer],
+) -> zeron_proto::ApprovalDecision {
+    let selected = answers
+        .iter()
+        .find(|answer| answer.question_id == question.id)
+        .and_then(|answer| answer.labels.first())
+        .map(String::as_str);
+    match selected {
+        Some("Allow once") => zeron_proto::ApprovalDecision::AllowOnce,
+        Some("Allow for task") => zeron_proto::ApprovalDecision::AllowTask,
+        Some("Cancel") => zeron_proto::ApprovalDecision::Cancel,
+        _ => zeron_proto::ApprovalDecision::Deny,
+    }
+}
+
+fn luna_approval_question(
+    questions: &[UserInputQuestion],
+) -> Result<Option<&UserInputQuestion>, ()> {
+    let has_luna_marker = questions.iter().any(|question| {
+        question
+            .approval
+            .as_ref()
+            .is_some_and(zeron_proto::ApprovalRequest::is_luna_cross_task)
+    });
+    if !has_luna_marker {
+        return Ok(None);
+    }
+    if questions.len() != 1 {
+        return Err(());
+    }
+    Ok(questions.first())
 }
 
 /// Whether the transcript shows `request_id` explicitly resolved (here or on
@@ -9000,6 +9036,65 @@ impl Composer {
             cx.notify();
             return;
         }
+        let luna_question = match luna_approval_question(&wizard.questions) {
+            Ok(question) => question,
+            Err(()) => {
+                self.failure = Some("Invalid LUNA approval request".into());
+                self.failure_key = Some(chat_id);
+                cx.notify();
+                return;
+            }
+        };
+        if let Some(question) = luna_question {
+            let decision = approval_decision(question, &answers);
+            self.failure = None;
+            self.failure_key = None;
+            self.answered_requests.insert(request_id.clone());
+            // The server-owned pending kind is authoritative. This marker
+            // only chooses the direct in-process UI route; never fall back to
+            // RespondApproval over JSON RPC if that route is unavailable.
+            self.action_task = Some(cx.spawn(async move |this, cx| {
+                let result = engine
+                    .respond_luna_local_ui_approval(&chat_id, &request_id, decision)
+                    .await;
+                this.update(cx, |composer, cx| {
+                    if composer.state.read(cx).selected_chat.as_deref() != Some(chat_id.as_str()) {
+                        composer.answered_requests.remove(&request_id);
+                        return;
+                    }
+                    match result {
+                        Ok(LunaApprovalOutcome::AllowedOnce | LunaApprovalOutcome::Denied) => {
+                            composer.wizard = None;
+                            composer
+                                .answer_input
+                                .update(cx, |input, cx| input.set_text("", cx));
+                        }
+                        Ok(LunaApprovalOutcome::Stale) => {
+                            composer.answered_requests.remove(&request_id);
+                            composer.wizard = Some(wizard.clone());
+                            composer.failure = Some("Approval is no longer pending".into());
+                            composer.failure_key = Some(chat_id.clone());
+                        }
+                        Ok(LunaApprovalOutcome::Expired | LunaApprovalOutcome::RunEnded) => {
+                            composer.answered_requests.remove(&request_id);
+                            composer.wizard = None;
+                            composer.failure = Some("Approval expired or its run ended".into());
+                            composer.failure_key = Some(chat_id.clone());
+                        }
+                        Err(error) => {
+                            composer.answered_requests.remove(&request_id);
+                            composer.wizard = Some(wizard.clone());
+                            composer.failure = Some(error.to_string().into());
+                            composer.failure_key = Some(chat_id.clone());
+                        }
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }));
+            cx.notify();
+            return;
+        }
         self.failure = None;
         self.failure_key = None;
         self.wizard = None;
@@ -9011,17 +9106,7 @@ impl Composer {
             .iter()
             .find(|question| question.approval.is_some());
         let command = if let Some(question) = approval {
-            let selected = answers
-                .iter()
-                .find(|answer| answer.question_id == question.id)
-                .and_then(|answer| answer.labels.first())
-                .map(String::as_str);
-            let decision = match selected {
-                Some("Allow once") => zeron_proto::ApprovalDecision::AllowOnce,
-                Some("Allow for task") => zeron_proto::ApprovalDecision::AllowTask,
-                Some("Cancel") => zeron_proto::ApprovalDecision::Cancel,
-                _ => zeron_proto::ApprovalDecision::Deny,
-            };
+            let decision = approval_decision(question, &answers);
             SessionCommandPayload::RespondApproval {
                 request_id: request_id.clone(),
                 decision,
@@ -11642,6 +11727,47 @@ mod tests {
             multi_select: multi,
             approval: None,
         }
+    }
+
+    #[test]
+    fn luna_approval_marker_chooses_only_the_direct_single_question_route() {
+        let mut provider = question("provider", &["Deny", "Allow once"], false);
+        provider.approval = Some(zeron_proto::ApprovalRequest {
+            provider_request_id: "provider".into(),
+            provider: HarnessId::Codex,
+            turn_id: Some("turn-a".into()),
+            machine_name: "synthetic".into(),
+            action_kind: zeron_proto::ApprovalActionKind::Tool,
+            summary: "provider action".into(),
+            requested_scope: zeron_proto::PermissionScope::Workspace,
+            expires_at_ms: i64::MAX,
+            supports_task_allowance: false,
+        });
+        assert!(
+            luna_approval_question(&[provider.clone()])
+                .unwrap()
+                .is_none()
+        );
+
+        let mut luna = provider.clone();
+        luna.id = "luna".into();
+        luna.approval.as_mut().unwrap().action_kind =
+            zeron_proto::ApprovalActionKind::LunaCrossTask;
+        assert_eq!(
+            luna_approval_question(&[luna.clone()]).unwrap(),
+            Some(&luna)
+        );
+        assert!(luna_approval_question(&[provider, luna.clone()]).is_err());
+        assert_eq!(
+            approval_decision(
+                &luna,
+                &[UserInputAnswer {
+                    question_id: "luna".into(),
+                    labels: vec!["Allow once".into()],
+                }],
+            ),
+            zeron_proto::ApprovalDecision::AllowOnce
+        );
     }
 
     #[test]

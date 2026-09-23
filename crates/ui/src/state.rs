@@ -29,10 +29,12 @@ use serde::de::DeserializeOwned;
 
 use crate::comments::ReviewComment;
 use zeron_doc::{SessionMessageEntry, TranscriptDesync, TranscriptFrame};
-use zeron_engine::{Engine, EngineConfig, EngineRuntime, InstanceLock, rpc::AuthRpc};
+use zeron_engine::{
+    Engine, EngineConfig, EngineRuntime, InstanceLock, rpc::AuthRpc, sessions::LunaApprovalOutcome,
+};
 use zeron_proto::{
-    AuthState, ChangeRequestSummary, Chat, ChatIndicator, CheckoutChangeRequestStatus, Device,
-    EngineInfo, HarnessId, Session, Space, WorkspaceScope,
+    ApprovalDecision, AuthState, ChangeRequestSummary, Chat, ChatIndicator,
+    CheckoutChangeRequestStatus, Device, EngineInfo, HarnessId, Session, Space, WorkspaceScope,
 };
 use zeron_rpc::{RpcClient, RpcError, RpcReply, RpcService, connect_ws, memory_client, methods};
 
@@ -75,10 +77,24 @@ pub enum EngineMode {
 /// One of the two ways to own an engine connection. Both end at an [`RpcClient`]
 /// speaking the identical protocol — the trait only differs in provenance and
 /// teardown.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum LocalLunaApprovalError {
+    #[error("LUNA approval requires the in-process local UI")]
+    LocalOnly,
+    #[error("local engine is not ready")]
+    EngineUnavailable,
+}
+
 #[async_trait]
 trait EngineBackend: Send + Sync {
     fn client(&self) -> &RpcClient;
     fn mode(&self) -> EngineMode;
+    async fn respond_luna_local_ui_approval(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError>;
     /// Graceful teardown (drains runs / flushes docs for the in-process engine).
     async fn shutdown(&self);
 }
@@ -101,6 +117,21 @@ impl EngineBackend for InProcessEngine {
     }
     fn mode(&self) -> EngineMode {
         EngineMode::InProcess
+    }
+    async fn respond_luna_local_ui_approval(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError> {
+        let sessions = self
+            .runtime
+            .lock()
+            .await
+            .as_ref()
+            .map(|runtime| runtime.core().sessions.clone())
+            .ok_or(LocalLunaApprovalError::EngineUnavailable)?;
+        Ok(sessions.respond_luna_local_ui_approval(chat_id, request_id, decision))
     }
     async fn shutdown(&self) {
         self.boot_task.abort();
@@ -207,6 +238,14 @@ impl EngineBackend for RemoteEngine {
         EngineMode::Remote {
             url: self.url.clone(),
         }
+    }
+    async fn respond_luna_local_ui_approval(
+        &self,
+        _chat_id: &str,
+        _request_id: &str,
+        _decision: ApprovalDecision,
+    ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError> {
+        Err(LocalLunaApprovalError::LocalOnly)
     }
     async fn shutdown(&self) {
         // The daemon outlives this viewport; only stop our readiness probe.
@@ -469,6 +508,19 @@ impl EngineHandle {
 
     pub fn client(&self) -> &RpcClient {
         self.inner.client()
+    }
+
+    /// Direct Rust-only response path. This never serializes a grant or an
+    /// approval decision into the shared JSON RPC transport.
+    pub async fn respond_luna_local_ui_approval(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError> {
+        self.inner
+            .respond_luna_local_ui_approval(chat_id, request_id, decision)
+            .await
     }
 
     pub fn mode(&self) -> EngineMode {
@@ -2527,6 +2579,7 @@ mod tests {
     use super::*;
     use chrono::TimeDelta;
     use gpui::AppContext;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use zeron_engine::{
         AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
         default_registry,
@@ -2543,6 +2596,38 @@ mod tests {
     }
 
     struct LegacyIdentityRpc;
+
+    struct CountRpc(Arc<AtomicUsize>);
+
+    #[async_trait]
+    impl RpcService for CountRpc {
+        async fn handle(
+            &self,
+            _method: &str,
+            _params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            RpcReply::value(&serde_json::json!({}))
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_luna_approval_never_sends_an_rpc_frame() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handle =
+            EngineHandle::from_test_client(memory_client(Arc::new(CountRpc(calls.clone()))));
+        assert_eq!(
+            handle
+                .respond_luna_local_ui_approval(
+                    "chat-a",
+                    "approval-a",
+                    ApprovalDecision::AllowOnce,
+                )
+                .await,
+            Err(LocalLunaApprovalError::LocalOnly)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
 
     #[async_trait]
     impl RpcService for LegacyIdentityRpc {
@@ -2670,6 +2755,16 @@ mod tests {
             .await
             .unwrap();
         assert!(harnesses.as_array().is_some_and(|h| !h.is_empty()));
+        assert_eq!(
+            handle
+                .respond_luna_local_ui_approval(
+                    "missing-chat",
+                    "missing-approval",
+                    ApprovalDecision::AllowOnce,
+                )
+                .await,
+            Ok(LunaApprovalOutcome::Stale)
+        );
         handle.shutdown().await;
     }
 
