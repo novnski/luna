@@ -18,6 +18,7 @@ pub mod registry;
 mod store;
 mod types;
 pub mod wake;
+pub mod write_epoch;
 
 pub use chat_client::{
     ChatClient, ChatDocSink, ChatEvent, ChatStatsSnapshot, ChatTuning, CheckpointFetcher,

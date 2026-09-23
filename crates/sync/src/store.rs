@@ -17,6 +17,8 @@ use zeron_proto::{
     HistorySearchScope, TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
 };
 
+use crate::write_epoch::{FlushPermit, WriteEpoch, WritePermit};
+
 /// Errors surfaced by [`DocsStore`].
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -38,6 +40,10 @@ pub enum StoreError {
     AttentionCommandConflict,
     #[error("cannot dismiss unresolved attention")]
     UnresolvedAttention,
+    #[error("snapshot save requires a write or flush permit")]
+    AdmissionRequired,
+    #[error("write permit does not belong to this guarded store")]
+    AdmissionMismatch,
 }
 
 /// Ordered, append-only migrations. Each entry runs once inside a transaction;
@@ -293,12 +299,38 @@ pub struct DocsStore {
     conn: Mutex<Connection>,
     activity_gate: Mutex<()>,
     failed_publications: Mutex<HashSet<String>>,
+    // This bounded seam gates only the three save_snapshot variants. Stage 3
+    // must close the bypass through other writers and a second DocsStore::open.
+    write_epoch: Option<WriteEpoch>,
 }
 
 impl DocsStore {
     /// Open (creating directory, database, and schema as needed).
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let data_dir = data_dir.as_ref();
+        Self::open_inner(data_dir.as_ref(), None)
+    }
+
+    /// Synthetic guard seam. The directory must already exist inside the
+    /// coordinator's canonical device root. Validation happens before SQLite
+    /// open, PRAGMA updates, and migrations, all of which may write.
+    /// Stage 3 must protect another handle opened with `Self::open` against
+    /// this same database before any live-root use is safe.
+    pub fn open_guarded(
+        data_dir: impl AsRef<Path>,
+        coordinator: WriteEpoch,
+        permit: &WritePermit,
+    ) -> Result<Self, StoreError> {
+        if !coordinator.permits_write(permit) {
+            return Err(StoreError::AdmissionMismatch);
+        }
+        let data_dir = data_dir.as_ref().canonicalize()?;
+        if !data_dir.is_dir() || !data_dir.starts_with(coordinator.root()) {
+            return Err(StoreError::AdmissionMismatch);
+        }
+        Self::open_inner(&data_dir, Some(coordinator))
+    }
+
+    fn open_inner(data_dir: &Path, write_epoch: Option<WriteEpoch>) -> Result<Self, StoreError> {
         std::fs::create_dir_all(data_dir)?;
         let mut conn = Connection::open(data_dir.join("docs.sqlite3"))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -309,6 +341,7 @@ impl DocsStore {
             conn: Mutex::new(conn),
             activity_gate: Mutex::new(()),
             failed_publications: Mutex::new(HashSet::new()),
+            write_epoch,
         })
     }
 
@@ -1100,6 +1133,31 @@ impl DocsStore {
 
     /// Save (upsert) the snapshot for `doc_id`.
     pub fn save_snapshot(&self, doc_id: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        self.require_uncoordinated_snapshot_save()?;
+        self.save_snapshot_inner(doc_id, bytes)
+    }
+
+    pub fn save_snapshot_admitted(
+        &self,
+        permit: &WritePermit,
+        doc_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), StoreError> {
+        self.require_writer(permit)?;
+        self.save_snapshot_inner(doc_id, bytes)
+    }
+
+    pub fn save_snapshot_flushing(
+        &self,
+        permit: &FlushPermit<'_>,
+        doc_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), StoreError> {
+        self.require_flush(permit)?;
+        self.save_snapshot_inner(doc_id, bytes)
+    }
+
+    fn save_snapshot_inner(&self, doc_id: &str, bytes: &[u8]) -> Result<(), StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         self.persist_snapshot_changes_tx(&tx, &[(doc_id, bytes)], &[], &[])?;
@@ -1111,6 +1169,38 @@ impl DocsStore {
     /// one transaction. This is the non-receipt half of the queue durability
     /// boundary: a caller may publish/apply the candidate only after success.
     pub fn save_snapshot_with_updates(
+        &self,
+        doc_id: &str,
+        bytes: &[u8],
+        updates: &[(&str, &[u8])],
+    ) -> Result<(), StoreError> {
+        self.require_uncoordinated_snapshot_save()?;
+        self.save_snapshot_with_updates_inner(doc_id, bytes, updates)
+    }
+
+    pub fn save_snapshot_with_updates_admitted(
+        &self,
+        permit: &WritePermit,
+        doc_id: &str,
+        bytes: &[u8],
+        updates: &[(&str, &[u8])],
+    ) -> Result<(), StoreError> {
+        self.require_writer(permit)?;
+        self.save_snapshot_with_updates_inner(doc_id, bytes, updates)
+    }
+
+    pub fn save_snapshot_with_updates_flushing(
+        &self,
+        permit: &FlushPermit<'_>,
+        doc_id: &str,
+        bytes: &[u8],
+        updates: &[(&str, &[u8])],
+    ) -> Result<(), StoreError> {
+        self.require_flush(permit)?;
+        self.save_snapshot_with_updates_inner(doc_id, bytes, updates)
+    }
+
+    fn save_snapshot_with_updates_inner(
         &self,
         doc_id: &str,
         bytes: &[u8],
@@ -1131,6 +1221,41 @@ impl DocsStore {
     /// ONE transaction, so bytes and cursor can never disagree (the C2 rule;
     /// a divergent pair is exactly the restored-backup redownload bug).
     pub fn save_snapshot_with_cursor(
+        &self,
+        doc_id: &str,
+        bytes: &[u8],
+        cursor: u64,
+        epoch: u32,
+    ) -> Result<(), StoreError> {
+        self.require_uncoordinated_snapshot_save()?;
+        self.save_snapshot_with_cursor_inner(doc_id, bytes, cursor, epoch)
+    }
+
+    pub fn save_snapshot_with_cursor_admitted(
+        &self,
+        permit: &WritePermit,
+        doc_id: &str,
+        bytes: &[u8],
+        cursor: u64,
+        epoch: u32,
+    ) -> Result<(), StoreError> {
+        self.require_writer(permit)?;
+        self.save_snapshot_with_cursor_inner(doc_id, bytes, cursor, epoch)
+    }
+
+    pub fn save_snapshot_with_cursor_flushing(
+        &self,
+        permit: &FlushPermit<'_>,
+        doc_id: &str,
+        bytes: &[u8],
+        cursor: u64,
+        epoch: u32,
+    ) -> Result<(), StoreError> {
+        self.require_flush(permit)?;
+        self.save_snapshot_with_cursor_inner(doc_id, bytes, cursor, epoch)
+    }
+
+    fn save_snapshot_with_cursor_inner(
         &self,
         doc_id: &str,
         bytes: &[u8],
@@ -2521,6 +2646,28 @@ impl DocsStore {
         Ok(())
     }
 
+    fn require_uncoordinated_snapshot_save(&self) -> Result<(), StoreError> {
+        if self.write_epoch.is_some() {
+            Err(StoreError::AdmissionRequired)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn require_writer(&self, permit: &WritePermit) -> Result<(), StoreError> {
+        match &self.write_epoch {
+            Some(epoch) if epoch.permits_write(permit) => Ok(()),
+            _ => Err(StoreError::AdmissionMismatch),
+        }
+    }
+
+    fn require_flush(&self, permit: &FlushPermit<'_>) -> Result<(), StoreError> {
+        match &self.write_epoch {
+            Some(epoch) if epoch.permits_flush(permit) => Ok(()),
+            _ => Err(StoreError::AdmissionMismatch),
+        }
+    }
+
     fn conn(&self) -> MutexGuard<'_, Connection> {
         // A poisoned lock only means another thread panicked mid-query; the
         // connection itself is still usable.
@@ -3101,6 +3248,9 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::write_epoch::Phase;
+    use std::sync::Arc;
+    use std::time::Duration;
     use zeron_proto::{
         ACTIVITY_ENVELOPE_VERSION, ATTENTION_CONTRACT_VERSION, ActivityKind, ActivityRedaction,
         ActivitySourceRef, AttentionItem, AttentionKind, AttentionLifecycle, AttentionMutation,
@@ -3428,6 +3578,104 @@ mod tests {
         );
         assert_eq!(reopened.needs_attention[0].acknowledged_at_ms, None);
         assert_eq!(reopened.needs_attention[0].seen_at_ms, None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_snapshot_saves_require_the_matching_epoch() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("profile");
+        std::fs::create_dir(&data_dir).unwrap();
+        let coordinator = WriteEpoch::for_device_root(root.path()).unwrap();
+        let first = coordinator.try_admit().unwrap();
+
+        let wrong_root = tempfile::tempdir().unwrap();
+        let other = WriteEpoch::for_device_root(wrong_root.path()).unwrap();
+        let wrong_permit = other.try_admit().unwrap();
+        let other_same_root = WriteEpoch::for_device_root(root.path()).unwrap();
+        let wrong_coordinator_permit = other_same_root.try_admit().unwrap();
+        assert!(matches!(
+            DocsStore::open_guarded(&data_dir, coordinator.clone(), &wrong_coordinator_permit),
+            Err(StoreError::AdmissionMismatch)
+        ));
+        assert!(matches!(
+            DocsStore::open_guarded(&data_dir, coordinator.clone(), &wrong_permit),
+            Err(StoreError::AdmissionMismatch)
+        ));
+        assert!(matches!(
+            DocsStore::open_guarded(wrong_root.path(), coordinator.clone(), &first),
+            Err(StoreError::AdmissionMismatch)
+        ));
+        assert!(!data_dir.join("docs.sqlite3").exists());
+        assert!(!wrong_root.path().join("docs.sqlite3").exists());
+
+        let store =
+            Arc::new(DocsStore::open_guarded(&data_dir, coordinator.clone(), &first).unwrap());
+        store
+            .save_snapshot_with_updates_admitted(&first, "doc", b"base", &[])
+            .unwrap();
+        let freezing = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.freeze(Duration::from_secs(2)).await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while coordinator.phase() != Phase::Quiescing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            store.save_snapshot("doc", b"bypass"),
+            Err(StoreError::AdmissionRequired)
+        ));
+        assert!(matches!(
+            store.save_snapshot_with_updates("doc", b"bypass", &[]),
+            Err(StoreError::AdmissionRequired)
+        ));
+        assert!(matches!(
+            store.save_snapshot_with_cursor("doc", b"bypass", 1, 1),
+            Err(StoreError::AdmissionRequired)
+        ));
+        assert!(matches!(
+            store.save_snapshot_admitted(&wrong_permit, "doc", b"wrong-root"),
+            Err(StoreError::AdmissionMismatch)
+        ));
+        assert!(matches!(
+            store.save_snapshot_admitted(&wrong_coordinator_permit, "doc", b"wrong-coordinator"),
+            Err(StoreError::AdmissionMismatch)
+        ));
+        assert_eq!(store.load_snapshot("doc").unwrap().unwrap(), b"base");
+
+        // An operation admitted before the drain may finish while Quiescing.
+        store
+            .save_snapshot_with_cursor_admitted(&first, "doc", b"first", 2, 2)
+            .unwrap();
+        drop(first);
+        let flush = freezing.await.unwrap().unwrap();
+        assert_eq!(coordinator.phase(), Phase::Flushing);
+        assert_eq!(
+            coordinator.try_admit().err(),
+            Some(crate::write_epoch::EpochError::Busy)
+        );
+        let flush_permit = flush.permit();
+        store
+            .save_snapshot_flushing(&flush_permit, "doc", b"flushed")
+            .unwrap();
+        let snapshot = flush.into_snapshot().unwrap();
+        assert_eq!(store.load_snapshot("doc").unwrap().unwrap(), b"flushed");
+        assert!(matches!(
+            store.save_snapshot("doc", b"after-boundary"),
+            Err(StoreError::AdmissionRequired)
+        ));
+        drop(snapshot);
+
+        let second = coordinator.try_admit().unwrap();
+        assert_eq!(second.epoch(), 2);
+        store
+            .save_snapshot_admitted(&second, "doc", b"second")
+            .unwrap();
+        assert_eq!(store.load_snapshot("doc").unwrap().unwrap(), b"second");
     }
 
     #[test]
