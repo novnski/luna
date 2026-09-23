@@ -24,6 +24,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use chrono::Utc;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use zeron_doc::{DeletedSpace, REGISTRY_DOC_ID, RegistryDoc, WorkspaceDoc};
 use zeron_proto::{
@@ -171,7 +173,8 @@ struct WorkspaceHostInner {
     devices_tx: watch::Sender<Vec<Device>>,
     sessions_tx: watch::Sender<Vec<Session>>,
     spaces_tx: watch::Sender<Vec<Space>>,
-    room: Mutex<Option<Arc<RegistryClient>>>,
+    room: Mutex<Option<RegistryClient>>,
+    lifecycle: Mutex<WorkspaceLifecycle>,
     /// Bumped on every registry change (local mutation or applied server
     /// frame) — drives republish + the snapshot debounce in `workspace_task`.
     changed_tx: watch::Sender<u64>,
@@ -191,6 +194,38 @@ struct WorkspaceHostInner {
     /// warm-up clock (`peer_liveness`): a just-joined room hasn't heard
     /// anyone's heartbeat yet, and that silence must not read as "offline".
     room_joined_at: std::sync::atomic::AtomicI64,
+}
+
+struct WorkspaceLifecycle {
+    edge_stopped: bool,
+    shutting_down: bool,
+    join_generation: u64,
+    current_join: Option<CancellationToken>,
+    edge_stop: CancellationToken,
+    worker_stop: CancellationToken,
+    tasks: TaskTracker,
+}
+
+impl WorkspaceLifecycle {
+    fn new() -> Self {
+        Self {
+            edge_stopped: false,
+            shutting_down: false,
+            join_generation: 0,
+            current_join: None,
+            edge_stop: CancellationToken::new(),
+            worker_stop: CancellationToken::new(),
+            tasks: TaskTracker::new(),
+        }
+    }
+
+    fn may_install(&self, generation: u64) -> bool {
+        !self.edge_stopped && !self.shutting_down && self.join_generation == generation
+    }
+
+    fn owns_room(&self, generation: u64) -> bool {
+        self.join_generation == generation
+    }
 }
 
 /// "This peer is alive" callback (device id) — see `WorkspaceHost::set_peer_alive_hook`.
@@ -320,6 +355,7 @@ impl WorkspaceHost {
                 sessions_tx,
                 spaces_tx,
                 room: Mutex::new(None),
+                lifecycle: Mutex::new(WorkspaceLifecycle::new()),
                 changed_tx,
                 presence_seen: Mutex::new(std::collections::HashMap::new()),
                 peer_alive: Mutex::new(None),
@@ -332,10 +368,26 @@ impl WorkspaceHost {
         // dies before the first debounced save.
         host.inner.save_snapshot();
         host.join_room();
-        tokio::spawn(workspace_task(Arc::downgrade(&host.inner), changed_rx));
+        let mut lifecycle = lock(&host.inner.lifecycle);
+        let worker_stop = lifecycle.worker_stop.clone();
+        let worker = workspace_task(Arc::downgrade(&host.inner), changed_rx);
+        lifecycle.tasks.spawn(async move {
+            tokio::select! {
+                _ = worker_stop.cancelled() => {}
+                _ = worker => {}
+            }
+        });
         if host.inner.config.edge.is_some() {
-            tokio::spawn(relay_probe_task(Arc::downgrade(&host.inner)));
+            let edge_stop = lifecycle.edge_stop.clone();
+            let relay = relay_probe_task(Arc::downgrade(&host.inner));
+            lifecycle.tasks.spawn(async move {
+                tokio::select! {
+                    _ = edge_stop.cancelled() => {}
+                    _ = relay => {}
+                }
+            });
         }
+        drop(lifecycle);
         Ok(host)
     }
 
@@ -368,134 +420,196 @@ impl WorkspaceHost {
         let reg = self.inner.reg.clone();
         let device_id = self.inner.config.device_id.clone();
         let weak = Arc::downgrade(&self.inner);
-        tokio::spawn(async move {
-            let mut wake = zeron_sync::wake::subscribe();
-            let mut online = zeron_sync::wake::subscribe_online();
-            // `RegistryClient` only self-reconnects AFTER a first successful
-            // join; an INITIAL failure (a 500 from an overloaded DO, a token
-            // racing a refresh, an edge deploy) must not end this task and
-            // leave the device offline until an app restart. Retry the first
-            // join on a capped, jittered backoff so a transient blip self-heals.
-            let mut backoff = JOIN_RETRY_BASE;
-            loop {
-                if weak.upgrade().is_none() {
-                    return; // host dropped
-                }
-                let tuning = RegistryTuning {
-                    probe_quiet: REGISTRY_PROBE_QUIET,
-                };
-                // Production path (token present): dual transport — the WS
-                // dials as before, and a plain-HTTPS pull/push seam derived
-                // from the same URL provider bootstraps the doc in ~1 RTT
-                // and keeps syncing at backoff cadence when the socket can't
-                // connect (airplane-wifi networks strip WS upgrades).
-                let result = if token.is_some() {
-                    RegistryClient::connect_via_transport(
-                        url.clone(),
-                        reg.clone(),
-                        &device_id,
-                        tuning,
-                        Arc::new(WsDerivedRegistryTransport::new(url.clone())),
-                    )
-                    .await
-                } else {
-                    RegistryClient::connect_via_tuned(url.clone(), reg.clone(), &device_id, tuning)
+        let previous = {
+            let mut lifecycle = lock(&self.inner.lifecycle);
+            if lifecycle.edge_stopped || lifecycle.shutting_down {
+                return;
+            }
+            let Some(generation) = lifecycle.join_generation.checked_add(1) else {
+                tracing::warn!("registry join generation exhausted");
+                return;
+            };
+            lifecycle.join_generation = generation;
+            if let Some(previous) = lifecycle.current_join.take() {
+                previous.cancel();
+            }
+            let join_stop = CancellationToken::new();
+            lifecycle.current_join = Some(join_stop.clone());
+            let previous = lock(&self.inner.room).take();
+            let task = async move {
+                let mut wake = zeron_sync::wake::subscribe();
+                let mut online = zeron_sync::wake::subscribe_online();
+                // `RegistryClient` only self-reconnects AFTER a first successful
+                // join; an INITIAL failure (a 500 from an overloaded DO, a token
+                // racing a refresh, an edge deploy) must not end this task and
+                // leave the device offline until an app restart. Retry the first
+                // join on a capped, jittered backoff so a transient blip self-heals.
+                let mut backoff = JOIN_RETRY_BASE;
+                loop {
+                    if weak.upgrade().is_none() {
+                        return; // host dropped
+                    }
+                    let tuning = RegistryTuning {
+                        probe_quiet: REGISTRY_PROBE_QUIET,
+                    };
+                    // Production path (token present): dual transport — the WS
+                    // dials as before, and a plain-HTTPS pull/push seam derived
+                    // from the same URL provider bootstraps the doc in ~1 RTT
+                    // and keeps syncing at backoff cadence when the socket can't
+                    // connect (airplane-wifi networks strip WS upgrades).
+                    let result = if token.is_some() {
+                        RegistryClient::connect_via_transport(
+                            url.clone(),
+                            reg.clone(),
+                            &device_id,
+                            tuning,
+                            Arc::new(WsDerivedRegistryTransport::new(url.clone())),
+                        )
                         .await
-                };
-                match result {
-                    Ok(client) => {
-                        let client = Arc::new(client);
-                        client.set_presence(now_ms());
-                        let mut events = client.events();
-                        if token_revoked(&token).await {
-                            return;
-                        }
-                        let Some(inner) = weak.upgrade() else { return };
-                        *lock(&inner.room) = Some(client.clone());
-                        inner
-                            .room_joined_at
-                            .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
-                        inner.bump_changed();
-                        tracing::info!(org = %org_id, "registry room joined");
-                        drop(inner);
-                        // The slot is the sole owner. This lets engine-level
-                        // revocation close the socket synchronously by taking it.
-                        drop(client);
-                        // The event pump lives for the client's whole life
-                        // (across its self-reconnects); it ends only when the
-                        // client is dropped at host teardown.
-                        loop {
-                            tokio::select! {
-                                event = events.recv() => match event {
-                                    Ok(zeron_sync::RegistryEvent::Connected) => {
-                                        let Some(inner) = weak.upgrade() else { return };
-                                        // Re-join: restart the dial gate's
-                                        // warm-up clock (presence map is empty
-                                        // again; silence isn't evidence yet).
-                                        inner
-                                            .room_joined_at
-                                            .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
-                                        inner.bump_changed();
-                                    }
-                                    Ok(zeron_sync::RegistryEvent::Applied) => {
-                                        let Some(inner) = weak.upgrade() else { return };
-                                        inner.bump_changed();
-                                    }
-                                    Ok(zeron_sync::RegistryEvent::Presence) => {
-                                        let Some(inner) = weak.upgrade() else { return };
-                                        inner.publish();
-                                    }
-                                    Ok(zeron_sync::RegistryEvent::Disconnected) => {}
-                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                                },
-                                _ = token_changed(&mut token_changes) => {
-                                    if token_revoked(&token).await {
-                                        tracing::info!(org = %org_id,
-                                            "registry credentials removed; leaving room");
-                                        break;
+                    } else {
+                        RegistryClient::connect_via_tuned(
+                            url.clone(),
+                            reg.clone(),
+                            &device_id,
+                            tuning,
+                        )
+                        .await
+                    };
+                    match result {
+                        Ok(client) => {
+                            client.set_presence(now_ms());
+                            let mut events = client.events();
+                            if token_revoked(&token).await {
+                                return;
+                            }
+                            let Some(inner) = weak.upgrade() else { return };
+                            let mut client = Some(client);
+                            let (installed, previous) = {
+                                let lifecycle = lock(&inner.lifecycle);
+                                if !lifecycle.may_install(generation) {
+                                    (false, None)
+                                } else {
+                                    let previous =
+                                        lock(&inner.room).replace(client.take().unwrap());
+                                    inner
+                                        .room_joined_at
+                                        .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+                                    inner.bump_changed();
+                                    (true, previous)
+                                }
+                            };
+                            drop(previous);
+                            drop(client);
+                            if !installed {
+                                return;
+                            }
+                            tracing::info!(org = %org_id, "registry room joined");
+                            drop(inner);
+                            // The slot is the sole owner. Synchronous revocation
+                            // takes and drops it after releasing the host locks.
+                            // The event pump lives for the client's whole life
+                            // (across its self-reconnects); it ends only when the
+                            // client is dropped at host teardown.
+                            loop {
+                                tokio::select! {
+                                    event = events.recv() => match event {
+                                        Ok(zeron_sync::RegistryEvent::Connected) => {
+                                            let Some(inner) = weak.upgrade() else { return };
+                                            // Re-join: restart the dial gate's
+                                            // warm-up clock (presence map is empty
+                                            // again; silence isn't evidence yet).
+                                            inner
+                                                .room_joined_at
+                                                .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+                                            inner.bump_changed();
+                                        }
+                                        Ok(zeron_sync::RegistryEvent::Applied) => {
+                                            let Some(inner) = weak.upgrade() else { return };
+                                            inner.bump_changed();
+                                        }
+                                        Ok(zeron_sync::RegistryEvent::Presence) => {
+                                            let Some(inner) = weak.upgrade() else { return };
+                                            inner.publish();
+                                        }
+                                        Ok(zeron_sync::RegistryEvent::Disconnected) => {}
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                    },
+                                    _ = token_changed(&mut token_changes) => {
+                                        if token_revoked(&token).await {
+                                            tracing::info!(org = %org_id,
+                                                "registry credentials removed; leaving room");
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if let Some(inner) = weak.upgrade() {
-                            *lock(&inner.room) = None;
-                        }
-                        return;
-                    }
-                    Err(err) => {
-                        tracing::warn!(org = %org_id, error = %err, backoff_ms = backoff.as_millis() as u64,
-                            "registry room join failed; retrying");
-                    }
-                }
-                // Drain stale online events so only successes DURING this
-                // wait cut it short (our own failed dial doesn't count).
-                while online.try_recv().is_ok() {}
-                tokio::select! {
-                    _ = tokio::time::sleep(backoff + join_retry_jitter()) => {
-                        backoff = (backoff * 2).min(JOIN_RETRY_CAP);
-                    }
-                    _ = wake.recv() => {
-                        backoff = JOIN_RETRY_BASE;
-                    }
-                    _ = online.recv() => {
-                        backoff = JOIN_RETRY_BASE;
-                    }
-                    _ = token_changed(&mut token_changes) => {
-                        if token_revoked(&token).await {
+                            if let Some(inner) = weak.upgrade() {
+                                let previous = {
+                                    let lifecycle = lock(&inner.lifecycle);
+                                    if lifecycle.owns_room(generation) {
+                                        lock(&inner.room).take()
+                                    } else {
+                                        None
+                                    }
+                                };
+                                drop(previous);
+                            }
                             return;
                         }
-                        backoff = JOIN_RETRY_BASE;
+                        Err(err) => {
+                            tracing::warn!(org = %org_id, error = %err, backoff_ms = backoff.as_millis() as u64,
+                            "registry room join failed; retrying");
+                        }
+                    }
+                    // Drain stale online events so only successes DURING this
+                    // wait cut it short (our own failed dial doesn't count).
+                    while online.try_recv().is_ok() {}
+                    tokio::select! {
+                        _ = tokio::time::sleep(backoff + join_retry_jitter()) => {
+                            backoff = (backoff * 2).min(JOIN_RETRY_CAP);
+                        }
+                        _ = wake.recv() => {
+                            backoff = JOIN_RETRY_BASE;
+                        }
+                        _ = online.recv() => {
+                            backoff = JOIN_RETRY_BASE;
+                        }
+                        _ = token_changed(&mut token_changes) => {
+                            if token_revoked(&token).await {
+                                return;
+                            }
+                            backoff = JOIN_RETRY_BASE;
+                        }
                     }
                 }
-            }
-        });
+            };
+            lifecycle.tasks.spawn(async move {
+                tokio::select! {
+                    _ = join_stop.cancelled() => {}
+                    _ = task => {}
+                }
+            });
+            previous
+        };
+        drop(previous);
     }
 
     /// Close the current registry membership before account-scoped state is
-    /// drained. The auth signal prevents an in-flight join from replacing it.
+    /// drained. The lifecycle fence prevents an in-flight join from replacing it.
     pub fn disconnect_edge(&self) {
-        lock(&self.inner.room).take();
+        let client = {
+            let mut lifecycle = lock(&self.inner.lifecycle);
+            lifecycle.edge_stopped = true;
+            if let Some(join) = lifecycle.current_join.take() {
+                join.cancel();
+            }
+            lifecycle.edge_stop.cancel();
+            lock(&self.inner.room).take()
+        };
+        // Dropping the client aborts its actor and HTTPS child. Their handles
+        // are not awaitable through the current RegistryClient API.
+        drop(client);
     }
 
     /// Wire the "peer is alive" signal (fresh presence heartbeat) to a callback —
@@ -1448,6 +1562,25 @@ impl WorkspaceHost {
         self.inner.save_snapshot_checked()
     }
 
+    /// Permanently stop and await the host-owned join, relay, and delayed
+    /// snapshot tasks after their callers have stopped producing mutations.
+    /// A failed final save remains retryable by calling this method again.
+    /// RegistryClient's own actor and HTTPS child are aborted on disconnect,
+    /// but this method cannot await them with its current API.
+    #[allow(dead_code)] // Product shutdown wiring follows the lifecycle seam.
+    pub(crate) async fn drain_tasks_checked(&self) -> Result<(), EngineError> {
+        self.disconnect_edge();
+        let tasks = {
+            let mut lifecycle = lock(&self.inner.lifecycle);
+            lifecycle.shutting_down = true;
+            lifecycle.worker_stop.cancel();
+            lifecycle.tasks.close();
+            lifecycle.tasks.clone()
+        };
+        tasks.wait().await;
+        self.flush_checked()
+    }
+
     /// Shutdown: stamp our `lastSeenAt` (the only periodic-ish row write besides
     /// boot) and flush the snapshot.
     pub fn shutdown(&self) {
@@ -2111,6 +2244,240 @@ mod tests {
             .find(|device| device.id == "test-device")
             .unwrap();
         assert_eq!(device.name, "Latest");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn checked_drain_waits_for_worker_then_saves_latest_registry() {
+        use super::*;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path()).unwrap());
+        let host = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first_capture = Mutex::new(Some((captured_tx, release_rx)));
+        *lock(&host.inner.snapshot_after_capture) = Some(Arc::new(move || {
+            if let Some((captured_tx, release_rx)) = lock(&first_capture).take() {
+                captured_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        }));
+
+        assert!(host.rename_device("test-device", "Older").unwrap());
+        tokio::task::spawn_blocking(move || captured_rx.recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(host.inner.snapshot_persist.try_lock().is_err());
+        assert!(host.rename_device("test-device", "Latest").unwrap());
+        let draining = tokio::spawn({
+            let host = host.clone();
+            async move { host.drain_tasks_checked().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!draining.is_finished(), "drain skipped the in-flight save");
+        release_tx.send(()).unwrap();
+        draining.await.unwrap().unwrap();
+
+        drop(host);
+        drop(store);
+        let reopened = DocsStore::open(root.path()).unwrap();
+        let bytes = reopened.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let saved = RegistryDoc::from_bytes(&bytes, "test-device").unwrap();
+        let device = saved
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "test-device")
+            .unwrap();
+        assert_eq!(device.name, "Latest");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn checked_drain_retries_failed_final_snapshot_without_new_change() {
+        use super::*;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path()).unwrap());
+        let host = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let before = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let connection = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_registry_snapshot BEFORE UPDATE ON snapshots
+                 WHEN NEW.doc_id = 'registry1'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic snapshot failure'); END;",
+            )
+            .unwrap();
+        assert!(host.rename_device("test-device", "Latest").unwrap());
+
+        let error = host.drain_tasks_checked().await.unwrap_err().to_string();
+        assert!(error.contains("synthetic snapshot failure"), "{error}");
+        assert_eq!(
+            store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap(),
+            before
+        );
+        connection
+            .execute_batch("DROP TRIGGER reject_registry_snapshot")
+            .unwrap();
+        host.drain_tasks_checked().await.unwrap();
+        let bytes = store.load_snapshot(REGISTRY_DOC_ID).unwrap().unwrap();
+        let saved = RegistryDoc::from_bytes(&bytes, "test-device").unwrap();
+        let device = saved
+            .read_devices()
+            .unwrap()
+            .into_iter()
+            .find(|device| device.id == "test-device")
+            .unwrap();
+        assert_eq!(device.name, "Latest");
+    }
+
+    #[test]
+    fn stale_join_generation_cannot_install_or_clear_new_room() {
+        use super::WorkspaceLifecycle;
+
+        let mut lifecycle = WorkspaceLifecycle::new();
+        lifecycle.join_generation = 1;
+        assert!(lifecycle.may_install(1));
+        assert!(lifecycle.owns_room(1));
+        lifecycle.join_generation = 2;
+        assert!(!lifecycle.may_install(1));
+        assert!(!lifecycle.owns_room(1));
+        assert!(lifecycle.may_install(2));
+        lifecycle.edge_stopped = true;
+        assert!(!lifecycle.may_install(2));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn disconnect_cancels_pending_initial_join_without_network() {
+        use super::*;
+        use std::time::Duration;
+        use tokio::sync::oneshot;
+
+        struct DropSignal(Option<oneshot::Sender<()>>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(done) = self.0.take() {
+                    let _ = done.send(());
+                }
+            }
+        }
+        struct PendingUrl {
+            started: Mutex<Option<oneshot::Sender<()>>>,
+            dropped: Mutex<Option<oneshot::Sender<()>>>,
+        }
+        impl zeron_sync::UrlProvider for PendingUrl {
+            fn url(
+                &self,
+            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            {
+                let started = lock(&self.started).take();
+                let dropped = lock(&self.dropped).take();
+                Box::pin(async move {
+                    let _drop = DropSignal(dropped);
+                    if let Some(started) = started {
+                        let _ = started.send(());
+                    }
+                    std::future::pending().await
+                })
+            }
+        }
+        struct NeverCalledUrl;
+        impl zeron_sync::UrlProvider for NeverCalledUrl {
+            fn url(
+                &self,
+            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            {
+                panic!("join spawned after edge revocation")
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let host = WorkspaceHost::open(
+            Arc::new(DocsStore::open(root.path()).unwrap()),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (dropped_tx, dropped_rx) = oneshot::channel();
+        host.spawn_join(
+            Arc::new(PendingUrl {
+                started: Mutex::new(Some(started_tx)),
+                dropped: Mutex::new(Some(dropped_tx)),
+            }),
+            None,
+            None,
+        );
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let generation = lock(&host.inner.lifecycle).join_generation;
+
+        host.disconnect_edge();
+        host.drain_tasks_checked().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), dropped_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!host.connected());
+        host.spawn_join(Arc::new(NeverCalledUrl), None, None);
+        assert_eq!(lock(&host.inner.lifecycle).join_generation, generation);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn disconnect_and_drain_close_all_host_tasks_before_network_poll() {
+        use super::*;
+
+        let root = tempfile::tempdir().unwrap();
+        let host = WorkspaceHost::open(
+            Arc::new(DocsStore::open(root.path()).unwrap()),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
+            },
+        )
+        .unwrap();
+        // Current-thread runtime has not polled the join or probe yet.
+        assert_eq!(lock(&host.inner.lifecycle).tasks.len(), 3);
+        host.disconnect_edge();
+        host.drain_tasks_checked().await.unwrap();
+        assert_eq!(lock(&host.inner.lifecycle).tasks.len(), 0);
+        assert!(!host.connected());
     }
 
     #[tokio::test]
