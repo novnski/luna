@@ -12,15 +12,19 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use sha2::{Digest, Sha256};
 use zeron_proto::AgentEvent;
 use zeron_proto::RuntimeContractDiagnostics;
+use zeron_sync::write_epoch::EpochError;
+
+use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -28,6 +32,10 @@ pub enum JournalError {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("device-root journal admission: {0:?}")]
+    Admission(EpochError),
+    #[error("journal append outcome uncertain: {0}")]
+    Uncertain(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,16 +56,80 @@ struct ChatJournal {
 pub struct RunJournal {
     dir: PathBuf,
     open_files: Mutex<HashMap<String, ChatJournal>>,
+    write_handle: Option<DeviceWriteHandle>,
+    #[cfg(test)]
+    fail_after_appends: Mutex<Option<usize>>,
 }
 
 impl RunJournal {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, JournalError> {
+        Self::open_with_handle(dir, None)
+    }
+
+    pub(crate) fn open_guarded(
+        dir: impl AsRef<Path>,
+        write_handle: DeviceWriteHandle,
+    ) -> Result<Self, JournalError> {
+        Self::open_with_handle(dir, Some(write_handle))
+    }
+
+    fn open_with_handle(
+        dir: impl AsRef<Path>,
+        write_handle: Option<DeviceWriteHandle>,
+    ) -> Result<Self, JournalError> {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
         Ok(Self {
             dir,
             open_files: Mutex::new(HashMap::new()),
+            write_handle,
+            #[cfg(test)]
+            fail_after_appends: Mutex::new(None),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_append_for_tests(&self) {
+        self.fail_after_appends_for_tests(0);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_after_appends_for_tests(&self, successful_appends: usize) {
+        *self
+            .fail_after_appends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(successful_appends);
+    }
+
+    pub(crate) fn try_admit(&self) -> Result<Option<DeviceWritePermit>, JournalError> {
+        self.write_handle
+            .as_ref()
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(JournalError::Admission)
+    }
+
+    pub(crate) async fn admit_async(
+        &self,
+        timeout: Duration,
+    ) -> Result<Option<DeviceWritePermit>, JournalError> {
+        match &self.write_handle {
+            Some(handle) => handle
+                .admit_async(timeout)
+                .await
+                .map(Some)
+                .map_err(JournalError::Admission),
+            None => Ok(None),
+        }
+    }
+
+    fn check_permit(&self, permit: Option<&DeviceWritePermit>) -> Result<(), JournalError> {
+        if let Some(handle) = &self.write_handle
+            && !permit.is_some_and(|permit| handle.owns(permit))
+        {
+            return Err(JournalError::Admission(EpochError::Stale));
+        }
+        Ok(())
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<String, ChatJournal>> {
@@ -181,6 +253,53 @@ impl RunJournal {
 
     /// Append one event; returns its journal seq.
     pub fn append(&self, chat_id: &str, event: &AgentEvent) -> Result<u64, JournalError> {
+        self.append_with_permit(chat_id, event, None)
+    }
+
+    pub(crate) fn append_with_permit(
+        &self,
+        chat_id: &str,
+        event: &AgentEvent,
+        permit: Option<&DeviceWritePermit>,
+    ) -> Result<u64, JournalError> {
+        #[cfg(test)]
+        let should_fail = {
+            let mut remaining = self
+                .fail_after_appends
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match *remaining {
+                Some(0) => {
+                    *remaining = None;
+                    true
+                }
+                Some(count) => {
+                    *remaining = Some(count - 1);
+                    false
+                }
+                None => false,
+            }
+        };
+        #[cfg(test)]
+        if should_fail {
+            return Err(JournalError::Io(std::io::Error::other(
+                "injected journal append failure",
+            )));
+        }
+        self.append_with_writer(chat_id, event, permit, |file, bytes| {
+            file.write_all(bytes)?;
+            file.flush()
+        })
+    }
+
+    fn append_with_writer(
+        &self,
+        chat_id: &str,
+        event: &AgentEvent,
+        permit: Option<&DeviceWritePermit>,
+        write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<u64, JournalError> {
+        self.check_permit(permit)?;
         let mut files = self.lock();
         if !files.contains_key(chat_id) {
             // Bound the open-fd set: entries were never removed, so every chat
@@ -220,8 +339,17 @@ impl RunJournal {
         }
         buf.extend_from_slice(line.as_bytes());
         buf.push(b'\n');
-        journal.file.write_all(&buf)?;
-        journal.file.flush()?;
+        let start_len = journal.file.metadata()?.len();
+        if let Err(error) = write(&mut journal.file, &buf) {
+            // Never retry an uncertain append blindly. A full line that was
+            // written before an error already has the confirmed seq;
+            // otherwise leave the outcome explicit and reopen/rescan later.
+            files.remove(chat_id);
+            if appended_bytes_match(&self.path_for(chat_id), start_len, &buf) {
+                return Ok(seq);
+            }
+            return Err(JournalError::Uncertain(error.to_string()));
+        }
         journal.needs_newline = false;
         journal.next_seq = seq + 1;
         Ok(seq)
@@ -278,6 +406,7 @@ impl RunJournal {
 
     /// Remove a chat's journal file entirely (tests / future compaction).
     pub fn discard(&self, chat_id: &str) -> Result<(), JournalError> {
+        let _permit = self.try_admit()?;
         self.lock().remove(chat_id);
         let path = self.path_for(chat_id);
         if path.exists() {
@@ -285,6 +414,20 @@ impl RunJournal {
         }
         Ok(())
     }
+}
+
+fn appended_bytes_match(path: &Path, offset: u64, expected: &[u8]) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    if file.metadata().ok().map(|meta| meta.len()) != offset.checked_add(expected.len() as u64) {
+        return false;
+    }
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return false;
+    }
+    let mut actual = vec![0; expected.len()];
+    file.read_exact(&mut actual).is_ok() && actual == expected
 }
 
 /// Parse every valid line; malformed lines (torn tail writes) are skipped.
@@ -381,7 +524,9 @@ fn sanitize_id(chat_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{InstanceLock, device_write::DeviceWriteOwner};
     use zeron_proto::DoneStatus;
+    use zeron_sync::write_epoch::Phase;
 
     fn text(s: &str) -> AgentEvent {
         AgentEvent::TextDelta { text: s.into() }
@@ -394,6 +539,112 @@ mod tests {
             error: None,
             session_id: None,
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_run_ticket_keeps_events_ordered_across_freeze() {
+        let root = tempfile::tempdir().unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let epoch = owner.epoch_for_tests();
+        let journal =
+            RunJournal::open_guarded(root.path().join("journals"), owner.handle()).unwrap();
+        let ticket = journal.try_admit().unwrap().unwrap();
+        assert_eq!(
+            journal
+                .append_with_permit("chat", &text("one"), Some(&ticket))
+                .unwrap(),
+            1
+        );
+        let mut freezing = Box::pin(epoch.freeze(Duration::from_secs(2)));
+        assert!(matches!(
+            futures::poll!(freezing.as_mut()),
+            std::task::Poll::Pending
+        ));
+        assert_eq!(epoch.phase(), Phase::Quiescing);
+        assert!(matches!(
+            journal.try_admit(),
+            Err(JournalError::Admission(EpochError::Busy))
+        ));
+        assert_eq!(
+            journal
+                .append_with_permit("chat", &text("two"), Some(&ticket))
+                .unwrap(),
+            2
+        );
+        assert!(matches!(
+            journal.append("chat", &text("unadmitted")),
+            Err(JournalError::Admission(EpochError::Stale))
+        ));
+        drop(ticket);
+        let snapshot = freezing.await.unwrap().into_snapshot().unwrap();
+        assert_eq!(
+            journal
+                .replay("chat", 0)
+                .unwrap()
+                .into_iter()
+                .map(|(seq, _)| seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        drop(snapshot);
+        owner.retire();
+        assert!(matches!(
+            journal.try_admit(),
+            Err(JournalError::Admission(EpochError::Retired))
+        ));
+    }
+
+    #[test]
+    fn wrong_coordinator_ticket_cannot_append() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let other_owner =
+            DeviceWriteOwner::new(other.path(), InstanceLock::acquire(other.path()).unwrap())
+                .unwrap();
+        let ticket = other_owner.handle().try_admit().unwrap();
+        let journal =
+            RunJournal::open_guarded(root.path().join("journals"), owner.handle()).unwrap();
+        assert!(matches!(
+            journal.append_with_permit("chat", &text("wrong"), Some(&ticket)),
+            Err(JournalError::Admission(EpochError::Stale))
+        ));
+        assert!(journal.replay("chat", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn full_line_after_write_error_is_confirmed_once() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RunJournal::open(root.path()).unwrap();
+        let seq = journal
+            .append_with_writer("chat", &text("one"), None, |file, bytes| {
+                file.write_all(bytes)?;
+                Err(std::io::Error::other("injected postwrite failure"))
+            })
+            .unwrap();
+        assert_eq!(seq, 1);
+        assert_eq!(journal.replay("chat", 0).unwrap().len(), 1);
+        assert_eq!(journal.append("chat", &text("two")).unwrap(), 2);
+        assert_eq!(journal.replay("chat", 0).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn partial_line_after_write_error_is_uncertain_and_next_seq_is_recovered() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RunJournal::open(root.path()).unwrap();
+        assert!(matches!(
+            journal.append_with_writer("chat", &text("partial"), None, |file, bytes| {
+                file.write_all(&bytes[..bytes.len() / 2])?;
+                Err(std::io::Error::other("injected partial write"))
+            }),
+            Err(JournalError::Uncertain(_))
+        ));
+        assert!(journal.replay("chat", 0).unwrap().is_empty());
+        assert_eq!(journal.append("chat", &text("later")).unwrap(), 1);
+        let replay = journal.replay("chat", 0).unwrap();
+        assert_eq!(replay, vec![(1, text("later"))]);
     }
 
     #[test]

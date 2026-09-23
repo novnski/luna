@@ -39,6 +39,8 @@ use zeron_proto::{
     PermissionMode, PermissionPolicy, RecoveryAcceptance, RecoveryFailure, RecoveryStatus,
     RunRequest, Session, SessionStatus, TaskRecovery, UserInputAnswer, UserInputQuestion,
 };
+
+use crate::device_write::DeviceWritePermit;
 use zeron_sync::DocsStore;
 
 use crate::doc_host::{ChatDocHandle, DocHost};
@@ -1051,6 +1053,14 @@ impl SessionsEngine {
         mut message_id: Option<String>,
         recovery: Option<RecoveryAttemptContext>,
     ) -> Result<String, EngineError> {
+        // A run owns one ticket for its entire lifetime, including parked
+        // persistent sessions. Acquire before account/chat gates and before
+        // accepting a user message or starting a provider.
+        let run_permit = self
+            .inner
+            .journal
+            .admit_async(std::time::Duration::from_secs(5))
+            .await?;
         // Provider selection and runtime routing/startup are one boundary: an
         // account mutation cannot race a warm steer or a fresh process spawn.
         let _account_transition = self.inner.account_transition.lock().await;
@@ -1539,6 +1549,7 @@ impl SessionsEngine {
                 user_message_id: user_id,
                 recovery,
             },
+            run_permit,
         ));
         Ok(run_id)
     }
@@ -2537,6 +2548,7 @@ impl SessionsEngine {
     /// chain from the frozen Run command, provider/session journal, L06 binding,
     /// and L07 receipt. It never replays the last transcript text blindly.
     pub fn recover_stale(&self) -> Result<usize, EngineError> {
+        let permit = self.inner.journal.try_admit()?;
         let stale = self.inner.journal.stale_sessions()?;
         let mut recovered = 0usize;
         let mut reconciled_running = std::collections::HashSet::new();
@@ -2591,7 +2603,7 @@ impl SessionsEngine {
                 error: Some(note.into()),
                 session_id: None,
             };
-            self.inner.publish(&chat_id, &done);
+            self.inner.publish(&chat_id, &done, permit.as_ref())?;
             let stamped = handle.mark_abandoned_streams(note)?.len();
             self.set_status(&chat_id, SessionStatus::Idle, false);
             tracing::info!(chat = %chat_id, stamped, "reconciled stale session journal");
@@ -3013,21 +3025,20 @@ impl Inner {
             .collect()
     }
 
-    fn publish(&self, chat_id: &str, event: &AgentEvent) -> u64 {
-        let seq = match self.journal.append(chat_id, event) {
-            Ok(seq) => seq,
-            Err(err) => {
-                tracing::error!(chat = %chat_id, error = %err, "journal append failed");
-                0
-            }
-        };
+    fn publish(
+        &self,
+        chat_id: &str,
+        event: &AgentEvent,
+        permit: Option<&DeviceWritePermit>,
+    ) -> Result<u64, EngineError> {
+        let seq = self.journal.append_with_permit(chat_id, event, permit)?;
         if let Some(hub) = lock(&self.hubs).get(chat_id) {
             let _ = hub.send(JournaledEvent {
                 seq,
                 event: event.clone(),
             });
         }
-        seq
+        Ok(seq)
     }
 
     /// Bump the session's freshness on stream activity WITHOUT a status
@@ -3723,6 +3734,111 @@ struct FrozenRun {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn stop_after_journal_failure(
+    inner: &Arc<Inner>,
+    chat_id: &str,
+    run_id: &str,
+    harness_id: HarnessId,
+    request: &RunRequest,
+    resume_state: &RunResumeState,
+    provider_session_id: Option<String>,
+    error: &EngineError,
+) {
+    tracing::error!(chat = %chat_id, run = %run_id, %error, "run journal write outcome uncertain; stopping provider");
+    let target = {
+        let runs = lock(&inner.runs);
+        runs.get(chat_id)
+            .filter(|handle| handle.run_id == run_id)
+            .map(|handle| {
+                let steers = lock(&handle.routed_steers).drain(..).collect::<Vec<_>>();
+                (
+                    handle.interrupt_token.clone(),
+                    handle.cancel.clone(),
+                    handle.pending_inputs.clone(),
+                    steers,
+                )
+            })
+    };
+    if let Some((token, cancel, pending, steers)) = target {
+        token.cancel();
+        let _ = cancel.send(true);
+        for (_, pending) in lock(&pending).drain() {
+            let _ = pending.resolver.send(Vec::new());
+        }
+        if let Some(host) = inner.doc_host() {
+            for steer in steers {
+                if let Err(error) = host.mark_steer_correlation_unknown(chat_id, &steer.message_id)
+                {
+                    tracing::warn!(chat = %chat_id, %error, "journal failure steer hold could not persist");
+                }
+            }
+        }
+    }
+
+    let detail = "Run stopped because the local journal write outcome is uncertain. The last provider event was not confirmed in the journal. Review the partial output and provider state; do not resend automatically.";
+    if let Some(host) = inner.doc_host() {
+        match host.open(chat_id) {
+            Ok(handle) => {
+                if let Err(error) = handle.mark_abandoned_streams(detail) {
+                    tracing::warn!(chat = %chat_id, %error, "journal failure could not abort the streaming transcript");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(chat = %chat_id, %error, "journal failure transcript readback unavailable")
+            }
+        }
+    }
+    let engine = SessionsEngine {
+        inner: inner.clone(),
+    };
+    let recovery = engine.record_recovery_failure(
+        chat_id,
+        harness_id,
+        request.clone(),
+        resume_state.user_message_id.clone(),
+        RecoveryAcceptance::Unknown,
+        RecoveryFailure::Other,
+        detail.into(),
+        provider_session_id,
+        resume_state.recovery.as_ref(),
+    );
+    if !matches!(&recovery, Ok(Some(view)) if view.detail.contains("local journal")) {
+        if let Err(error) = recovery {
+            tracing::error!(chat = %chat_id, %error, "journal failure recovery detail could not persist");
+        }
+        // Disk failure can also prevent a durable recovery row. Keep the
+        // uncertainty visible in this process without claiming persistence.
+        let now = now_ms();
+        inner.publish_recovery(
+            chat_id,
+            Some(TaskRecovery {
+                chain_id: new_id(),
+                task_id: chat_id.into(),
+                original_message_id: resume_state.user_message_id.clone(),
+                original_command_id: None,
+                original_acceptance: RecoveryAcceptance::Unknown,
+                acceptance: RecoveryAcceptance::Unknown,
+                failure: RecoveryFailure::Other,
+                action: zeron_proto::RecoveryAction::ObserveOnly,
+                status: RecoveryStatus::CheckingDelivery,
+                attempt_count: 0,
+                max_attempts: MAX_AUTO_RETRIES,
+                automatic: false,
+                retry_at_ms: None,
+                automatic_deadline_ms: now,
+                environment_id: inner.device_id.clone(),
+                binding_id: None,
+                binding_generation: None,
+                detail: detail.into(),
+                created_at_ms: now,
+                updated_at_ms: now,
+            }),
+        );
+    }
+    inner.set_status(chat_id, SessionStatus::Errored, false);
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn drive_run(
     inner: Arc<Inner>,
     chat_id: String,
@@ -3736,6 +3852,7 @@ async fn drive_run(
     mut cancel_rx: watch::Receiver<bool>,
     hold_recovery_on_interrupt: Arc<AtomicBool>,
     resume_state: RunResumeState,
+    run_permit: Option<DeviceWritePermit>,
 ) {
     let device_id = inner.device_id.clone();
     // Captured for post-run auto-titling (the request moves into the harness).
@@ -3762,21 +3879,40 @@ async fn drive_run(
                 RecoveryAcceptance::Unknown
             };
             let message = err.to_string();
-            inner.publish(
-                &chat_id,
-                &AgentEvent::Error {
-                    message: message.clone(),
-                },
-            );
-            inner.publish(
-                &chat_id,
-                &AgentEvent::Done {
-                    status: DoneStatus::Errored,
-                    result: None,
-                    error: Some(message.clone()),
-                    session_id: None,
-                },
-            );
+            let journal_result = inner
+                .publish(
+                    &chat_id,
+                    &AgentEvent::Error {
+                        message: message.clone(),
+                    },
+                    run_permit.as_ref(),
+                )
+                .and_then(|_| {
+                    inner.publish(
+                        &chat_id,
+                        &AgentEvent::Done {
+                            status: DoneStatus::Errored,
+                            result: None,
+                            error: Some(message.clone()),
+                            session_id: None,
+                        },
+                        run_permit.as_ref(),
+                    )
+                });
+            if let Err(error) = journal_result {
+                stop_after_journal_failure(
+                    &inner,
+                    &chat_id,
+                    &run_id,
+                    harness_id,
+                    &recovery_request,
+                    &resume_state,
+                    None,
+                    &error,
+                );
+                inner.remove_run(&chat_id, &run_id);
+                return;
+            }
             inner.remove_run(&chat_id, &run_id);
             inner.set_status(&chat_id, SessionStatus::Errored, false);
             let engine = SessionsEngine {
@@ -3920,6 +4056,7 @@ async fn drive_run(
         std::collections::HashMap::new();
 
     let mut final_completed_turn = None;
+    let mut journal_failure: Option<EngineError> = None;
     let final_status = loop {
         let event: AgentEvent = if let Some(event) = prepared_events.pop_front() {
             event
@@ -4105,7 +4242,10 @@ async fn drive_run(
             event: sub_event,
         } = &event
         {
-            inner.publish(&chat_id, &event);
+            if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                journal_failure = Some(error);
+                break SessionStatus::Errored;
+            }
             let is_steer = matches!(
                 sub_event.as_ref(),
                 AgentEvent::UserMessage { .. } | AgentEvent::Steered { .. }
@@ -4544,7 +4684,10 @@ async fn drive_run(
             ..
         } = &event
         {
-            inner.publish(&chat_id, &event);
+            if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                journal_failure = Some(error);
+                break SessionStatus::Errored;
+            }
             // A steer boundary means a real prompt owns the turn again — its
             // Done will come; the short self-continued window stands down.
             self_continued_turn = false;
@@ -4700,21 +4843,40 @@ async fn drive_run(
                     // Binding conflicts are terminal. Publishing SessionStarted
                     // without its durable mapping would make an unowned native
                     // thread look resumable, so fail before that event escapes.
-                    inner.publish(
-                        &chat_id,
-                        &AgentEvent::Error {
-                            message: error.to_string(),
-                        },
-                    );
-                    inner.publish(
-                        &chat_id,
-                        &AgentEvent::Done {
-                            status: DoneStatus::Errored,
-                            result: None,
-                            error: Some(error.to_string()),
-                            session_id: Some(session_id.clone()),
-                        },
-                    );
+                    let journal_result = inner
+                        .publish(
+                            &chat_id,
+                            &AgentEvent::Error {
+                                message: error.to_string(),
+                            },
+                            run_permit.as_ref(),
+                        )
+                        .and_then(|_| {
+                            inner.publish(
+                                &chat_id,
+                                &AgentEvent::Done {
+                                    status: DoneStatus::Errored,
+                                    result: None,
+                                    error: Some(error.to_string()),
+                                    session_id: Some(session_id.clone()),
+                                },
+                                run_permit.as_ref(),
+                            )
+                        });
+                    if let Err(journal_error) = journal_result {
+                        stop_after_journal_failure(
+                            &inner,
+                            &chat_id,
+                            &run_id,
+                            harness_id,
+                            &recovery_request,
+                            &resume_state,
+                            Some(session_id.clone()),
+                            &journal_error,
+                        );
+                        inner.remove_run(&chat_id, &run_id);
+                        return;
+                    }
                     inner.remove_run(&chat_id, &run_id);
                     inner.set_status(&chat_id, SessionStatus::Errored, false);
                     let engine = SessionsEngine {
@@ -4827,7 +4989,10 @@ async fn drive_run(
             _ => {}
         }
 
-        inner.publish(&chat_id, &event);
+        if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+            journal_failure = Some(error);
+            break SessionStatus::Errored;
+        }
 
         if matches!(&event, AgentEvent::Done { .. })
             && let Some(task_identity) = inner.task_identity.get()
@@ -5024,6 +5189,20 @@ async fn drive_run(
         }
     };
 
+    if let Some(error) = journal_failure.as_ref() {
+        stop_after_journal_failure(
+            &inner,
+            &chat_id,
+            &run_id,
+            harness_id,
+            &recovery_request,
+            &resume_state,
+            recovery_session_id.clone(),
+            error,
+        );
+        interrupted = true; // no accepted steer may be replayed after uncertain journaling
+    }
+
     // Parent stream closure says nothing about uncompleted provider children.
     // This also covers metadata-only children that never opened a transcript.
     for parent_id in child_activity.keys() {
@@ -5120,18 +5299,478 @@ async fn drive_run(
 mod tests {
     use super::{
         LunaApprovalOutcome, LunaSyntheticArchiveGrant, LunaSyntheticArchiveProposal, PendingInput,
-        PendingInputKind, PendingInputs, RunHandle, RuntimeConfig, SessionsEngine, approval_answer,
-        expire_pending_approval, lock, reduce_provider_context_compaction,
-        reduce_provider_context_terminal, subagent_doc_id, take_pending_ordinary_input,
+        PendingInputKind, PendingInputs, RunHandle, RunResumeState, RuntimeConfig, SessionsEngine,
+        approval_answer, expire_pending_approval, lock, reduce_provider_context_compaction,
+        reduce_provider_context_terminal, stop_after_journal_failure, subagent_doc_id,
+        take_pending_ordinary_input,
     };
+    use futures::StreamExt as _;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use zeron_doc::{MessageRole, MessageStatus};
     use zeron_proto::{
-        ContextControlState, ContextOperationStatus, HarnessId, RecoveryAcceptance, RecoveryAction,
-        RecoveryFailure, RecoveryStatus, RunRequest, SandboxLevel, Session, SessionStatus,
-        TaskRecovery,
+        ContextControlState, ContextOperationStatus, HarnessId, Model, ReasoningLevel,
+        RecoveryAcceptance, RecoveryAction, RecoveryFailure, RecoveryStatus, RunRequest,
+        SandboxLevel, Session, SessionStatus, SteeringMode, TaskRecovery,
     };
     use zeron_sync::DocsStore;
+
+    struct HoldingJournalHarness {
+        release_first_turn: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl zeron_harness::Harness for HoldingJournalHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Synthetic journal holder"
+        }
+        fn supports_steering(&self) -> bool {
+            true
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::StepBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[ReasoningLevel::Medium]
+        }
+        async fn models(&self) -> Result<Vec<Model>, zeron_harness::HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            _request: RunRequest,
+            controls: zeron_harness::RunControls,
+        ) -> Result<
+            futures::stream::BoxStream<
+                'static,
+                Result<zeron_proto::AgentEvent, zeron_harness::HarnessError>,
+            >,
+            zeron_harness::HarnessError,
+        > {
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            let release = self.release_first_turn.clone();
+            let token = controls.interrupt.clone();
+            let mut steering = controls.steering;
+            tokio::spawn(async move {
+                let started = zeron_proto::AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: "synthetic".into(),
+                    tools: vec![],
+                    cwd: "synthetic".into(),
+                    session_id: "synthetic-session".into(),
+                    assistant_message_id: "assistant-1".into(),
+                };
+                if tx.send(Ok(started)).await.is_err() {
+                    return;
+                }
+                if tx
+                    .send(Ok(zeron_proto::AgentEvent::TextDelta {
+                        text: "first".into(),
+                    }))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                tokio::select! {
+                    _ = release.notified() => {
+                        if tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Completed, result: None, error: None, session_id: Some("synthetic-session".into()) })).await.is_err() { return; }
+                    }
+                    _ = token.cancelled() => {
+                        let _ = tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
+                        return;
+                    }
+                }
+                loop {
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            let _ = tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
+                            break;
+                        }
+                        Some(_) = steering.recv() => {
+                            if tx.send(Ok(zeron_proto::AgentEvent::Steered { assistant_message_id: None, next_assistant_message_id: None })).await.is_err() { break; }
+                            if tx.send(Ok(zeron_proto::AgentEvent::TextDelta { text: "steered".into() })).await.is_err() { break; }
+                            if tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Completed, result: None, error: None, session_id: Some("synthetic-session".into()) })).await.is_err() { break; }
+                        }
+                    }
+                }
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+
+    fn hermetic_journal_engine(
+        root: &std::path::Path,
+        release: Arc<tokio::sync::Notify>,
+    ) -> crate::EngineCore {
+        let registry = Arc::new(crate::registry::HarnessRegistry::new());
+        registry.register(Arc::new(HoldingJournalHarness {
+            release_first_turn: release,
+        }));
+        let data = root.join("synthetic-engine");
+        let accounts = crate::agent_accounts::AgentAccountsConfig {
+            data_dir: root.join("synthetic-provider-state"),
+            claude_config_dir: root.join("synthetic-claude"),
+            claude_config_file: root.join("synthetic-claude.json"),
+            codex_home: root.join("synthetic-codex"),
+            cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
+        };
+        crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+            crate::EngineProfile::development(&data, "synthetic-org", "synthetic-user"),
+            registry,
+            HarnessId::Mock,
+            None,
+            accounts,
+        )
+        .unwrap()
+    }
+
+    fn synthetic_journal_request(root: &std::path::Path, prompt: &str) -> RunRequest {
+        let mut request = request();
+        request.prompt = prompt.into();
+        let workspace = root.join("synthetic-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        request.cwd = workspace.to_string_lossy().into_owned();
+        request
+    }
+
+    async fn journal_event(
+        receiver: &mut tokio::sync::broadcast::Receiver<super::JournaledEvent>,
+        predicate: impl Fn(&zeron_proto::AgentEvent) -> bool,
+    ) -> u64 {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let event = receiver.recv().await.unwrap();
+                assert!(event.seq > 0, "live fanout must follow a confirmed append");
+                if predicate(&event.event) {
+                    return event.seq;
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn freeze_before_dispatch_waits_without_accepting_a_run() {
+        let root = tempfile::tempdir().unwrap();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let core = hermetic_journal_engine(root.path(), release);
+        let epoch = core.device_write.epoch_for_tests();
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let sessions = core.sessions.clone();
+        let request = synthetic_journal_request(root.path(), "first");
+        let mut dispatch = tokio::spawn(async move {
+            sessions
+                .dispatch("journal-chat", HarnessId::Mock, request, None)
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut dispatch)
+                .await
+                .is_err()
+        );
+        assert!(!core.sessions.has_live_run("journal-chat"));
+        assert!(
+            core.sessions
+                .subscribe("journal-chat", 0)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        drop(snapshot);
+        let run_id = dispatch.await.unwrap().unwrap();
+        assert!(!run_id.is_empty());
+        assert!(core.sessions.interrupt("journal-chat").await.unwrap());
+        core.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn active_and_parked_run_timeout_freeze_then_interrupt_releases_ticket() {
+        let root = tempfile::tempdir().unwrap();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let core = hermetic_journal_engine(root.path(), release.clone());
+        let epoch = core.device_write.epoch_for_tests();
+        let (_, mut live) = core.sessions.subscribe("journal-chat", 0).unwrap();
+        let first_id = core
+            .sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "first"),
+                None,
+            )
+            .await
+            .unwrap();
+        journal_event(
+            &mut live,
+            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+        )
+        .await;
+        assert!(matches!(
+            epoch.freeze(Duration::from_millis(40)).await,
+            Err(zeron_sync::write_epoch::EpochError::TimedOut)
+        ));
+        assert_eq!(epoch.phase(), zeron_sync::write_epoch::Phase::Open);
+        release.notify_one();
+        journal_event(&mut live, |event| {
+            matches!(
+                event,
+                zeron_proto::AgentEvent::Done {
+                    status: zeron_proto::DoneStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if core
+                    .sessions
+                    .watch_sessions()
+                    .borrow()
+                    .iter()
+                    .any(|session| {
+                        session.chat_id == "journal-chat" && session.status == SessionStatus::Idle
+                    })
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            core.sessions.has_live_run("journal-chat"),
+            "persistent session is parked"
+        );
+        assert!(matches!(
+            epoch.freeze(Duration::from_millis(40)).await,
+            Err(zeron_sync::write_epoch::EpochError::TimedOut)
+        ));
+
+        let warm_id = core
+            .sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "warm steer"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(warm_id, first_id);
+        journal_event(&mut live, |event| {
+            matches!(event, zeron_proto::AgentEvent::Steered { .. })
+        })
+        .await;
+        journal_event(&mut live, |event| {
+            matches!(
+                event,
+                zeron_proto::AgentEvent::Done {
+                    status: zeron_proto::DoneStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .await;
+        assert!(core.sessions.interrupt("journal-chat").await.unwrap());
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let replay = core.sessions.subscribe("journal-chat", 0).unwrap().0;
+        assert!(replay.iter().all(|event| event.seq > 0));
+        drop(snapshot);
+        core.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_run_append_stops_without_fanout_or_assistant_fold() {
+        let root = tempfile::tempdir().unwrap();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let core = hermetic_journal_engine(root.path(), release);
+        let epoch = core.device_write.epoch_for_tests();
+        let (_, mut live) = core.sessions.subscribe("journal-chat", 0).unwrap();
+        core.sessions.inner.journal.fail_after_appends_for_tests(1);
+        core.sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "first"),
+                None,
+            )
+            .await
+            .unwrap();
+        // SessionStarted is durable; the following TextDelta fails before it
+        // can enter live fanout or the assistant transcript fold.
+        journal_event(&mut live, |event| {
+            matches!(event, zeron_proto::AgentEvent::SessionStarted { .. })
+        })
+        .await;
+        let status = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut watch = core.sessions.watch_sessions();
+            loop {
+                if let Some(session) = watch.borrow().iter().find(|session| {
+                    session.chat_id == "journal-chat"
+                        && session.status == SessionStatus::Errored
+                        && session.recovery.is_some()
+                }) {
+                    return session.clone();
+                }
+                watch.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            status.recovery.as_ref().unwrap().status,
+            RecoveryStatus::CheckingDelivery
+        );
+        assert!(
+            status
+                .recovery
+                .as_ref()
+                .unwrap()
+                .detail
+                .contains("local journal write outcome is uncertain")
+        );
+        assert!(matches!(
+            live.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        let replay = core.sessions.subscribe("journal-chat", 0).unwrap().0;
+        assert!(replay.iter().all(|event| event.seq > 0));
+        let entries = core
+            .doc_host
+            .open("journal-chat")
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap();
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.role != MessageRole::Assistant)
+        );
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        drop(snapshot);
+        core.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_terminal_append_aborts_prior_stream_and_shows_uncertainty() {
+        let root = tempfile::tempdir().unwrap();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let core = hermetic_journal_engine(root.path(), release.clone());
+        let epoch = core.device_write.epoch_for_tests();
+        let (_, mut live) = core.sessions.subscribe("journal-chat", 0).unwrap();
+        core.sessions.inner.journal.fail_after_appends_for_tests(2);
+        core.sessions
+            .dispatch(
+                "journal-chat",
+                HarnessId::Mock,
+                synthetic_journal_request(root.path(), "first"),
+                None,
+            )
+            .await
+            .unwrap();
+        journal_event(
+            &mut live,
+            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+        )
+        .await;
+        // The event is broadcast before the coalesced transcript commit.
+        // Let that commit land so this exercises aborting an existing stream.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let entries = core
+                    .doc_host
+                    .open("journal-chat")
+                    .unwrap()
+                    .doc()
+                    .read_entries()
+                    .unwrap();
+                if entries.iter().any(|entry| {
+                    entry.role == MessageRole::Assistant
+                        && entry.status == Some(MessageStatus::Streaming)
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        release.notify_one();
+        let status = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut watch = core.sessions.watch_sessions();
+            loop {
+                if let Some(session) = watch.borrow().iter().find(|session| {
+                    session.chat_id == "journal-chat"
+                        && session.status == SessionStatus::Errored
+                        && session.recovery.is_some()
+                }) {
+                    return session.clone();
+                }
+                watch.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            status.recovery.unwrap().status,
+            RecoveryStatus::CheckingDelivery
+        );
+        assert!(matches!(
+            live.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        let replay = core.sessions.subscribe("journal-chat", 0).unwrap().0;
+        assert_eq!(replay.len(), 2);
+        assert!(replay.iter().all(|event| event.seq > 0));
+        let entries = core
+            .doc_host
+            .open("journal-chat")
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.role == MessageRole::Assistant
+                    && entry.status == Some(MessageStatus::Aborted))
+        );
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        drop(snapshot);
+        core.shutdown().await;
+    }
 
     #[test]
     fn typed_approval_answers_fail_closed_for_unenforceable_task_allowance() {
@@ -5499,6 +6138,76 @@ mod tests {
             },
         );
         (root, sessions, pending, engine_rx)
+    }
+
+    #[test]
+    fn failed_journal_append_has_no_seq_zero_fanout_and_visible_uncertainty() {
+        let (_root, sessions, pending, _engine_rx) = local_luna_test_run();
+        let (_, mut live) = sessions.subscribe("chat-a", 0).unwrap();
+        let token = lock(&sessions.inner.runs)
+            .get("chat-a")
+            .unwrap()
+            .interrupt_token
+            .clone();
+        let (resolver, mut answer) = tokio::sync::oneshot::channel();
+        lock(&pending).insert(
+            "question-a".into(),
+            PendingInput {
+                kind: PendingInputKind::Provider,
+                questions: Vec::new(),
+                resolver,
+            },
+        );
+
+        sessions.inner.journal.fail_next_append_for_tests();
+        let event = zeron_proto::AgentEvent::TextDelta {
+            text: "not persisted".into(),
+        };
+        let error = sessions.inner.publish("chat-a", &event, None).unwrap_err();
+        assert!(
+            sessions
+                .inner
+                .journal
+                .replay("chat-a", 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            live.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        stop_after_journal_failure(
+            &sessions.inner,
+            "chat-a",
+            "run-a",
+            HarnessId::Codex,
+            &request(),
+            &RunResumeState {
+                user_message_id: "user-a".into(),
+                recovery: None,
+            },
+            None,
+            &error,
+        );
+        assert!(token.is_cancelled());
+        assert!(answer.try_recv().unwrap().is_empty());
+        let status = sessions
+            .watch_sessions()
+            .borrow()
+            .iter()
+            .find(|session| session.chat_id == "chat-a")
+            .unwrap()
+            .clone();
+        assert_eq!(status.status, SessionStatus::Errored);
+        let recovery = status.recovery.unwrap();
+        assert_eq!(recovery.action, RecoveryAction::ObserveOnly);
+        assert_eq!(recovery.status, RecoveryStatus::CheckingDelivery);
+        assert!(!recovery.automatic);
+        assert!(
+            recovery
+                .detail
+                .contains("local journal write outcome is uncertain")
+        );
     }
 
     /// Synthetic engine-owned registration; no production path creates LUNA
@@ -6369,7 +7078,7 @@ mod tests {
             },
         );
         for event in &events {
-            sessions.inner.publish("chat", event);
+            sessions.inner.publish("chat", event, None).unwrap();
             let AgentEvent::Subagent {
                 parent_tool_use_id,
                 event,

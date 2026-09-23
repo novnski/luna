@@ -22,6 +22,7 @@
 //! target is skipped, so re-running after a partial import (or after new
 //! local work from a later signed-out stretch) imports only what's missing.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -31,6 +32,7 @@ use zeron_sync::DocsStore;
 
 use crate::EngineError;
 use crate::chat2_host::CHAT2_DOC_EPOCH;
+use crate::device_write::DeviceWriteHandle;
 use crate::run_journal::{journal_paths, runtime_receipt_paths};
 use crate::uploads::Uploads;
 use crate::workspace_host::WorkspaceHost;
@@ -125,6 +127,7 @@ struct ImporterInner {
     target_journals: PathBuf,
     workspace: WorkspaceHost,
     uploads: Uploads,
+    write_handle: Option<DeviceWriteHandle>,
 }
 
 impl LocalImporter {
@@ -139,6 +142,56 @@ impl LocalImporter {
         workspace: WorkspaceHost,
         uploads: Uploads,
     ) -> Self {
+        Self::new_with_handle(
+            data_dir,
+            device_id,
+            org_id,
+            user_id,
+            target_store,
+            target_journals,
+            workspace,
+            uploads,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_guarded(
+        data_dir: &Path,
+        device_id: &str,
+        org_id: &str,
+        user_id: &str,
+        target_store: Arc<DocsStore>,
+        target_journals: PathBuf,
+        workspace: WorkspaceHost,
+        uploads: Uploads,
+        write_handle: DeviceWriteHandle,
+    ) -> Self {
+        Self::new_with_handle(
+            data_dir,
+            device_id,
+            org_id,
+            user_id,
+            target_store,
+            target_journals,
+            workspace,
+            uploads,
+            Some(write_handle),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_handle(
+        data_dir: &Path,
+        device_id: &str,
+        org_id: &str,
+        user_id: &str,
+        target_store: Arc<DocsStore>,
+        target_journals: PathBuf,
+        workspace: WorkspaceHost,
+        uploads: Uploads,
+        write_handle: Option<DeviceWriteHandle>,
+    ) -> Self {
         Self {
             inner: Arc::new(ImporterInner {
                 data_dir: data_dir.to_path_buf(),
@@ -149,8 +202,50 @@ impl LocalImporter {
                 target_journals,
                 workspace,
                 uploads,
+                write_handle,
             }),
         }
+    }
+
+    fn copy_journal(&self, source: &Path, destination: &Path) -> Result<(), EngineError> {
+        Self::copy_journal_with_handle(
+            source,
+            destination,
+            &self.inner.target_journals,
+            self.inner.write_handle.as_ref(),
+        )
+    }
+
+    fn copy_journal_with_handle(
+        source: &Path,
+        destination: &Path,
+        target_journals: &Path,
+        write_handle: Option<&DeviceWriteHandle>,
+    ) -> Result<(), EngineError> {
+        let _permit = write_handle
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(|error| {
+                EngineError::Other(format!(
+                    "journal import temporarily unavailable ({error:?})"
+                ))
+            })?;
+        std::fs::create_dir_all(target_journals)?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".journal-import-")
+            .suffix(".tmp")
+            .tempfile_in(target_journals)?;
+        let mut source_file = std::fs::File::open(source)?;
+        std::io::copy(&mut source_file, &mut temporary)?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .into_temp_path()
+            .persist_noclobber(destination)
+            .map_err(std::io::Error::from)?;
+        #[cfg(unix)]
+        std::fs::File::open(target_journals)?.sync_all()?;
+        Ok(())
     }
 
     fn source_root(&self) -> PathBuf {
@@ -416,8 +511,7 @@ impl LocalImporter {
         let (src_journal, src_resume) = journal_paths(source_journals, &chat.id);
         let (dst_journal, dst_resume) = journal_paths(&self.inner.target_journals, &chat.id);
         if src_journal.is_file() && !dst_journal.exists() {
-            std::fs::create_dir_all(&self.inner.target_journals)?;
-            std::fs::copy(&src_journal, &dst_journal)?;
+            self.copy_journal(&src_journal, &dst_journal)?;
             copied = true;
         }
         if src_resume.is_file() && !dst_resume.exists() {
@@ -449,7 +543,60 @@ impl LocalImporter {
 
 #[cfg(test)]
 mod tests {
-    use super::ImportEvent;
+    use super::{ImportEvent, LocalImporter};
+    use crate::{InstanceLock, device_write::DeviceWriteOwner};
+    use std::time::Duration;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn journal_import_waits_for_same_freeze_and_retries_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("local/chat.jsonl");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        let bytes = b"{\"seq\":1,\"event\":{\"type\":\"textDelta\",\"text\":\"synthetic\"}}\n";
+        std::fs::write(&source, bytes).unwrap();
+        let target_dir = root.path().join("target/journals");
+        let destination = target_dir.join("chat.jsonl");
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let handle = owner.handle();
+        let snapshot = owner
+            .epoch_for_tests()
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let error = LocalImporter::copy_journal_with_handle(
+            &source,
+            &destination,
+            &target_dir,
+            Some(&handle),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Busy"));
+        assert!(!destination.exists());
+        assert!(!target_dir.exists());
+        drop(snapshot);
+
+        LocalImporter::copy_journal_with_handle(&source, &destination, &target_dir, Some(&handle))
+            .unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(&target_dir).unwrap().count(), 1);
+        drop(owner);
+        let replacement =
+            DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+                .unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        let second = target_dir.join("second.jsonl");
+        LocalImporter::copy_journal_with_handle(
+            &source,
+            &second,
+            &target_dir,
+            Some(&replacement.handle()),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&second).unwrap(), bytes);
+    }
 
     #[test]
     fn import_events_serialize_camel_case() {
