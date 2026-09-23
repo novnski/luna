@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use zeron_proto::{
-    CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, UsageBucket, UsageLimitSnapshot,
-    UsagePriceRate, UsageProvider, UsageSnapshot, UsageSourceStatus,
+    CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, USAGE_LIMIT_FRESHNESS_MS, UsageBucket,
+    UsageLimitSnapshot, UsagePriceRate, UsageProvider, UsageResetState, UsageSnapshot,
+    UsageSourceStatus,
 };
 use zeron_rpc::methods;
 
@@ -166,7 +167,7 @@ fn quota_pace(
     let start = reset.checked_sub(duration_ms)?;
     if duration_ms <= 0
         || now_ms < checked
-        || now_ms.checked_sub(checked)? >= 5 * 60_000
+        || now_ms.checked_sub(checked)? >= USAGE_LIMIT_FRESHNESS_MS
         || checked < start
         || checked >= reset
         || now_ms >= reset
@@ -209,20 +210,26 @@ fn parse_price_override(fields: [&str; 5]) -> Result<(String, UsagePriceRate), S
     Ok((model.into(), rate))
 }
 
-fn reset_label(at_ms: Option<i64>, now_ms: i64) -> String {
-    let Some(at_ms) = at_ms else {
-        return "Reset time unknown".into();
-    };
-    if at_ms <= now_ms {
-        return "Reset time passed · refresh to verify".into();
-    }
-    let remaining = (at_ms - now_ms).max(0) / 60_000;
-    if remaining < 60 {
-        format!("Resets in {remaining}m")
-    } else if remaining < 24 * 60 {
-        format!("Resets in {}h {}m", remaining / 60, remaining % 60)
-    } else {
-        format!("Resets in {}d", remaining / (24 * 60))
+fn reset_label(state: UsageResetState, now_ms: i64) -> String {
+    match state {
+        UsageResetState::Unknown => "Reset time unknown".into(),
+        UsageResetState::ReportedPassed { .. } => "Reset time passed · refresh to verify".into(),
+        UsageResetState::LastReported { at_ms } => Utc
+            .timestamp_millis_opt(at_ms)
+            .single()
+            .map_or("Last reported reset time unavailable".into(), |at| {
+                format!("Last reported reset {} UTC", at.format("%b %-d, %H:%M"))
+            }),
+        UsageResetState::ReportedFuture { at_ms } => {
+            let remaining = at_ms.saturating_sub(now_ms) / 60_000;
+            if remaining < 60 {
+                format!("Resets in {remaining}m")
+            } else if remaining < 24 * 60 {
+                format!("Resets in {}h {}m", remaining / 60, remaining % 60)
+            } else {
+                format!("Resets in {}d", remaining / (24 * 60))
+            }
+        }
     }
 }
 
@@ -236,11 +243,14 @@ fn limits_status(limit: &UsageLimitSnapshot, now_ms: i64) -> String {
     if !state.is_empty() {
         return state.into();
     }
-    let Some(checked) = limit.checked_at_ms else {
+    if limit.checked_at_ms.is_none() {
         return "Check time unknown".into();
+    }
+    let Some(age) = limit.checked_age_ms(now_ms) else {
+        return "Check time unverified".into();
     };
-    let age = (now_ms - checked).max(0) / 60_000;
-    if age >= 5 {
+    let age = age / 60_000;
+    if !limit.is_fresh(now_ms) {
         format!("Stale · checked {age}m ago")
     } else {
         format!("Checked {age}m ago")
@@ -262,10 +272,7 @@ fn limit_window_row(
     } else {
         theme.accent
     };
-    let fresh = limit.availability == LimitAvailability::Ready
-        && limit
-            .checked_at_ms
-            .is_some_and(|at| now_ms.checked_sub(at).is_some_and(|age| age < 5 * 60_000));
+    let fresh = limit.is_fresh(now_ms);
     div()
         .flex()
         .flex_col()
@@ -321,7 +328,7 @@ fn limit_window_row(
                 .child(format!(
                     "{:.0}% used · {}{}",
                     window.used_percent,
-                    reset_label(window.resets_at_ms, now_ms),
+                    reset_label(limit.reset_state(window, now_ms), now_ms),
                     if fresh { "" } else { " · unverified now" }
                 )),
         )
@@ -423,13 +430,10 @@ fn limit_card(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64, compact: b
 fn compact_limit_status(limit: &UsageLimitSnapshot, now_ms: i64) -> Option<&'static str> {
     match limit.availability {
         LimitAvailability::Ready if limit.checked_at_ms.is_none() => Some("Check time unknown"),
-        LimitAvailability::Ready
-            if limit
-                .checked_at_ms
-                .is_some_and(|checked| now_ms - checked >= 5 * 60_000) =>
-        {
-            Some("Stale · refresh to verify")
+        LimitAvailability::Ready if limit.checked_age_ms(now_ms).is_none() => {
+            Some("Check time unverified")
         }
+        LimitAvailability::Ready if !limit.is_fresh(now_ms) => Some("Stale · refresh to verify"),
         LimitAvailability::Ready => None,
         LimitAvailability::ProbeFailed if limit.windows.is_empty() => {
             Some("Refresh failed · quota unavailable")
@@ -1732,13 +1736,13 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_savings_label, compact_limit_status, format_local_hour, parse_price_override,
-        quota_pace, reset_label,
+        cache_savings_label, compact_limit_status, format_local_hour, limits_status,
+        parse_price_override, quota_pace, reset_label,
     };
     use chrono::{FixedOffset, TimeZone};
     use zeron_proto::{
         CostQuality, LimitAvailability, UsageBucket, UsageLimitSnapshot, UsageLimitWindow,
-        UsageProvider, UsageTokens,
+        UsageProvider, UsageResetState, UsageTokens,
     };
 
     #[test]
@@ -1766,12 +1770,21 @@ mod tests {
 
     #[test]
     fn reset_countdown_does_not_claim_a_past_window_is_current() {
-        assert_eq!(reset_label(None, 0), "Reset time unknown");
-        assert_eq!(reset_label(Some(65 * 60_000), 0), "Resets in 1h 5m");
         assert_eq!(
-            reset_label(Some(1), 1),
+            reset_label(UsageResetState::Unknown, 0),
+            "Reset time unknown"
+        );
+        assert_eq!(
+            reset_label(UsageResetState::ReportedFuture { at_ms: 65 * 60_000 }, 0),
+            "Resets in 1h 5m"
+        );
+        assert_eq!(
+            reset_label(UsageResetState::ReportedPassed { at_ms: 1 }, 1),
             "Reset time passed · refresh to verify"
         );
+        let stale = reset_label(UsageResetState::LastReported { at_ms: 65 * 60_000 }, 0);
+        assert!(stale.starts_with("Last reported reset"));
+        assert!(!stale.contains("Resets in"));
     }
 
     #[test]
@@ -1794,6 +1807,13 @@ mod tests {
             detail: None,
         };
         assert_eq!(compact_limit_status(&limit, 60_000), None);
+        limit.checked_at_ms = Some(2 * 60_000);
+        assert_eq!(
+            compact_limit_status(&limit, 60_000),
+            Some("Check time unverified")
+        );
+        assert_eq!(limits_status(&limit, 60_000), "Check time unverified");
+        limit.checked_at_ms = Some(0);
         assert_eq!(
             compact_limit_status(&limit, 6 * 60_000),
             Some("Stale · refresh to verify")
@@ -1803,6 +1823,11 @@ mod tests {
             compact_limit_status(&limit, 6 * 60_000),
             Some("Refresh failed · last good values")
         );
+        limit.windows[0].resets_at_ms = Some(10 * 60_000);
+        let last_reported =
+            reset_label(limit.reset_state(&limit.windows[0], 6 * 60_000), 6 * 60_000);
+        assert!(last_reported.starts_with("Last reported reset"));
+        assert!(!last_reported.contains("Resets in"));
         limit.windows.clear();
         assert_eq!(
             compact_limit_status(&limit, 6 * 60_000),
