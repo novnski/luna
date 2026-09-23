@@ -171,9 +171,66 @@ pub enum IntegrationKind {
     McpServer,
 }
 
+/// Configuration owner, not the upstream server's identity. A Codex MCP
+/// entry remains provider-owned even if its name happens to mention a gateway.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IntegrationOwner {
+    #[default]
+    Unknown,
+    ProviderNative,
+    Gateway,
+}
+
+/// LUNA action availability. `Unavailable` means this LUNA adapter has no
+/// verified action; it does not claim the provider lacks its own controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IntegrationActionAvailability {
+    #[default]
+    Unknown,
+    Unavailable,
+    Supported,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct IntegrationActionFacts {
+    pub enable: IntegrationActionAvailability,
+    pub disable: IntegrationActionAvailability,
+    pub authenticate: IntegrationActionAvailability,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IntegrationSkillScope {
+    Global,
+    Project,
+}
+
+/// A destination class, never a path, URL, command, or credential. LUNA only
+/// emits routes whose owner it can resolve from the inventory source.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum IntegrationHelpRoute {
+    #[default]
+    Unknown,
+    SkillSource {
+        scope: IntegrationSkillScope,
+    },
+    ProviderMcpConfig,
+    GatewayConnection {
+        connection_id: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntegrationInventoryItem {
+    /// Opaque, source-scoped identity. None only for legacy inventory JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
     pub name: String,
     pub kind: IntegrationKind,
     /// Provider-reported or provider-owned config, never a LUNA copy.
@@ -185,6 +242,12 @@ pub struct IntegrationInventoryItem {
     /// None means the provider has no trustworthy per-session attachment readback.
     pub attached: Option<bool>,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub owner: IntegrationOwner,
+    #[serde(default)]
+    pub actions: IntegrationActionFacts,
+    #[serde(default)]
+    pub help_route: IntegrationHelpRoute,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,6 +312,37 @@ impl LunaAgentRuntimeContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_inventory_json_decodes_with_unknown_contract_facts() {
+        let old = serde_json::json!({
+            "provider": "codex",
+            "machineId": "synthetic-machine",
+            "items": [{
+                "name": "sample",
+                "kind": "mcpServer",
+                "source": "Codex home / config.toml",
+                "scope": "global",
+                "configured": true,
+                "available": null,
+                "attached": null,
+                "reason": null
+            }],
+            "unavailableReason": null,
+            "help": "legacy help"
+        });
+        let view: IntegrationInventoryView = serde_json::from_value(old).unwrap();
+        let item = &view.items[0];
+        assert_eq!(item.identity, None);
+        assert_eq!(item.owner, IntegrationOwner::Unknown);
+        assert_eq!(item.actions.enable, IntegrationActionAvailability::Unknown);
+        assert_eq!(item.actions.disable, IntegrationActionAvailability::Unknown);
+        assert_eq!(
+            item.actions.authenticate,
+            IntegrationActionAvailability::Unknown
+        );
+        assert_eq!(item.help_route, IntegrationHelpRoute::Unknown);
+    }
 
     #[test]
     fn public_diagnostics_omit_scrubbed_provider_session_id() {
