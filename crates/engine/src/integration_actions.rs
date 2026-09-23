@@ -405,9 +405,10 @@ fn effective_attachment_from_owner(
         }
     }
     let attached = members.contains(identity);
-    if item.attached.is_some_and(|known| known != attached)
-        || (attached && item.available == Some(false))
-    {
+    // Current configuration may be disabled after this session loaded the
+    // integration. Only a conflicting selected-session observation can veto
+    // the complete, binding-matched owner readback.
+    if item.attached.is_some_and(|known| known != attached) {
         return None;
     }
     Some(attached)
@@ -684,7 +685,15 @@ mod tests {
         disabled.items[0].available = Some(false);
         assert_eq!(
             effective_attachment_from_owner(&disabled, ID, &current, Some(&valid), 1_020),
-            None
+            Some(true),
+            "disabled configuration cannot erase an already attached session"
+        );
+        let mut stale_disabled = owner_membership(&[]);
+        stale_disabled.checked_at_ms = current.started_at_ms - 1;
+        assert_eq!(
+            effective_attachment_from_owner(&disabled, ID, &current, Some(&stale_disabled), 1_020),
+            None,
+            "stale absence cannot claim the disabled server detached"
         );
         let mut conflicting_attachment = inventory.clone();
         conflicting_attachment.items[0].attached = Some(true);

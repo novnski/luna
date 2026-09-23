@@ -121,14 +121,25 @@ impl CodexNativeClient {
         parse_skill_catalog(&response?, cwd)
     }
 
-    /// Read effective provider MCP configuration names without returning
-    /// command, environment or authentication fields from `config/read`.
-    /// Configured and enabled do not establish server health or attachment.
-    pub async fn read_mcp_config(&self) -> Result<Vec<CodexMcpConfigEntry>, HarnessError> {
-        let response = self
-            .call("config/read", json!({"includeLayers": false}))
-            .await?;
-        parse_mcp_config(&response)
+    /// Read provider MCP configuration for an explicit workspace. Codex reads
+    /// project config relative to the app-server process cwd; `config/read`
+    /// has no separate cwd parameter in this adapter's validated contract.
+    /// Commands, environment and auth fields never leave this method.
+    pub async fn read_mcp_config(
+        &self,
+        cwd: &Path,
+    ) -> Result<Vec<CodexMcpConfigEntry>, HarnessError> {
+        let canonical_cwd = cwd.canonicalize().map_err(HarnessError::Io)?;
+        let cwd = canonical_cwd
+            .to_str()
+            .ok_or_else(|| HarnessError::Protocol("Codex MCP workspace is not UTF-8".into()))?;
+        let mut connection = self.connect(Some(cwd)).await?;
+        let response = connection
+            .client
+            .request("config/read", json!({"includeLayers": false}))
+            .await;
+        connection.close().await;
+        parse_mcp_config(&response?)
     }
     pub fn new(codex_home: impl Into<PathBuf>) -> Self {
         Self {

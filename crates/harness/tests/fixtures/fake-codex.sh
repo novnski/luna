@@ -115,8 +115,20 @@ if has "$line" '"method":"thread/archive"' || has "$line" '"method":"thread/unar
   exec sleep 30
 fi
 if has "$line" '"method":"config/read"'; then
+  if [ -f "$CODEX_HOME/mcp-config-trace" ]; then
+    pwd > "$CODEX_HOME/mcp-config-last-cwd"
+    printf '%s\n' "$line" > "$CODEX_HOME/mcp-config-last-request"
+  fi
   if [ -f "$CODEX_HOME/mcp-config-fail" ]; then
     emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32603,\"message\":\"synthetic MCP config failure\"}}"
+    exec sleep 30
+  fi
+  if [ -f './.luna-mcp-project-a' ]; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"project-a\":{\"enabled\":true}}}}}"
+    exec sleep 30
+  fi
+  if [ -f './.luna-mcp-project-b' ]; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"project-b\":{\"enabled\":true}}}}}"
     exec sleep 30
   fi
   emit "{\"id\":$(rid "$line"),\"result\":{\"config\":{\"mcp_servers\":{\"test\":{\"enabled\":true,\"command\":\"SECRET_COMMAND_SENTINEL\"},\"off\":{\"enabled\":false,\"env\":{\"TOKEN\":\"SECRET_TOKEN_SENTINEL\"}}}}}}"

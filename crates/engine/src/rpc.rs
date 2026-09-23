@@ -7641,7 +7641,7 @@ impl RpcService for EngineRpc {
                             ),
                             tokio::time::timeout(
                                 std::time::Duration::from_secs(8),
-                                client.read_mcp_config(),
+                                client.read_mcp_config(workspace),
                             ),
                         );
                         // A selection change while the provider responds must
@@ -7667,7 +7667,7 @@ impl RpcService for EngineRpc {
                             crate::integration_settings::apply_codex_mcp_config(
                                 &mut view,
                                 &mcp_config,
-                                &home,
+                                workspace,
                             );
                         } else {
                             crate::integration_settings::mark_codex_mcp_config_unavailable(

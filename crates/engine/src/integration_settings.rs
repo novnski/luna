@@ -252,11 +252,11 @@ pub fn codex_inventory(
                             scope: "global".into(),
                             configured: true,
                             available: if enabled { None } else { Some(false) },
-                            attached: if enabled { None } else { Some(false) },
+                            attached: None,
                             reason: Some(if enabled {
-                                "Configured; server availability, authentication, and session attachment are unverified.".into()
+                                "Found in Codex home config.toml; selected-workspace configuration, server health, and session attachment are unverified.".into()
                             } else {
-                                "Disabled in provider-native configuration.".into()
+                                "Disabled in Codex home config.toml; a selected workspace may override it, and an existing session may still have it loaded.".into()
                             }),
                             owner: IntegrationOwner::ProviderNative,
                             actions: unsupported_actions(),
@@ -386,27 +386,27 @@ pub fn mark_codex_catalog_unavailable(view: &mut IntegrationInventoryView) {
 pub fn apply_codex_mcp_config(
     view: &mut IntegrationInventoryView,
     servers: &[CodexMcpConfigEntry],
-    codex_home: &Path,
+    workspace: &Path,
 ) {
     for server in servers {
         let identity = inventory_identity(
             &view.machine_id,
-            "codex-mcp-config",
-            &codex_home.join("config.toml"),
+            "codex-mcp-selected-workspace",
+            workspace,
             &server.name,
         );
         let reason = if server.enabled {
             "Codex config/read reports this MCP server configured; health, authentication and selected-session attachment are unverified."
         } else {
-            "Codex config/read reports this MCP server disabled."
+            "Codex config/read reports this MCP server disabled; an existing session may still have it loaded."
         };
         if let Some(item) = view
             .items
             .iter_mut()
-            .find(|item| item.kind == IntegrationKind::McpServer && item.name == server.name)
+            .find(|item| item.identity.as_deref() == Some(identity.as_str()))
         {
             item.available = if server.enabled { None } else { Some(false) };
-            item.attached = if server.enabled { None } else { Some(false) };
+            item.attached = None;
             item.reason = Some(reason.into());
             continue;
         }
@@ -415,10 +415,10 @@ pub fn apply_codex_mcp_config(
             name: server.name.clone(),
             kind: IntegrationKind::McpServer,
             source: "Codex app-server / config/read".into(),
-            scope: "provider".into(),
+            scope: "selected workspace".into(),
             configured: true,
             available: if server.enabled { None } else { Some(false) },
-            attached: if server.enabled { None } else { Some(false) },
+            attached: None,
             reason: Some(reason.into()),
             owner: IntegrationOwner::ProviderNative,
             actions: unsupported_actions(),
@@ -521,7 +521,7 @@ mod tests {
                     enabled: false,
                 },
             ],
-            &home,
+            &project,
         );
         assert_eq!(view.items.len(), 5);
         assert_eq!(
@@ -568,7 +568,8 @@ mod tests {
                 .find(|item| item.name == "off")
                 .unwrap()
                 .attached,
-            Some(false)
+            None,
+            "disabled current config cannot prove an existing session detached"
         );
         let serialized = serde_json::to_string(&view).unwrap();
         assert!(!serialized.contains("PRIVATE_HOME_SENTINEL"));
@@ -639,6 +640,59 @@ mod tests {
                 .available,
             Some(false)
         );
+        assert_eq!(
+            view.items
+                .iter()
+                .find(|item| item.name == "off")
+                .unwrap()
+                .attached,
+            None,
+            "file-only inventory cannot establish selected-session absence"
+        );
+    }
+
+    #[test]
+    fn mcp_readback_uses_workspace_identity_without_rewriting_home_facts() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("PRIVATE_HOME_SENTINEL");
+        let project_a = dir.path().join("PRIVATE_PROJECT_A_SENTINEL");
+        let project_b = dir.path().join("PRIVATE_PROJECT_B_SENTINEL");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("config.toml"),
+            "[mcp_servers.gateway]\nenabled = false\n",
+        )
+        .unwrap();
+        let mut a = codex_inventory(&home, Some(&project_a), "fake-device");
+        let mut b = codex_inventory(&home, Some(&project_b), "fake-device");
+        let observed = [CodexMcpConfigEntry {
+            name: "gateway".into(),
+            enabled: true,
+        }];
+        apply_codex_mcp_config(&mut a, &observed, &project_a);
+        apply_codex_mcp_config(&mut b, &observed, &project_b);
+        assert_eq!(a.items.len(), 2);
+        let home_item = a.items.iter().find(|item| item.scope == "global").unwrap();
+        let workspace_item = a
+            .items
+            .iter()
+            .find(|item| item.scope == "selected workspace")
+            .unwrap();
+        assert_eq!(home_item.available, Some(false));
+        assert_eq!(workspace_item.available, None);
+        assert!(home_item.attached.is_none() && workspace_item.attached.is_none());
+        assert_ne!(home_item.identity, workspace_item.identity);
+        assert_ne!(
+            workspace_item.identity,
+            b.items
+                .iter()
+                .find(|item| item.scope == "selected workspace")
+                .unwrap()
+                .identity
+        );
+        let serialized = serde_json::to_string(&a).unwrap();
+        assert!(!serialized.contains("PRIVATE_HOME_SENTINEL"));
+        assert!(!serialized.contains("PRIVATE_PROJECT_A_SENTINEL"));
     }
 
     #[test]

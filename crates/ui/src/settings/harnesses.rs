@@ -128,7 +128,8 @@ pub struct HarnessesPage {
     instruction_project_id: Option<String>,
     global_input: Entity<ComposerInput>,
     project_input: Entity<ComposerInput>,
-    instruction_task: Option<Task<()>>,
+    instruction_load_task: Option<Task<()>>,
+    instruction_save_task: Option<Task<()>>,
     inventory_task: Option<Task<()>>,
     instruction_saving: bool,
     runtime_contract: Loadable<RuntimeContractView>,
@@ -232,7 +233,8 @@ impl HarnessesPage {
             instruction_project_id: None,
             global_input,
             project_input,
-            instruction_task: None,
+            instruction_load_task: None,
+            instruction_save_task: None,
             inventory_task: None,
             instruction_saving: false,
             runtime_contract: Loadable::Idle,
@@ -399,7 +401,7 @@ impl HarnessesPage {
             .map(|space| space.id.clone());
         self.instruction_project_id = project_id.clone();
         self.instructions = Loadable::Loading;
-        self.instruction_task = Some(cx.spawn(async move |this, cx| {
+        self.instruction_load_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(
@@ -466,7 +468,7 @@ impl HarnessesPage {
         let revision = view.revision;
         let display_project_id = self.instruction_project_id.clone();
         self.instruction_saving = true;
-        self.instruction_task = Some(cx.spawn(async move |this, cx| {
+        self.instruction_save_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(
                 methods::SET_INSTRUCTION_SETTINGS,
                 serde_json::json!({"projectId": project_id, "text": text, "expectedRevision": revision}),
@@ -474,33 +476,47 @@ impl HarnessesPage {
                 serde_json::from_value::<InstructionSettingsView>(value).map_err(|e| e.to_string())
             });
             this.update(cx, |page, cx| {
-                page.instruction_saving = false;
-                if page.target_device.is_some()
-                    || page.instruction_project_id != display_project_id
-                    || page
-                        .state
-                        .read(cx)
-                        .selected_space_row()
-                        .map(|space| space.id.clone())
-                        != display_project_id
-                {
-                    if page.target_device.is_none() {
-                        page.load_instructions(cx);
-                    }
-                    cx.notify();
-                    return;
-                }
-                match result {
-                    Ok(view) => {
-                        page.instructions = Loadable::Ready(view);
-                        page.error = None;
-                        page.load_runtime_contract(cx);
-                    }
-                    Err(error) => page.error = Some(error),
-                }
-                cx.notify();
+                page.finish_instruction_save(result, display_project_id, cx);
             }).ok();
         }));
+        cx.notify();
+    }
+
+    fn finish_instruction_save(
+        &mut self,
+        result: Result<InstructionSettingsView, String>,
+        origin_project_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.instruction_saving = false;
+        let current_project_id = self
+            .state
+            .read(cx)
+            .selected_space_row()
+            .map(|space| space.id.clone());
+        let same_scope = self.target_device.is_none()
+            && self.instruction_project_id == origin_project_id
+            && current_project_id == origin_project_id;
+        match result {
+            Ok(_) => {
+                // A global write returns a global-only view. Reload the
+                // selected project and its new revision instead of installing
+                // that response over the project's editor.
+                self.error = None;
+                if self.target_device.is_none() {
+                    self.load_instructions(cx);
+                    self.load_runtime_contract(cx);
+                }
+            }
+            Err(error) => {
+                self.error = Some(error);
+                // Keep unsaved input for a same-scope retry. A changed scope
+                // must show the newly selected project's own content.
+                if !same_scope && self.target_device.is_none() {
+                    self.load_instructions(cx);
+                }
+            }
+        }
         cx.notify();
     }
 
@@ -1636,8 +1652,133 @@ impl Render for HarnessesPage {
 
 #[cfg(test)]
 mod tests {
-    use super::{SignInPhase, matches_selected_contract};
-    use zeron_proto::{RuntimeContractView, RuntimeDelivery};
+    use super::{HarnessesPage, SignInPhase, matches_selected_contract};
+    use crate::popover::Loadable;
+    use crate::state::AppState;
+    use crate::theme::Theme;
+    use gpui::AppContext;
+    use zeron_proto::{InstructionSettingsView, RuntimeContractView, RuntimeDelivery, Space};
+
+    fn project(id: &str) -> Space {
+        Space {
+            id: id.into(),
+            device_id: "local".into(),
+            path: format!("/synthetic/{id}"),
+            name: None,
+            git_detected: false,
+            git_checked_at: None,
+            checkout_id: None,
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+        }
+    }
+
+    fn instruction_view(
+        project_id: Option<&str>,
+        global: &str,
+        project: &str,
+    ) -> InstructionSettingsView {
+        InstructionSettingsView {
+            revision: 2,
+            global: global.into(),
+            project_id: project_id.map(str::to_owned),
+            project: project.into(),
+        }
+    }
+
+    #[gpui::test]
+    fn delayed_save_survives_project_and_device_switch(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.spaces = vec![project("p1"), project("p2")];
+            state.selected_space = Some("p1".into());
+            state
+        });
+        let window = cx.add_window(|_, cx| HarnessesPage::new(state.clone(), cx));
+        let (sender, receiver) = futures::channel::oneshot::channel::<InstructionSettingsView>();
+        window
+            .update(cx, |page, _, cx| {
+                page.instruction_project_id = Some("p1".into());
+                page.instructions = Loadable::Ready(instruction_view(Some("p1"), "old", "p1 text"));
+                page.instruction_saving = true;
+                page.instruction_save_task = Some(cx.spawn(async move |this, cx| {
+                    let result = receiver.await.unwrap();
+                    this.update(cx, |page, cx| {
+                        page.finish_instruction_save(Ok(result), Some("p1".into()), cx);
+                    })
+                    .ok();
+                }));
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        state.update(cx, |state, cx| {
+            state.selected_space = Some("p2".into());
+            cx.notify();
+        });
+        window
+            .update(cx, |page, _, cx| {
+                page.instruction_project_id = Some("p2".into());
+                // A new load replaces only the load task. The pending save must
+                // retain its receiver through this and the device switch.
+                page.instruction_load_task = Some(cx.spawn(async move |_, _| {
+                    std::future::pending::<()>().await;
+                }));
+                page.set_target_device(Some("remote".into()), cx);
+                assert!(page.instruction_saving);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        sender
+            .send(instruction_view(Some("p1"), "new", "old project"))
+            .expect("pending save was not canceled by a load or device switch");
+        cx.run_until_parked();
+        window
+            .update(cx, |page, _, _| {
+                assert!(!page.instruction_saving);
+                assert!(matches!(page.instructions, Loadable::Idle));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn global_save_keeps_project_editor_scoped_until_reload(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.spaces = vec![project("p1")];
+            state.selected_space = Some("p1".into());
+            state
+        });
+        let window = cx.add_window(|_, cx| HarnessesPage::new(state, cx));
+        window
+            .update(cx, |page, _, cx| {
+                page.instruction_project_id = Some("p1".into());
+                page.instructions =
+                    Loadable::Ready(instruction_view(Some("p1"), "old", "project text"));
+                page.instruction_saving = true;
+                page.finish_instruction_save(
+                    Ok(instruction_view(None, "new global", "")),
+                    Some("p1".into()),
+                    cx,
+                );
+                assert!(!page.instruction_saving);
+                let Loadable::Ready(view) = &page.instructions else {
+                    panic!("project view replaced")
+                };
+                assert_eq!(view.project_id.as_deref(), Some("p1"));
+                assert_eq!(view.project, "project text");
+            })
+            .unwrap();
+    }
 
     #[test]
     fn selected_session_evidence_never_follows_a_different_task_or_device() {
