@@ -955,11 +955,21 @@ impl DocHost {
     }
 
     pub async fn task_command_gate(&self, task_id: &str) -> OwnedMutexGuard<()> {
+        self.task_gate(task_id).lock_owned().await
+    }
+
+    fn task_gate(&self, task_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         let gate = lock(&self.inner.task_command_gates)
             .entry(task_id.to_string())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
-        gate.lock_owned().await
+        gate
+    }
+
+    /// Recovery is opportunistic: leave an active command's task untouched
+    /// and revisit it on the next bounded sweep.
+    pub(crate) fn try_task_command_gate(&self, task_id: &str) -> Option<OwnedMutexGuard<()>> {
+        self.task_gate(task_id).try_lock_owned().ok()
     }
 
     pub fn begin_task_command(

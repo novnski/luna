@@ -210,6 +210,10 @@ pub struct EngineCore {
     updater_wake: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Owns the exclusive data-dir lock and retires future write admission.
     device_write: device_write::DeviceWriteOwner,
+    /// Shared by every RPC service in this engine; changes on a real reopen.
+    cleanup_boot_id: String,
+    cleanup_cancel: tokio_util::sync::CancellationToken,
+    cleanup_worker: std::sync::Mutex<Option<(Arc<rpc::EngineRpc>, tokio::task::JoinHandle<()>)>>,
 }
 
 impl EngineCore {
@@ -529,11 +533,29 @@ impl EngineCore {
             updater: std::sync::Mutex::new(None),
             updater_wake: std::sync::Mutex::new(None),
             device_write,
+            cleanup_boot_id: uuid::Uuid::new_v4().to_string(),
+            cleanup_cancel: tokio_util::sync::CancellationToken::new(),
+            cleanup_worker: std::sync::Mutex::new(None),
         })
     }
 
     pub fn workspace_scope(&self) -> WorkspaceScope {
         self.workspace_scope
+    }
+
+    #[doc(hidden)]
+    pub fn cleanup_boot_id_for_tests(&self) -> &str {
+        &self.cleanup_boot_id
+    }
+
+    #[doc(hidden)]
+    pub fn cleanup_worker_count_for_tests(&self) -> usize {
+        usize::from(
+            self.cleanup_worker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some(),
+        )
     }
 
     /// Hermetic RPC fixture seam: replace the dormant default broker with an
@@ -672,6 +694,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.task_identity.clone(),
             self.workspace_scope,
+            self.cleanup_boot_id.clone(),
         )
         .with_auth(self.auth())
         .with_previews(self.previews.clone());
@@ -690,6 +713,21 @@ impl EngineCore {
             rpc = rpc.with_local_import(importer);
         }
         let rpc = Arc::new(rpc);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let mut worker = self
+                .cleanup_worker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if worker.is_none() {
+                let (task_after, project_after) = rpc.resume_cleanup_initial();
+                let handle = rpc.start_cleanup_maintenance(
+                    self.cleanup_cancel.clone(),
+                    task_after,
+                    project_after,
+                );
+                *worker = Some((rpc.clone(), handle));
+            }
+        }
         let backend: Arc<dyn cross_task_tools::CrossTaskBackend> = rpc.clone();
         self.sessions
             .set_cross_task_backend(Arc::downgrade(&backend));
@@ -712,6 +750,15 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) -> bool {
+        self.cleanup_cancel.cancel();
+        let cleanup = self
+            .cleanup_worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some((_, task)) = cleanup {
+            let _ = task.await;
+        }
         self.previews.shutdown().await;
         // A run interruption transitions its chat to Idle, and Idle normally
         // releases the next queued row. Freeze first so quitting never starts
@@ -762,6 +809,15 @@ impl EngineCore {
 
 impl Drop for EngineCore {
     fn drop(&mut self) {
+        self.cleanup_cancel.cancel();
+        if let Some((_, task)) = self
+            .cleanup_worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
         self.device_write.retire();
     }
 }

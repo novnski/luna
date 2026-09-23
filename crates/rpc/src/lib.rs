@@ -156,6 +156,9 @@ pub mod methods {
     /// L07 authoritative path for every existing local task mutation.
     pub const EXECUTE_TASK_COMMAND: &str = "ExecuteTaskCommand";
     pub const GET_TASK_COMMAND_RECEIPT: &str = "GetTaskCommandReceipt";
+    pub const GET_TASK_CLEANUP: &str = "GetTaskCleanup";
+    pub const GET_PROJECT_CLEANUP: &str = "GetProjectCleanup";
+    pub const GET_DELETION_CLEANUP_SUMMARY: &str = "GetDeletionCleanupSummary";
     pub const GET_TASK_COMMAND_SNAPSHOT: &str = "GetTaskCommandSnapshot";
     pub const WATCH_TASK_COMMANDS: &str = "WatchTaskCommands";
     /// L08 composing-device-local durable draft surface. These methods are

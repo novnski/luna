@@ -3030,8 +3030,18 @@ impl Shell {
 
     pub(super) fn delete_space(&mut self, space_id: String, cx: &mut Context<Self>) {
         self.delete_space_confirm = None;
+        let mut expected_chat_ids: Vec<String> = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .filter(|chat| chat.space_id.as_deref() == Some(&space_id))
+            .map(|chat| chat.id.clone())
+            .collect();
+        expected_chat_ids.sort();
         self.mutate(
-            serde_json::json!({ "op": "deleteSpace", "spaceId": space_id }),
+            serde_json::json!({ "op": "deleteSpace", "spaceId": space_id,
+                "expectedChatIds": expected_chat_ids }),
             cx,
         );
         cx.notify();
@@ -3152,21 +3162,28 @@ impl Shell {
                         .and_then(|s| state.device_name(&s.device_id))
                         .unwrap_or("its device")
                         .to_string(),
-                    state.chats_in_space(&space_id).len(),
+                    state
+                        .chats
+                        .iter()
+                        .filter(|chat| chat.space_id.as_deref() == Some(&space_id))
+                        .count(),
                 )
             };
             let copy = if count == 1 {
                 format!(
-                    "Removing “{name}” permanently deletes its 1 session on {device}. This can’t be undone."
+                    "Permanently delete “{name}” and its 1 LUNA session on {device}? This can’t be undone."
                 )
             } else {
                 format!(
-                    "Removing “{name}” permanently deletes its {count} sessions on {device}. This can’t be undone."
+                    "Permanently delete “{name}” and its {count} LUNA sessions on {device}? This can’t be undone."
                 )
             };
             let card = popover::dialog_card(&theme)
                 .child(popover::dialog_title(&theme, "Remove project?"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, copy)))
+                .child(div().mt(px(6.0)).child(popover::dialog_body(&theme,
+                    "Every session in this project, including any fork listed in the count, is deleted. Forks outside this project, project files, shared attachments, synced copies and provider-private data remain. LUNA cleans up local transcript snapshots, unsent drafts, terminal history and verified unshared draft uploads. Remote cleanup is unavailable; deletion stops if this project contains remote sessions.",
+                )))
                 .child(
                     div()
                         .mt(px(16.0))

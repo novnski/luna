@@ -1563,6 +1563,29 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.delete_space(space_id))?)
     }
 
+    /// Refuse a stale deletion preview inside the registry commit lock.
+    pub fn delete_space_if_chats(
+        &self,
+        space_id: &str,
+        expected_chat_ids: &[String],
+    ) -> Result<DeletedSpace, EngineError> {
+        Ok(self.mutate(|doc| {
+            let mut actual: Vec<String> = doc
+                .read_chats()?
+                .into_iter()
+                .filter(|chat| chat.space_id.as_deref() == Some(space_id))
+                .map(|chat| chat.id)
+                .collect();
+            actual.sort();
+            if actual != expected_chat_ids {
+                return Err(zeron_doc::DocError::Schema(
+                    "project sessions changed after deletion preview".into(),
+                ));
+            }
+            doc.delete_space(space_id)
+        })?)
+    }
+
     /// Synced seen marker (any device; LWW + monotonic guard in the doc layer).
     pub fn mark_chat_seen(
         &self,

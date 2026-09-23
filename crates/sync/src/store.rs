@@ -32,6 +32,8 @@ pub enum StoreError {
     DraftSubmissionConflict(String),
     #[error("composer draft {0} reused a revision with different content")]
     DraftRevisionConflict(String),
+    #[error("task {0} is being permanently deleted")]
+    TaskCleanupPending(String),
     #[error("task recovery state changed before the requested transition")]
     RecoveryConflict,
     #[error("attention projection revision changed before the requested mutation")]
@@ -240,6 +242,34 @@ const MIGRATIONS: &[&str] = &[
         record_json BLOB NOT NULL
      ) STRICT;
      CREATE INDEX appshot_activity_task ON appshot_activity(task_id);",
+    // v10 — L18 local cleanup checkpoint. Paths are only candidates from
+    // task-owned, unsent drafts; the engine still checks the upload jail and
+    // surviving owners before unlinking any bytes.
+    "CREATE TABLE task_cleanup (
+        task_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+     ) STRICT;
+     CREATE TABLE task_cleanup_paths (
+        task_id TEXT NOT NULL,
+        blob_path TEXT NOT NULL,
+        PRIMARY KEY(task_id, blob_path)
+     ) STRICT;
+     CREATE TABLE project_cleanup (
+        project_id TEXT PRIMARY KEY,
+        child_ids_json BLOB NOT NULL,
+        state TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+     ) STRICT;",
+    // v11 — distinguish an in-flight preparation owned by this engine boot
+    // from one abandoned by a previous process. A second RPC service in the
+    // same engine must never clear the first service's active preparation.
+    "ALTER TABLE task_cleanup ADD COLUMN owner_boot_id TEXT NOT NULL DEFAULT '';
+     ALTER TABLE project_cleanup ADD COLUMN owner_boot_id TEXT NOT NULL DEFAULT '';
+     CREATE INDEX task_cleanup_pending ON task_cleanup(state,task_id);
+     CREATE INDEX project_cleanup_pending ON project_cleanup(state,project_id);",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1451,6 +1481,9 @@ impl DocsStore {
     ) -> Result<ComposerDraftSaveOutcome, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
+        if let Some(task_id) = draft.task_id.as_deref() {
+            ensure_task_not_cleaning(&tx, task_id)?;
+        }
         let bytes = serde_json::to_vec(draft)?;
         let current = tx
             .query_row(
@@ -1673,6 +1706,9 @@ impl DocsStore {
     ) -> Result<(), StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
+        if let Some(task_id) = task_id {
+            ensure_task_not_cleaning(&tx, task_id)?;
+        }
         let bytes = serde_json::to_vec(snapshot)?;
         let existing: Option<Vec<u8>> = tx
             .query_row(
@@ -1894,6 +1930,371 @@ impl DocsStore {
         tx.execute(
             "DELETE FROM chat_outbox_initialized WHERE doc_id = ?1",
             params![doc_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Checkpoint an irreversible task cleanup before the registry tombstone.
+    /// Only draft-only paths are candidates: submitted/queued/transcript bytes
+    /// may be referenced by a surviving fork or another task.
+    pub fn prepare_task_cleanup(
+        &self,
+        device_id: &str,
+        task_id: &str,
+        owner_boot_id: &str,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO task_cleanup(task_id,state,detail,updated_at,owner_boot_id)
+             VALUES(?1,'pending','Local cleanup is pending',?2,?3)
+             ON CONFLICT(task_id) DO UPDATE SET state='pending',
+               detail=excluded.detail,updated_at=excluded.updated_at,
+               owner_boot_id=excluded.owner_boot_id",
+            params![task_id, now_ms(), owner_boot_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO task_cleanup_paths(task_id,blob_path)
+             SELECT ?2,a.blob_path FROM attachment_owners a
+             JOIN composer_drafts d ON d.device_id=a.device_id AND d.draft_id=a.owner_id
+             WHERE a.device_id=?1 AND d.task_id=?2 AND a.owner_kind='draft'
+               AND NOT EXISTS (SELECT 1 FROM composer_draft_submissions s
+                               WHERE s.device_id=d.device_id AND s.draft_id=d.draft_id)",
+            params![device_id, task_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Roll back a preparation only when the registry still contains the task.
+    /// The caller must establish that the irreversible delete did not commit.
+    pub fn abort_task_cleanup(&self, task_id: &str) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM task_cleanup_paths WHERE task_id=?1",
+            params![task_id],
+        )?;
+        tx.execute(
+            "DELETE FROM task_cleanup WHERE task_id=?1 AND state IN ('pending','failed')",
+            params![task_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Retire only records keyed to this LUNA task. The command receipt and
+    /// identity tombstone remain as durable replay guards.
+    pub fn retire_task_local_records(
+        &self,
+        device_id: &str,
+        task_id: &str,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM attachment_owners WHERE device_id=?1 AND owner_kind='draft'
+             AND owner_id IN (SELECT draft_id FROM composer_drafts WHERE device_id=?1 AND task_id=?2)",
+            params![device_id, task_id],
+        )?;
+        tx.execute(
+            "DELETE FROM attachment_owners WHERE device_id=?1 AND owner_kind='submission'
+             AND owner_id IN (SELECT command_id FROM composer_draft_submissions WHERE device_id=?1 AND task_id=?2)",
+            params![device_id, task_id],
+        )?;
+        for table in ["composer_drafts", "composer_draft_submissions"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE device_id=?1 AND task_id=?2"),
+                params![device_id, task_id],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM appshot_activity WHERE task_id=?1",
+            params![task_id],
+        )?;
+        tx.execute(
+            "DELETE FROM activity_events WHERE task_id=?1",
+            params![task_id],
+        )?;
+        tx.execute(
+            "DELETE FROM task_recovery_state WHERE task_id=?1",
+            params![task_id],
+        )?;
+        tx.execute("DELETE FROM snapshots WHERE doc_id=?1", params![task_id])?;
+        tx.execute("DELETE FROM chat_outbox WHERE doc_id=?1", params![task_id])?;
+        tx.execute(
+            "DELETE FROM chat_outbox_initialized WHERE doc_id=?1",
+            params![task_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn task_cleanup_paths(&self, task_id: &str) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT blob_path FROM task_cleanup_paths WHERE task_id=?1 ORDER BY blob_path",
+        )?;
+        Ok(statement
+            .query_map(params![task_id], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn attachment_has_owner(&self, path: &str) -> Result<bool, StoreError> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM attachment_owners WHERE blob_path=?1)",
+            params![path],
+            |row| row.get::<_, bool>(0),
+        )?)
+    }
+
+    /// Hold the SQLite writer reservation from owner check through unlink so
+    /// a concurrent draft cannot adopt a blob in the gap between those steps.
+    /// Callers must validate that `path` is a regular file in their upload jail.
+    pub fn remove_unowned_attachment(&self, path: &str) -> Result<bool, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let owned: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attachment_owners WHERE blob_path=?1)",
+            params![path],
+            |row| row.get(0),
+        )?;
+        if owned {
+            return Ok(false);
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn set_task_cleanup_state(
+        &self,
+        task_id: &str,
+        state: &str,
+        detail: &str,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE task_cleanup SET state=?2,detail=?3,updated_at=?4 WHERE task_id=?1",
+            params![task_id, state, detail, now_ms()],
+        )?;
+        if state == "completed" || state == "provider-pending" {
+            tx.execute(
+                "DELETE FROM task_cleanup_paths WHERE task_id=?1",
+                params![task_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn pending_task_cleanups(&self, limit: usize) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT task_id FROM task_cleanup WHERE state IN ('pending','failed')
+             ORDER BY updated_at,task_id LIMIT ?1",
+        )?;
+        Ok(statement
+            .query_map(params![limit as i64], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Keyset page so a permanently blocked first row cannot starve later
+    /// cleanup work. The caller wraps to the empty cursor after the last page.
+    pub fn pending_task_cleanups_after(
+        &self,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, String)>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT task_id,state,owner_boot_id FROM task_cleanup
+             WHERE state IN ('pending','failed') AND task_id>?1
+             ORDER BY task_id LIMIT ?2",
+        )?;
+        Ok(statement
+            .query_map(params![after, limit as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn task_cleanup_state(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<(String, String)>, StoreError> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT state,detail FROM task_cleanup WHERE task_id=?1",
+                params![task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    /// A committed delete receipt is sufficient replay evidence for tasks
+    /// created before the identity service registered every local chat.
+    pub fn has_applied_task_delete(&self, task_id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT receipt_json FROM task_command_receipts WHERE task_id=?1 ORDER BY updated_at DESC LIMIT 32",
+        )?;
+        for bytes in statement.query_map(params![task_id], |row| row.get::<_, Vec<u8>>(0))? {
+            let receipt: CommandReceipt = serde_json::from_slice(&bytes?)?;
+            if receipt.intent == "delete" && receipt.status == CommandReceiptStatus::Applied {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn prepare_project_cleanup(
+        &self,
+        project_id: &str,
+        children: &[String],
+        owner_boot_id: &str,
+    ) -> Result<(), StoreError> {
+        self.conn().execute(
+            "INSERT INTO project_cleanup(project_id,child_ids_json,state,detail,updated_at,owner_boot_id)
+             VALUES(?1,?2,'pending','Project cleanup is pending',?3,?4)
+             ON CONFLICT(project_id) DO UPDATE SET child_ids_json=excluded.child_ids_json,
+               state='pending',detail=excluded.detail,updated_at=excluded.updated_at,
+               owner_boot_id=excluded.owner_boot_id",
+            params![project_id, serde_json::to_vec(children)?, now_ms(), owner_boot_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn abort_project_cleanup(&self, project_id: &str) -> Result<(), StoreError> {
+        self.conn().execute(
+            "DELETE FROM project_cleanup WHERE project_id=?1 AND state IN ('pending','failed')",
+            params![project_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn project_cleanup_state(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<(String, String)>, StoreError> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT state,detail FROM project_cleanup WHERE project_id=?1",
+                params![project_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn set_project_cleanup_state(
+        &self,
+        project_id: &str,
+        state: &str,
+        detail: &str,
+    ) -> Result<(), StoreError> {
+        self.conn().execute(
+            "UPDATE project_cleanup SET state=?2,detail=?3,updated_at=?4 WHERE project_id=?1",
+            params![project_id, state, detail, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn pending_project_cleanups(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, Vec<String>)>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT project_id,child_ids_json FROM project_cleanup
+             WHERE state IN ('pending','failed') ORDER BY updated_at,project_id LIMIT ?1",
+        )?;
+        let rows = statement
+            .query_map(params![limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(project, bytes)| Ok((project, serde_json::from_slice(&bytes)?)))
+            .collect()
+    }
+
+    pub fn pending_project_cleanups_after(
+        &self,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Vec<String>, String, String)>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT project_id,child_ids_json,state,owner_boot_id FROM project_cleanup
+             WHERE state IN ('pending','failed') AND project_id>?1
+             ORDER BY project_id LIMIT ?2",
+        )?;
+        let rows = statement
+            .query_map(params![after, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, bytes, state, boot)| Ok((id, serde_json::from_slice(&bytes)?, state, boot)))
+            .collect()
+    }
+
+    /// Bounded summary for the existing sidebar notice. The detail is an
+    /// already-persisted local failure string, never transcript/provider data.
+    pub fn deletion_cleanup_summary(&self) -> Result<(usize, usize, Option<String>), StoreError> {
+        let conn = self.conn();
+        let mut pending = 0usize;
+        let mut failed = 0usize;
+        for table in ["task_cleanup", "project_cleanup"] {
+            pending += conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE state='pending' AND updated_at<?1"),
+                params![now_ms() - 5_000],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+            failed += conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE state='failed'"),
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+        }
+        let first = conn
+            .query_row(
+                "SELECT detail FROM (
+               SELECT detail,updated_at FROM task_cleanup WHERE state='failed'
+               UNION ALL
+               SELECT detail,updated_at FROM project_cleanup WHERE state='failed'
+             ) ORDER BY updated_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok((pending, failed, first))
+    }
+
+    pub fn retire_project_local_records(&self, project_id: &str) -> Result<(), StoreError> {
+        let _activity_guard = self.activity_index_guard();
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM activity_project_policies WHERE project_id=?1",
+            params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM activity_events WHERE project_id=?1",
+            params![project_id],
         )?;
         tx.commit()?;
         Ok(())
@@ -2926,6 +3327,22 @@ fn replace_attachment_owners_tx<'a>(
         )?;
     }
     Ok(())
+}
+
+fn ensure_task_not_cleaning(
+    tx: &rusqlite::Transaction<'_>,
+    task_id: &str,
+) -> Result<(), StoreError> {
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_cleanup WHERE task_id=?1)",
+        params![task_id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        Err(StoreError::TaskCleanupPending(task_id.into()))
+    } else {
+        Ok(())
+    }
 }
 
 fn load_task_command_snapshot(
@@ -4512,7 +4929,7 @@ mod draft_tests {
         assert_eq!(records.last().unwrap().kind, AppshotActivityKind::Queued);
     }
 
-    fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
+    pub(super) fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
         ComposerDraft {
             version: zeron_proto::COMPOSER_DRAFT_VERSION,
             draft_id: "task-a".into(),
@@ -4893,5 +5310,117 @@ mod task_command_tests {
         assert!(retention_gap.reload_required);
         assert!(retention_gap.events.is_empty());
         assert_eq!(retention_gap.snapshot.task_sequence, 3);
+    }
+
+    #[test]
+    fn task_cleanup_preserves_shared_blob_and_recovers_after_failed_retirement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.png").to_string_lossy().to_string();
+        let store = DocsStore::open(dir.path()).unwrap();
+        store
+            .save_composer_draft("device", &super::draft_tests::draft(1, "first", &path))
+            .unwrap();
+        let mut other = super::draft_tests::draft(1, "second", &path);
+        other.draft_id = "task-b".into();
+        other.task_id = Some("task-b".into());
+        store.save_composer_draft("device", &other).unwrap();
+        store
+            .prepare_task_cleanup("device", "task-a", "synthetic-boot")
+            .unwrap();
+        assert!(matches!(
+            store.save_composer_draft("device", &super::draft_tests::draft(2, "late", &path)),
+            Err(StoreError::TaskCleanupPending(_))
+        ));
+        assert_eq!(
+            store.task_cleanup_paths("task-a").unwrap(),
+            vec![path.clone()]
+        );
+        store
+            .conn()
+            .execute_batch(
+                "CREATE TRIGGER fail_l18_retire BEFORE DELETE ON composer_drafts
+             BEGIN SELECT RAISE(ABORT, 'synthetic cleanup failure'); END;",
+            )
+            .unwrap();
+        assert!(store.retire_task_local_records("device", "task-a").is_err());
+        assert!(store.attachment_has_owner(&path).unwrap());
+        store
+            .set_task_cleanup_state("task-a", "failed", "synthetic cleanup failure")
+            .unwrap();
+        drop(store);
+
+        let store = DocsStore::open(dir.path()).unwrap();
+        assert_eq!(store.pending_task_cleanups(16).unwrap(), vec!["task-a"]);
+        store
+            .conn()
+            .execute_batch("DROP TRIGGER fail_l18_retire")
+            .unwrap();
+        store.retire_task_local_records("device", "task-a").unwrap();
+        assert!(
+            store.attachment_has_owner(&path).unwrap(),
+            "task-b still owns the blob"
+        );
+        store
+            .set_task_cleanup_state("task-a", "completed", "done")
+            .unwrap();
+        assert!(store.task_cleanup_paths("task-a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn cleanup_keyset_pages_advance_past_the_first_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        for index in 0..21 {
+            let task = format!("task-{index:02}");
+            store
+                .prepare_task_cleanup("device", &task, "old-boot")
+                .unwrap();
+        }
+        for index in 0..10 {
+            let project = format!("project-{index:02}");
+            store
+                .prepare_project_cleanup(&project, &[], "old-boot")
+                .unwrap();
+        }
+        store
+            .set_task_cleanup_state("task-00", "failed", "synthetic blockage")
+            .unwrap();
+        let first = store.pending_task_cleanups_after("", 16).unwrap();
+        assert_eq!(first.len(), 16);
+        let second = store
+            .pending_task_cleanups_after(&first.last().unwrap().0, 16)
+            .unwrap();
+        assert_eq!(second.len(), 5);
+        assert_eq!(second.last().unwrap().0, "task-20");
+        assert!(
+            store
+                .pending_task_cleanups_after(&second.last().unwrap().0, 16)
+                .unwrap()
+                .is_empty()
+        );
+        let projects = store.pending_project_cleanups_after("", 8).unwrap();
+        assert_eq!(projects.len(), 8);
+        let rest = store
+            .pending_project_cleanups_after(&projects.last().unwrap().0, 8)
+            .unwrap();
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest.last().unwrap().0, "project-09");
+        store
+            .conn()
+            .execute(
+                "UPDATE task_cleanup SET updated_at=?1 WHERE state='pending'",
+                params![now_ms() - 10_000],
+            )
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "UPDATE project_cleanup SET updated_at=?1 WHERE state='pending'",
+                params![now_ms() - 10_000],
+            )
+            .unwrap();
+        let (pending, failed, detail) = store.deletion_cleanup_summary().unwrap();
+        assert_eq!((pending, failed), (30, 1));
+        assert_eq!(detail.as_deref(), Some("synthetic blockage"));
     }
 }
