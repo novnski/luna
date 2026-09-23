@@ -2,16 +2,18 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
 use zeron_doc::{
     MessagePart, MessageRole, MessageStatus, RegistryDoc, SessionDoc, SessionMessageEntry,
 };
-use zeron_engine::InstanceLock;
 use zeron_engine::backup::{
     BackupError, BackupService, IsolatedRoot, RecoveryKey, inspect_archive,
 };
+use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, InstanceLock};
+use zeron_proto::HarnessId;
 use zeron_proto::{Chat, Space};
 use zeron_sync::DocsStore;
 
@@ -58,6 +60,32 @@ fn service(root: &Path) -> BackupService {
         IsolatedRoot::open(root).unwrap(),
         RecoveryKey::injected([17; 32]),
     )
+}
+
+fn copy_synthetic_tree(source: &Path, target: &Path) {
+    fs::create_dir(target).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let kind = fs::symlink_metadata(&source_path).unwrap().file_type();
+        assert!(!kind.is_symlink() && (kind.is_dir() || kind.is_file()));
+        if kind.is_dir() {
+            copy_synthetic_tree(&source_path, &target_path);
+        } else {
+            fs::copy(&source_path, &target_path).unwrap();
+        }
+    }
+}
+
+fn fake_accounts(parent: &Path) -> AgentAccountsConfig {
+    AgentAccountsConfig {
+        data_dir: parent.join("synthetic-provider-state"),
+        claude_config_dir: parent.join("synthetic-claude"),
+        claude_config_file: parent.join("synthetic-claude.json"),
+        codex_home: parent.join("synthetic-codex"),
+        cursor_sdk_auth_file: parent.join("synthetic-cursor-auth.json"),
+    }
 }
 
 #[test]
@@ -571,4 +599,57 @@ fn failed_post_activation_readback_rolls_back_synthetic_root() {
         fs::read(failed[0].path().join("ui-settings.json")).unwrap(),
         br#"{"theme":"synthetic"}"#
     );
+}
+
+#[tokio::test]
+async fn staged_copy_engine_boot_probe_keeps_original_stage_untouched() {
+    let (parent, root, backups) = fixture();
+    let backup = service(&root)
+        .export(&backups.join("boot-probe.lunabk"))
+        .unwrap();
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    let probe = parent.path().join("marked-boot-probe");
+    copy_synthetic_tree(&staged.path, &probe);
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::local(&probe).unwrap(),
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+        fake_accounts(&parent.path().join("probe-provider-fixtures")),
+    )
+    .unwrap();
+    let blocked_archive = backups.join("while-engine-running.lunabk");
+    assert!(matches!(
+        service(&probe).export(&blocked_archive),
+        Err(BackupError::EngineRunning)
+    ));
+    assert!(!blocked_archive.exists());
+    let store = DocsStore::open(probe.join("profiles/local")).unwrap();
+    assert_eq!(
+        store.load_snapshot("synthetic-doc").unwrap().unwrap(),
+        b"synthetic source"
+    );
+    drop(store);
+    core.shutdown().await;
+    drop(core);
+    assert!(!probe.join("credentials").exists());
+    service(&root).verify_staged_for_tests(&staged).unwrap();
+
+    let corrupt_probe = parent.path().join("marked-corrupt-probe");
+    copy_synthetic_tree(&staged.path, &corrupt_probe);
+    fs::write(
+        corrupt_probe.join("profiles/local/docs.sqlite3"),
+        b"invalid synthetic SQLite",
+    )
+    .unwrap();
+    let boot = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::local(&corrupt_probe).unwrap(),
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+        fake_accounts(&parent.path().join("corrupt-provider-fixtures")),
+    );
+    assert!(boot.is_err());
+    assert!(!corrupt_probe.join("credentials").exists());
+    service(&root).verify_staged_for_tests(&staged).unwrap();
 }
