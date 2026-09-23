@@ -178,19 +178,26 @@ impl BackupsPage {
         let Some(status) = self.status.ready() else {
             return;
         };
-        if status.availability != BackupAvailability::Ready || status.staged_restore.is_some() {
+        if status.availability != BackupAvailability::Ready {
             return;
         }
-        let Some(last) = status.last_success.as_ref() else {
+        let Some(archive_path) = status
+            .staged_restore
+            .as_ref()
+            .map(|stage| stage.archive_path.clone())
+            .or_else(|| {
+                status
+                    .last_success
+                    .as_ref()
+                    .map(|last| last.archive_path.clone())
+            })
+        else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
-        let params = serde_json::to_value(BackupArchiveRequest {
-            archive_path: last.archive_path.clone(),
-        })
-        .unwrap();
+        let params = serde_json::to_value(BackupArchiveRequest { archive_path }).unwrap();
         self.busy = true;
         self.error = None;
         self.action_task = Some(cx.spawn(async move |this, cx| {
@@ -210,7 +217,11 @@ impl BackupsPage {
                         page.stage_result = Some(stage);
                         page.load(cx);
                     }
-                    Err(error) => page.error = Some(error),
+                    Err(error) => {
+                        page.error = Some(error);
+                        page.stage_result = None;
+                        page.load(cx);
+                    }
                 }
                 cx.notify();
             })
@@ -247,10 +258,18 @@ impl Render for BackupsPage {
             && status
                 .as_ref()
                 .is_some_and(|value| value.last_success.is_some());
-        let can_stage = can_inspect
-            && status
-                .as_ref()
-                .is_some_and(|value| value.staged_restore.is_none());
+        let can_stage = ready
+            && status.as_ref().is_some_and(|value| {
+                value.staged_restore.is_some() || value.last_success.is_some()
+            });
+        let has_stage = status
+            .as_ref()
+            .is_some_and(|value| value.staged_restore.is_some());
+        let key_line = match status.as_ref() {
+            Some(value) if value.key_configured => "Owner recovery key configured",
+            Some(_) => "Owner recovery key needed. This build cannot generate or reveal one.",
+            None => "Recovery key status unavailable",
+        };
         let status_label = match status.as_ref().map(|value| value.availability) {
             Some(BackupAvailability::Ready) => "Ready for isolated copies",
             Some(BackupAvailability::Unconfigured) => "Configuration needed",
@@ -336,6 +355,10 @@ impl Render for BackupsPage {
                                             .child(widgets::meta_line(&theme, vec![div().child(SharedString::from(destination)).into_any_element()]))))
                                     .child(widgets::card_row(&theme, false)
                                         .child(div().flex_1().min_w_0()
+                                            .child(widgets::row_title(&theme, "Recovery key"))
+                                            .child(widgets::meta_line(&theme, vec![div().child(key_line).into_any_element()]))))
+                                    .child(widgets::card_row(&theme, false)
+                                        .child(div().flex_1().min_w_0()
                                             .child(widgets::row_title(&theme, "Last verified archive"))
                                             .child(widgets::meta_line(&theme, vec![div().child(SharedString::from(last_line)).into_any_element()]))))
                             )
@@ -362,7 +385,7 @@ impl Render for BackupsPage {
                                     .id("backup-stage")
                                     .opacity(if can_stage { 1.0 } else { 0.45 })
                                     .hover(|s| s.bg(theme::wash(0.06)))
-                                    .child("Stage restore")
+                                    .child(if has_stage { "Verify staged copy" } else { "Stage restore" })
                                     .when(can_stage, |button| button.on_click(cx.listener(|page, _, _, cx| page.stage_latest(cx)))))
                             )
                             .when_some(self.last_result.as_ref().map(|r| r.archive_path.clone()), |page, path| page.child(widgets::meta_line(&theme, vec![div().child(SharedString::from(format!("Saved: {path}"))).into_any_element()])))
@@ -379,7 +402,7 @@ impl Render for BackupsPage {
                             .when_some(staged, |page, staged| page.child(
                                 widgets::section_card(&theme)
                                     .child(widgets::card_row(&theme, true).child(div().flex_1()
-                                        .child(widgets::row_title(&theme, "Staged restore verified"))
+                                        .child(widgets::row_title(&theme, "Staged restore checkpoint"))
                                         .child(widgets::meta_line(&theme, vec![div().child(SharedString::from(staged.staging_path)).into_any_element()]))))
                                     .child(widgets::card_row(&theme, false).child(div()
                                         .child(widgets::row_title(&theme, "Activation unavailable"))

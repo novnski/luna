@@ -52,6 +52,7 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
     );
     assert!(control.configure_recovery_key_hex("bad".into()).is_err());
     control.configure_recovery_key_hex("11".repeat(32)).unwrap();
+    assert!(control.status().unwrap().key_configured);
     let key = broker
         .list_metadata()
         .unwrap()
@@ -96,16 +97,26 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
         .unwrap();
     assert!(Path::new(&staged.staging_path).is_dir());
     assert!(!staged.restore_activation_available);
+    let fresh = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
+    assert_eq!(fresh.status().unwrap().last_success.unwrap(), manual);
+    let reverified = fresh
+        .stage_restore(BackupArchiveRequest {
+            archive_path: manual.archive_path.clone(),
+        })
+        .unwrap();
+    assert_eq!(reverified.staging_path, staged.staging_path);
     assert!(
-        control
+        reverified
+            .reason
+            .contains("fresh archive and index readback")
+    );
+    assert!(
+        fresh
             .stage_restore(BackupArchiveRequest {
-                archive_path: manual.archive_path.clone()
+                archive_path: destination.join("different.lunabk").display().to_string(),
             })
             .is_err()
     );
-
-    let fresh = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
-    assert_eq!(fresh.status().unwrap().last_success.unwrap(), manual);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -131,6 +142,90 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
     let status = unrelated.status().unwrap();
     assert_eq!(status.availability, BackupAvailability::Unconfigured);
     assert!(!status.key_configured);
+}
+
+#[test]
+fn staged_checkpoint_fails_closed_across_restart_and_retries_after_repair() {
+    let temp = TempDir::new().unwrap();
+    let owner = temp.path().join("synthetic-engine");
+    let source = temp.path().join("copy-isolated-source");
+    let destination = temp.path().join("marked-backups");
+    marked_root(&owner);
+    marked_root(&source);
+    fs::create_dir(&destination).unwrap();
+    fs::write(
+        destination.join(".luna-l17-isolated-backups"),
+        "L17 synthetic or copy-isolated backup destination\n",
+    )
+    .unwrap();
+    fs::write(source.join("ui-settings.json"), b"synthetic original").unwrap();
+    let store = DocsStore::open(source.join("profiles/local")).unwrap();
+    store
+        .save_snapshot("synthetic", b"synthetic transcript")
+        .unwrap();
+    drop(store);
+
+    let broker = CredentialBroker::in_memory_for_tests(&owner);
+    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
+    control.configure_recovery_key_hex("44".repeat(32)).unwrap();
+    control
+        .configure(BackupConfigureRequest {
+            source_root: source.display().to_string(),
+            destination_dir: destination.display().to_string(),
+            automatic_enabled: false,
+        })
+        .unwrap();
+    let archive = control.manual_backup().unwrap().archive_path;
+    let request = BackupArchiveRequest {
+        archive_path: archive,
+    };
+    let staged = control.stage_restore(request.clone()).unwrap();
+    drop(control);
+
+    let fresh = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
+    let stage_path = Path::new(&staged.staging_path);
+    fs::write(stage_path.join("ui-settings.json"), b"changed stage").unwrap();
+    assert!(fresh.stage_restore(request.clone()).is_err());
+    let failed = fresh.status().unwrap().staged_restore.unwrap();
+    assert!(failed.reason.contains("Staged verification failed"));
+    assert_eq!(failed.staging_path, staged.staging_path);
+
+    fs::write(stage_path.join("ui-settings.json"), b"synthetic original").unwrap();
+    fresh.stage_restore(request.clone()).unwrap();
+    let moved = temp.path().join("interrupted-stage-held");
+    fs::rename(stage_path, &moved).unwrap();
+    assert!(
+        fresh
+            .status()
+            .unwrap()
+            .staged_restore
+            .unwrap()
+            .reason
+            .contains("missing")
+    );
+    assert!(fresh.stage_restore(request.clone()).is_err());
+    fs::rename(&moved, stage_path).unwrap();
+    let recovered = fresh.stage_restore(request.clone()).unwrap();
+    assert_eq!(recovered.staging_path, staged.staging_path);
+    assert!(!recovered.restore_activation_available);
+
+    let state_path = owner.join("backup-control-v1.json");
+    let mut old_state: serde_json::Value =
+        serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    old_state.as_object_mut().unwrap().remove("stagedEvidence");
+    fs::write(&state_path, serde_json::to_vec(&old_state).unwrap()).unwrap();
+    let legacy = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker);
+    assert!(
+        legacy
+            .status()
+            .unwrap()
+            .staged_restore
+            .unwrap()
+            .reason
+            .contains("predates restart-safe readback")
+    );
+    assert!(legacy.stage_restore(request).is_err());
+    assert!(stage_path.is_dir());
 }
 
 #[tokio::test]
@@ -257,6 +352,17 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
     .unwrap();
     assert!(Path::new(&stage.staging_path).is_dir());
     assert!(!stage.restore_activation_available);
+    let rechecked: zeron_proto::BackupStageStatus = serde_json::from_value(
+        client
+            .call(
+                methods::STAGE_BACKUP_RESTORE,
+                serde_json::json!({"archivePath": stage.archive_path}),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rechecked.staging_path, stage.staging_path);
     core.shutdown().await;
 }
 

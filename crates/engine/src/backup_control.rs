@@ -16,8 +16,8 @@ use zeron_proto::{
 };
 
 use crate::backup::{
-    BackupError, BackupReceipt, BackupService, IsolatedRoot, RecoveryKey, retention_candidates,
-    validate_isolated_destination,
+    BackupError, BackupReceipt, BackupService, IsolatedRoot, RecoveryKey, StagedEvidence,
+    retention_candidates, validate_isolated_destination,
 };
 use crate::credentials::{
     CredentialBroker, CredentialError, CredentialScope, CredentialState, SecretIngress,
@@ -25,7 +25,7 @@ use crate::credentials::{
 
 const STATE_FILE: &str = "backup-control-v1.json";
 const KEY_NAME: &str = "LUNA backup recovery key";
-const RESTORE_REASON: &str = "Restore activation is unavailable until staged index rebuilding, free-space checks, and post-start readback with rollback are verified.";
+const RESTORE_REASON: &str = "Restore activation remains unavailable: chat2, task identity and usage reconstruction, plus post-start engine readback, are incomplete.";
 
 #[derive(Debug, thiserror::Error)]
 pub enum BackupControlError {
@@ -51,6 +51,8 @@ pub enum BackupControlError {
     ConfigChangeRequiresPlan,
     #[error("a staged restore already exists and requires review")]
     StageAlreadyExists,
+    #[error("this staged restore predates restart-safe evidence and requires owner review")]
+    StageNeedsReview,
 }
 
 type Result<T> = std::result::Result<T, BackupControlError>;
@@ -82,6 +84,8 @@ struct ControlState {
     receipts: Vec<BackupReceipt>,
     #[serde(default)]
     staged_restore: Option<BackupStageStatus>,
+    #[serde(default)]
+    staged_evidence: Option<StagedEvidence>,
     last_error: Option<String>,
 }
 
@@ -269,8 +273,9 @@ impl BackupControl {
         })
     }
 
-    /// Verify and stage an archive in the separate copy-isolated root. No RPC
-    /// activates it; a second stage is refused while the first needs review.
+    /// Verify and stage an archive in the separate copy-isolated root. A
+    /// repeat request for the same archive rechecks the persisted stage after
+    /// restart; a different archive needs explicit owner resolution.
     pub fn stage_restore(&self, request: BackupArchiveRequest) -> Result<BackupStageStatus> {
         let _guard = self
             .inner
@@ -278,29 +283,79 @@ impl BackupControl {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let mut state = self.load_state()?;
-        if state
-            .staged_restore
-            .as_ref()
-            .is_some_and(|s| Path::new(&s.staging_path).is_dir())
-        {
-            return Err(BackupControlError::StageAlreadyExists);
-        }
         let config = state
             .config
             .as_ref()
             .ok_or(BackupControlError::Unconfigured)?;
         let service = self.service(config)?;
+        if let Some(mut staged) = state.staged_restore.clone() {
+            if staged.archive_path != request.archive_path {
+                return Err(BackupControlError::StageAlreadyExists);
+            }
+            let evidence = state
+                .staged_evidence
+                .as_ref()
+                .ok_or(BackupControlError::StageNeedsReview)?;
+            if let Err(error) = service.reverify_staged(
+                evidence,
+                Path::new(&staged.archive_path),
+                Path::new(&staged.staging_path),
+            ) {
+                staged.reason = format!(
+                    "Staged verification failed: {error}. Owner review is required before retry."
+                );
+                state.staged_restore = Some(staged);
+                state.last_error = Some(error.to_string());
+                self.save_state(&state)?;
+                return Err(error.into());
+            }
+            staged.verified_at_ms = crate::now_ms();
+            staged.reason = "Staged data passed fresh archive and index readback. Activation remains unavailable pending engine-owned restore gates.".into();
+            state.staged_restore = Some(staged.clone());
+            state.last_error = None;
+            self.save_state(&state)?;
+            return Ok(staged);
+        }
         let staged = service.stage_restore(Path::new(&request.archive_path))?;
-        let status = BackupStageStatus {
+        let mut status = BackupStageStatus {
             archive_path: request.archive_path,
             staging_path: staged.path.display().to_string(),
-            verified_at_ms: crate::now_ms(),
+            verified_at_ms: 0,
             database_count: staged.preview.manifest.databases.len(),
             attachment_count: staged.preview.manifest.entries.iter().filter(|e| e.category == "attachment").count(),
             restore_activation_available: false,
-            reason: "Staged data was verified at this time. Activation remains unavailable pending index rebuild, free-space checks, and post-start readback.".into(),
+            reason: "Staged data passed archive and index readback. Reverify after restart; activation remains unavailable pending engine-owned restore gates.".into(),
         };
+        let evidence = match staged.evidence(Path::new(&status.archive_path)) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                status.reason = format!(
+                    "Staged verification failed: {error}. Owner review is required before retry."
+                );
+                state.staged_restore = Some(status);
+                state.last_error = Some(error.to_string());
+                self.save_state(&state)?;
+                return Err(error.into());
+            }
+        };
+        if let Err(error) = service.reverify_staged(
+            &evidence,
+            Path::new(&status.archive_path),
+            Path::new(&status.staging_path),
+        ) {
+            status.reason = format!(
+                "Staged verification failed: {error}. Owner review is required before retry."
+            );
+            state.staged_restore = Some(status);
+            state.staged_evidence = Some(evidence);
+            state.last_error = Some(error.to_string());
+            self.save_state(&state)?;
+            return Err(error.into());
+        }
+        status.verified_at_ms = crate::now_ms();
         state.staged_restore = Some(status.clone());
+        state.staged_evidence = Some(evidence);
+        state.last_error = None;
         self.save_state(&state)?;
         Ok(status)
     }
@@ -403,7 +458,7 @@ impl BackupControl {
                 source_root: None,
                 destination_dir: None,
                 automatic_enabled: false,
-                key_configured: false,
+                key_configured: self.recovery_key().is_ok(),
                 last_success: None,
                 retention_candidates: 0,
                 staged_restore: None,
@@ -463,9 +518,20 @@ impl BackupControl {
             key_configured,
             last_success: verified_last.then(|| summary(state.receipts.last().unwrap())),
             retention_candidates: retention_candidates(&state.receipts).len(),
-            staged_restore: state
-                .staged_restore
-                .filter(|s| Path::new(&s.staging_path).is_dir()),
+            staged_restore: state.staged_restore.map(|mut stage| {
+                if state.staged_evidence.is_none()
+                    && !stage.reason.starts_with("Staged verification failed:")
+                {
+                    stage.reason =
+                        "Staged evidence predates restart-safe readback; owner review is required."
+                            .into();
+                } else if !Path::new(&stage.staging_path).is_dir() {
+                    stage.reason =
+                        "Staged directory is missing; owner review is required before retry."
+                            .into();
+                }
+                stage
+            }),
             restore_activation_available: false,
             restore_reason: RESTORE_REASON.into(),
         })
