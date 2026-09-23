@@ -5,9 +5,10 @@ use std::sync::{Arc, Barrier, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use zeron_engine::credentials::{CredentialScope, SecretIngress};
 use zeron_engine::{
-    AuthState, Engine, EngineConfig, EngineCore, EngineProfile, HarnessId, WorkspaceScope,
-    default_registry,
+    AgentAccountsConfig, Auth, AuthConfig, AuthState, Engine, EngineConfig, EngineCore,
+    EngineProfile, HarnessId, HarnessRegistry, WorkspaceScope,
 };
 
 fn config(
@@ -28,8 +29,32 @@ fn config(
 }
 
 fn assemble(profile: EngineProfile) -> EngineCore {
-    EngineCore::assemble_with_profile(profile, Arc::new(default_registry()), HarnessId::Mock, None)
-        .expect("assemble profile")
+    let root = profile.device_root();
+    let accounts = AgentAccountsConfig {
+        data_dir: root.join("synthetic-provider-state"),
+        claude_config_dir: root.join("synthetic-claude"),
+        claude_config_file: root.join("synthetic-claude.json"),
+        codex_home: root.join("synthetic-codex"),
+        cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
+    };
+    accounts
+        .disable_claude_keychain_fallback()
+        .expect("seal synthetic Claude home");
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        profile,
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+        accounts,
+    )
+    .expect("assemble profile")
+}
+
+fn synthetic_auth(data_dir: &Path, edge_url: &str) -> AuthConfig {
+    let mut config = AuthConfig::new(edge_url, data_dir);
+    config.use_in_memory_credentials_for_tests();
+    config.workos_client_id = Some("client_test".into());
+    config
 }
 
 async fn shutdown(core: EngineCore) {
@@ -340,11 +365,29 @@ async fn existing_session_opens_the_historical_cloud_layout_in_place() {
             .expect("create historical chat");
         shutdown(core).await;
     }
+    let auth_config = synthetic_auth(dir.path(), "http://127.0.0.1:1");
+    let (_, credential) = auth_config
+        .test_credential_broker()
+        .store_local(
+            SecretIngress::LocalEngine,
+            CredentialScope::luna_sync(),
+            "refresh-token",
+            "Synthetic LUNA sync refresh",
+            "Fixture account",
+            b"fake-refresh-token",
+        )
+        .expect("seed in-memory fake credential");
     std::fs::write(
         dir.path().join("session.json"),
-        r#"{"refreshToken":"refresh-1","user":{"id":"legacy-user","email":"legacy@example.com"},"orgId":"legacy-org"}"#,
+        serde_json::json!({
+            "version": 2,
+            "credentialId": credential.id,
+            "user": {"id": "legacy-user", "email": "legacy@example.com"},
+            "orgId": "legacy-org",
+        })
+        .to_string(),
     )
-    .expect("seed existing session");
+    .expect("seed metadata-only session");
 
     let config = config(
         dir.path(),
@@ -352,7 +395,7 @@ async fn existing_session_opens_the_historical_cloud_layout_in_place() {
         Some("client_test"),
         None,
     );
-    let auth = Engine::build_auth(&config).await;
+    let auth = Auth::new(auth_config);
     let scope = Engine::initial_workspace_scope(&auth);
     let resolved = Engine::resolve_profile(&config, &auth, scope)
         .expect("resolve existing session")
