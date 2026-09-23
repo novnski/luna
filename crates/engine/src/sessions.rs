@@ -417,6 +417,48 @@ struct ProviderBindingKey {
     provider_thread_id: String,
 }
 
+/// Evidence from one adapter-validated call claimed against this live run.
+/// This is private, non-cloneable, and never an approval or command authority.
+#[derive(Debug)]
+struct ClaimedProviderCall {
+    source_task_id: String,
+    source_run_id: String,
+    source_binding: ProviderBindingKey,
+    provider_turn_id: String,
+    provider_call_id: String,
+}
+
+impl ClaimedProviderCall {
+    fn matches_live(&self, run: &RunHandle, binding: Option<&ProviderBindingKey>) -> bool {
+        self.source_run_id == run.run_id
+            && self.source_binding.task_id == self.source_task_id
+            && run.runtime_config.harness_id == HarnessId::Codex
+            && binding == Some(&self.source_binding)
+            && run.run_provider_binding.as_ref() == Some(&self.source_binding)
+            && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
+            && !run.interrupt_token.is_cancelled()
+            && !*run.cancel.subscribe().borrow()
+            && run.provider_turn.as_ref().is_some_and(|turn| {
+                turn.run_id == self.source_run_id
+                    && turn.binding == self.source_binding
+                    && turn.provider_turn_id == self.provider_turn_id
+                    && turn.claimed_call_ids.contains(&self.provider_call_id)
+            })
+    }
+}
+
+/// Read-only evidence for a possible later control proposal. No request ID,
+/// user grant, command ID, or dispatcher is created by this stage.
+#[derive(Debug)]
+#[allow(dead_code)]
+struct PreparedControlEvidence {
+    claim: ClaimedProviderCall,
+    source_project_id: String,
+    source_environment_id: String,
+    target_task_id: String,
+    target_snapshot: zeron_proto::TaskCommandSnapshot,
+}
+
 /// A checkpoint is evidence for one active provider turn, never authorization.
 /// Claiming a call ID only reserves it for a future engine-owned proposal; it
 /// does not mint a grant or dispatch a tool.
@@ -834,8 +876,8 @@ impl SessionsEngine {
         run_id: &str,
         context: &zeron_harness::LunaToolInvocationContext,
         deadline: tokio::time::Instant,
-    ) -> bool {
-        self.wait_and_claim_luna_provider_call(
+    ) -> Option<ClaimedProviderCall> {
+        self.wait_and_claim_luna_provider_call_evidence(
             chat_id,
             run_id,
             context.provider_thread_id(),
@@ -848,7 +890,7 @@ impl SessionsEngine {
 
     /// Raw IDs stay private to this engine seam for hermetic tests. Production
     /// callers must use the typed adapter context above, not model arguments.
-    async fn wait_and_claim_luna_provider_call(
+    async fn wait_and_claim_luna_provider_call_evidence(
         &self,
         chat_id: &str,
         run_id: &str,
@@ -856,17 +898,15 @@ impl SessionsEngine {
         provider_turn_id: &str,
         provider_call_id: &str,
         caller_deadline: tokio::time::Instant,
-    ) -> bool {
+    ) -> Option<ClaimedProviderCall> {
         const MAX_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
         let deadline = caller_deadline.min(tokio::time::Instant::now() + MAX_WAIT);
         if tokio::time::Instant::now() >= deadline {
-            return false;
+            return None;
         }
         let (mut readiness, mut cancel, interrupt) = {
             let runs = lock(&self.inner.runs);
-            let Some(run) = runs.get(chat_id).filter(|run| run.run_id == run_id) else {
-                return false;
-            };
+            let run = runs.get(chat_id).filter(|run| run.run_id == run_id)?;
             (
                 run.provider_turn_readiness.subscribe(),
                 run.cancel.subscribe(),
@@ -878,12 +918,12 @@ impl SessionsEngine {
                 || interrupt.is_cancelled()
                 || *cancel.borrow()
             {
-                return false;
+                return None;
             }
             let state = *readiness.borrow_and_update();
             match state {
                 ProviderTurnReadiness::Ready => {
-                    return self.claim_luna_provider_call(
+                    return self.claim_luna_provider_call_evidence(
                         chat_id,
                         run_id,
                         provider_thread_id,
@@ -891,20 +931,76 @@ impl SessionsEngine {
                         provider_call_id,
                     );
                 }
-                ProviderTurnReadiness::Unavailable | ProviderTurnReadiness::Ended => return false,
+                ProviderTurnReadiness::Unavailable | ProviderTurnReadiness::Ended => return None,
                 ProviderTurnReadiness::AwaitingBinding
                 | ProviderTurnReadiness::AwaitingCheckpoint => {}
             }
             tokio::select! {
                 biased;
-                _ = interrupt.cancelled() => return false,
-                changed = cancel.changed() => if changed.is_err() { return false; },
-                changed = readiness.changed() => if changed.is_err() { return false; },
-                _ = tokio::time::sleep_until(deadline) => return false,
+                _ = interrupt.cancelled() => return None,
+                changed = cancel.changed() => if changed.is_err() { return None; },
+                changed = readiness.changed() => if changed.is_err() { return None; },
+                _ = tokio::time::sleep_until(deadline) => return None,
             }
         }
     }
 
+    fn claim_luna_provider_call_evidence(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        provider_thread_id: &str,
+        provider_turn_id: &str,
+        provider_call_id: &str,
+    ) -> Option<ClaimedProviderCall> {
+        let binding = self.inner.current_codex_binding_key(chat_id)?;
+        let claimed = lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
+            run.claim_codex_invocation(
+                chat_id,
+                run_id,
+                Some(&binding),
+                provider_thread_id,
+                provider_turn_id,
+                provider_call_id,
+            )
+        });
+        // A binding may advance between the first lookup and the run lock.
+        // Consuming that call ID and failing closed is safer than accepting it.
+        if !claimed || self.inner.current_codex_binding_key(chat_id).as_ref() != Some(&binding) {
+            return None;
+        }
+        Some(ClaimedProviderCall {
+            source_task_id: chat_id.to_owned(),
+            source_run_id: run_id.to_owned(),
+            source_binding: binding,
+            provider_turn_id: provider_turn_id.to_owned(),
+            provider_call_id: provider_call_id.to_owned(),
+        })
+    }
+
+    #[cfg(test)]
+    async fn wait_and_claim_luna_provider_call(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        provider_thread_id: &str,
+        provider_turn_id: &str,
+        provider_call_id: &str,
+        deadline: tokio::time::Instant,
+    ) -> bool {
+        self.wait_and_claim_luna_provider_call_evidence(
+            chat_id,
+            run_id,
+            provider_thread_id,
+            provider_turn_id,
+            provider_call_id,
+            deadline,
+        )
+        .await
+        .is_some()
+    }
+
+    #[cfg(test)]
     fn claim_luna_provider_call(
         &self,
         chat_id: &str,
@@ -913,20 +1009,98 @@ impl SessionsEngine {
         provider_turn_id: &str,
         provider_call_id: &str,
     ) -> bool {
-        let binding = self.inner.current_codex_binding_key(chat_id);
-        let claimed = lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
-            run.claim_codex_invocation(
-                chat_id,
-                run_id,
-                binding.as_ref(),
-                provider_thread_id,
-                provider_turn_id,
-                provider_call_id,
-            )
-        });
-        // A binding may advance between the first lookup and the run lock.
-        // Consuming that call ID and failing closed is safer than granting it.
-        claimed && self.inner.current_codex_binding_key(chat_id) == binding
+        self.claim_luna_provider_call_evidence(
+            chat_id,
+            run_id,
+            provider_thread_id,
+            provider_turn_id,
+            provider_call_id,
+        )
+        .is_some()
+    }
+
+    fn claimed_call_cancel_state(
+        &self,
+        claim: &ClaimedProviderCall,
+    ) -> Option<(CancellationToken, watch::Receiver<bool>)> {
+        let binding = self.inner.current_codex_binding_key(&claim.source_task_id);
+        let runs = lock(&self.inner.runs);
+        let run = runs.get(&claim.source_task_id)?;
+        claim
+            .matches_live(run, binding.as_ref())
+            .then(|| (run.interrupt_token.clone(), run.cancel.subscribe()))
+    }
+
+    fn claimed_call_is_live(&self, claim: &ClaimedProviderCall) -> bool {
+        self.claimed_call_cancel_state(claim).is_some()
+    }
+
+    /// Dormant read-only preparation for a future, separately authorized
+    /// control flow. This cannot register input, mint consent or grant, choose
+    /// an action, generate a command ID, or submit a command.
+    #[allow(dead_code)]
+    async fn prepare_luna_control_evidence(
+        &self,
+        claim: ClaimedProviderCall,
+        authority: &crate::cross_task_tools::CrossTaskAuthority,
+        target_task_id: &str,
+    ) -> Result<PreparedControlEvidence, crate::cross_task_tools::CrossTaskError> {
+        use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
+        if authority.caller_task_id != claim.source_task_id
+            || authority.local_environment_id != self.inner.device_id
+            || authority.delivery != zeron_proto::RuntimeDelivery::CodexDynamicTools
+            || authority.explicit_user_request
+            || authority.allow_projectless
+            || authority.granted_scopes.len() != 1
+            || !authority.granted_scopes.contains("threads.read")
+            || authority.visible_project_ids.len() != 1
+            || target_task_id == claim.source_task_id
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let source_project_id = authority
+            .visible_project_ids
+            .iter()
+            .next()
+            .expect("checked one visible project")
+            .clone();
+        let (interrupt, mut cancel) = self
+            .claimed_call_cancel_state(&claim)
+            .ok_or(CrossTaskError::Unavailable)?;
+        let backend = self
+            .cross_task_backend()
+            .ok_or(CrossTaskError::Unavailable)?;
+        let tools = CrossTaskTools::new(backend);
+        let target_snapshot = tokio::select! {
+            biased;
+            _ = interrupt.cancelled() => return Err(CrossTaskError::Cancelled),
+            _ = cancel.wait_for(|value| *value) => return Err(CrossTaskError::Cancelled),
+            result = tools.control_target_snapshot(authority, target_task_id, &interrupt) => result,
+        }?;
+        if !self.claimed_call_is_live(&claim) {
+            return Err(CrossTaskError::Unavailable);
+        }
+        tokio::select! {
+            biased;
+            _ = interrupt.cancelled() => return Err(CrossTaskError::Cancelled),
+            _ = cancel.wait_for(|value| *value) => return Err(CrossTaskError::Cancelled),
+            result = tools.revalidate_control_target_snapshot(
+                authority,
+                target_task_id,
+                &target_snapshot,
+                &interrupt,
+            ) => result,
+        }?;
+        if !self.claimed_call_is_live(&claim) {
+            return Err(CrossTaskError::Unavailable);
+        }
+        Ok(PreparedControlEvidence {
+            claim,
+            source_project_id,
+            source_environment_id: authority.local_environment_id.clone(),
+            target_task_id: target_task_id.to_owned(),
+            target_snapshot,
+        })
     }
 
     pub fn task_binding_generation(&self, chat_id: &str) -> Option<u32> {
@@ -5813,6 +5987,7 @@ mod tests {
         stop_after_journal_failure, subagent_doc_id, take_pending_ordinary_input,
     };
     use futures::StreamExt as _;
+    use std::collections::{HashSet, VecDeque};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -6771,6 +6946,417 @@ mod tests {
                 .inner
                 .observe_codex_binding(task_id, "run-a", "provider-thread-a")
         );
+    }
+
+    struct FakeControlEvidenceBackend {
+        source_task_id: String,
+        source_environment_id: String,
+        target: Mutex<zeron_proto::CrossTaskSummary>,
+        snapshots: Mutex<VecDeque<zeron_proto::TaskCommandSnapshot>>,
+        snapshot_reads: AtomicUsize,
+        entered_snapshot: Option<Arc<tokio::sync::Notify>>,
+        release_snapshot: Option<Arc<tokio::sync::Notify>>,
+        control_calls: AtomicUsize,
+        receipt_reads: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::cross_task_tools::CrossTaskBackend for FakeControlEvidenceBackend {
+        fn capabilities(&self) -> crate::cross_task_tools::CrossTaskCapabilities {
+            crate::cross_task_tools::CrossTaskCapabilities {
+                read: true,
+                ..Default::default()
+            }
+        }
+
+        async fn task(
+            &self,
+            task_id: &str,
+        ) -> Result<Option<zeron_proto::CrossTaskSummary>, crate::cross_task_tools::CrossTaskError>
+        {
+            let target = lock(&self.target);
+            Ok(if task_id == self.source_task_id {
+                Some(zeron_proto::CrossTaskSummary {
+                    task_id: self.source_task_id.clone(),
+                    project_id: Some("project-a".into()),
+                    environment_id: self.source_environment_id.clone(),
+                    ..target.clone()
+                })
+            } else if task_id == target.task_id {
+                Some(target.clone())
+            } else {
+                None
+            })
+        }
+
+        async fn list(
+            &self,
+            _: zeron_proto::CrossTaskListRequest,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+        ) -> Result<zeron_proto::CrossTaskListPage, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn read(
+            &self,
+            _: zeron_proto::CrossTaskReadRequest,
+        ) -> Result<zeron_proto::CrossTaskReadPage, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn enqueue_queue(
+            &self,
+            _: zeron_proto::CrossTaskSendRequest,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+        ) -> Result<zeron_proto::CrossTaskSendReceipt, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn wait_event(
+            &self,
+            _: zeron_proto::CrossTaskWaitRequest,
+        ) -> Result<Option<zeron_proto::CrossTaskWaitEvent>, crate::cross_task_tools::CrossTaskError>
+        {
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+
+        async fn control_target_snapshot(
+            &self,
+            _: &str,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+        ) -> Result<zeron_proto::TaskCommandSnapshot, crate::cross_task_tools::CrossTaskError>
+        {
+            self.snapshot_reads.fetch_add(1, Ordering::SeqCst);
+            if let (Some(entered), Some(release)) = (&self.entered_snapshot, &self.release_snapshot)
+            {
+                entered.notify_one();
+                release.notified().await;
+            }
+            let mut snapshots = lock(&self.snapshots);
+            let snapshot = snapshots.front().cloned().unwrap();
+            if snapshots.len() > 1 {
+                snapshots.pop_front();
+            }
+            Ok(snapshot)
+        }
+
+        async fn control_command_receipt(
+            &self,
+            _: &str,
+            _: &str,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+        ) -> Result<Option<zeron_proto::CommandReceipt>, crate::cross_task_tools::CrossTaskError>
+        {
+            self.receipt_reads.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+
+        async fn control(
+            &self,
+            _: zeron_proto::CrossTaskControlRequest,
+            _: &crate::cross_task_tools::CrossTaskAuthority,
+            _: &crate::cross_task_tools::CrossTaskControlGrant,
+        ) -> Result<zeron_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError>
+        {
+            self.control_calls.fetch_add(1, Ordering::SeqCst);
+            Err(crate::cross_task_tools::CrossTaskError::Unsupported)
+        }
+    }
+
+    fn control_evidence_authority(
+        core: &crate::EngineCore,
+        source_task_id: &str,
+    ) -> crate::cross_task_tools::CrossTaskAuthority {
+        crate::cross_task_tools::CrossTaskAuthority {
+            caller_task_id: source_task_id.into(),
+            local_environment_id: core.device_id.clone(),
+            visible_project_ids: HashSet::from(["project-a".into()]),
+            allow_projectless: false,
+            granted_scopes: HashSet::from(["threads.read".into()]),
+            explicit_user_request: false,
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+        }
+    }
+
+    fn control_evidence_backend(
+        core: &crate::EngineCore,
+        source_task_id: &str,
+    ) -> Arc<FakeControlEvidenceBackend> {
+        Arc::new(FakeControlEvidenceBackend {
+            source_task_id: source_task_id.into(),
+            source_environment_id: core.device_id.clone(),
+            target: Mutex::new(zeron_proto::CrossTaskSummary {
+                task_id: "target-a".into(),
+                project_id: Some("project-a".into()),
+                environment_id: core.device_id.clone(),
+                title: "Synthetic target".into(),
+                status: "idle".into(),
+                archived: false,
+                updated_at_ms: 1,
+            }),
+            snapshots: Mutex::new(VecDeque::from([zeron_proto::TaskCommandSnapshot {
+                task_id: "target-a".into(),
+                task_revision: 7,
+                task_sequence: 12,
+                binding_id: Some("binding-target".into()),
+                binding_generation: Some(2),
+                active_turn_id: Some("target-run".into()),
+            }])),
+            snapshot_reads: AtomicUsize::new(0),
+            entered_snapshot: None,
+            release_snapshot: None,
+            control_calls: AtomicUsize::new(0),
+            receipt_reads: AtomicUsize::new(0),
+        })
+    }
+
+    fn register_control_evidence_backend(
+        core: &crate::EngineCore,
+        backend: &Arc<FakeControlEvidenceBackend>,
+    ) {
+        let erased: Arc<dyn crate::cross_task_tools::CrossTaskBackend> = backend.clone();
+        core.sessions
+            .set_cross_task_backend(Arc::downgrade(&erased));
+    }
+
+    fn ready_control_evidence_claim(
+        root: &tempfile::TempDir,
+        core: &crate::EngineCore,
+        source_task_id: &str,
+    ) -> super::ClaimedProviderCall {
+        publish_managed_codex_binding(root, core, source_task_id);
+        assert!(core.sessions.inner.observe_codex_checkpoint(
+            source_task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        ));
+        core.sessions
+            .claim_luna_provider_call_evidence(
+                source_task_id,
+                "run-a",
+                "provider-thread-a",
+                "turn-a",
+                "call-a",
+            )
+            .expect("exact synthetic call claim")
+    }
+
+    #[tokio::test]
+    async fn provider_wait_returns_exact_claimed_call_evidence_once() {
+        let (root, core, task_id) = managed_codex_wait_fixture();
+        let sessions = core.sessions.clone();
+        let waiting_task = task_id.clone();
+        let waiter = tokio::spawn(async move {
+            sessions
+                .wait_and_claim_luna_provider_call_evidence(
+                    &waiting_task,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-a",
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        publish_managed_codex_binding(&root, &core, &task_id);
+        assert!(!waiter.is_finished());
+        assert!(core.sessions.inner.observe_codex_checkpoint(
+            &task_id,
+            "run-a",
+            Some("provider-thread-a"),
+            "turn-a",
+        ));
+        let claim = waiter.await.unwrap().expect("ready provider call claim");
+        assert_eq!(claim.source_task_id, task_id);
+        assert_eq!(claim.source_run_id, "run-a");
+        assert_eq!(claim.source_binding.task_id, task_id);
+        assert!(!claim.source_binding.binding_id.is_empty());
+        assert_eq!(claim.source_binding.generation, 1);
+        assert_eq!(claim.source_binding.provider_thread_id, "provider-thread-a");
+        assert_eq!(claim.provider_turn_id, "turn-a");
+        assert_eq!(claim.provider_call_id, "call-a");
+        assert!(core.sessions.claimed_call_is_live(&claim));
+        assert!(
+            core.sessions
+                .claim_luna_provider_call_evidence(
+                    &task_id,
+                    "run-a",
+                    "provider-thread-a",
+                    "turn-a",
+                    "call-a",
+                )
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn control_preparation_keeps_only_exact_read_only_evidence() {
+        let (root, core, source_task_id) = managed_codex_wait_fixture();
+        let claim = ready_control_evidence_claim(&root, &core, &source_task_id);
+        let backend = control_evidence_backend(&core, &source_task_id);
+        register_control_evidence_backend(&core, &backend);
+        let expected_snapshot = lock(&backend.snapshots).front().unwrap().clone();
+        let evidence = core
+            .sessions
+            .prepare_luna_control_evidence(
+                claim,
+                &control_evidence_authority(&core, &source_task_id),
+                "target-a",
+            )
+            .await
+            .unwrap();
+        assert_eq!(evidence.claim.source_task_id, source_task_id);
+        assert_eq!(evidence.claim.source_run_id, "run-a");
+        assert_eq!(evidence.claim.provider_turn_id, "turn-a");
+        assert_eq!(evidence.claim.provider_call_id, "call-a");
+        assert_eq!(evidence.source_project_id, "project-a");
+        assert_eq!(evidence.source_environment_id, core.device_id);
+        assert_eq!(evidence.target_task_id, "target-a");
+        assert_eq!(evidence.target_snapshot, expected_snapshot);
+        assert_eq!(backend.snapshot_reads.load(Ordering::SeqCst), 2);
+        assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        assert!(
+            lock(&core.sessions.inner.runs)
+                .get(&source_task_id)
+                .unwrap()
+                .pending_inputs
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn control_preparation_rejects_changed_snapshot_and_unscoped_targets() {
+        use crate::cross_task_tools::CrossTaskError;
+
+        let (root, core, source_task_id) = managed_codex_wait_fixture();
+        let claim = ready_control_evidence_claim(&root, &core, &source_task_id);
+        let backend = control_evidence_backend(&core, &source_task_id);
+        let mut changed = lock(&backend.snapshots).front().unwrap().clone();
+        changed.task_sequence += 1;
+        lock(&backend.snapshots).push_back(changed);
+        register_control_evidence_backend(&core, &backend);
+        assert_eq!(
+            core.sessions
+                .prepare_luna_control_evidence(
+                    claim,
+                    &control_evidence_authority(&core, &source_task_id),
+                    "target-a",
+                )
+                .await
+                .unwrap_err(),
+            CrossTaskError::StaleSnapshot
+        );
+        assert_eq!(backend.snapshot_reads.load(Ordering::SeqCst), 2);
+
+        for scope in [
+            "foreign-project",
+            "remote-environment",
+            "manage-scope",
+            "user-request",
+        ] {
+            let (root, core, source_task_id) = managed_codex_wait_fixture();
+            let claim = ready_control_evidence_claim(&root, &core, &source_task_id);
+            let backend = control_evidence_backend(&core, &source_task_id);
+            let mut authority = control_evidence_authority(&core, &source_task_id);
+            match scope {
+                "foreign-project" => lock(&backend.target).project_id = Some("project-b".into()),
+                "remote-environment" => lock(&backend.target).environment_id = "remote".into(),
+                "manage-scope" => {
+                    authority.granted_scopes.insert("threads.manage".into());
+                }
+                "user-request" => authority.explicit_user_request = true,
+                _ => unreachable!(),
+            }
+            register_control_evidence_backend(&core, &backend);
+            assert_eq!(
+                core.sessions
+                    .prepare_luna_control_evidence(claim, &authority, "target-a")
+                    .await
+                    .unwrap_err(),
+                CrossTaskError::TargetScope,
+                "{scope}"
+            );
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn control_preparation_closes_when_source_changes_during_backend_await() {
+        use crate::cross_task_tools::CrossTaskError;
+
+        for change in ["rebind", "turn", "run-drop", "cancel"] {
+            let (root, core, source_task_id) = managed_codex_wait_fixture();
+            let claim = ready_control_evidence_claim(&root, &core, &source_task_id);
+            let mut backend = control_evidence_backend(&core, &source_task_id);
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let fake = Arc::get_mut(&mut backend).unwrap();
+            fake.entered_snapshot = Some(entered.clone());
+            fake.release_snapshot = Some(release.clone());
+            register_control_evidence_backend(&core, &backend);
+            let sessions = core.sessions.clone();
+            let authority = control_evidence_authority(&core, &source_task_id);
+            let preparing = tokio::spawn(async move {
+                sessions
+                    .prepare_luna_control_evidence(claim, &authority, "target-a")
+                    .await
+            });
+            tokio::time::timeout(Duration::from_secs(2), entered.notified())
+                .await
+                .expect("backend read entered");
+            match change {
+                "rebind" => {
+                    core.task_identity
+                        .advance_binding(
+                            &source_task_id,
+                            HarnessId::Codex,
+                            "provider-thread-b",
+                            zeron_proto::BindingOrigin::ContextReset,
+                            "synthetic rebind",
+                        )
+                        .unwrap();
+                }
+                "turn" => assert!(core.sessions.inner.observe_codex_checkpoint(
+                    &source_task_id,
+                    "run-a",
+                    Some("provider-thread-a"),
+                    "turn-b",
+                )),
+                "run-drop" => {
+                    lock(&core.sessions.inner.runs).remove(&source_task_id);
+                }
+                "cancel" => {
+                    lock(&core.sessions.inner.runs)
+                        .get(&source_task_id)
+                        .unwrap()
+                        .cancel
+                        .send_replace(true);
+                }
+                _ => unreachable!(),
+            }
+            release.notify_one();
+            let result = tokio::time::timeout(Duration::from_secs(2), preparing)
+                .await
+                .expect("preparation settled")
+                .unwrap();
+            assert!(
+                matches!(
+                    &result,
+                    Err(CrossTaskError::Unavailable | CrossTaskError::Cancelled)
+                ),
+                "{change}: {result:?}"
+            );
+            assert_eq!(backend.control_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]
