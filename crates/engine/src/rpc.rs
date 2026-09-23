@@ -2570,11 +2570,36 @@ impl EngineRpc {
 
     async fn execute_task_command(
         &self,
+        command: TaskCommandParams,
+        legacy: bool,
+    ) -> Result<CommandReceipt, RpcError> {
+        self.execute_task_command_with_send_fence(command, legacy, None)
+            .await
+    }
+
+    async fn execute_task_command_with_send_fence(
+        &self,
         mut command: TaskCommandParams,
         legacy: bool,
+        send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
     ) -> Result<CommandReceipt, RpcError> {
         let _lane = self.doc_host.task_command_gate(&command.task_id).await;
         let current = self.current_task_command_snapshot(&command.task_id)?;
+        if send_fence.is_some_and(|fence| {
+            current.task_revision != fence.target_snapshot.task_revision
+                || current.binding_id != fence.target_snapshot.binding_id
+                || current.binding_generation != fence.target_snapshot.binding_generation
+                || current.active_turn_id != fence.target_snapshot.active_turn_id
+        }) {
+            return Err(RpcError::Failed(
+                "target task changed before command admission".into(),
+            ));
+        }
+        if let Some(fence) = send_fence {
+            self.sessions
+                .with_live_approved_send(fence, || Ok(()))
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+        }
         if legacy {
             if command.intent.requires_revision() {
                 command.expected_task_revision = Some(current.task_revision);
@@ -2733,6 +2758,21 @@ impl EngineRpc {
             None
         };
         let revalidated = self.current_task_command_snapshot(&command.task_id)?;
+        if send_fence.is_some_and(|fence| {
+            revalidated.task_revision != fence.target_snapshot.task_revision
+                || revalidated.binding_id != fence.target_snapshot.binding_id
+                || revalidated.binding_generation != fence.target_snapshot.binding_generation
+                || revalidated.active_turn_id != fence.target_snapshot.active_turn_id
+        }) {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Conflict,
+                false,
+                CommandReasonCode::StaleTaskRevision,
+                "the target changed after approval",
+                "Read the task again and request a new approval.",
+            );
+        }
         if command.expected_binding_generation.is_some()
             && command.expected_binding_generation != revalidated.binding_generation
         {
@@ -2941,6 +2981,7 @@ impl EngineRpc {
                 command.intent,
                 expected_turn_id.as_deref(),
                 validated_project_move,
+                send_fence,
             )
             .await;
         let outcome = match outcome {
@@ -4196,6 +4237,7 @@ impl EngineRpc {
         intent: TaskCommandIntent,
         expected_turn_id: Option<&str>,
         validated_project_move: Option<ValidatedProjectMove>,
+        send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
     ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
         match intent {
             TaskCommandIntent::CreateChat {
@@ -5338,7 +5380,7 @@ impl EngineRpc {
                 use crate::doc_host::QueueMutationOutcome;
                 let (outcome, committed) = self
                     .doc_host
-                    .enqueue_queued_message(
+                    .enqueue_queued_message_guarded(
                         command_id,
                         task_id,
                         &message_id,
@@ -5347,9 +5389,9 @@ impl EngineRpc {
                         hold_for_turn_end,
                         follow_up_behavior,
                         execution,
+                        send_fence.map(|fence| (&self.sessions, fence)),
                     )
-                    .await
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .await?;
                 if let Some(receipt) = committed {
                     let accepted_turn_id = receipt.snapshot.active_turn_id.clone();
                     if matches!(outcome, QueueMutationOutcome::Applied)
@@ -6612,6 +6654,7 @@ impl CrossTaskBackend for EngineRpc {
             list: true,
             read: true,
             durable_queue: true,
+            approved_queue: true,
             event_wait: true,
         }
     }
@@ -6854,6 +6897,80 @@ impl CrossTaskBackend for EngineRpc {
             .execute_task_command(command, true)
             .await
             .map_err(|_| CrossTaskError::Backend("durable queue command failed".into()))?;
+        if receipt.status != CommandReceiptStatus::Applied {
+            return Err(CrossTaskError::CommandOutcome {
+                status: receipt.status,
+                reason: receipt.reason.as_ref().map(|reason| reason.code),
+            });
+        }
+        let sequence = receipt
+            .event_sequence
+            .ok_or(CrossTaskError::InvalidBackendResult)?;
+        Ok(zeron_proto::CrossTaskSendReceipt {
+            task_id: request.task_id,
+            queued_message_id: request.idempotency_key,
+            activity_cursor: format!("command:{sequence}"),
+            command: receipt,
+            delivery_state: "queued".into(),
+        })
+    }
+
+    async fn enqueue_approved_queue(
+        &self,
+        request: zeron_proto::CrossTaskSendRequest,
+        authority: &CrossTaskAuthority,
+        fence: &crate::cross_task_tools::ApprovedSendFence,
+    ) -> Result<zeron_proto::CrossTaskSendReceipt, CrossTaskError> {
+        if authority.caller_task_id != fence.source_task_id
+            || authority.local_environment_id != self.engine_info.device_id
+            || !authority.granted_scopes.contains("threads.read")
+            || fence.request != request
+            || fence.target_snapshot.task_id != request.task_id
+            || fence.expires_at_ms <= crate::now_ms()
+        {
+            return Err(CrossTaskError::UserRequest);
+        }
+        local_control_evidence_target(self, &request.task_id, authority).await?;
+        let mut command = cross_task_queue_command(&request, authority);
+        command.expected_task_revision = Some(fence.target_snapshot.task_revision);
+        command.expected_binding_generation = fence.target_snapshot.binding_generation;
+        command.expected_turn_id = fence.target_snapshot.active_turn_id.clone();
+        let expected_hash = canonical_payload_hash(&command.intent)
+            .map_err(|_| CrossTaskError::InvalidBackendResult)?;
+        let submitted = self
+            .execute_task_command_with_send_fence(command, false, Some(fence))
+            .await;
+        // The transaction may have committed before an in-memory projection
+        // failed. Read the stable command ID instead of replaying the send.
+        let readback = self
+            .doc_host
+            .task_command_receipt(&request.idempotency_key)
+            .map_err(|_| {
+                CrossTaskError::Backend("queue receipt readback failed; outcome unknown".into())
+            })?;
+        let receipt = match submitted {
+            Ok(receipt) if receipt.status == CommandReceiptStatus::Conflict => receipt,
+            Ok(receipt) => readback.unwrap_or(receipt),
+            Err(_) => readback.ok_or_else(|| {
+                CrossTaskError::Backend("queue outcome unknown; inspect the same command ID".into())
+            })?,
+        };
+        if receipt.payload_hash != expected_hash {
+            return Err(CrossTaskError::CommandOutcome {
+                status: CommandReceiptStatus::Conflict,
+                reason: Some(CommandReasonCode::CommandIdConflict),
+            });
+        }
+        if receipt.command_id != request.idempotency_key
+            || receipt.task_id != request.task_id
+            || receipt.intent != "queueMessage"
+            || receipt.client_id != "luna-cross-task"
+            || receipt.actor_id != format!("luna-tool:{}", authority.caller_task_id)
+            || receipt.client_session_id != authority.caller_task_id
+            || receipt.execution_environment.as_deref() != Some(self.engine_info.device_id.as_str())
+        {
+            return Err(CrossTaskError::InvalidBackendResult);
+        }
         if receipt.status != CommandReceiptStatus::Applied {
             return Err(CrossTaskError::CommandOutcome {
                 status: receipt.status,

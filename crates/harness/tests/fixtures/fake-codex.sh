@@ -232,6 +232,58 @@ tid=$(rid "$turnline")
 
 case "$turnline" in
 
+*scenario:l25-send-storage-fail:*)
+  target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send-storage-fail:\([0-9a-f-]*\).*/\1/p')
+  [ -n "$target" ] || { fail_turn "$tid" "missing storage-failure target"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-l25-storage-fail\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-l25-storage-fail"}}}'
+  emit "{\"method\":\"item/tool/call\",\"id\":89,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-storage-fail\",\"callId\":\"call-storage-fail\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Storage failure follow-up\",\"idempotencyKey\":\"l25-storage-fail\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":false' || { fail_turn "$tid" "SQL failure returned queued success"; exit 0; }
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-storage-fail","status":"completed"}}}'
+  ;;
+
+*scenario:l25-send-stale:*)
+  target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send-stale:\([0-9a-f-]*\).*/\1/p')
+  [ -n "$target" ] || { fail_turn "$tid" "missing stale target"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-l25-stale\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-l25-stale"}}}'
+  emit "{\"method\":\"item/tool/call\",\"id\":86,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-stale\",\"callId\":\"call-stale-target\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Stale target follow-up\",\"idempotencyKey\":\"l25-stale-target\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":false' || { fail_turn "$tid" "stale target accepted"; exit 0; }
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-stale","status":"completed"}}}'
+  ;;
+
+*scenario:l25-send:*)
+  target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send:\([0-9a-f-]*\).*/\1/p')
+  foreign=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send:[0-9a-f-]*:\([0-9a-f-]*\).*/\1/p')
+  [ -n "$target" ] || { fail_turn "$tid" "missing synthetic L25 target"; exit 0; }
+  has "$thread_line" '"name":"send_message_to_thread"' || { fail_turn "$tid" "L25 send tool missing"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-l25-send\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-l25-send"}}}'
+  emit "{\"method\":\"item/tool/call\",\"id\":81,\"params\":{\"threadId\":\"foreign-thread\",\"turnId\":\"t-l25-send\",\"callId\":\"call-wrong-task\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"foreign\",\"idempotencyKey\":\"l25-foreign\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":false' || { fail_turn "$tid" "foreign source accepted"; exit 0; }
+  if [ -n "$foreign" ]; then
+    emit "{\"method\":\"item/tool/call\",\"id\":85,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-wrong-target\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$foreign\",\"message\":\"wrong project\",\"idempotencyKey\":\"l25-wrong-target\"}}}"
+    read -r response || exit 1
+    has "$response" '"success":false' || { fail_turn "$tid" "wrong-project target accepted"; exit 0; }
+  fi
+  emit "{\"method\":\"item/tool/call\",\"id\":82,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-1\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Synthetic L25 queued follow-up\",\"idempotencyKey\":\"l25-send-1\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":true' && has "$response" 'queued' || { fail_turn "$tid" "approved send did not return queued receipt"; exit 0; }
+  emit "{\"method\":\"item/tool/call\",\"id\":83,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-1\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Synthetic L25 queued follow-up\",\"idempotencyKey\":\"l25-send-1\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":false' || { fail_turn "$tid" "replayed provider call accepted"; exit 0; }
+  emit "{\"method\":\"item/tool/call\",\"id\":87,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-collision\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Different synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-1\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":false' || { fail_turn "$tid" "changed-payload command ID accepted"; exit 0; }
+  emit "{\"method\":\"item/tool/call\",\"id\":84,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-deny\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Denied synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-deny\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":false' || { fail_turn "$tid" "denied send accepted"; exit 0; }
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-send","status":"completed"}}}'
+  ;;
+
 *scenario:runtime-contract-resume*)
   has "$thread_line" '"developerInstructions"' || { fail_turn "$tid" "LUNA instructions missing on resume"; exit 0; }
   if has "$thread_line" '"dynamicTools"'; then fail_turn "$tid" "resume must not replace dynamic tools"; exit 0; fi

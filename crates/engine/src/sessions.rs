@@ -90,6 +90,11 @@ struct PendingInput {
 #[derive(Debug)]
 enum PendingInputKind {
     Provider,
+    LunaSend {
+        run_id: String,
+        proposal: Box<LunaSendProposal>,
+        grant_tx: oneshot::Sender<crate::cross_task_tools::ApprovedSendFence>,
+    },
     // Only engine-owned registration may select this kind. The run binding is
     // never derived from a serialized question or client-provided source hint.
     #[allow(dead_code)]
@@ -106,6 +111,46 @@ enum PendingInputKind {
         proposal: Box<LunaProspectiveInterruptProposal>,
         grant_tx: oneshot::Sender<LunaProspectiveInterruptGrant>,
     },
+}
+
+#[derive(Debug)]
+struct LunaSendProposal {
+    request_id: String,
+    claim: ClaimedProviderCall,
+    fence: crate::cross_task_tools::ApprovedSendFence,
+    project_id: String,
+    environment_id: String,
+}
+
+impl LunaSendProposal {
+    fn question(&self) -> UserInputQuestion {
+        UserInputQuestion {
+            id: format!("question-{}", self.request_id),
+            header: "LUNA approval".into(),
+            question: format!(
+                "Queue this exact message to task {} in project {} on {} at revision {} and turn {:?}?\n\n{}",
+                self.fence.request.task_id,
+                self.project_id,
+                self.environment_id,
+                self.fence.target_snapshot.task_revision,
+                self.fence.target_snapshot.active_turn_id,
+                self.fence.request.message,
+            ),
+            options: vec!["Deny".into(), "Allow once".into()],
+            multi_select: false,
+            approval: Some(zeron_proto::ApprovalRequest {
+                provider_request_id: self.claim.provider_call_id.clone(),
+                provider: HarnessId::Codex,
+                turn_id: Some(self.claim.provider_turn_id.clone()),
+                machine_name: self.environment_id.clone(),
+                action_kind: zeron_proto::ApprovalActionKind::LunaCrossTask,
+                summary: format!("Queue a follow-up to task {}", self.fence.request.task_id),
+                requested_scope: zeron_proto::PermissionScope::Workspace,
+                expires_at_ms: self.fence.expires_at_ms,
+                supports_task_allowance: false,
+            }),
+        }
+    }
 }
 
 /// Fake-backed proof payload only. No production run registers one yet, and
@@ -351,15 +396,17 @@ fn take_pending_ordinary_input(
     let pending = pending_inputs.get(request_id)?;
     if matches!(
         &pending.kind,
-        PendingInputKind::LunaCrossTask { .. } | PendingInputKind::LunaProspectiveInterrupt { .. }
+        PendingInputKind::LunaCrossTask { .. }
+            | PendingInputKind::LunaProspectiveInterrupt { .. }
+            | PendingInputKind::LunaSend { .. }
     ) || pending
         .questions
         .iter()
         .any(|question| question.approval.is_some())
     {
         // Typed approvals cannot leave through ordinary input. Provider
-        // approvals use `respond_approval`; LUNA approvals need the future
-        // trusted local UI route.
+        // approvals use `respond_approval`; LUNA approvals use the in-process
+        // local UI route.
         return None;
     }
     pending_inputs.remove(request_id)
@@ -1222,10 +1269,224 @@ impl SessionsEngine {
         self.claimed_call_cancel_state(claim).is_some()
     }
 
-    /// Dormant read-only preparation for a future, separately authorized
-    /// control flow. This cannot register input, mint consent or grant, choose
-    /// an action, generate a command ID, or submit a command.
-    #[allow(dead_code)]
+    async fn invoke_approved_luna_send(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        contract: &zeron_proto::LunaAgentRuntimeContract,
+        invocation: zeron_harness::LunaToolInvocation,
+        cancel: &CancellationToken,
+        backend: Option<Arc<dyn crate::cross_task_tools::CrossTaskBackend>>,
+    ) -> Result<serde_json::Value, EngineError> {
+        use crate::cross_task_tools::{
+            ApprovedSendFence, CrossTaskAuthority, CrossTaskError, CrossTaskTools,
+        };
+        use zeron_proto::{CrossTaskSendMode, CrossTaskSendRequest, RuntimeDelivery};
+        let fail = |error: CrossTaskError| EngineError::Other(error.to_string());
+        let Some(tool) = contract
+            .tools
+            .iter()
+            .find(|tool| tool.name == invocation.name)
+        else {
+            return Err(fail(CrossTaskError::Unavailable));
+        };
+        if contract.context.thread_id != chat_id
+            || contract.delivery != RuntimeDelivery::CodexDynamicTools
+            || !tool
+                .required_scopes
+                .iter()
+                .all(|scope| contract.context.granted_scopes.contains(scope))
+        {
+            return Err(fail(CrossTaskError::Scope));
+        }
+        let request: CrossTaskSendRequest = serde_json::from_value(invocation.arguments)
+            .map_err(|_| fail(CrossTaskError::Input))?;
+        // The complete text appears in the local approval question.
+        if request.mode != CrossTaskSendMode::Queue
+            || request.message.trim().is_empty()
+            || request.message.chars().count() > crate::cross_task_tools::MAX_APPROVED_MESSAGE_CHARS
+            || request.idempotency_key.is_empty()
+            || request.idempotency_key.len() > 128
+            || !request
+                .idempotency_key
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(fail(CrossTaskError::Input));
+        }
+        let backend = backend.ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+        let authority =
+            CrossTaskAuthority::from_context(&contract.context, contract.delivery, false);
+        let claim = self
+            .wait_and_claim_luna_provider_invocation(
+                chat_id,
+                run_id,
+                &invocation.context,
+                tokio::time::Instant::now() + std::time::Duration::from_millis(500),
+            )
+            .await
+            .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+        let evidence = self
+            .prepare_luna_control_evidence(claim, &authority, &request.task_id)
+            .await
+            .map_err(fail)?;
+        let expires_at_ms = now_ms().saturating_add(30_000);
+        let fence = ApprovedSendFence {
+            source_task_id: evidence.claim.source_task_id.clone(),
+            source_run_id: evidence.claim.source_run_id.clone(),
+            source_binding_id: evidence.claim.source_binding.binding_id.clone(),
+            source_binding_generation: evidence.claim.source_binding.generation,
+            source_provider_thread_id: evidence.claim.source_binding.provider_thread_id.clone(),
+            source_provider_turn_id: evidence.claim.provider_turn_id.clone(),
+            source_provider_call_id: evidence.claim.provider_call_id.clone(),
+            target_snapshot: evidence.target_snapshot,
+            request: request.clone(),
+            expires_at_ms,
+        };
+        let proposal = LunaSendProposal {
+            request_id: new_id(),
+            claim: evidence.claim,
+            fence,
+            project_id: evidence.source_project_id,
+            environment_id: evidence.source_environment_id,
+        };
+        let request_id = proposal.request_id.clone();
+        let question = proposal.question();
+        let (resolver, _answer_rx) = oneshot::channel();
+        let (grant_tx, grant_rx) = oneshot::channel();
+        let binding = self.inner.current_codex_binding_key(chat_id);
+        let (pending, engine_tx) = {
+            let runs = lock(&self.inner.runs);
+            let run = runs
+                .get(chat_id)
+                .filter(|run| proposal.claim.matches_live(run, binding.as_ref()))
+                .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+            let pending = run.pending_inputs.clone();
+            lock(&pending).insert(
+                request_id.clone(),
+                PendingInput {
+                    kind: PendingInputKind::LunaSend {
+                        run_id: run_id.to_owned(),
+                        proposal: Box::new(proposal),
+                        grant_tx,
+                    },
+                    questions: vec![question.clone()],
+                    resolver,
+                },
+            );
+            (pending, run.engine_tx.clone())
+        };
+        if engine_tx
+            .send(AgentEvent::InputRequested {
+                request_id: request_id.clone(),
+                questions: vec![question],
+            })
+            .is_err()
+        {
+            expire_pending_approval(&pending, &engine_tx, &request_id);
+            return Err(fail(CrossTaskError::Unavailable));
+        }
+        let grant = tokio::select! {
+            _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
+            result = tokio::time::timeout(std::time::Duration::from_secs(30), grant_rx) => {
+                match result {
+                    Ok(Ok(fence)) => Ok(fence),
+                    Ok(Err(_)) => Err(CrossTaskError::UserRequest),
+                    Err(_) => Err(CrossTaskError::Deadline),
+                }
+            }
+        };
+        expire_pending_approval(&pending, &engine_tx, &request_id);
+        let fence = grant.map_err(fail)?;
+        self.with_live_approved_send(&fence, || Ok(()))?;
+        let tools = CrossTaskTools::new(backend);
+        tools
+            .revalidate_control_target_snapshot(
+                &authority,
+                &request.task_id,
+                &fence.target_snapshot,
+                cancel,
+            )
+            .await
+            .map_err(fail)?;
+        let receipt = tools
+            .send_approved(&authority, request, &fence, cancel)
+            .await
+            .map_err(fail)?;
+        serde_json::to_value(receipt).map_err(Into::into)
+    }
+
+    /// Keep the source run fenced through the synchronous queue transaction.
+    /// The caller must first acquire the target command/drain lanes; there is
+    /// no await while this run lock is held.
+    pub(crate) fn with_live_approved_send<T>(
+        &self,
+        fence: &crate::cross_task_tools::ApprovedSendFence,
+        commit: impl FnOnce() -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        if fence.expires_at_ms <= now_ms() {
+            return Err(EngineError::Other("cross-task approval expired".into()));
+        }
+        let binding = self.inner.current_codex_binding_key(&fence.source_task_id);
+        let runs = lock(&self.inner.runs);
+        let valid = runs.get(&fence.source_task_id).is_some_and(|run| {
+            run.run_id == fence.source_run_id
+                && run.runtime_config.harness_id == HarnessId::Codex
+                && !run.interrupt_token.is_cancelled()
+                && !*run.cancel.subscribe().borrow()
+                && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
+                && run.run_provider_binding.as_ref() == binding.as_ref()
+                && binding.as_ref().is_some_and(|binding| {
+                    binding.binding_id == fence.source_binding_id
+                        && binding.generation == fence.source_binding_generation
+                        && binding.provider_thread_id == fence.source_provider_thread_id
+                })
+                && run.provider_turn.as_ref().is_some_and(|turn| {
+                    turn.run_id == fence.source_run_id
+                        && turn.provider_turn_id == fence.source_provider_turn_id
+                        && turn
+                            .claimed_call_ids
+                            .contains(&fence.source_provider_call_id)
+                        && Some(&turn.binding) == binding.as_ref()
+                })
+        });
+        if !valid {
+            return Err(EngineError::Other(
+                "source provider call is no longer live".into(),
+            ));
+        }
+        let host = self
+            .inner
+            .doc_host()
+            .ok_or_else(|| EngineError::Other("task command host is unavailable".into()))?;
+        let mut target = host.task_command_snapshot(&fence.request.task_id)?.snapshot;
+        if let Some(binding) = self
+            .inner
+            .task_identity
+            .get()
+            .and_then(|service| service.view(&fence.request.task_id))
+            .and_then(|view| view.current_binding)
+        {
+            target.binding_id = Some(binding.binding_id);
+            target.binding_generation = Some(binding.generation);
+        }
+        target.active_turn_id = runs
+            .get(&fence.request.task_id)
+            .map(|run| run.run_id.clone());
+        if target.task_revision != fence.target_snapshot.task_revision
+            || target.binding_id != fence.target_snapshot.binding_id
+            || target.binding_generation != fence.target_snapshot.binding_generation
+            || target.active_turn_id != fence.target_snapshot.active_turn_id
+        {
+            return Err(EngineError::Other(
+                "target task changed after approval".into(),
+            ));
+        }
+        commit()
+    }
+
+    /// Read-only target evidence for an adapter-claimed provider call. The
+    /// send path still needs a separate, exact local UI approval.
     async fn prepare_luna_control_evidence(
         &self,
         claim: ClaimedProviderCall,
@@ -2729,6 +2990,9 @@ impl SessionsEngine {
         };
         let interrupt_token = CancellationToken::new();
         let hold_recovery_on_interrupt = Arc::new(AtomicBool::new(true));
+        let tool_sessions = self.clone();
+        let tool_chat_id = chat_id.to_owned();
+        let tool_run_id = run_id.clone();
         let controls = RunControls {
             request_input,
             steering: steer_rx,
@@ -2743,6 +3007,9 @@ impl SessionsEngine {
                 .filter(|contract| !contract.tools.is_empty())
                 .map(|contract| {
                     let cancel = interrupt_token.clone();
+                    let sessions = tool_sessions.clone();
+                    let chat_id = tool_chat_id.clone();
+                    let run_id = tool_run_id.clone();
                     let backend = lock(&self.inner.cross_task_backends)
                         .iter()
                         .rev()
@@ -2752,21 +3019,27 @@ impl SessionsEngine {
                         let contract = contract.clone();
                         let cancel = cancel.clone();
                         let backend = backend.as_ref().and_then(Weak::upgrade);
+                        let sessions = sessions.clone();
+                        let chat_id = chat_id.clone();
+                        let run_id = run_id.clone();
                         Box::pin(async move {
-                            // The adapter validated this provider invocation against
-                            // its active thread and turn. The current registry only
-                            // dispatches read tools; a future mutating path must
-                            // bind these IDs to a separate one-use user grant.
-                            let _provider_context = invocation.context;
-                            crate::runtime_contract::invoke_with_backend(
-                                &contract,
-                                &invocation.name,
-                                invocation.arguments,
-                                &cancel,
-                                backend,
-                            )
-                            .await
-                            .map_err(|error| {
+                            let result = if invocation.name == "send_message_to_thread" {
+                                sessions
+                                    .invoke_approved_luna_send(
+                                        &chat_id, &run_id, &contract, invocation, &cancel, backend,
+                                    )
+                                    .await
+                            } else {
+                                crate::runtime_contract::invoke_with_backend(
+                                    &contract,
+                                    &invocation.name,
+                                    invocation.arguments,
+                                    &cancel,
+                                    backend,
+                                )
+                                .await
+                            };
+                            result.map_err(|error| {
                                 zeron_harness::HarnessError::Protocol(error.to_string())
                             })
                         })
@@ -3030,6 +3303,7 @@ impl SessionsEngine {
                     &item.kind,
                     PendingInputKind::LunaCrossTask { .. }
                         | PendingInputKind::LunaProspectiveInterrupt { .. }
+                        | PendingInputKind::LunaSend { .. }
                 )
             })
         })
@@ -3037,13 +3311,20 @@ impl SessionsEngine {
 
     /// The only response path for a server-owned LUNA approval. The caller
     /// must be an in-process UI handle; this method is not exposed by RPC.
-    /// No production path creates such a pending request yet.
     pub fn respond_luna_local_ui_approval(
         &self,
         chat_id: &str,
         request_id: &str,
         decision: zeron_proto::ApprovalDecision,
     ) -> LunaApprovalOutcome {
+        let is_send = lock(&self.inner.runs).get(chat_id).is_some_and(|run| {
+            lock(&run.pending_inputs)
+                .get(request_id)
+                .is_some_and(|item| matches!(item.kind, PendingInputKind::LunaSend { .. }))
+        });
+        if is_send {
+            return self.respond_luna_send_local_ui_approval(chat_id, request_id, decision);
+        }
         let live_binding = self.inner.current_codex_binding_key(chat_id);
         // Hold the run map through response delivery: a replacement cannot
         // accept an answer for a resolver owned by the previous run.
@@ -3172,6 +3453,70 @@ impl SessionsEngine {
                 })
                 .is_err()
         {
+            return LunaApprovalOutcome::RunEnded;
+        }
+        outcome
+    }
+
+    fn respond_luna_send_local_ui_approval(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        decision: zeron_proto::ApprovalDecision,
+    ) -> LunaApprovalOutcome {
+        let binding = self.inner.current_codex_binding_key(chat_id);
+        let runs = lock(&self.inner.runs);
+        let Some(run) = runs.get(chat_id) else {
+            return LunaApprovalOutcome::Stale;
+        };
+        let mut entries = lock(&run.pending_inputs);
+        let Some(entry) = entries.get(request_id) else {
+            return LunaApprovalOutcome::Stale;
+        };
+        let PendingInputKind::LunaSend {
+            run_id,
+            proposal,
+            grant_tx,
+        } = &entry.kind
+        else {
+            return LunaApprovalOutcome::Stale;
+        };
+        if run_id != &run.run_id
+            || entry.questions.len() != 1
+            || entry.questions[0] != proposal.question()
+            || !proposal.claim.matches_live(run, binding.as_ref())
+            || proposal.fence.source_task_id != chat_id
+            || proposal.fence.source_run_id != run.run_id
+            || grant_tx.is_closed()
+            || entry.resolver.is_closed()
+        {
+            return LunaApprovalOutcome::Stale;
+        }
+        let expired = proposal.fence.expires_at_ms <= now_ms();
+        let pending = entries.remove(request_id).expect("checked LUNA send input");
+        drop(entries);
+        let PendingInputKind::LunaSend {
+            proposal, grant_tx, ..
+        } = pending.kind
+        else {
+            unreachable!("checked LUNA send input")
+        };
+        let approved = decision == zeron_proto::ApprovalDecision::AllowOnce && !expired;
+        let outcome = if expired {
+            LunaApprovalOutcome::Expired
+        } else if approved {
+            LunaApprovalOutcome::AllowedOnce
+        } else {
+            LunaApprovalOutcome::Denied
+        };
+        let _ = run.engine_tx.send(AgentEvent::InputResolved {
+            request_id: request_id.to_owned(),
+        });
+        let _ = pending.resolver.send(vec![UserInputAnswer {
+            question_id: pending.questions[0].id.clone(),
+            labels: vec![if approved { "Allow once" } else { "Deny" }.into()],
+        }]);
+        if approved && grant_tx.send(proposal.fence).is_err() {
             return LunaApprovalOutcome::RunEnded;
         }
         outcome
@@ -8405,6 +8750,152 @@ mod tests {
             .expect("exact synthetic call claim")
     }
 
+    #[tokio::test]
+    async fn approved_send_commit_fence_rejects_wrong_call_target_revision_and_replaced_turn() {
+        let (root, core, source) = managed_codex_wait_fixture();
+        let claim = ready_control_evidence_claim(&root, &core, &source);
+        let target = uuid::Uuid::new_v4().to_string();
+        core.workspace
+            .create_chat(&target, Some("project-a"), None, None, None)
+            .unwrap();
+        core.task_identity
+            .register_new_task(
+                &target,
+                Some("project-a"),
+                None,
+                root.path().join("project-a").to_str(),
+                zeron_proto::TaskLineage::default(),
+            )
+            .unwrap();
+        let fence = crate::cross_task_tools::ApprovedSendFence {
+            source_task_id: source.clone(),
+            source_run_id: claim.source_run_id,
+            source_binding_id: claim.source_binding.binding_id,
+            source_binding_generation: claim.source_binding.generation,
+            source_provider_thread_id: claim.source_binding.provider_thread_id,
+            source_provider_turn_id: claim.provider_turn_id,
+            source_provider_call_id: claim.provider_call_id,
+            target_snapshot: core
+                .doc_host
+                .task_command_snapshot(&target)
+                .unwrap()
+                .snapshot,
+            request: zeron_proto::CrossTaskSendRequest {
+                task_id: target,
+                message: "synthetic".into(),
+                mode: zeron_proto::CrossTaskSendMode::Queue,
+                idempotency_key: "source-fence".into(),
+            },
+            expires_at_ms: crate::now_ms() + 30_000,
+        };
+        core.sessions
+            .with_live_approved_send(&fence, || Ok(()))
+            .unwrap();
+        let mut wrong_call = fence.clone();
+        wrong_call.source_provider_call_id = "unclaimed-call".into();
+        assert!(
+            core.sessions
+                .with_live_approved_send(&wrong_call, || -> Result<(), crate::EngineError> {
+                    panic!("wrong call reached commit")
+                })
+                .is_err()
+        );
+        let mut stale_target = fence.clone();
+        stale_target.target_snapshot.task_revision += 1;
+        assert!(
+            core.sessions
+                .with_live_approved_send(&stale_target, || -> Result<(), crate::EngineError> {
+                    panic!("stale target reached commit")
+                })
+                .is_err()
+        );
+        assert!(core.sessions.inner.observe_codex_checkpoint(
+            &source,
+            "run-a",
+            Some("provider-thread-a"),
+            "replacement-turn",
+        ));
+        assert!(
+            core.sessions
+                .with_live_approved_send(&fence, || -> Result<(), crate::EngineError> {
+                    panic!("replaced turn reached commit")
+                })
+                .is_err()
+        );
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn approved_send_postcommit_install_failure_keeps_applied_receipt_through_rpc() {
+        use crate::cross_task_tools::CrossTaskBackend;
+        let (root, core, source) = managed_codex_wait_fixture();
+        let claim = ready_control_evidence_claim(&root, &core, &source);
+        let target = uuid::Uuid::new_v4().to_string();
+        core.workspace
+            .create_chat(&target, Some("project-a"), None, None, None)
+            .unwrap();
+        core.task_identity
+            .register_new_task(
+                &target,
+                Some("project-a"),
+                None,
+                root.path().join("project-a").to_str(),
+                zeron_proto::TaskLineage::default(),
+            )
+            .unwrap();
+        let request = zeron_proto::CrossTaskSendRequest {
+            task_id: target.clone(),
+            message: "synthetic postcommit follow-up".into(),
+            mode: zeron_proto::CrossTaskSendMode::Queue,
+            idempotency_key: "approved-postcommit".into(),
+        };
+        let fence = crate::cross_task_tools::ApprovedSendFence {
+            source_task_id: source.clone(),
+            source_run_id: claim.source_run_id,
+            source_binding_id: claim.source_binding.binding_id,
+            source_binding_generation: claim.source_binding.generation,
+            source_provider_thread_id: claim.source_binding.provider_thread_id,
+            source_provider_turn_id: claim.provider_turn_id,
+            source_provider_call_id: claim.provider_call_id,
+            target_snapshot: core
+                .doc_host
+                .task_command_snapshot(&target)
+                .unwrap()
+                .snapshot,
+            request: request.clone(),
+            expires_at_ms: crate::now_ms() + 30_000,
+        };
+        core.doc_host.fail_next_approved_queue_install_for_test();
+        let rpc = core.rpc_service();
+        let result = CrossTaskBackend::enqueue_approved_queue(
+            rpc.as_ref(),
+            request,
+            &control_evidence_authority(&core, &source),
+            &fence,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.delivery_state, "queued");
+        assert_eq!(
+            result.command.status,
+            zeron_proto::CommandReceiptStatus::Applied
+        );
+        assert_eq!(
+            core.doc_host
+                .task_command_receipt("approved-postcommit")
+                .unwrap()
+                .unwrap()
+                .status,
+            zeron_proto::CommandReceiptStatus::Applied
+        );
+        let stored = core.store.load_snapshot(&target).unwrap().unwrap();
+        let doc = zeron_doc::SessionDoc::from_snapshot(&stored).unwrap();
+        assert_eq!(doc.read_queue().unwrap().len(), 1);
+        assert!(core.doc_host.open(&target).is_err());
+        assert!(core.doc_host.flush_all_checked().is_err());
+        core.shutdown().await;
+    }
+
     async fn prospective_interrupt_fixture() -> (
         tempfile::TempDir,
         crate::EngineCore,
@@ -10928,6 +11419,7 @@ mod tests {
                 list: false,
                 read: false,
                 durable_queue: false,
+                approved_queue: false,
                 event_wait: false,
             }
         }
