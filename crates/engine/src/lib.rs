@@ -370,7 +370,9 @@ impl EngineCore {
         let device_id = load_or_create_device_id(data_dir)?;
         // This device's harness enablement (Settings → Agents) rides the
         // engine data dir — per-device, like the CLI installs it gates.
-        registry.load_prefs(data_dir);
+        registry
+            .load_prefs_guarded(data_dir, device_write.handle())
+            .map_err(|error| EngineError::Other(error.to_string()))?;
         let store = Arc::new(DocsStore::open(profile.store_root())?);
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open_guarded(

@@ -199,8 +199,14 @@ async fn update_harness_enabled<F>(
 where
     F: std::future::Future<Output = Result<(), zeron_harness::HarnessError>>,
 {
+    // Keep this exact ticket through provider sign-out and preference publish.
+    // A frozen device must reject before the external future is polled.
+    let permit = registry
+        .admit_prefs_write()
+        .map_err(|error| RpcError::Failed(error.to_string()))?;
     let enabled_harnesses = registry.enabled_set();
     let was_enabled = enabled_harnesses.contains(&harness);
+    let mut signed_out = false;
     if was_enabled && !enabled && harness == HarnessId::Antigravity {
         if enabled_harnesses.len() == 1 {
             return Err(RpcError::Failed(
@@ -212,10 +218,23 @@ where
                 "Antigravity sign-out failed; it remains enabled so you can retry: {error}"
             ))
         })?;
+        signed_out = true;
     }
     registry
-        .set_enabled(harness, enabled)
-        .map_err(RpcError::Failed)
+        .set_enabled_with_permit(harness, enabled, permit.as_ref())
+        .map_err(|error| {
+            if signed_out && error.published() {
+                RpcError::Failed(format!(
+                    "Antigravity sign-out succeeded; the enablement file was published, but its durability is uncertain. Refresh before retrying: {error}"
+                ))
+            } else if signed_out {
+                RpcError::Failed(format!(
+                    "Antigravity sign-out succeeded, but enablement was not saved and remains unchanged by this request. Refresh account state before retrying: {error}"
+                ))
+            } else {
+                RpcError::Failed(error.to_string())
+            }
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -8312,6 +8331,93 @@ mod tests {
         assert!(registry.enabled_set().contains(&HarnessId::Antigravity));
 
         update_harness_enabled(&registry, HarnessId::Antigravity, false, async {
+            Ok::<(), zeron_harness::HarnessError>(())
+        })
+        .await
+        .unwrap();
+        assert!(!registry.enabled_set().contains(&HarnessId::Antigravity));
+    }
+
+    #[tokio::test]
+    async fn guarded_antigravity_toggle_admits_before_fake_sign_out_and_reports_save_failure() {
+        use crate::{InstanceLock, device_write::DeviceWriteOwner, registry::HarnessDescriptor};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let registry = HarnessRegistry::new();
+        for id in [HarnessId::ClaudeCode, HarnessId::Antigravity] {
+            registry.register_lazy(
+                HarnessDescriptor {
+                    id,
+                    name: format!("synthetic-{id:?}"),
+                    supports_steering: false,
+                    steering_mode: zeron_proto::SteeringMode::TurnBoundary,
+                    reasoning_levels: vec![],
+                    installed: true,
+                    enabled: None,
+                },
+                Box::new(|| true),
+                Box::new(|| {
+                    Err(zeron_harness::HarnessError::NotInstalled(
+                        "synthetic".into(),
+                    ))
+                }),
+            );
+        }
+        registry
+            .load_prefs_guarded(root.path(), owner.handle())
+            .unwrap();
+        registry.set_enabled(HarnessId::Antigravity, true).unwrap();
+        let path = root.path().join("harness-prefs.json");
+        let before = std::fs::read(&path).unwrap();
+        let polled = Arc::new(AtomicUsize::new(0));
+
+        let snapshot = owner
+            .epoch_for_tests()
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let count = polled.clone();
+        let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok::<(), zeron_harness::HarnessError>(())
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("Busy"));
+        assert_eq!(polled.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        drop(snapshot);
+
+        registry.set_prefs_before_publish_for_tests(Some(Arc::new(|| {
+            Err(std::io::Error::other("synthetic save failure"))
+        })));
+        let count = polled.clone();
+        let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok::<(), zeron_harness::HarnessError>(())
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("sign-out succeeded"));
+        assert!(error.to_string().contains("enablement was not saved"));
+        assert_eq!(polled.load(Ordering::SeqCst), 1);
+        assert!(registry.enabled_set().contains(&HarnessId::Antigravity));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+
+        registry.set_prefs_before_publish_for_tests(None);
+        let epoch = owner.epoch_for_tests();
+        update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
+            assert!(matches!(
+                epoch.freeze(Duration::from_millis(40)).await,
+                Err(zeron_sync::write_epoch::EpochError::TimedOut)
+            ));
             Ok::<(), zeron_harness::HarnessError>(())
         })
         .await
