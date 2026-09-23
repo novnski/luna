@@ -133,6 +133,48 @@ pub struct CrossTaskWaitResult {
     pub timed_out: bool,
 }
 
+/// Engine command intent for a control that must have a separate, trusted
+/// per-request authorization grant. These are not advertised provider tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CrossTaskControlAction {
+    Create,
+    Interrupt,
+    Archive,
+    Unarchive,
+    Move,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CrossTaskControlRequest {
+    pub action: CrossTaskControlAction,
+    /// Existing stable LUNA task, or the preallocated stable UUID for create.
+    pub task_id: String,
+    pub project_id: String,
+    pub environment_id: String,
+    pub command_id: String,
+    #[serde(default)]
+    pub destination_project_id: Option<String>,
+    #[serde(default)]
+    pub expected_task_revision: Option<u64>,
+    #[serde(default)]
+    pub expected_binding_generation: Option<u32>,
+    #[serde(default)]
+    pub expected_turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossTaskControlReceipt {
+    pub task_id: String,
+    pub command: CommandReceipt,
+    /// Current local observation after the command. A pending stop is not a
+    /// claim that the provider or engine has settled.
+    pub observed_status: String,
+    pub settled: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +199,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(request.mode, CrossTaskSendMode::Queue);
+        assert!(
+            serde_json::from_value::<CrossTaskControlRequest>(serde_json::json!({
+                "action":"archive", "taskId":"luna-task", "projectId":"project-a",
+                "environmentId":"local", "commandId":"command-a",
+                "grantedScopes":["threads.manage"]
+            }))
+            .is_err()
+        );
     }
 }

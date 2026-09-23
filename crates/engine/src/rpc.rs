@@ -86,7 +86,8 @@ use crate::auth::Auth;
 use crate::backup_control::{BackupControl, BackupControlError};
 use crate::change_requests::CheckoutChangeRequests;
 use crate::cross_task_tools::{
-    CrossTaskAuthority, CrossTaskBackend, CrossTaskCapabilities, CrossTaskError,
+    CrossTaskAuthority, CrossTaskBackend, CrossTaskCapabilities, CrossTaskControlGrant,
+    CrossTaskError,
 };
 use crate::diff_sync::CheckoutDiffSync;
 use crate::doc_host::DocHost;
@@ -5560,6 +5561,48 @@ fn cross_task_queue_command(
     }
 }
 
+fn cross_task_control_command(
+    request: &zeron_proto::CrossTaskControlRequest,
+    authority: &CrossTaskAuthority,
+) -> TaskCommandParams {
+    use zeron_proto::CrossTaskControlAction as Action;
+    let intent = match request.action {
+        Action::Create => TaskCommandIntent::CreateChat {
+            space_id: Some(request.project_id.clone()),
+            device_id: None,
+            config: None,
+            branch: None,
+            cwd: None,
+            lineage: TaskLineage::default(),
+        },
+        Action::Interrupt => TaskCommandIntent::Session {
+            command: SessionCommandPayload::Interrupt {},
+            transfers: Vec::new(),
+        },
+        Action::Archive | Action::Unarchive => TaskCommandIntent::SetArchived {
+            archived: request.action == Action::Archive,
+        },
+        Action::Move => TaskCommandIntent::MoveProject {
+            destination_space_id: request
+                .destination_project_id
+                .clone()
+                .expect("validated move destination"),
+        },
+    };
+    TaskCommandParams {
+        command_id: request.command_id.clone(),
+        actor_id: format!("luna-tool:{}", authority.caller_task_id),
+        client_id: "luna-cross-task".into(),
+        client_session_id: authority.caller_task_id.clone(),
+        task_id: request.task_id.clone(),
+        expected_task_revision: request.expected_task_revision,
+        expected_binding_generation: request.expected_binding_generation,
+        expected_turn_id: request.expected_turn_id.clone(),
+        issued_at_ms: crate::now_ms(),
+        intent,
+    }
+}
+
 #[async_trait]
 impl CrossTaskBackend for EngineRpc {
     fn capabilities(&self) -> CrossTaskCapabilities {
@@ -5840,6 +5883,122 @@ impl CrossTaskBackend for EngineRpc {
                 changed = chats.changed() => if changed.is_err() { return Err(CrossTaskError::Unavailable); },
             }
         }
+    }
+
+    async fn control(
+        &self,
+        request: zeron_proto::CrossTaskControlRequest,
+        authority: &CrossTaskAuthority,
+        grant: &CrossTaskControlGrant,
+    ) -> Result<zeron_proto::CrossTaskControlReceipt, CrossTaskError> {
+        use zeron_proto::CrossTaskControlAction as Action;
+        if !authority.explicit_user_request
+            || !authority.granted_scopes.contains("threads.manage")
+            || grant.caller_task_id != authority.caller_task_id
+            || grant.request != request
+            || grant.expires_at_ms <= crate::now_ms()
+            || grant.expires_at_ms > crate::now_ms().saturating_add(60_000)
+        {
+            return Err(CrossTaskError::UserRequest);
+        }
+        let caller = CrossTaskBackend::task(self, &authority.caller_task_id)
+            .await?
+            .ok_or(CrossTaskError::TargetScope)?;
+        if caller.environment_id != self.engine_info.device_id
+            || caller.project_id.as_deref() != Some(request.project_id.as_str())
+            || request.environment_id != self.engine_info.device_id
+            || !authority.visible_project_ids.contains(&request.project_id)
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        match request.action {
+            Action::Create => {
+                if self.task_identity.view(&request.task_id).is_some()
+                    || self
+                        .workspace
+                        .chat(&request.task_id)
+                        .map_err(|_| CrossTaskError::Backend("task lookup failed".into()))?
+                        .is_some()
+                {
+                    // Let the durable command ledger handle an exact retry;
+                    // a different command cannot create over this task id.
+                    let prior = self
+                        .doc_host
+                        .task_command_receipt(&request.command_id)
+                        .map_err(|_| CrossTaskError::Backend("command lookup failed".into()))?;
+                    if !prior.is_some_and(|receipt| {
+                        receipt.task_id == request.task_id && receipt.intent == "createChat"
+                    }) {
+                        return Err(CrossTaskError::TargetScope);
+                    }
+                }
+                let destination = self
+                    .workspace
+                    .space(&request.project_id)
+                    .map_err(|_| CrossTaskError::Backend("project lookup failed".into()))?
+                    .ok_or(CrossTaskError::TargetScope)?;
+                if destination.device_id != self.engine_info.device_id {
+                    return Err(CrossTaskError::TargetScope);
+                }
+            }
+            Action::Interrupt | Action::Archive | Action::Unarchive | Action::Move => {
+                let target = CrossTaskBackend::task(self, &request.task_id)
+                    .await?
+                    .ok_or(CrossTaskError::TargetScope)?;
+                if target.project_id.as_deref() != Some(request.project_id.as_str())
+                    || target.environment_id != self.engine_info.device_id
+                {
+                    return Err(CrossTaskError::TargetScope);
+                }
+                if matches!(request.action, Action::Archive | Action::Unarchive)
+                    && self
+                        .task_identity
+                        .has_native_codex_binding(&request.task_id)
+                {
+                    // Native Codex archive changes provider-owned state; it is
+                    // not proven by the synthetic local control fixture.
+                    return Err(CrossTaskError::Unsupported);
+                }
+                if request.action == Action::Move {
+                    let destination_id = request
+                        .destination_project_id
+                        .as_deref()
+                        .ok_or(CrossTaskError::Input)?;
+                    if !authority.visible_project_ids.contains(destination_id) {
+                        return Err(CrossTaskError::TargetScope);
+                    }
+                    let destination = self
+                        .workspace
+                        .space(destination_id)
+                        .map_err(|_| CrossTaskError::Backend("destination lookup failed".into()))?
+                        .ok_or(CrossTaskError::TargetScope)?;
+                    if destination.device_id != self.engine_info.device_id {
+                        return Err(CrossTaskError::TargetScope);
+                    }
+                }
+            }
+        }
+        let command = cross_task_control_command(&request, authority);
+        let receipt = self
+            .execute_task_command(command, false)
+            .await
+            .map_err(|_| {
+                CrossTaskError::Backend(
+                    "command outcome is uncertain; retry only the same command id".into(),
+                )
+            })?;
+        let observed_status = CrossTaskBackend::task(self, &request.task_id)
+            .await?
+            .map(|task| task.status)
+            .unwrap_or_else(|| "missing".into());
+        let settled =
+            receipt.status.is_terminal() && !self.sessions.turn_in_flight(&request.task_id);
+        Ok(zeron_proto::CrossTaskControlReceipt {
+            task_id: request.task_id,
+            command: receipt,
+            observed_status,
+            settled,
+        })
     }
 }
 
