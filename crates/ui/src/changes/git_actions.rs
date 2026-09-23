@@ -1,7 +1,10 @@
 //! Git actions card in the existing Changes surface.
 
 use super::*;
-use zeron_proto::{GitActionKind, GitActionReceipt, GitActionRequest, GitMessageRequest};
+use zeron_proto::{
+    GitActionKind, GitActionReceipt, GitActionRequest, GitMessageRequest, GitPrStatus,
+    GitPrStatusRequest,
+};
 
 impl Changes {
     pub(super) fn git_context(&self, cx: &App) -> Option<(String, Option<String>, String)> {
@@ -23,6 +26,8 @@ impl Changes {
         };
         self.git_target = Some(key.clone());
         self.git_busy = true;
+        self.git_pr_status = None;
+        self.git_pr_task = None;
         self.git_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::json!({ "cwd": cwd });
             if let Some(target) = target {
@@ -50,9 +55,71 @@ impl Changes {
                             .collect();
                         pane.git_preview = Some(preview);
                         pane.git_notice = None;
+                        pane.load_git_pr(cx);
                     }
-                    Err(error) => pane.git_notice = Some(error.to_string()),
+                    Err(error) => {
+                        pane.git_preview = None;
+                        pane.git_pr_status = None;
+                        pane.git_notice = Some(error.to_string());
+                    }
                 }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn load_git_pr(&mut self, cx: &mut Context<Self>) {
+        let Some(preview) = self.git_preview.as_ref() else {
+            return;
+        };
+        let Some((cwd, target, key)) = self.git_context(cx) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let expected_token = preview.token.clone();
+        let request = GitPrStatusRequest {
+            cwd,
+            checkout_id: preview.checkout_id.clone(),
+            expected_token: expected_token.clone(),
+            branch: preview.branch.clone(),
+            remote: preview.remote.clone(),
+        };
+        self.git_pr_status = None;
+        self.git_pr_task = Some(cx.spawn(async move |this, cx| {
+            let mut params = serde_json::to_value(request).unwrap_or_default();
+            if let Some(target) = target {
+                params["targetDeviceId"] = target.into();
+            }
+            let result = engine
+                .client()
+                .call(methods::GET_GIT_PR_STATUS, params)
+                .await;
+            this.update(cx, |pane, cx| {
+                if pane.git_target.as_deref() != Some(key.as_str())
+                    || pane
+                        .git_preview
+                        .as_ref()
+                        .is_none_or(|preview| preview.token != expected_token)
+                {
+                    return;
+                }
+                pane.git_pr_status = Some(
+                    match result.and_then(|value| {
+                        serde_json::from_value::<GitPrStatus>(value)
+                            .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                    }) {
+                        Ok(status) => status,
+                        Err(zeron_rpc::RpcError::UnknownMethod(_)) => GitPrStatus::Unavailable {
+                            reason: "This device does not support PR status".into(),
+                        },
+                        Err(_) => GitPrStatus::Unavailable {
+                            reason: "PR lookup is unavailable; refresh to retry".into(),
+                        },
+                    },
+                );
                 cx.notify();
             })
             .ok();
@@ -113,6 +180,7 @@ impl Changes {
                             .map(|file| file.path.clone())
                             .collect();
                         pane.git_preview = Some(receipt.preview);
+                        pane.load_git_pr(cx);
                         pane.git_notice = receipt.error.or_else(|| {
                             Some(if receipt.pushed {
                                 "Push completed".into()
@@ -225,13 +293,48 @@ impl Changes {
             .child(label)
     }
 
+    fn render_pr_status(&self, theme: &Theme) -> AnyElement {
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .text_size(px(11.0))
+            .text_color(theme.text_dim);
+        match self.git_pr_status.clone() {
+            Some(GitPrStatus::Linked { change_request }) => {
+                let model =
+                    crate::change_requests::ChangeRequestBadgeModel::from_summary(&change_request);
+                row = row
+                    .child(crate::change_requests::pull_request_badge(
+                        "git-pr-link".into(),
+                        change_request,
+                        crate::change_requests::ChangeRequestBadgeSurface::Composer,
+                        theme,
+                    ))
+                    .child(
+                        div()
+                            .text_color(model.tone.color(theme))
+                            .child(model.state_label),
+                    )
+                    .child(div().min_w_0().truncate().child(model.title));
+            }
+            Some(GitPrStatus::NoMatch) => row = row.child("No PR found in the selected remote"),
+            Some(GitPrStatus::UnsupportedHost) => {
+                row = row.child("PR status unsupported for this remote")
+            }
+            Some(GitPrStatus::Unavailable { reason }) => row = row.child(reason),
+            None => row = row.child("Checking PR status…"),
+        }
+        row.into_any_element()
+    }
+
     pub(super) fn render_git_card(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let preview = self.git_preview.clone();
         let busy = self.git_busy;
         let mut card = div()
             .flex_none()
             .w_full()
-            .max_h(px(320.0))
+            .max_h(px(350.0))
             .flex()
             .flex_col()
             .gap(px(6.0))
@@ -259,6 +362,7 @@ impl Changes {
                             .on_click(cx.listener(|this, _, _, cx| this.load_git(cx))),
                     ),
             );
+            card = card.child(self.render_pr_status(theme));
             let selected = self.git_selected.clone();
             let rows = preview.files.into_iter().map(|file| {
                 let path = file.path.clone();

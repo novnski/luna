@@ -5057,6 +5057,7 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         }
         methods::EXECUTE_GIT_ACTION => Duration::from_secs(150),
         methods::GENERATE_GIT_COMMIT_MESSAGE => Duration::from_secs(45),
+        methods::GET_GIT_PR_STATUS => Duration::from_secs(60),
         methods::CREATE_WORKTREE => Duration::from_secs(120),
         _ => Duration::from_secs(30),
     }
@@ -5126,6 +5127,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_GIT_ACTION_PREVIEW
             | methods::EXECUTE_GIT_ACTION
             | methods::GENERATE_GIT_COMMIT_MESSAGE
+            | methods::GET_GIT_PR_STATUS
             // Terminals live on the chat's host device.
             | methods::OPEN_TERMINAL
             | methods::SUBSCRIBE_TERMINAL
@@ -6808,6 +6810,20 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&serde_json::json!({ "message": message }))
+            }
+            methods::GET_GIT_PR_STATUS => {
+                Box::pin(async move {
+                    let mut request: zeron_proto::GitPrStatusRequest = parse_params(params)?;
+                    let root = self.change_request_root(&request.cwd).await?;
+                    request.cwd = root.to_string_lossy().into_owned();
+                    let status = self
+                        .git_actions
+                        .pr_status(request)
+                        .await
+                        .map_err(RpcError::Failed)?;
+                    RpcReply::value(&status)
+                })
+                .await
             }
             methods::WATCH_CHECKOUT_CHANGE_REQUEST => {
                 let p: CheckoutChangeRequestParams = parse_params(params)?;
