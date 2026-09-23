@@ -23,6 +23,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use chrono::Utc;
+use futures::future::BoxFuture;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -175,6 +176,7 @@ struct WorkspaceHostInner {
     spaces_tx: watch::Sender<Vec<Space>>,
     room: Mutex<Option<RegistryClient>>,
     lifecycle: Mutex<WorkspaceLifecycle>,
+    registry_handoff_changed: watch::Sender<u64>,
     /// Bumped on every registry change (local mutation or applied server
     /// frame) — drives republish + the snapshot debounce in `workspace_task`.
     changed_tx: watch::Sender<u64>,
@@ -204,6 +206,8 @@ struct WorkspaceLifecycle {
     edge_stop: CancellationToken,
     worker_stop: CancellationToken,
     tasks: TaskTracker,
+    registry_handoffs: usize,
+    registry_drains: Vec<BoxFuture<'static, ()>>,
 }
 
 impl WorkspaceLifecycle {
@@ -216,7 +220,16 @@ impl WorkspaceLifecycle {
             edge_stop: CancellationToken::new(),
             worker_stop: CancellationToken::new(),
             tasks: TaskTracker::new(),
+            registry_handoffs: 0,
+            registry_drains: Vec::new(),
         }
+    }
+
+    fn reserve_registry_handoff(&mut self) {
+        self.registry_handoffs = self
+            .registry_handoffs
+            .checked_add(1)
+            .expect("registry drain handoff count exhausted");
     }
 
     fn may_install(&self, generation: u64) -> bool {
@@ -341,6 +354,7 @@ impl WorkspaceHost {
         let (sessions_tx, _) = watch::channel(state.sessions);
         let (spaces_tx, _) = watch::channel(state.spaces);
         let (changed_tx, changed_rx) = watch::channel(0u64);
+        let (registry_handoff_changed, _) = watch::channel(0u64);
 
         let host = Self {
             inner: Arc::new(WorkspaceHostInner {
@@ -356,6 +370,7 @@ impl WorkspaceHost {
                 spaces_tx,
                 room: Mutex::new(None),
                 lifecycle: Mutex::new(WorkspaceLifecycle::new()),
+                registry_handoff_changed,
                 changed_tx,
                 presence_seen: Mutex::new(std::collections::HashMap::new()),
                 peer_alive: Mutex::new(None),
@@ -435,7 +450,7 @@ impl WorkspaceHost {
             }
             let join_stop = CancellationToken::new();
             lifecycle.current_join = Some(join_stop.clone());
-            let previous = lock(&self.inner.room).take();
+            let previous = self.inner.take_room_for_stop(&mut lifecycle);
             let task = async move {
                 let mut wake = zeron_sync::wake::subscribe();
                 let mut online = zeron_sync::wake::subscribe_online();
@@ -485,12 +500,15 @@ impl WorkspaceHost {
                             let Some(inner) = weak.upgrade() else { return };
                             let mut client = Some(client);
                             let (installed, previous) = {
-                                let lifecycle = lock(&inner.lifecycle);
+                                let mut lifecycle = lock(&inner.lifecycle);
                                 if !lifecycle.may_install(generation) {
                                     (false, None)
                                 } else {
                                     let previous =
                                         lock(&inner.room).replace(client.take().unwrap());
+                                    if previous.is_some() {
+                                        lifecycle.reserve_registry_handoff();
+                                    }
                                     inner
                                         .room_joined_at
                                         .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
@@ -498,7 +516,7 @@ impl WorkspaceHost {
                                     (true, previous)
                                 }
                             };
-                            drop(previous);
+                            inner.stop_room_client(previous);
                             drop(client);
                             if !installed {
                                 return;
@@ -546,14 +564,14 @@ impl WorkspaceHost {
                             }
                             if let Some(inner) = weak.upgrade() {
                                 let previous = {
-                                    let lifecycle = lock(&inner.lifecycle);
+                                    let mut lifecycle = lock(&inner.lifecycle);
                                     if lifecycle.owns_room(generation) {
-                                        lock(&inner.room).take()
+                                        inner.take_room_for_stop(&mut lifecycle)
                                     } else {
                                         None
                                     }
                                 };
-                                drop(previous);
+                                inner.stop_room_client(previous);
                             }
                             return;
                         }
@@ -592,7 +610,7 @@ impl WorkspaceHost {
             });
             previous
         };
-        drop(previous);
+        self.inner.stop_room_client(previous);
     }
 
     /// Close the current registry membership before account-scoped state is
@@ -605,11 +623,9 @@ impl WorkspaceHost {
                 join.cancel();
             }
             lifecycle.edge_stop.cancel();
-            lock(&self.inner.room).take()
+            self.inner.take_room_for_stop(&mut lifecycle)
         };
-        // Dropping the client aborts its actor and HTTPS child. Their handles
-        // are not awaitable through the current RegistryClient API.
-        drop(client);
+        self.inner.stop_room_client(client);
     }
 
     /// Wire the "peer is alive" signal (fresh presence heartbeat) to a callback —
@@ -1562,20 +1578,38 @@ impl WorkspaceHost {
         self.inner.save_snapshot_checked()
     }
 
-    /// Permanently stop and await the host-owned join, relay, and delayed
-    /// snapshot tasks after their callers have stopped producing mutations.
-    /// A failed final save remains retryable by calling this method again.
-    /// RegistryClient's own actor and HTTPS child are aborted on disconnect,
-    /// but this method cannot await them with its current API.
+    /// Permanently stop and await the host-owned tasks and any established
+    /// registry clients after callers have stopped producing mutations. Wait
+    /// for synchronous revoke handoffs before closing the tracker so a client
+    /// cannot be taken from the room and omitted from the final drain. A failed
+    /// final save remains retryable by calling this method again. Pending
+    /// initial connections still use the abort-only legacy cancellation path.
     #[allow(dead_code)] // Product shutdown wiring follows the lifecycle seam.
     pub(crate) async fn drain_tasks_checked(&self) -> Result<(), EngineError> {
         self.disconnect_edge();
-        let tasks = {
-            let mut lifecycle = lock(&self.inner.lifecycle);
-            lifecycle.shutting_down = true;
-            lifecycle.worker_stop.cancel();
-            lifecycle.tasks.close();
-            lifecycle.tasks.clone()
+        let mut handoff_changed = self.inner.registry_handoff_changed.subscribe();
+        let tasks = loop {
+            let ready = {
+                let mut lifecycle = lock(&self.inner.lifecycle);
+                if lifecycle.registry_handoffs != 0 {
+                    None
+                } else {
+                    lifecycle.shutting_down = true;
+                    lifecycle.worker_stop.cancel();
+                    for drain in std::mem::take(&mut lifecycle.registry_drains) {
+                        lifecycle.tasks.spawn(drain);
+                    }
+                    lifecycle.tasks.close();
+                    Some(lifecycle.tasks.clone())
+                }
+            };
+            if let Some(tasks) = ready {
+                break tasks;
+            }
+            handoff_changed
+                .changed()
+                .await
+                .map_err(|_| EngineError::Other("registry handoff watcher closed".into()))?;
         };
         tasks.wait().await;
         self.flush_checked()
@@ -1594,6 +1628,33 @@ impl WorkspaceHost {
 }
 
 impl WorkspaceHostInner {
+    /// Caller holds the lifecycle lock; room is always taken second. Reserve
+    /// the gap before the client can be stopped outside both locks.
+    fn take_room_for_stop(&self, lifecycle: &mut WorkspaceLifecycle) -> Option<RegistryClient> {
+        let client = lock(&self.room).take();
+        if client.is_some() {
+            lifecycle.reserve_registry_handoff();
+        }
+        client
+    }
+
+    fn publish_registry_drain(&self, drain: BoxFuture<'static, ()>) {
+        let mut lifecycle = lock(&self.lifecycle);
+        assert!(lifecycle.registry_handoffs > 0);
+        debug_assert!(!lifecycle.shutting_down);
+        lifecycle.registry_drains.push(drain);
+        lifecycle.registry_handoffs -= 1;
+        self.registry_handoff_changed
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    fn stop_room_client(&self, client: Option<RegistryClient>) {
+        if let Some(client) = client {
+            let drain = client.begin_stop();
+            self.publish_registry_drain(Box::pin(drain.join()));
+        }
+    }
+
     fn bump_changed(&self) {
         self.changed_tx.send_modify(|v| *v = v.wrapping_add(1));
     }
@@ -2353,6 +2414,70 @@ mod tests {
             .find(|device| device.id == "test-device")
             .unwrap();
         assert_eq!(device.name, "Latest");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn registry_handoff_waits_before_flush_even_after_drain_cancellation() {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let host = WorkspaceHost::open(
+            Arc::new(DocsStore::open(root.path()).unwrap()),
+            WorkspaceHostConfig {
+                device_id: "test-device".into(),
+                device_name: "Test device".into(),
+                platform: "test".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let captures = Arc::new(AtomicUsize::new(0));
+        *lock(&host.inner.snapshot_after_capture) = Some(Arc::new({
+            let captures = captures.clone();
+            move || {
+                captures.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        // Synthetic gap after a room is taken but before begin_stop publishes
+        // its drain. The real path reserves this under lifecycle -> room locks.
+        lock(&host.inner.lifecycle).reserve_registry_handoff();
+        let first = tokio::spawn({
+            let host = host.clone();
+            async move { host.drain_tasks_checked().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!first.is_finished());
+        first.abort();
+        let _ = first.await;
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let second = tokio::spawn({
+            let host = host.clone();
+            async move { host.drain_tasks_checked().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!second.is_finished());
+        host.inner.publish_registry_drain(Box::pin(async move {
+            let _ = release_rx.await;
+        }));
+        tokio::task::yield_now().await;
+        assert!(!second.is_finished());
+        assert_eq!(captures.load(Ordering::SeqCst), 0);
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(captures.load(Ordering::SeqCst), 1);
+        assert_eq!(lock(&host.inner.lifecycle).registry_handoffs, 0);
+        assert!(lock(&host.inner.lifecycle).tasks.is_closed());
+        host.drain_tasks_checked().await.unwrap();
+        assert_eq!(captures.load(Ordering::SeqCst), 2);
     }
 
     #[test]
