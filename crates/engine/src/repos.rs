@@ -11,6 +11,7 @@
 //! All git access is via subprocess (`tokio::process`) — never libgit2.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -24,7 +25,7 @@ use zeron_proto::{
     Worktree,
 };
 
-use crate::EngineError;
+use crate::{EngineError, device_write::DeviceWriteHandle};
 
 /// Existence probe timeout for user-chosen / remembered paths, which can point at
 /// dead network mounts where a bare `stat` hangs for minutes.
@@ -95,6 +96,9 @@ struct ReposInner {
     data_dir: PathBuf,
     device_id: String,
     worktrees_root: PathBuf,
+    /// EngineCore-owned clones use the device-root coordinator for repos.json.
+    write_handle: Option<DeviceWriteHandle>,
+    registry_lock: std::sync::Mutex<()>,
     file_searches: std::sync::Mutex<HashMap<PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     http: reqwest::Client,
     github_avatars: std::sync::Mutex<HashMap<String, String>>,
@@ -120,6 +124,13 @@ pub struct Repos {
     inner: std::sync::Arc<ReposInner>,
 }
 
+fn registration_after_create_error(target: &Path, error: EngineError) -> EngineError {
+    EngineError::Other(format!(
+        "Repository exists at {}. Its registry update could not be confirmed: {error}. Check List Repos; if the repository is absent, use Add Repo with this path.",
+        target.display()
+    ))
+}
+
 impl Repos {
     /// `data_dir` holds `repos.json` + cloned/created repos; the worktree root
     /// comes from `$LUNA_WORKTREES_DIR` or `~/.luna/worktrees`.
@@ -127,13 +138,37 @@ impl Repos {
         Self::with_worktrees_root(data_dir, device_id, default_worktrees_root())
     }
 
+    pub(crate) fn new_guarded(
+        data_dir: &Path,
+        device_id: &str,
+        write_handle: DeviceWriteHandle,
+    ) -> Self {
+        Self::with_worktrees_root_and_handle(
+            data_dir,
+            device_id,
+            default_worktrees_root(),
+            Some(write_handle),
+        )
+    }
+
     /// Explicit worktree root (tests).
     pub fn with_worktrees_root(data_dir: &Path, device_id: &str, worktrees_root: PathBuf) -> Self {
+        Self::with_worktrees_root_and_handle(data_dir, device_id, worktrees_root, None)
+    }
+
+    fn with_worktrees_root_and_handle(
+        data_dir: &Path,
+        device_id: &str,
+        worktrees_root: PathBuf,
+        write_handle: Option<DeviceWriteHandle>,
+    ) -> Self {
         Self {
             inner: std::sync::Arc::new(ReposInner {
                 data_dir: data_dir.to_path_buf(),
                 device_id: device_id.to_string(),
                 worktrees_root,
+                write_handle,
+                registry_lock: std::sync::Mutex::new(()),
                 file_searches: std::sync::Mutex::new(HashMap::new()),
                 http: reqwest::Client::builder()
                     .timeout(GITHUB_AVATAR_TIMEOUT)
@@ -160,20 +195,73 @@ impl Repos {
             .unwrap_or_default()
     }
 
-    fn save_paths(&self, paths: &[String]) -> Result<(), EngineError> {
+    /// Registration may not turn a malformed or unreadable registry into an
+    /// empty one. Listing keeps its historical best-effort fallback.
+    fn load_paths_strict(&self) -> Result<Vec<String>, EngineError> {
+        let path = self.registry_path();
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        serde_json::from_str(&raw).map_err(|error| {
+            EngineError::Other(format!(
+                "repos registry is malformed at {}: {error}",
+                path.display()
+            ))
+        })
+    }
+
+    fn register(&self, path: &str) -> Result<(), EngineError> {
+        self.register_with_hooks(path, || Ok(()), || Ok(()))
+    }
+
+    fn register_with_hooks(
+        &self,
+        path: &str,
+        before_publish: impl FnOnce() -> Result<(), EngineError>,
+        after_publish: impl FnOnce() -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        // Admission precedes the registry mutex and every device-root write.
+        let _permit = self
+            .inner
+            .write_handle
+            .as_ref()
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(|error| {
+                EngineError::Other(format!("repos registry write unavailable ({error:?})"))
+            })?;
+        let _registry = self
+            .inner
+            .registry_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut paths = self.load_paths_strict()?;
+        paths.push(path.to_string());
         let mut seen = HashSet::new();
         let deduped: Vec<&String> = paths.iter().filter(|p| seen.insert(p.as_str())).collect();
         let json = serde_json::to_string_pretty(&deduped)
             .map_err(|e| EngineError::Other(format!("repos registry serialize: {e}")))?;
         std::fs::create_dir_all(&self.inner.data_dir)?;
-        std::fs::write(self.registry_path(), json)?;
+        // The backup inventory selects repos.json, not this unique sibling.
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".repos.json.tmp-")
+            .tempfile_in(&self.inner.data_dir)?;
+        temporary.write_all(json.as_bytes())?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        before_publish()?;
+        // Close the temporary handle before replacing an existing target (in
+        // particular on Windows); TempPath cleans up if publication fails.
+        temporary
+            .into_temp_path()
+            .persist(self.registry_path())
+            .map_err(std::io::Error::from)?;
+        after_publish()?;
+        #[cfg(unix)]
+        std::fs::File::open(&self.inner.data_dir)?.sync_all()?;
         Ok(())
-    }
-
-    fn register(&self, path: &str) -> Result<(), EngineError> {
-        let mut paths = self.load_paths();
-        paths.push(path.to_string());
-        self.save_paths(&paths)
     }
 
     // ── git plumbing ────────────────────────────────────────────────────────
@@ -370,7 +458,8 @@ impl Repos {
         std::fs::create_dir_all(&repos_dir)?;
         self.git(&["clone", trimmed, &target.to_string_lossy()], None)
             .await?;
-        self.register(&target.to_string_lossy())?;
+        self.register(&target.to_string_lossy())
+            .map_err(|error| registration_after_create_error(&target, error))?;
         self.to_repo(&target).await
     }
 
@@ -399,7 +488,8 @@ impl Repos {
         }
         std::fs::create_dir_all(&target)?;
         self.git(&["init", "-b", "main"], Some(&target)).await?;
-        self.register(&target.to_string_lossy())?;
+        self.register(&target.to_string_lossy())
+            .map_err(|error| registration_after_create_error(&target, error))?;
         self.to_repo(&target).await
     }
 
@@ -2147,6 +2237,213 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{InstanceLock, device_write::DeviceWriteOwner};
+    use zeron_sync::write_epoch::Phase;
+
+    fn guarded_repos(root: &tempfile::TempDir) -> (DeviceWriteOwner, Repos) {
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let repos = Repos::with_worktrees_root_and_handle(
+            root.path(),
+            "synthetic-device",
+            root.path().join("worktrees"),
+            Some(owner.handle()),
+        );
+        (owner, repos)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn registry_commit_drains_into_snapshot_and_retries_after_freeze() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, repos) = guarded_repos(&root);
+        let epoch = owner.epoch_for_tests();
+        let base = root.path().join("base").to_string_lossy().into_owned();
+        let first_path = root.path().join("first").to_string_lossy().into_owned();
+        let expected_first = first_path.clone();
+        let second_path = root.path().join("second").to_string_lossy().into_owned();
+        repos.register(&base).unwrap();
+        let original = std::fs::read(repos.registry_path()).unwrap();
+
+        // Hold an admitted write after the temporary file is synced, before
+        // its single publication rename.
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+        let first_repos = repos.clone();
+        let first = std::thread::spawn(move || {
+            first_repos.register_with_hooks(
+                &first_path,
+                || {
+                    ready_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(())
+                },
+                || Ok(()),
+            )
+        });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut freezing = Box::pin(epoch.freeze(Duration::from_secs(5)));
+        assert!(matches!(
+            futures::poll!(freezing.as_mut()),
+            std::task::Poll::Pending
+        ));
+        assert_eq!(epoch.phase(), Phase::Quiescing);
+        assert!(
+            repos
+                .register(&second_path)
+                .unwrap_err()
+                .to_string()
+                .contains("Busy")
+        );
+        assert_eq!(std::fs::read(repos.registry_path()).unwrap(), original);
+
+        release_tx.send(()).unwrap();
+        first.join().unwrap().unwrap();
+        let snapshot = freezing.await.unwrap().into_snapshot().unwrap();
+        let during: Vec<String> =
+            serde_json::from_slice(&std::fs::read(repos.registry_path()).unwrap()).unwrap();
+        assert_eq!(during, vec![base.clone(), expected_first.clone()]);
+        assert!(
+            repos
+                .register(&second_path)
+                .unwrap_err()
+                .to_string()
+                .contains("Busy")
+        );
+        drop(snapshot);
+
+        repos.register(&second_path).unwrap();
+        let reopened = Repos::new(root.path(), "synthetic-device");
+        assert_eq!(
+            reopened.load_paths(),
+            vec![base, expected_first, second_path]
+        );
+        let committed = std::fs::read(repos.registry_path()).unwrap();
+        owner.retire();
+        let stale = repos.clone();
+        drop(owner);
+        assert!(
+            stale
+                .register("retired")
+                .unwrap_err()
+                .to_string()
+                .contains("Retired")
+        );
+        assert_eq!(std::fs::read(repos.registry_path()).unwrap(), committed);
+    }
+
+    #[test]
+    fn registry_failure_preserves_old_json_and_malformed_data_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let (_owner, repos) = guarded_repos(&root);
+        repos.register("base").unwrap();
+        let original = std::fs::read(repos.registry_path()).unwrap();
+        let error = repos
+            .register_with_hooks(
+                "later",
+                || Err(std::io::Error::other("injected prepublication I/O failure").into()),
+                || Ok(()),
+            )
+            .unwrap_err();
+        assert!(matches!(error, EngineError::Io(_)));
+        assert_eq!(std::fs::read(repos.registry_path()).unwrap(), original);
+        assert_eq!(
+            std::fs::read_dir(root.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".repos.json.tmp-"))
+                .count(),
+            0
+        );
+        repos.register("later").unwrap();
+        assert_eq!(repos.load_paths_strict().unwrap(), vec!["base", "later"]);
+
+        std::fs::write(repos.registry_path(), b"[broken").unwrap();
+        assert!(
+            repos
+                .register("must-not-replace")
+                .unwrap_err()
+                .to_string()
+                .contains("malformed")
+        );
+        assert_eq!(std::fs::read(repos.registry_path()).unwrap(), b"[broken");
+    }
+
+    #[test]
+    fn postpublication_error_reports_uncertain_registry_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let (_owner, repos) = guarded_repos(&root);
+        let target = root.path().join("repos/synthetic");
+        std::fs::create_dir_all(&target).unwrap();
+        let path = target.to_string_lossy().to_string();
+
+        let error = repos
+            .register_with_hooks(
+                &path,
+                || Ok(()),
+                || Err(std::io::Error::other("injected postpublication I/O failure").into()),
+            )
+            .unwrap_err();
+        assert!(matches!(error, EngineError::Io(_)));
+        assert_eq!(repos.load_paths_strict().unwrap(), vec![path.clone()]);
+        let guidance = registration_after_create_error(&target, error).to_string();
+        assert!(guidance.contains(&path));
+        assert!(guidance.contains("registry update could not be confirmed"));
+        assert!(guidance.contains("injected postpublication I/O failure"));
+        assert!(guidance.contains("Check List Repos"));
+        assert!(guidance.contains("if the repository is absent, use Add Repo"));
+    }
+
+    #[test]
+    fn concurrent_registration_keeps_both_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let (_owner, repos) = guarded_repos(&root);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut workers = Vec::new();
+        for path in ["first", "second"] {
+            let repos = repos.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                repos.register(path)
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        let paths: HashSet<String> = repos.load_paths_strict().unwrap().into_iter().collect();
+        assert_eq!(paths, HashSet::from(["first".into(), "second".into()]));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_repo_during_snapshot_reports_add_repo_recovery_path() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, repos) = guarded_repos(&root);
+        let epoch = owner.epoch_for_tests();
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let target = root.path().join("repos/synthetic");
+        let error = repos.create("synthetic").await.unwrap_err().to_string();
+        assert!(target.join(".git").is_dir());
+        assert!(!repos.registry_path().exists());
+        assert!(error.contains(&target.to_string_lossy().to_string()));
+        assert!(error.contains("Check List Repos"));
+        assert!(error.contains("Add Repo"));
+
+        drop(snapshot);
+        repos.add(&target.to_string_lossy()).await.unwrap();
+        assert_eq!(
+            repos.load_paths_strict().unwrap(),
+            vec![target.to_string_lossy().to_string()]
+        );
+    }
 
     fn history_commit(sha: String, parent_sha: Option<String>) -> GitHistoryCommit {
         GitHistoryCommit {
