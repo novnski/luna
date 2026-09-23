@@ -24,7 +24,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use zeron_doc::{REGISTRY_DOC_ID, RegistryDoc};
@@ -128,9 +128,16 @@ struct ImporterInner {
     workspace: WorkspaceHost,
     uploads: Uploads,
     write_handle: Option<DeviceWriteHandle>,
+    /// Importer clones share this lock so their dedup reads and file publishes
+    /// cannot race. Acquire it only after the optional device write ticket.
+    run_lock: Mutex<()>,
+    #[cfg(test)]
+    before_run_lock: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl LocalImporter {
+    /// Legacy standalone constructor without device-write admission. Product
+    /// engine assembly uses [`Self::new_guarded`] so freezes reject new work.
     #[allow(clippy::too_many_arguments)] // engine assembly seam, not a public API
     pub fn new(
         data_dir: &Path,
@@ -203,19 +210,14 @@ impl LocalImporter {
                 workspace,
                 uploads,
                 write_handle,
+                run_lock: Mutex::new(()),
+                #[cfg(test)]
+                before_run_lock: Mutex::new(None),
             }),
         }
     }
 
-    fn copy_journal(&self, source: &Path, destination: &Path) -> Result<(), EngineError> {
-        Self::copy_journal_with_handle(
-            source,
-            destination,
-            &self.inner.target_journals,
-            self.inner.write_handle.as_ref(),
-        )
-    }
-
+    #[cfg(test)]
     fn copy_journal_with_handle(
         source: &Path,
         destination: &Path,
@@ -230,9 +232,19 @@ impl LocalImporter {
                     "journal import temporarily unavailable ({error:?})"
                 ))
             })?;
+        Self::copy_file_atomic(source, destination, target_journals)
+    }
+
+    /// Publish a complete file once. `run` calls this under its outer ticket;
+    /// the standalone journal helper admits its own ticket above.
+    fn copy_file_atomic(
+        source: &Path,
+        destination: &Path,
+        target_journals: &Path,
+    ) -> Result<(), EngineError> {
         std::fs::create_dir_all(target_journals)?;
         let mut temporary = tempfile::Builder::new()
-            .prefix(".journal-import-")
+            .prefix(".local-import-")
             .suffix(".tmp")
             .tempfile_in(target_journals)?;
         let mut source_file = std::fs::File::open(source)?;
@@ -401,6 +413,41 @@ impl LocalImporter {
     /// Run the import, emitting [`ImportEvent`]s (the last is always
     /// `Summary`). Blocking (sqlite + fs) — callers run it off the async path.
     pub fn run(&self, mut emit: impl FnMut(ImportEvent)) -> Result<(), EngineError> {
+        // Source open may migrate SQLite, and the marker read below may move a
+        // corrupt file aside. Admit before either, then retain the same ticket
+        // through every target write and the terminal progress event. The
+        // public `new` constructor remains unguarded for standalone callers;
+        // product assembly uses `new_guarded`.
+        let _permit = self
+            .inner
+            .write_handle
+            .as_ref()
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(|error| {
+                use zeron_sync::write_epoch::EpochError;
+                let detail = match error {
+                    EpochError::Busy => "backup snapshot in progress; retry after it finishes",
+                    EpochError::Retired => "engine writer retired; retry after engine restart",
+                    _ => "device writer unavailable; retry after engine restart",
+                };
+                EngineError::Other(format!("local import unavailable ({error:?}): {detail}"))
+            })?;
+        #[cfg(test)]
+        if let Some(hook) = self
+            .inner
+            .before_run_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        {
+            hook();
+        }
+        let _run = self
+            .inner
+            .run_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some((source_store, registry)) = self.open_source()? else {
             emit(ImportEvent::Start {
                 chats: 0,
@@ -441,11 +488,26 @@ impl LocalImporter {
             spaces: pending_spaces.len(),
         });
 
+        // Claim source command IDs before publishing imported chat rows. A
+        // ledger failure leaves this attempt incomplete and retryable.
+        let ledger = source_store
+            .processed_commands()
+            .and_then(|rows| self.inner.target_store.import_processed_commands(&rows));
+        let (ledger_rows_merged, ledger_ok) = match ledger {
+            Ok(count) => (count, true),
+            Err(err) => {
+                errors.push(format!("command ledger: {err}"));
+                (0, false)
+            }
+        };
+
         let mut imported_spaces = 0;
-        for space in &pending_spaces {
-            match self.inner.workspace.import_space_row(space) {
-                Ok(()) => imported_spaces += 1,
-                Err(err) => errors.push(format!("space {}: {err}", space.id)),
+        if ledger_ok {
+            for space in &pending_spaces {
+                match self.inner.workspace.import_space_row(space) {
+                    Ok(()) => imported_spaces += 1,
+                    Err(err) => errors.push(format!("space {}: {err}", space.id)),
+                }
             }
         }
 
@@ -453,33 +515,25 @@ impl LocalImporter {
         let total = pending_chats.len();
         let mut imported_chats = 0;
         let mut journals_copied = 0;
-        for (index, chat) in pending_chats.iter().enumerate() {
-            emit(ImportEvent::Chat {
-                index,
-                total,
-                chat_id: chat.id.clone(),
-                title: chat.title.clone(),
-            });
-            match self.import_chat(&source_store, chat, &source_journals) {
-                Ok(journal) => {
-                    imported_chats += 1;
-                    if journal {
-                        journals_copied += 1;
+        if ledger_ok {
+            for (index, chat) in pending_chats.iter().enumerate() {
+                emit(ImportEvent::Chat {
+                    index,
+                    total,
+                    chat_id: chat.id.clone(),
+                    title: chat.title.clone(),
+                });
+                match self.import_chat(&source_store, chat, &source_journals) {
+                    Ok(journal) => {
+                        imported_chats += 1;
+                        if journal {
+                            journals_copied += 1;
+                        }
                     }
+                    Err(err) => errors.push(format!("chat {}: {err}", chat.id)),
                 }
-                Err(err) => errors.push(format!("chat {}: {err}", chat.id)),
             }
         }
-
-        // Merge the source's command ledger so imported pending commands can
-        // never re-execute under this profile (mark-before-execute carries over).
-        let ledger_rows_merged = source_store
-            .processed_commands()
-            .and_then(|rows| self.inner.target_store.import_processed_commands(&rows))
-            .unwrap_or_else(|err| {
-                errors.push(format!("command ledger: {err}"));
-                0
-            });
 
         // Transcripts embed absolute paths under the local uploads root; jail
         // it read-only now (and on future boots, via the marker). A marker
@@ -490,7 +544,15 @@ impl LocalImporter {
                 .uploads
                 .add_read_only_root(&self.source_uploads());
         }
-        if let Err(err) = self.record_import(imported_chats, imported_spaces) {
+        // Persist imported registry rows before publishing a marker that will
+        // re-arm their uploads root on a future boot. Partial attempts remain
+        // retryable and never claim completion.
+        if let Err(err) = self.inner.workspace.flush_checked() {
+            errors.push(format!("registry snapshot: {err}"));
+        }
+        if errors.is_empty()
+            && let Err(err) = self.record_import(imported_chats, imported_spaces)
+        {
             errors.push(format!("import marker: {err}"));
         }
 
@@ -531,12 +593,13 @@ impl LocalImporter {
         let (src_journal, src_resume) = journal_paths(source_journals, &chat.id);
         let (dst_journal, dst_resume) = journal_paths(&self.inner.target_journals, &chat.id);
         if src_journal.is_file() && !dst_journal.exists() {
-            self.copy_journal(&src_journal, &dst_journal)?;
+            // `run` already owns its ticket. A second admission could fail if
+            // a freeze enters Quiescing while this import is in flight.
+            Self::copy_file_atomic(&src_journal, &dst_journal, &self.inner.target_journals)?;
             copied = true;
         }
         if src_resume.is_file() && !dst_resume.exists() {
-            std::fs::create_dir_all(&self.inner.target_journals)?;
-            std::fs::copy(&src_resume, &dst_resume)?;
+            Self::copy_file_atomic(&src_resume, &dst_resume, &self.inner.target_journals)?;
         }
         for source in runtime_receipt_paths(source_journals, &chat.id)? {
             let destination = self.inner.target_journals.join(
@@ -545,8 +608,7 @@ impl LocalImporter {
                     .ok_or_else(|| EngineError::Other("invalid runtime receipt name".into()))?,
             );
             if !destination.exists() {
-                std::fs::create_dir_all(&self.inner.target_journals)?;
-                std::fs::copy(&source, &destination)?;
+                Self::copy_file_atomic(&source, &destination, &self.inner.target_journals)?;
             }
         }
 
@@ -570,9 +632,466 @@ mod tests {
         uploads::Uploads,
         workspace_host::{WorkspaceHost, WorkspaceHostConfig},
     };
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
     use zeron_sync::DocsStore;
+
+    fn synthetic_target(
+        root: &Path,
+        owner: &DeviceWriteOwner,
+    ) -> (Arc<DocsStore>, WorkspaceHost, LocalImporter) {
+        let target_root = root.join("orgs/synthetic-org/synthetic-user");
+        let store = Arc::new(DocsStore::open(&target_root).unwrap());
+        let workspace = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "synthetic-device".into(),
+                device_name: "Synthetic device".into(),
+                platform: "test".into(),
+                org_id: "synthetic-org".into(),
+                user_id: "synthetic-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let importer = LocalImporter::new_guarded(
+            root,
+            "synthetic-device",
+            "synthetic-org",
+            "synthetic-user",
+            store.clone(),
+            target_root.join("journals"),
+            workspace.clone(),
+            Uploads::from_root(&target_root.join("uploads")),
+            owner.handle(),
+        );
+        (store, workspace, importer)
+    }
+
+    fn seed_synthetic_source(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let source_root = root.join("profiles/local");
+        let store = Arc::new(DocsStore::open(&source_root).unwrap());
+        let workspace = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "synthetic-device".into(),
+                device_name: "Synthetic device".into(),
+                platform: "test".into(),
+                org_id: "local".into(),
+                user_id: "local".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        workspace
+            .create_space("space-1", "synthetic-device", "/synthetic", None, false)
+            .unwrap();
+        workspace
+            .create_chat("chat-1", Some("space-1"), None, None, None)
+            .unwrap();
+        workspace.flush_checked().unwrap();
+        store
+            .save_snapshot("chat-1", b"synthetic chat snapshot")
+            .unwrap();
+        store.mark_processed("command-1").unwrap();
+        drop(workspace);
+        drop(store);
+
+        let journals = source_root.join("journals");
+        std::fs::create_dir_all(&journals).unwrap();
+        let (journal, resume) = crate::run_journal::journal_paths(&journals, "chat-1");
+        let receipt = journals.join("chat-1.runtime.1.json");
+        std::fs::write(&journal, b"{\"seq\":1,\"event\":{}}\n").unwrap();
+        std::fs::write(&resume, b"synthetic resume").unwrap();
+        std::fs::write(&receipt, b"{\"synthetic\":true}").unwrap();
+        std::fs::create_dir_all(source_root.join("uploads")).unwrap();
+        (journal, resume, receipt)
+    }
+
+    fn summary_errors(events: &[ImportEvent]) -> &[String] {
+        match events.last().unwrap() {
+            ImportEvent::Summary { errors, .. } => errors,
+            other => panic!("expected summary, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_busy_or_retired_does_not_migrate_source_or_quarantine_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let source_root = root.path().join("profiles/local");
+        std::fs::create_dir_all(&source_root).unwrap();
+        let source_db = source_root.join("docs.sqlite3");
+        {
+            let connection = rusqlite::Connection::open(&source_db).unwrap();
+            connection
+                .execute_batch("CREATE TABLE seed (id INTEGER)")
+                .unwrap();
+        }
+        let source_before = std::fs::read(&source_db).unwrap();
+        let marker = root.path().join("local-import.json");
+        let corrupt_marker = b"{corrupt synthetic marker";
+        std::fs::write(&marker, corrupt_marker).unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let (store, _, importer) = synthetic_target(root.path(), &owner);
+        let target_before = store.load_snapshot(zeron_doc::REGISTRY_DOC_ID).unwrap();
+        let target_journals = root
+            .path()
+            .join("orgs/synthetic-org/synthetic-user/journals");
+        let assert_untouched = || {
+            assert_eq!(std::fs::read(&source_db).unwrap(), source_before);
+            assert_eq!(std::fs::read_dir(&source_root).unwrap().count(), 1);
+            assert_eq!(std::fs::read(&marker).unwrap(), corrupt_marker);
+            assert!(!marker.with_extension("json.corrupt").exists());
+            assert_eq!(
+                store.load_snapshot(zeron_doc::REGISTRY_DOC_ID).unwrap(),
+                target_before
+            );
+            assert!(!target_journals.exists());
+        };
+
+        let snapshot = owner
+            .epoch_for_tests()
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        let mut events = Vec::new();
+        let busy = importer
+            .run(|event| events.push(event))
+            .unwrap_err()
+            .to_string();
+        assert!(busy.contains("Busy") && busy.contains("retry"), "{busy}");
+        assert!(events.is_empty());
+        assert_untouched();
+        drop(snapshot);
+
+        owner.retire();
+        let retired = importer
+            .run(|event| events.push(event))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            retired.contains("Retired") && retired.contains("retry"),
+            "{retired}"
+        );
+        assert!(events.is_empty());
+        assert_untouched();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn admitted_run_finishes_all_copies_and_flush_before_freeze_snapshot() {
+        use zeron_sync::write_epoch::Phase;
+
+        let root = tempfile::tempdir().unwrap();
+        let (source_journal, source_resume, source_receipt) = seed_synthetic_source(root.path());
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let (store, workspace, importer) = synthetic_target(root.path(), &owner);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let running = importer.clone();
+        let run_task = tokio::task::spawn_blocking(move || {
+            let mut events = Vec::new();
+            let mut started_tx = Some(started_tx);
+            let mut release_rx = Some(release_rx);
+            running.run(|event| {
+                if matches!(event, ImportEvent::Start { .. }) {
+                    started_tx.take().unwrap().send(()).unwrap();
+                    release_rx
+                        .take()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap();
+                }
+                events.push(event);
+            })?;
+            Ok::<_, crate::EngineError>(events)
+        });
+        started_rx.await.unwrap();
+        let epoch = owner.epoch_for_tests();
+        let freezing = tokio::spawn(async move { epoch.freeze(Duration::from_secs(5)).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while owner.epoch_for_tests().phase() != Phase::Quiescing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let target_journals = root
+            .path()
+            .join("orgs/synthetic-org/synthetic-user/journals");
+        assert!(!target_journals.exists());
+        release_tx.send(()).unwrap();
+        let events = run_task.await.unwrap().unwrap();
+        assert!(summary_errors(&events).is_empty(), "{events:?}");
+        let snapshot = freezing.await.unwrap().unwrap().into_snapshot().unwrap();
+
+        for source in [&source_journal, &source_resume, &source_receipt] {
+            let target = target_journals.join(source.file_name().unwrap());
+            assert_eq!(
+                std::fs::read(target).unwrap(),
+                std::fs::read(source).unwrap()
+            );
+        }
+        assert_eq!(std::fs::read_dir(&target_journals).unwrap().count(), 3);
+        assert!(store.is_processed("command-1").unwrap());
+        assert!(workspace.chat("chat-1").unwrap().is_some());
+        assert!(workspace.space("space-1").unwrap().is_some());
+        let saved = store
+            .load_snapshot(zeron_doc::REGISTRY_DOC_ID)
+            .unwrap()
+            .unwrap();
+        let saved = zeron_doc::RegistryDoc::from_bytes(&saved, "synthetic-device").unwrap();
+        assert!(saved.chat("chat-1").unwrap().is_some());
+        assert_eq!(
+            super::marker_grants_read_root(root.path(), "synthetic-org", "synthetic-user"),
+            Some(root.path().join("profiles/local/uploads"))
+        );
+        drop(snapshot);
+
+        let mut retry = Vec::new();
+        importer.run(|event| retry.push(event)).unwrap();
+        assert!(summary_errors(&retry).is_empty());
+        assert!(matches!(
+            retry.last().unwrap(),
+            ImportEvent::Summary {
+                imported_chats: 0,
+                imported_spaces: 0,
+                skipped_chats: 1,
+                skipped_spaces: 1,
+                ..
+            }
+        ));
+        assert_eq!(std::fs::read_dir(&target_journals).unwrap().count(), 3);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn failed_ledger_and_flush_leave_no_marker_and_retry_after_owner_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let (source_journal, source_resume, source_receipt) = seed_synthetic_source(root.path());
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let (store, workspace, importer) = synthetic_target(root.path(), &owner);
+        let target_db = root
+            .path()
+            .join("orgs/synthetic-org/synthetic-user/docs.sqlite3");
+        let connection = rusqlite::Connection::open(&target_db).unwrap();
+        let marker = root.path().join("local-import.json");
+
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_import_ledger BEFORE INSERT ON processed_commands
+                 BEGIN SELECT RAISE(ABORT, 'synthetic ledger failure'); END;",
+            )
+            .unwrap();
+        let mut events = Vec::new();
+        importer.run(|event| events.push(event)).unwrap();
+        assert!(
+            summary_errors(&events)
+                .iter()
+                .any(|error| error.contains("synthetic ledger failure")),
+            "{events:?}"
+        );
+        assert!(!marker.exists());
+        assert!(!store.is_processed("command-1").unwrap());
+        assert!(workspace.chat("chat-1").unwrap().is_none());
+        connection
+            .execute_batch("DROP TRIGGER fail_import_ledger")
+            .unwrap();
+
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_import_registry BEFORE UPDATE ON snapshots
+                 WHEN NEW.doc_id = 'registry1'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic registry failure'); END;",
+            )
+            .unwrap();
+        events.clear();
+        importer.run(|event| events.push(event)).unwrap();
+        assert!(
+            summary_errors(&events)
+                .iter()
+                .any(|error| error.contains("synthetic registry failure")),
+            "{events:?}"
+        );
+        assert!(!marker.exists());
+        assert!(store.is_processed("command-1").unwrap());
+        assert!(workspace.chat("chat-1").unwrap().is_some());
+        let persisted = store
+            .load_snapshot(zeron_doc::REGISTRY_DOC_ID)
+            .unwrap()
+            .unwrap();
+        let persisted = zeron_doc::RegistryDoc::from_bytes(&persisted, "synthetic-device").unwrap();
+        assert!(persisted.chat("chat-1").unwrap().is_none());
+
+        owner.retire();
+        drop(importer);
+        drop(workspace);
+        drop(store);
+        connection
+            .execute_batch("DROP TRIGGER fail_import_registry")
+            .unwrap();
+        drop(connection);
+        drop(owner);
+
+        let replacement =
+            DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+                .unwrap();
+        let (store, workspace, restarted) = synthetic_target(root.path(), &replacement);
+        assert!(workspace.chat("chat-1").unwrap().is_none());
+        let mut retry = Vec::new();
+        restarted.run(|event| retry.push(event)).unwrap();
+        assert!(summary_errors(&retry).is_empty(), "{retry:?}");
+        assert!(marker.is_file());
+        assert!(workspace.chat("chat-1").unwrap().is_some());
+        assert!(store.is_processed("command-1").unwrap());
+        let target_journals = root
+            .path()
+            .join("orgs/synthetic-org/synthetic-user/journals");
+        for source in [&source_journal, &source_resume, &source_receipt] {
+            let target = target_journals.join(source.file_name().unwrap());
+            assert_eq!(
+                std::fs::read(target).unwrap(),
+                std::fs::read(source).unwrap()
+            );
+        }
+        assert_eq!(std::fs::read_dir(&target_journals).unwrap().count(), 3);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn concurrent_importer_clones_serialize_dedup_and_file_publication() {
+        let root = tempfile::tempdir().unwrap();
+        seed_synthetic_source(root.path());
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let (_, _, importer) = synthetic_target(root.path(), &owner);
+        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first = importer.clone();
+        let first_run = tokio::task::spawn_blocking(move || {
+            let mut events = Vec::new();
+            let mut started_tx = Some(first_started_tx);
+            let mut release_rx = Some(release_rx);
+            first.run(|event| {
+                if matches!(event, ImportEvent::Start { .. }) {
+                    started_tx.take().unwrap().send(()).unwrap();
+                    release_rx
+                        .take()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap();
+                }
+                events.push(event);
+            })?;
+            Ok::<_, crate::EngineError>(events)
+        });
+        first_started_rx.await.unwrap();
+        assert!(importer.inner.run_lock.try_lock().is_err());
+
+        let (second_entered_tx, second_entered_rx) = tokio::sync::oneshot::channel();
+        let entered = std::sync::Mutex::new(Some(second_entered_tx));
+        *importer
+            .inner
+            .before_run_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(move || {
+            if let Some(sender) = entered
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                sender.send(()).unwrap();
+            }
+        }));
+        let second = importer.clone();
+        let second_run = tokio::task::spawn_blocking(move || {
+            let mut events = Vec::new();
+            second.run(|event| events.push(event))?;
+            Ok::<_, crate::EngineError>(events)
+        });
+        second_entered_rx.await.unwrap();
+        assert!(importer.inner.run_lock.try_lock().is_err());
+        release_tx.send(()).unwrap();
+        let first_events = first_run.await.unwrap().unwrap();
+        let second_events = second_run.await.unwrap().unwrap();
+        assert!(summary_errors(&first_events).is_empty(), "{first_events:?}");
+        assert!(
+            summary_errors(&second_events).is_empty(),
+            "{second_events:?}"
+        );
+        assert!(matches!(
+            first_events.last().unwrap(),
+            ImportEvent::Summary {
+                imported_chats: 1,
+                imported_spaces: 1,
+                ..
+            }
+        ));
+        assert!(matches!(
+            second_events.last().unwrap(),
+            ImportEvent::Summary {
+                imported_chats: 0,
+                imported_spaces: 0,
+                skipped_chats: 1,
+                skipped_spaces: 1,
+                ..
+            }
+        ));
+        let target_journals = root
+            .path()
+            .join("orgs/synthetic-org/synthetic-user/journals");
+        assert_eq!(std::fs::read_dir(&target_journals).unwrap().count(), 3);
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("local-import.json")).unwrap())
+                .unwrap();
+        assert_eq!(marker["imports"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn failed_file_publication_keeps_marker_absent_and_retryable() {
+        let root = tempfile::tempdir().unwrap();
+        let (journal, resume, receipt) = seed_synthetic_source(root.path());
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let (store, workspace, importer) = synthetic_target(root.path(), &owner);
+        let target_journals = root
+            .path()
+            .join("orgs/synthetic-org/synthetic-user/journals");
+        std::fs::write(&target_journals, b"synthetic blocked directory").unwrap();
+
+        let mut events = Vec::new();
+        importer.run(|event| events.push(event)).unwrap();
+        assert!(
+            summary_errors(&events)
+                .iter()
+                .any(|error| error.starts_with("chat chat-1:")),
+            "{events:?}"
+        );
+        assert!(!root.path().join("local-import.json").exists());
+        assert_eq!(
+            std::fs::read(&target_journals).unwrap(),
+            b"synthetic blocked directory"
+        );
+        assert!(workspace.chat("chat-1").unwrap().is_none());
+        assert!(store.is_processed("command-1").unwrap());
+
+        std::fs::remove_file(&target_journals).unwrap();
+        events.clear();
+        importer.run(|event| events.push(event)).unwrap();
+        assert!(summary_errors(&events).is_empty(), "{events:?}");
+        assert!(root.path().join("local-import.json").is_file());
+        assert!(workspace.chat("chat-1").unwrap().is_some());
+        for source in [&journal, &resume, &receipt] {
+            assert_eq!(
+                std::fs::read(target_journals.join(source.file_name().unwrap())).unwrap(),
+                std::fs::read(source).unwrap()
+            );
+        }
+        assert_eq!(std::fs::read_dir(&target_journals).unwrap().count(), 3);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn status_blocks_marker_quarantine_and_source_migration_until_restart() {
