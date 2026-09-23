@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use zeron_engine::{
-    AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
+    AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, GitCheckpoints,
+    HarnessRegistry, Repos,
 };
 use zeron_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
 use zeron_rpc::{RpcClient, methods};
@@ -23,7 +24,22 @@ const TASK_PERSONAL: &str = "34343434-3434-4343-8343-343434343434";
 const TASK_ARCHIVED: &str = "45454545-4545-4454-8454-454545454545";
 const TASK_REMOTE: &str = "56565656-5656-4565-8565-565656565656";
 const TASK_NON_GIT: &str = "67676767-6767-4676-8676-676767676767";
+const TASK_L20_SHARED: &str = "78787878-7878-4787-8787-787878787878";
+const TASK_L20_ISOLATED: &str = "89898989-8989-4898-8898-898989898989";
+const L20_OPT_IN: &str = "LUNA_L20_CHECKPOINT_QA";
 const REMOTE_DEVICE: &str = "fixture-offline-machine";
+
+fn validate_l20_root(root: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        root.parent() == Some(Path::new("/private/tmp"))
+            && root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("luna-l12-")),
+        "L20 fixture requires an explicit canonical /private/tmp/luna-l12-* root"
+    );
+    Ok(())
+}
 
 fn account_config(root: &Path) -> AgentAccountsConfig {
     AgentAccountsConfig {
@@ -66,6 +82,243 @@ fn init_git_repo(path: &Path) -> anyhow::Result<()> {
         .arg(path)
         .status()?;
     anyhow::ensure!(status.success(), "fixture git init failed");
+    Ok(())
+}
+
+fn fixture_git(path: &Path, args: &[&str]) -> anyhow::Result<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "synthetic git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    anyhow::ensure!(
+        output.stdout.len() <= 16 * 1024,
+        "synthetic Git output exceeded fixture limit"
+    );
+    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+}
+
+fn init_l20_repo(path: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(path)?;
+    fixture_git(path, &["init", "-q", "-b", "main"])?;
+    fixture_git(path, &["config", "user.name", "LUNA Fixture"])?;
+    fixture_git(path, &["config", "user.email", "fixture@example.invalid"])?;
+    std::fs::write(path.join("sample.txt"), "before checkpoint\n")?;
+    fixture_git(path, &["add", "sample.txt"])?;
+    fixture_git(
+        path,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-m",
+            "synthetic base",
+        ],
+    )?;
+    Ok(())
+}
+
+struct L20Seed {
+    shared: PathBuf,
+    isolated: PathBuf,
+    newly_seeded: bool,
+}
+
+async fn seed_l20_with_services(
+    core: &EngineCore,
+    root: &Path,
+    repos: &Repos,
+    checkpoints: &GitCheckpoints,
+) -> anyhow::Result<L20Seed> {
+    validate_l20_root(root)?;
+    let shared = root.join("l20/shared");
+    let shared_row = core.workspace.chat(TASK_L20_SHARED)?;
+    let isolated_row = core.workspace.chat(TASK_L20_ISOLATED)?;
+    if let (Some(shared_row), Some(isolated_row)) = (&shared_row, &isolated_row) {
+        let shared_cwd = PathBuf::from(shared_row.cwd.as_deref().unwrap_or(""));
+        let isolated_cwd = PathBuf::from(isolated_row.cwd.as_deref().unwrap_or(""));
+        anyhow::ensure!(
+            shared_cwd.canonicalize()? == shared
+                && isolated_cwd
+                    .canonicalize()?
+                    .starts_with(root.join("l20-worktrees")),
+            "existing L20 tasks no longer point to this synthetic root"
+        );
+        return Ok(L20Seed {
+            shared,
+            isolated: isolated_cwd,
+            newly_seeded: false,
+        });
+    }
+    anyhow::ensure!(
+        shared_row.is_none() && isolated_row.is_none() && !root.join("l20").exists(),
+        "partial L20 seed found; use a fresh synthetic root"
+    );
+    let source = root.join("l20/source");
+    init_l20_repo(&shared)?;
+    init_l20_repo(&source)?;
+    let worktree = repos.create_worktree(&source, "main").await?;
+    let isolated = PathBuf::from(worktree.path).canonicalize()?;
+    anyhow::ensure!(
+        isolated.starts_with(root.join("l20-worktrees")) && isolated.join(".git").is_file(),
+        "created worktree escaped the synthetic managed root"
+    );
+    anyhow::ensure!(
+        repos.checkout_identity(&isolated).await?.root == isolated,
+        "created worktree did not resolve to its registered checkout"
+    );
+    core.workspace.create_space(
+        "fixture-l20-shared",
+        &core.device_id,
+        shared.to_str().unwrap(),
+        Some("L20 Shared checkout".into()),
+        true,
+    )?;
+    core.workspace.create_space(
+        "fixture-l20-isolated",
+        &core.device_id,
+        isolated.to_str().unwrap(),
+        Some("L20 Isolated checkout".into()),
+        true,
+    )?;
+    for (task_id, space_id, cwd, title, turn_id) in [
+        (
+            TASK_L20_SHARED,
+            "fixture-l20-shared",
+            shared.as_path(),
+            "L20 Shared checkpoint (restore refused)",
+            "l20-shared-turn",
+        ),
+        (
+            TASK_L20_ISOLATED,
+            "fixture-l20-isolated",
+            isolated.as_path(),
+            "L20 Isolated checkpoint (restore available)",
+            "l20-isolated-turn",
+        ),
+    ] {
+        core.workspace.create_chat(
+            task_id,
+            Some(space_id),
+            Some(&core.device_id),
+            Some(task_config()),
+            Some(cwd.to_string_lossy().into_owned()),
+        )?;
+        core.workspace.rename_chat(task_id, title)?;
+        checkpoints
+            .start(task_id, turn_id, cwd.to_str().unwrap())
+            .await;
+        std::fs::write(cwd.join("sample.txt"), "after checkpoint\n")?;
+        std::fs::write(cwd.join("turn-created.txt"), "created during turn\n")?;
+        checkpoints.end(task_id, turn_id, "completed").await;
+        std::fs::write(cwd.join("sample.txt"), "current post-checkpoint edit\n")?;
+        std::fs::write(cwd.join("post-edit.txt"), "created after checkpoint\n")?;
+        let list = checkpoints
+            .list(task_id, cwd.to_str().unwrap(), false)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            list.checkpoints.len() == 1
+                && list.checkpoints[0].before_available
+                && list.checkpoints[0].after_available
+                && list.checkpoints[0].error.is_none(),
+            "L20 checkpoint capture did not persist both boundaries"
+        );
+        let diff = checkpoints
+            .diff(task_id, cwd.to_str().unwrap(), &list.checkpoints[0].turn_id)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            diff.paths == ["sample.txt", "turn-created.txt"],
+            "L20 checkpoint diff paths changed: {:?}",
+            diff.paths
+        );
+    }
+    let shared_list = checkpoints
+        .list(TASK_L20_SHARED, shared.to_str().unwrap(), false)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let isolated_list = checkpoints
+        .list(TASK_L20_ISOLATED, isolated.to_str().unwrap(), false)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        !shared_list.restore_available && isolated_list.restore_available,
+        "L20 shared/isolated restore gates did not match the registered checkouts"
+    );
+    let preview = checkpoints
+        .preview_restore(
+            TASK_L20_ISOLATED,
+            isolated.to_str().unwrap(),
+            &isolated_list.checkpoints[0].turn_id,
+            "before",
+            false,
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        preview.paths == ["post-edit.txt", "sample.txt", "turn-created.txt"],
+        "L20 restore preview paths changed: {:?}",
+        preview.paths
+    );
+    std::fs::write(
+        root.join("L20-FIXTURE.txt"),
+        format!(
+            "Synthetic L20 Git checkpoints only. No provider or live user workspace.\nshared_task={TASK_L20_SHARED}\nshared_cwd={}\nisolated_task={TASK_L20_ISOLATED}\nisolated_cwd={}\ncheckpoint_before=sample.txt contains 'before checkpoint'\ncheckpoint_after=sample.txt contains 'after checkpoint'; turn-created.txt exists\ncurrent=sample.txt contains 'current post-checkpoint edit'; post-edit.txt exists\n",
+            shared.display(),
+            isolated.display()
+        ),
+    )?;
+    Ok(L20Seed {
+        shared,
+        isolated,
+        newly_seeded: true,
+    })
+}
+
+async fn seed_l20(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+    let checkpoints = GitCheckpoints::new(core.repos.clone());
+    let seeded = seed_l20_with_services(core, root, &core.repos, &checkpoints).await?;
+    // The UI uses the engine's RPC-owned checkpoint service, which reads these
+    // same hidden refs. Prove both tasks resolve through that product path.
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    for (task_id, cwd, restore_available) in [
+        (TASK_L20_SHARED, seeded.shared.as_path(), false),
+        (TASK_L20_ISOLATED, seeded.isolated.as_path(), true),
+    ] {
+        let cwd = cwd
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 synthetic cwd"))?;
+        let list: zeron_proto::GitCheckpointList = client
+            .call_as(
+                methods::LIST_GIT_CHECKPOINTS,
+                serde_json::json!({ "chatId": task_id, "cwd": cwd }),
+            )
+            .await?;
+        anyhow::ensure!(
+            list.checkpoints.len() == 1 && list.restore_available == restore_available,
+            "L20 RPC checkpoint list/gate readback failed for {task_id}: {:?}",
+            list.restore_unavailable_reason
+        );
+        let _: zeron_proto::GitCheckpointDiff = client.call_as(methods::DIFF_GIT_CHECKPOINT,
+            serde_json::json!({ "chatId": task_id, "cwd": cwd, "turnId": list.checkpoints[0].turn_id })).await?;
+        if restore_available && seeded.newly_seeded {
+            let _: zeron_proto::GitCheckpointRestorePreview = client.call_as(methods::PREVIEW_GIT_CHECKPOINT_RESTORE,
+                serde_json::json!({ "chatId": task_id, "cwd": cwd, "turnId": list.checkpoints[0].turn_id, "point": "before" })).await?;
+        }
+    }
     Ok(())
 }
 
@@ -257,9 +510,31 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated fixture root"));
+    let seed_only = std::env::args().nth(2).as_deref() == Some("--l20-seed-only");
     anyhow::ensure!(root.is_absolute(), "fixture root must be absolute");
-    std::fs::create_dir_all(&root)?;
+    let l20 = match std::env::var(L20_OPT_IN) {
+        Ok(value) if value == "1" => true,
+        Ok(value) => anyhow::bail!("{L20_OPT_IN} must be 1 when set, got {value:?}"),
+        Err(std::env::VarError::NotPresent) => false,
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(!seed_only || l20, "--l20-seed-only requires {L20_OPT_IN}=1");
+    if l20 {
+        anyhow::ensure!(
+            root.is_dir() && !std::fs::symlink_metadata(&root)?.file_type().is_symlink(),
+            "L20 opt-in requires a pre-existing, non-symlink synthetic root"
+        );
+    } else {
+        std::fs::create_dir_all(&root)?;
+    }
     let root = root.canonicalize()?;
+    if l20 {
+        validate_l20_root(&root)?;
+        // EngineCore and its RPC service must resolve the same managed root.
+        unsafe {
+            std::env::set_var("LUNA_WORKTREES_DIR", root.join("l20-worktrees"));
+        }
+    }
     let engine_data = root.join("engine");
     let ui_data = root.join("ui");
     let temp_data = root.join("tmp");
@@ -288,10 +563,21 @@ fn main() -> anyhow::Result<()> {
     // before IPC/bootstrap can lazily request EngineCore::auth().
     core.set_auth(Auth::new(fixture_auth_config(&root)));
     runtime.block_on(seed(&core, &root))?;
+    if l20 {
+        runtime.block_on(seed_l20(&core, &root))?;
+    }
     std::fs::write(
         root.join("SAFETY.txt"),
-        "L12 synthetic fixture only. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n",
+        if l20 {
+            "L12 + opt-in L20 synthetic fixture only. Git checkpoints and restore targets stay under this root. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n"
+        } else {
+            "L12 synthetic fixture only. Auth credential broker is in-memory; native provider metadata and platform Keychain fallbacks are disabled. No live provider/account/store access.\n"
+        },
     )?;
+    if seed_only {
+        runtime.block_on(core.shutdown());
+        return Ok(());
+    }
 
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
@@ -369,7 +655,17 @@ fn main() -> anyhow::Result<()> {
                 state.spaces = spaces;
                 state.chats_synced = true;
                 state.spaces_synced = true;
-                state.select_chat(Some(TASK_PINNED_A.into()), cx);
+                state.select_chat(
+                    Some(
+                        if l20 {
+                            TASK_L20_ISOLATED
+                        } else {
+                            TASK_PINNED_A
+                        }
+                        .into(),
+                    ),
+                    cx,
+                );
                 state.fixture_attach_engine(handle, cx);
                 state
             });
@@ -413,5 +709,118 @@ mod tests {
             "production/platform brokers reject this in-memory-only hook"
         );
         assert!(broker.set_in_memory_store_locked_for_tests(false));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn l20_opt_in_seed_uses_only_synthetic_registered_git_checkouts() {
+        let temp = tempfile::Builder::new()
+            .prefix("luna-l12-l20-seed-")
+            .tempdir_in("/private/tmp")
+            .unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        validate_l20_root(&root).unwrap();
+        let accounts = account_config(&root);
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                EngineProfile::development(
+                    &root.join("engine"),
+                    "l12-fixture-org",
+                    "l12-fixture-user",
+                ),
+                Arc::new(HarnessRegistry::new()),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )
+            .unwrap();
+        core.set_auth(Auth::new(fixture_auth_config(&root)));
+        seed(&core, &root).await.unwrap();
+        let repos = Repos::with_worktrees_root(
+            &root.join("synthetic-repos"),
+            &core.device_id,
+            root.join("l20-worktrees"),
+        );
+        let checkpoints = GitCheckpoints::new(repos.clone());
+        let seeded = seed_l20_with_services(&core, &root, &repos, &checkpoints)
+            .await
+            .unwrap();
+        assert!(seeded.newly_seeded);
+        assert!(
+            core.workspace.chat(TASK_PINNED_A).unwrap().is_some(),
+            "normal L12 seed must survive opt-in"
+        );
+        let shared = checkpoints
+            .list(TASK_L20_SHARED, seeded.shared.to_str().unwrap(), false)
+            .await
+            .unwrap();
+        let isolated = checkpoints
+            .list(TASK_L20_ISOLATED, seeded.isolated.to_str().unwrap(), false)
+            .await
+            .unwrap();
+        assert!(!shared.restore_available);
+        assert!(isolated.restore_available);
+        assert!(
+            checkpoints
+                .preview_restore(
+                    TASK_L20_SHARED,
+                    seeded.shared.to_str().unwrap(),
+                    &shared.checkpoints[0].turn_id,
+                    "before",
+                    false
+                )
+                .await
+                .unwrap_err()
+                .contains("shared checkouts")
+        );
+        let preview = checkpoints
+            .preview_restore(
+                TASK_L20_ISOLATED,
+                seeded.isolated.to_str().unwrap(),
+                &isolated.checkpoints[0].turn_id,
+                "before",
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            preview.paths,
+            ["post-edit.txt", "sample.txt", "turn-created.txt"]
+        );
+        let receipt = checkpoints
+            .restore(
+                zeron_proto::GitCheckpointRestoreRequest {
+                    chat_id: TASK_L20_ISOLATED.into(),
+                    cwd: seeded.isolated.to_string_lossy().into_owned(),
+                    turn_id: isolated.checkpoints[0].turn_id.clone(),
+                    point: "before".into(),
+                    expected_token: preview.token,
+                },
+                false,
+                |_| false,
+            )
+            .await
+            .unwrap();
+        assert!(receipt.restored && receipt.recovery_ref.starts_with("refs/luna/checkpoints/"));
+        assert_eq!(
+            std::fs::read_to_string(seeded.isolated.join("sample.txt")).unwrap(),
+            "before checkpoint\n"
+        );
+        assert!(!seeded.isolated.join("turn-created.txt").exists());
+        assert!(!seeded.isolated.join("post-edit.txt").exists());
+        assert!(
+            fixture_git(&seeded.isolated, &["status", "--porcelain"])
+                .unwrap()
+                .is_empty()
+        );
+        let reopened = seed_l20_with_services(&core, &root, &repos, &checkpoints)
+            .await
+            .unwrap();
+        assert!(!reopened.newly_seeded && reopened.isolated == seeded.isolated);
+        assert_eq!(
+            std::fs::read_to_string(seeded.isolated.join("sample.txt")).unwrap(),
+            "before checkpoint\n"
+        );
+        core.shutdown().await;
     }
 }

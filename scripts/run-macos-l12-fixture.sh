@@ -17,6 +17,7 @@ BUILD_EXECUTABLE="$ROOT/target/debug/examples/task-organization-fixture"
 BUNDLE_ID="com.novnski.luna.l12-qa"
 DISPLAY_NAME="LUNA L12 QA"
 REFERENCE_ICNS="${LUNA_L12_REFERENCE_ICNS:-$ROOT/target/luna-l11-fixture/LUNA L11 QA.app/Contents/Resources/luna.icns}"
+L20_OPT_IN="${LUNA_L20_CHECKPOINT_QA:-}"
 STAGE_ROOT=""
 BACKUP_ROOT=""
 REPLACEMENT_PENDING=false
@@ -28,6 +29,7 @@ fail() {
 }
 
 [[ -n "$REQUESTED_PROFILE" ]] || fail "usage: scripts/run-macos-l12-fixture.sh /tmp/luna-l12-<fresh-root> [build|run|stop|status]"
+[[ -z "$L20_OPT_IN" || "$L20_OPT_IN" == "1" ]] || fail "LUNA_L20_CHECKPOINT_QA must be 1 when set"
 [[ "$REQUESTED_PROFILE" == /* ]] || fail "synthetic root must be absolute"
 [[ -d "$REQUESTED_PROFILE" ]] || fail "synthetic root must already exist (create it with mktemp -d /tmp/luna-l12-native-qa.XXXXXX)"
 [[ ! -L "$REQUESTED_PROFILE" ]] || fail "synthetic root must not be a symlink"
@@ -239,9 +241,11 @@ case "$ACTION" in
     /bin/mkdir -p "$PROFILE/provider-state" "$PROFILE/synthetic-auth" "$PROFILE/synthetic-codex" "$PROFILE/synthetic-claude" "$PROFILE/tmp"
     # Launch through LaunchServices so native CUA receives the bundle identity.
     # `open` returns after launch; status/stop track only the exact app process.
-    /usr/bin/open -n \
-      --env LUNA_DISABLE_SOUND=1 \
-      --env LUNA_DISABLE_NOTIFICATIONS=1 \
+    launch_env=(--env LUNA_DISABLE_SOUND=1 --env LUNA_DISABLE_NOTIFICATIONS=1)
+    if [[ "$L20_OPT_IN" == "1" ]]; then
+      launch_env+=(--env LUNA_L20_CHECKPOINT_QA=1)
+    fi
+    /usr/bin/open -n "${launch_env[@]}" \
       --stdout "$LOG_FILE" \
       --stderr "$LOG_FILE" \
       "$APP" --args "$PROFILE"
