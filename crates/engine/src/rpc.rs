@@ -6479,7 +6479,11 @@ impl RpcService for EngineRpc {
                 let request: BackupKeyConfigureRequest = parse_params(params)?;
                 let control = self.backup_control()?;
                 backup_rpc_reply(move || {
-                    control.configure_recovery_key_hex(request.recovery_key_hex)
+                    match (request.recovery_key_hex, request.recovery_key_file_path) {
+                        (Some(hex), None) => control.configure_recovery_key_hex(hex),
+                        (None, Some(path)) => control.configure_recovery_key_file(path),
+                        _ => Err(BackupControlError::InvalidKeyConfiguration),
+                    }
                 })
                 .await
             }

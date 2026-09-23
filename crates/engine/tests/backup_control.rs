@@ -1,6 +1,10 @@
 //! No native login, Keychain, provider store or normal LUNA profile is used.
 
 use std::fs;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,6 +28,102 @@ fn marked_root(path: &Path) {
     .unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn owner_held_key_file_backs_up_without_keychain_or_root_overlap() {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let temp = TempDir::new().unwrap();
+    let owner = temp.path().join("synthetic-owner");
+    let source = temp.path().join("synthetic-source");
+    let destination = temp.path().join("synthetic-backups");
+    let key_file = temp.path().join("owner-held.key");
+    marked_root(&owner);
+    marked_root(&source);
+    fs::create_dir(&destination).unwrap();
+    fs::write(
+        destination.join(".luna-l17-isolated-backups"),
+        "L17 synthetic or copy-isolated backup destination\n",
+    )
+    .unwrap();
+    let store = DocsStore::open(source.join("profiles/local")).unwrap();
+    store.save_snapshot("synthetic", b"synthetic data").unwrap();
+    drop(store);
+
+    let mut key = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&key_file)
+        .unwrap();
+    key.write_all(&[0x5a; 32]).unwrap();
+    key.sync_all().unwrap();
+    drop(key);
+    let control = BackupControl::new(
+        IsolatedRoot::open(&owner).unwrap(),
+        CredentialBroker::for_data_dir(&owner),
+    );
+    assert!(matches!(
+        control.configure_recovery_key_hex("11".repeat(32)),
+        Err(BackupControlError::KeyFileRequired)
+    ));
+    control
+        .configure_recovery_key_file(key_file.display().to_string())
+        .unwrap();
+    assert!(control.status().unwrap().key_configured);
+    control
+        .configure(BackupConfigureRequest {
+            source_root: source.display().to_string(),
+            destination_dir: destination.display().to_string(),
+            automatic_enabled: true,
+        })
+        .unwrap();
+    let inside = source.join("inside.key");
+    let mut inside_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&inside)
+        .unwrap();
+    inside_file.write_all(&[0x5a; 32]).unwrap();
+    assert!(matches!(
+        control.configure_recovery_key_file(inside.display().to_string()),
+        Err(BackupControlError::OverlappingRoots)
+    ));
+    let receipt = control.manual_backup().unwrap();
+    assert!(Path::new(&receipt.archive_path).is_file());
+    let reopened = BackupControl::new(
+        IsolatedRoot::open(&owner).unwrap(),
+        CredentialBroker::for_data_dir(&owner),
+    );
+    assert_eq!(reopened.status().unwrap().last_success.unwrap(), receipt);
+    assert!(!owner.join("credentials").exists());
+    assert!(matches!(
+        reopened.configure_recovery_key_file(source.join("inside.key").display().to_string()),
+        Err(BackupControlError::KeyRotationRequiresPlan)
+    ));
+
+    let weak = temp.path().join("weak.key");
+    fs::write(&weak, [0x5a; 32]).unwrap();
+    fs::set_permissions(&weak, fs::Permissions::from_mode(0o644)).unwrap();
+    let second_owner = temp.path().join("synthetic-owner-2");
+    marked_root(&second_owner);
+    let fresh = BackupControl::new(
+        IsolatedRoot::open(&second_owner).unwrap(),
+        CredentialBroker::for_data_dir(&second_owner),
+    );
+    assert!(matches!(
+        fresh.configure_recovery_key_file(weak.display().to_string()),
+        Err(BackupControlError::InvalidKeyFile)
+    ));
+    let alias = temp.path().join("alias.key");
+    std::os::unix::fs::symlink(&key_file, &alias).unwrap();
+    assert!(matches!(
+        fresh.configure_recovery_key_file(alias.display().to_string()),
+        Err(BackupControlError::InvalidKeyFile)
+    ));
+}
+
 #[test]
 fn synthetic_key_generation_never_falls_back_to_platform_broker() {
     let temp = TempDir::new().unwrap();
@@ -37,6 +137,10 @@ fn synthetic_key_generation_never_falls_back_to_platform_broker() {
         control.generate_recovery_key_for_synthetic_tests(),
         Err(BackupControlError::SyntheticKeyOnly)
     ));
+    assert_eq!(
+        control.status().unwrap().availability,
+        BackupAvailability::Unconfigured
+    );
     assert!(!owner.join("credentials").exists());
 }
 

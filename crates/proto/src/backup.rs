@@ -47,12 +47,15 @@ pub struct BackupConfigureRequest {
 }
 
 /// Deliberately has no Debug or Serialize implementation: a caller may send
-/// owner-held material to a local engine, but it must never be logged or sent
-/// back on the wire. The UI does not yet expose a recovery-key input control.
+/// owner-held material or an absolute owner-held file path to a local engine,
+/// but neither is sent back on the wire. Hex ingress is synthetic-only.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupKeyConfigureRequest {
-    pub recovery_key_hex: String,
+    #[serde(default)]
+    pub recovery_key_hex: Option<String>,
+    #[serde(default)]
+    pub recovery_key_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

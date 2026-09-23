@@ -1,8 +1,12 @@
 //! Engine-owned L17 control for explicit copy-isolated backup roots. This is
 //! deliberately separate from the live engine profile: until a write barrier
-//! and recovery-key handoff exist, normal roots cannot be backed up here.
+//! and normal-root writer coordination exist, normal roots cannot be backed up here.
 
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::fs::{self, File};
+#[cfg(unix)]
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -41,6 +45,14 @@ pub enum BackupControlError {
     Unconfigured,
     #[error("recovery key must be exactly 64 hexadecimal characters")]
     InvalidRecoveryKey,
+    #[error("choose exactly one recovery key source")]
+    InvalidKeyConfiguration,
+    #[error("production backups require an owner-held recovery key file; Keychain is not used")]
+    KeyFileRequired,
+    #[error(
+        "recovery key file must be an owner-owned, mode-0600 regular file containing exactly 32 bytes"
+    )]
+    InvalidKeyFile,
     #[error("recovery key generation is limited to an explicit in-memory synthetic broker")]
     SyntheticKeyOnly,
     #[error("backup source, destination, and engine roots must be separate")]
@@ -83,6 +95,8 @@ struct BackupConfig {
 struct ControlState {
     version: u32,
     config: Option<BackupConfig>,
+    #[serde(default)]
+    recovery_key_file: Option<PathBuf>,
     receipts: Vec<BackupReceipt>,
     #[serde(default)]
     staged_restore: Option<BackupStageStatus>,
@@ -126,10 +140,13 @@ impl BackupControl {
         Ok(owner_code)
     }
 
-    /// Import owner-held 256-bit recovery material into an exact backup-only
-    /// CredentialBroker scope. The caller must keep its own independent copy;
-    /// this method never creates a plaintext fallback or returns the key.
+    /// Legacy in-memory fixture ingress. Production uses an owner-held key
+    /// file instead of this broker path, so this never opens Keychain.
     pub fn configure_recovery_key_hex(&self, mut hex: String) -> Result<()> {
+        if !self.inner.broker.is_in_memory_for_tests() {
+            hex.zeroize();
+            return Err(BackupControlError::KeyFileRequired);
+        }
         let _guard = self
             .inner
             .operation
@@ -143,6 +160,10 @@ impl BackupControl {
                 return Err(error);
             }
         };
+        if state.recovery_key_file.is_some() {
+            hex.zeroize();
+            return Err(BackupControlError::InvalidKeyConfiguration);
+        }
         if !state.receipts.is_empty() {
             hex.zeroize();
             return Err(BackupControlError::KeyRotationRequiresPlan);
@@ -159,6 +180,33 @@ impl BackupControl {
             key.as_ref(),
         )?;
         Ok(())
+    }
+
+    /// Select an existing owner-held 32-byte key file. The file stays outside
+    /// the engine, backup source, and destination roots; LUNA stores only its
+    /// canonical path and never opens Keychain for this backup key.
+    pub fn configure_recovery_key_file(&self, path: String) -> Result<()> {
+        let _guard = self
+            .inner
+            .operation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.load_state()?;
+        if !state.receipts.is_empty() || state.staged_restore.is_some() {
+            return Err(BackupControlError::KeyRotationRequiresPlan);
+        }
+        let file = Path::new(&path);
+        if !file.is_absolute() || key_file_is_in_provider_home(file) {
+            return Err(BackupControlError::InvalidKeyFile);
+        }
+        if fs::symlink_metadata(file)?.file_type().is_symlink() {
+            return Err(BackupControlError::InvalidKeyFile);
+        }
+        let canonical = file.canonicalize()?;
+        let _key = self.read_owner_key_file(&canonical, state.config.as_ref())?;
+        state.version = 1;
+        state.recovery_key_file = Some(canonical);
+        self.save_state(&state)
     }
 
     pub fn configure(&self, request: BackupConfigureRequest) -> Result<BackupStatus> {
@@ -189,6 +237,9 @@ impl BackupControl {
             destination_dir: destination,
             automatic_enabled: request.automatic_enabled,
         };
+        if let Some(key_file) = state.recovery_key_file.as_deref() {
+            let _key = self.read_owner_key_file(key_file, Some(&next_config))?;
+        }
         if state.config.as_ref().is_some_and(|prior| {
             prior.source_root != next_config.source_root
                 || prior.destination_dir != next_config.destination_dir
@@ -447,6 +498,15 @@ impl BackupControl {
     }
 
     fn recovery_key(&self) -> Result<RecoveryKey> {
+        let state = self.load_state()?;
+        if let Some(path) = state.recovery_key_file.as_deref() {
+            return self.read_owner_key_file(path, state.config.as_ref());
+        }
+        // The legacy broker path remains solely for explicit in-memory
+        // fixtures. A production status/read never probes macOS Keychain.
+        if !self.inner.broker.is_in_memory_for_tests() {
+            return Err(BackupControlError::KeyFileRequired);
+        }
         let scope = CredentialScope::luna_backup();
         let metadata = self
             .inner
@@ -468,6 +528,59 @@ impl BackupControl {
         let key = RecoveryKey::from_authorized_bytes(bytes);
         bytes.zeroize();
         Ok(key)
+    }
+
+    #[cfg(unix)]
+    fn read_owner_key_file(
+        &self,
+        path: &Path,
+        config: Option<&BackupConfig>,
+    ) -> Result<RecoveryKey> {
+        if !path.is_absolute() || key_file_is_in_provider_home(path) {
+            return Err(BackupControlError::InvalidKeyFile);
+        }
+        if fs::symlink_metadata(path)?.file_type().is_symlink() {
+            return Err(BackupControlError::InvalidKeyFile);
+        }
+        let canonical = path.canonicalize()?;
+        let owner = self.inner.owner_root.path();
+        if canonical.starts_with(owner)
+            || key_file_is_in_provider_home(&canonical)
+            || config.is_some_and(|config| {
+                canonical.starts_with(&config.source_root)
+                    || canonical.starts_with(&config.destination_dir)
+            })
+        {
+            return Err(BackupControlError::OverlappingRoots);
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+        let mut file = options.open(&canonical)?;
+        let metadata = file.metadata()?;
+        if !metadata.file_type().is_file() || metadata.len() != 32 {
+            return Err(BackupControlError::InvalidKeyFile);
+        }
+        use std::os::unix::fs::MetadataExt;
+        if metadata.mode() & 0o777 != 0o600
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.nlink() != 1
+        {
+            return Err(BackupControlError::InvalidKeyFile);
+        }
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        file.read_exact(&mut *bytes)?;
+        Ok(RecoveryKey::from_authorized_bytes(*bytes))
+    }
+
+    #[cfg(not(unix))]
+    fn read_owner_key_file(
+        &self,
+        _path: &Path,
+        _config: Option<&BackupConfig>,
+    ) -> Result<RecoveryKey> {
+        Err(BackupControlError::InvalidKeyFile)
     }
 
     fn status_from_state(&self, state: ControlState) -> Result<BackupStatus> {
@@ -597,6 +710,33 @@ impl BackupControl {
         File::open(root)?.sync_all()?;
         Ok(())
     }
+}
+
+/// A backup recovery file must not alias a provider-owned credential home.
+/// This only compares paths; it never opens or probes the provider stores.
+fn key_file_is_in_provider_home(path: &Path) -> bool {
+    let mut homes = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        homes.extend([
+            home.join(".codex"),
+            home.join(".claude"),
+            home.join(".config/opencode"),
+            home.join(".local/share/opencode"),
+        ]);
+    }
+    for variable in [
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "OPENCODE_HOME",
+        "OPENCODE_CONFIG_DIR",
+    ] {
+        if let Some(home) = std::env::var_os(variable).map(PathBuf::from)
+            && home.is_absolute()
+        {
+            homes.push(home);
+        }
+    }
+    homes.into_iter().any(|home| path.starts_with(home))
 }
 
 fn parse_key(hex: &str) -> Result<[u8; 32]> {
