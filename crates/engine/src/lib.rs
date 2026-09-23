@@ -499,12 +499,9 @@ impl EngineCore {
         }));
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
         task_identity.start_startup_reconciliation();
-        let backup_control = backup::IsolatedRoot::open(data_dir).ok().map(|root| {
-            backup_control::BackupControl::new(
-                root,
-                credentials::CredentialBroker::for_data_dir(data_dir),
-            )
-        });
+        let backup_control = backup::IsolatedRoot::open(data_dir)
+            .ok()
+            .map(backup_control::BackupControl::new);
         Ok(Self {
             backup_control,
             store,

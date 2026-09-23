@@ -314,7 +314,7 @@ impl BackupService {
         }
     }
 
-    fn inspect(&self, path: &Path) -> Result<BackupManifest> {
+    pub(crate) fn inspect(&self, path: &Path) -> Result<BackupManifest> {
         match &self.codec {
             ArchiveCodec::Encrypted(key) => inspect_archive(path, key),
             ArchiveCodec::BbStylePlain => inspect_bb_style_archive(path),

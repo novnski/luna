@@ -89,7 +89,7 @@ impl BackupsPage {
             let Some(destination) = status.destination_dir.as_ref() else {
                 return;
             };
-            let filename = format!("luna-export-{}.lunabk", uuid::Uuid::new_v4());
+            let filename = format!("luna-export-{}.tar.gz", uuid::Uuid::new_v4());
             let archive_path = std::path::Path::new(destination).join(filename);
             (
                 methods::EXPORT_BACKUP,
@@ -265,11 +265,7 @@ impl Render for BackupsPage {
         let has_stage = status
             .as_ref()
             .is_some_and(|value| value.staged_restore.is_some());
-        let key_line = match status.as_ref() {
-            Some(value) if value.key_configured => "Owner recovery key configured",
-            Some(_) => "Owner recovery key needed. This build cannot generate or reveal one.",
-            None => "Recovery key status unavailable",
-        };
+        let privacy_line = "Archives are unencrypted. Keep exported files private.";
         let status_label = match status.as_ref().map(|value| value.availability) {
             Some(BackupAvailability::Ready) => "Ready for isolated copies",
             Some(BackupAvailability::Unconfigured) => "Configuration needed",
@@ -332,7 +328,7 @@ impl Render for BackupsPage {
                         widgets::page_column()
                             .child(widgets::page_header(&theme, "Backups", None))
                             .child(widgets::page_subtitle(&theme,
-                                "Encrypted exports and backups for explicitly isolated LUNA copies."))
+                                "Verified BB-style archives for explicitly isolated LUNA copies."))
                             .when_some(self.status.error().map(str::to_owned), |page, error| page.child(widgets::error_strip(&theme, SharedString::from(error))))
                             .when_some(reason, |page, reason| page.child(widgets::warning_strip(&theme, SharedString::from(reason))))
                             .when_some(self.error.clone(), |page, error| page.child(widgets::error_strip(&theme, SharedString::from(error))))
@@ -355,8 +351,8 @@ impl Render for BackupsPage {
                                             .child(widgets::meta_line(&theme, vec![div().child(SharedString::from(destination)).into_any_element()]))))
                                     .child(widgets::card_row(&theme, false)
                                         .child(div().flex_1().min_w_0()
-                                            .child(widgets::row_title(&theme, "Recovery key"))
-                                            .child(widgets::meta_line(&theme, vec![div().child(key_line).into_any_element()]))))
+                                            .child(widgets::row_title(&theme, "Archive privacy"))
+                                            .child(widgets::meta_line(&theme, vec![div().child(privacy_line).into_any_element()]))))
                                     .child(widgets::card_row(&theme, false)
                                         .child(div().flex_1().min_w_0()
                                             .child(widgets::row_title(&theme, "Last verified archive"))

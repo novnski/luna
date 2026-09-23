@@ -2,17 +2,14 @@
 
 use std::fs;
 #[cfg(unix)]
-use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::sync::Arc;
 use tempfile::TempDir;
-use zeron_engine::backup::{IsolatedRoot, RecoveryKey, inspect_archive};
+use zeron_engine::backup::IsolatedRoot;
 use zeron_engine::backup_control::{BackupControl, BackupControlError};
-use zeron_engine::credentials::{CredentialBroker, CredentialScope};
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_proto::HarnessId;
 use zeron_proto::{BackupArchiveRequest, BackupAvailability, BackupConfigureRequest};
@@ -28,132 +25,8 @@ fn marked_root(path: &Path) {
     .unwrap();
 }
 
-#[cfg(unix)]
 #[test]
-fn owner_held_key_file_backs_up_without_keychain_or_root_overlap() {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-    let temp = TempDir::new().unwrap();
-    let owner = temp.path().join("synthetic-owner");
-    let source = temp.path().join("synthetic-source");
-    let destination = temp.path().join("synthetic-backups");
-    let key_file = temp.path().join("owner-held.key");
-    marked_root(&owner);
-    marked_root(&source);
-    fs::create_dir(&destination).unwrap();
-    fs::write(
-        destination.join(".luna-l17-isolated-backups"),
-        "L17 synthetic or copy-isolated backup destination\n",
-    )
-    .unwrap();
-    let store = DocsStore::open(source.join("profiles/local")).unwrap();
-    store.save_snapshot("synthetic", b"synthetic data").unwrap();
-    drop(store);
-
-    let mut key = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&key_file)
-        .unwrap();
-    key.write_all(&[0x5a; 32]).unwrap();
-    key.sync_all().unwrap();
-    drop(key);
-    let control = BackupControl::new(
-        IsolatedRoot::open(&owner).unwrap(),
-        CredentialBroker::for_data_dir(&owner),
-    );
-    assert!(matches!(
-        control.configure_recovery_key_hex("11".repeat(32)),
-        Err(BackupControlError::KeyFileRequired)
-    ));
-    control
-        .configure_recovery_key_file(key_file.display().to_string())
-        .unwrap();
-    assert!(control.status().unwrap().key_configured);
-    control
-        .configure(BackupConfigureRequest {
-            source_root: source.display().to_string(),
-            destination_dir: destination.display().to_string(),
-            automatic_enabled: true,
-        })
-        .unwrap();
-    let inside = source.join("inside.key");
-    let mut inside_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&inside)
-        .unwrap();
-    inside_file.write_all(&[0x5a; 32]).unwrap();
-    assert!(matches!(
-        control.configure_recovery_key_file(inside.display().to_string()),
-        Err(BackupControlError::OverlappingRoots)
-    ));
-    fs::remove_file(&inside).unwrap();
-    let receipt = control.manual_backup().unwrap();
-    assert!(Path::new(&receipt.archive_path).is_file());
-    let reopened = BackupControl::new(
-        IsolatedRoot::open(&owner).unwrap(),
-        CredentialBroker::for_data_dir(&owner),
-    );
-    assert_eq!(reopened.status().unwrap().last_success.unwrap(), receipt);
-    let staged = reopened
-        .stage_restore(BackupArchiveRequest {
-            archive_path: receipt.archive_path.clone(),
-        })
-        .unwrap();
-    assert!(!staged.restore_activation_available);
-    assert_eq!(reopened.status().unwrap().staged_restore.unwrap(), staged);
-    assert!(!owner.join("credentials").exists());
-    assert!(matches!(
-        reopened.configure_recovery_key_file(source.join("inside.key").display().to_string()),
-        Err(BackupControlError::KeyRotationRequiresPlan)
-    ));
-
-    let weak = temp.path().join("weak.key");
-    fs::write(&weak, [0x5a; 32]).unwrap();
-    fs::set_permissions(&weak, fs::Permissions::from_mode(0o644)).unwrap();
-    let second_owner = temp.path().join("synthetic-owner-2");
-    marked_root(&second_owner);
-    let fresh = BackupControl::new(
-        IsolatedRoot::open(&second_owner).unwrap(),
-        CredentialBroker::for_data_dir(&second_owner),
-    );
-    assert!(matches!(
-        fresh.configure_recovery_key_file(weak.display().to_string()),
-        Err(BackupControlError::InvalidKeyFile)
-    ));
-    let alias = temp.path().join("alias.key");
-    std::os::unix::fs::symlink(&key_file, &alias).unwrap();
-    assert!(matches!(
-        fresh.configure_recovery_key_file(alias.display().to_string()),
-        Err(BackupControlError::InvalidKeyFile)
-    ));
-}
-
-#[test]
-fn synthetic_key_generation_never_falls_back_to_platform_broker() {
-    let temp = TempDir::new().unwrap();
-    let owner = temp.path().join("marked-synthetic-owner");
-    marked_root(&owner);
-    let control = BackupControl::new(
-        IsolatedRoot::open(&owner).unwrap(),
-        CredentialBroker::for_data_dir(&owner),
-    );
-    assert!(matches!(
-        control.generate_recovery_key_for_synthetic_tests(),
-        Err(BackupControlError::SyntheticKeyOnly)
-    ));
-    assert_eq!(
-        control.status().unwrap().availability,
-        BackupAvailability::Unconfigured
-    );
-    assert!(!owner.join("credentials").exists());
-}
-
-#[test]
-fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
+fn bb_style_control_drives_persisted_manual_and_daily_copy_backup() {
     let temp = TempDir::new().unwrap();
     let owner = temp.path().join("synthetic-engine");
     let source = temp.path().join("copy-isolated-source");
@@ -172,31 +45,12 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
         .unwrap();
     drop(store);
 
-    let broker = CredentialBroker::in_memory_for_tests(&owner);
-    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
+    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap());
     assert_eq!(
         control.status().unwrap().availability,
         BackupAvailability::Unconfigured
     );
-    assert!(control.configure_recovery_key_hex("bad".into()).is_err());
-    control.configure_recovery_key_hex("11".repeat(32)).unwrap();
-    assert!(control.status().unwrap().key_configured);
-    let key = broker
-        .list_metadata()
-        .unwrap()
-        .into_iter()
-        .find(|m| m.name == "LUNA backup recovery key")
-        .unwrap();
-    assert!(
-        broker
-            .lease_by_id(&key.id, &CredentialScope::luna_sync())
-            .is_err()
-    );
-    assert!(
-        broker
-            .lease_by_id(&key.id, &CredentialScope::luna_backup())
-            .is_ok()
-    );
+    assert!(!control.status().unwrap().key_configured);
 
     let status = control
         .configure(BackupConfigureRequest {
@@ -208,8 +62,17 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
     assert_eq!(status.availability, BackupAvailability::Ready);
     assert!(!status.restore_activation_available);
     let manual = control.manual_backup().unwrap();
-    assert!(control.configure_recovery_key_hex("33".repeat(32)).is_err());
     assert!(Path::new(&manual.archive_path).is_file());
+    assert!(manual.archive_path.ends_with(".tar.gz"));
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(&manual.archive_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
     assert_eq!(control.status().unwrap().last_success.unwrap(), manual);
     let preview = control
         .inspect(BackupArchiveRequest {
@@ -225,7 +88,7 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
         .unwrap();
     assert!(Path::new(&staged.staging_path).is_dir());
     assert!(!staged.restore_activation_available);
-    let fresh = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
+    let fresh = BackupControl::new(IsolatedRoot::open(&owner).unwrap());
     assert_eq!(fresh.status().unwrap().last_success.unwrap(), manual);
     let reverified = fresh
         .stage_restore(BackupArchiveRequest {
@@ -241,7 +104,7 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
     assert!(
         fresh
             .stage_restore(BackupArchiveRequest {
-                archive_path: destination.join("different.lunabk").display().to_string(),
+                archive_path: destination.join("different.tar.gz").display().to_string(),
             })
             .is_err()
     );
@@ -261,15 +124,7 @@ fn broker_scoped_key_drives_persisted_manual_and_daily_copy_backup() {
     assert_ne!(automatic.archive_sha256, manual.archive_sha256);
     assert_eq!(fresh.status().unwrap().last_success.unwrap(), automatic);
 
-    // A different in-memory store cannot recover the scoped archive key. It
-    // must report unconfigured instead of reading a native credential store.
-    let unrelated = BackupControl::new(
-        IsolatedRoot::open(&owner).unwrap(),
-        CredentialBroker::in_memory_for_tests(&owner),
-    );
-    let status = unrelated.status().unwrap();
-    assert_eq!(status.availability, BackupAvailability::Unconfigured);
-    assert!(!status.key_configured);
+    assert!(!owner.join("credentials").exists());
 }
 
 #[test]
@@ -293,11 +148,7 @@ fn staged_checkpoint_fails_closed_across_restart_and_retries_after_repair() {
         .unwrap();
     drop(store);
 
-    let broker = CredentialBroker::in_memory_for_tests(&owner);
-    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
-    let owner_code = control.generate_recovery_key_for_synthetic_tests().unwrap();
-    assert_eq!(owner_code.len(), 64);
-    assert!(owner_code.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap());
     control
         .configure(BackupConfigureRequest {
             source_root: source.display().to_string(),
@@ -306,18 +157,14 @@ fn staged_checkpoint_fails_closed_across_restart_and_retries_after_repair() {
         })
         .unwrap();
     let archive = control.manual_backup().unwrap().archive_path;
-    let recovered_bytes: [u8; 32] = std::array::from_fn(|index| {
-        u8::from_str_radix(&owner_code[index * 2..index * 2 + 2], 16).unwrap()
-    });
-    assert!(inspect_archive(Path::new(&archive), &RecoveryKey::injected(recovered_bytes)).is_ok());
-    assert!(control.generate_recovery_key_for_synthetic_tests().is_err());
+    assert!(archive.ends_with(".tar.gz"));
     let request = BackupArchiveRequest {
         archive_path: archive,
     };
     let staged = control.stage_restore(request.clone()).unwrap();
     drop(control);
 
-    let fresh = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker.clone());
+    let fresh = BackupControl::new(IsolatedRoot::open(&owner).unwrap());
     let stage_path = Path::new(&staged.staging_path);
     fs::write(stage_path.join("ui-settings.json"), b"changed stage").unwrap();
     assert!(fresh.stage_restore(request.clone()).is_err());
@@ -349,7 +196,7 @@ fn staged_checkpoint_fails_closed_across_restart_and_retries_after_repair() {
         serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
     old_state.as_object_mut().unwrap().remove("stagedEvidence");
     fs::write(&state_path, serde_json::to_vec(&old_state).unwrap()).unwrap();
-    let legacy = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker);
+    let legacy = BackupControl::new(IsolatedRoot::open(&owner).unwrap());
     assert!(
         legacy
             .status()
@@ -382,8 +229,7 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
         .save_snapshot("synthetic", b"synthetic transcript")
         .unwrap();
     drop(store);
-    let broker = CredentialBroker::in_memory_for_tests(&owner);
-    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap(), broker);
+    let control = BackupControl::new(IsolatedRoot::open(&owner).unwrap());
     control
         .configure(BackupConfigureRequest {
             source_root: source.display().to_string(),
@@ -415,7 +261,8 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(status.availability, BackupAvailability::Unconfigured);
+    assert_eq!(status.availability, BackupAvailability::Ready);
+    assert!(!status.key_configured);
     assert!(
         client
             .call(
@@ -427,15 +274,15 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
             .await
             .is_err()
     );
-    client
-        .call(
-            methods::CONFIGURE_BACKUP_KEY,
-            serde_json::json!({
-                "recoveryKeyHex":"22".repeat(32)
-            }),
-        )
-        .await
-        .unwrap();
+    assert!(
+        client
+            .call(
+                methods::CONFIGURE_BACKUP_KEY,
+                serde_json::json!({ "recoveryKeyHex":"22".repeat(32) }),
+            )
+            .await
+            .is_err()
+    );
     let status: zeron_proto::BackupStatus = serde_json::from_value(
         client
             .call(methods::GET_BACKUP_STATUS, serde_json::json!({}))

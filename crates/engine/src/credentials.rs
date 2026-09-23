@@ -312,12 +312,6 @@ impl CredentialBroker {
         )
     }
 
-    /// Distinguish the explicit hermetic broker from the platform store
-    /// without probing either backend or reading any credential material.
-    pub(crate) fn is_in_memory_for_tests(&self) -> bool {
-        self.inner.test_key_store.is_some()
-    }
-
     fn with_store(
         vault_file: PathBuf,
         key_store: Arc<dyn VaultKeyStore>,
@@ -682,10 +676,6 @@ impl fmt::Debug for SecretMaterial {
 }
 
 impl SecretMaterial {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
     pub(crate) fn as_utf8(&self) -> Result<&str, CredentialError> {
         std::str::from_utf8(&self.0).map_err(|_| CredentialError::VaultCorrupt)
     }

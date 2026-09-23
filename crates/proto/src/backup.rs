@@ -30,6 +30,7 @@ pub struct BackupStatus {
     pub source_root: Option<String>,
     pub destination_dir: Option<String>,
     pub automatic_enabled: bool,
+    /// Legacy encrypted-archive status; always false for BB-style archives.
     pub key_configured: bool,
     pub last_success: Option<BackupSummary>,
     pub retention_candidates: usize,
@@ -46,9 +47,8 @@ pub struct BackupConfigureRequest {
     pub automatic_enabled: bool,
 }
 
-/// Deliberately has no Debug or Serialize implementation: a caller may send
-/// owner-held material or an absolute owner-held file path to a local engine,
-/// but neither is sent back on the wire. Hex ingress is synthetic-only.
+/// Legacy request kept for wire compatibility. The BB-style backup control
+/// rejects key configuration; it never forwards material to Keychain.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupKeyConfigureRequest {

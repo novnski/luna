@@ -68,14 +68,14 @@ use zeron_doc::{
 use zeron_proto::{
     AttentionMutationRequest, AttentionMutationResult, AttentionProducerAvailability,
     AttentionReadRequest, AttentionSnapshot, AttentionTransitionBatch, AttentionTransitionClaim,
-    BackupArchiveRequest, BackupAvailability, BackupConfigureRequest, BackupKeyConfigureRequest,
-    BackupStatus, BindingOrigin, Chat, ChatConfig, CommandReasonCode, CommandReceipt,
-    CommandReceiptReason, CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead,
-    ContextBoundary, ContextBoundaryKind, ContextControlState, ContextHandoff,
-    ContextOperationStatus, ConversationForkBoundaryKind, DraftBlobState, EngineInfo,
-    FollowUpBehavior, HarnessId, HistoryCapabilityView, HistoryCursor, HistoryProjectPolicy,
-    HistoryRebuildRequest, HistoryRebuildResult, HistoryRecoveryView, HistorySearchRequest,
-    ImportOwnership, PermissionMode, ProviderForkCapability, ProviderForkRequest, TaskCommandEvent,
+    BackupArchiveRequest, BackupAvailability, BackupConfigureRequest, BackupStatus, BindingOrigin,
+    Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
+    CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead, ContextBoundary,
+    ContextBoundaryKind, ContextControlState, ContextHandoff, ContextOperationStatus,
+    ConversationForkBoundaryKind, DraftBlobState, EngineInfo, FollowUpBehavior, HarnessId,
+    HistoryCapabilityView, HistoryCursor, HistoryProjectPolicy, HistoryRebuildRequest,
+    HistoryRebuildResult, HistoryRecoveryView, HistorySearchRequest, ImportOwnership,
+    PermissionMode, ProviderForkCapability, ProviderForkRequest, TaskCommandEvent,
     TaskCommandSnapshot, TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
@@ -6456,7 +6456,7 @@ impl RpcService for EngineRpc {
                 let Some(control) = self.backup_control.clone() else {
                     return RpcReply::value(&BackupStatus {
                         availability: BackupAvailability::Unavailable,
-                        reason: Some("Live-profile backup is unavailable; configure a separate copy-isolated source with an owner-held recovery key.".into()),
+                        reason: Some("Live-profile backup is unavailable until the offline shutdown/startup handoff is wired.".into()),
                         source_root: None,
                         destination_dir: None,
                         automatic_enabled: false,
@@ -6476,14 +6476,8 @@ impl RpcService for EngineRpc {
                 backup_rpc_reply(move || control.configure(request)).await
             }
             methods::CONFIGURE_BACKUP_KEY => {
-                let request: BackupKeyConfigureRequest = parse_params(params)?;
-                let control = self.backup_control()?;
-                backup_rpc_reply(move || {
-                    match (request.recovery_key_hex, request.recovery_key_file_path) {
-                        (Some(hex), None) => control.configure_recovery_key_hex(hex),
-                        (None, Some(path)) => control.configure_recovery_key_file(path),
-                        _ => Err(BackupControlError::InvalidKeyConfiguration),
-                    }
+                backup_rpc_reply(|| -> Result<(), BackupControlError> {
+                    Err(BackupControlError::KeyNotUsed)
                 })
                 .await
             }
