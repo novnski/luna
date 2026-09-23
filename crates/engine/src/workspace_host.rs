@@ -282,7 +282,6 @@ impl WorkspaceHost {
     /// Guard only RegistryClient-owned mutations with the engine's device-root
     /// lease. Boot, local registry, and DocsStore writes still need admission
     /// before this can become a complete product freeze boundary.
-    #[allow(dead_code)] // Product constructor wiring follows the guarded seam.
     pub(crate) fn open_with_registry_write_handle(
         store: Arc<DocsStore>,
         config: WorkspaceHostConfig,
@@ -2776,6 +2775,88 @@ mod tests {
         drop(permit);
         let replacement = InstanceLock::acquire(root.path()).unwrap();
         drop(replacement);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn assembled_host_uses_owner_admission_and_reopens_after_retirement() {
+        use super::*;
+        use crate::{
+            AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, InstanceLock,
+        };
+        use zeron_proto::HarnessId;
+        use zeron_sync::write_epoch::EpochError;
+
+        let root = tempfile::tempdir().unwrap();
+        let engine_root = root.path().join("synthetic-engine");
+        let profile = EngineProfile::development(&engine_root, "synthetic-org", "synthetic-user");
+        // All provider paths stay under this temporary root; metadata lookup
+        // is disabled below and no Edge config can create a socket join.
+        let accounts = AgentAccountsConfig {
+            data_dir: root.path().join("synthetic-provider-state"),
+            claude_config_dir: root.path().join("synthetic-claude"),
+            claude_config_file: root.path().join("synthetic-claude.json"),
+            codex_home: root.path().join("synthetic-codex"),
+            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
+        };
+        accounts.disable_claude_keychain_fallback().unwrap();
+
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                profile.clone(),
+                Arc::new(HarnessRegistry::new()),
+                HarnessId::Mock,
+                None,
+                accounts.clone(),
+            )
+            .unwrap();
+        let device_id = core.device_id.clone();
+        let admission = core.workspace.inner.registry_admission.clone().unwrap();
+        let permit = admission().unwrap();
+        assert!(
+            core.workspace
+                .rename_device(&device_id, "Synthetic guarded device")
+                .unwrap()
+        );
+        core.workspace.flush_checked().unwrap();
+
+        core.shutdown().await;
+        drop(core);
+        assert!(matches!(admission(), Err(EpochError::Retired)));
+        // The product constructor's boxed ticket keeps its actual root lease
+        // alive after EngineCore retires, even though its weak handle cannot
+        // admit another write.
+        assert!(InstanceLock::acquire(&engine_root).is_err());
+        drop(permit);
+
+        let reopened =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                profile,
+                Arc::new(HarnessRegistry::new()),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )
+            .unwrap();
+        assert_eq!(reopened.device_id, device_id);
+        assert_eq!(
+            reopened
+                .workspace
+                .read_devices()
+                .unwrap()
+                .into_iter()
+                .find(|device| device.id == device_id)
+                .unwrap()
+                .name,
+            "Synthetic guarded device"
+        );
+        let reopened_admission = reopened
+            .workspace
+            .inner
+            .registry_admission
+            .as_ref()
+            .unwrap();
+        drop(reopened_admission().unwrap());
+        reopened.shutdown().await;
     }
 
     #[tokio::test(flavor = "current_thread")]
