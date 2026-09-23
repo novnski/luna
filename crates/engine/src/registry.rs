@@ -8,6 +8,7 @@
 //! another device and edits THAT device's set over the forwarded RPCs.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -15,6 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use zeron_harness::{Harness, HarnessError, mock::MockHarness};
 use zeron_proto::{AgentEvent, DoneStatus, HarnessId, ReasoningLevel, SteeringMode};
+
+use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 
 /// What `ListHarnesses` reports per harness.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +138,39 @@ pub struct HarnessRegistry {
     prefs: Mutex<HarnessPrefsFile>,
     /// Where the prefs persist; `None` (tests, bare registries) skips writes.
     prefs_path: Mutex<Option<PathBuf>>,
+    /// Serialize candidate validation, publication, and in-memory commit.
+    prefs_write: Mutex<()>,
+    /// Weak engine-owned coordinator. Admission always precedes prefs_write.
+    prefs_write_handle: Mutex<Option<DeviceWriteHandle>>,
+    /// A rename with failed directory sync must be retried even if the next
+    /// request repeats the already-visible setting.
+    prefs_needs_sync: Mutex<bool>,
+    #[cfg(test)]
+    prefs_before_publish: Mutex<Option<Arc<dyn Fn() -> std::io::Result<()> + Send + Sync>>>,
+    #[cfg(test)]
+    prefs_after_publish: Mutex<Option<Arc<dyn Fn() -> std::io::Result<()> + Send + Sync>>>,
+}
+
+#[derive(Debug)]
+pub(crate) enum PrefsMutationError {
+    Failed(String),
+    /// Rename succeeded, but syncing the parent directory failed. The new
+    /// value is visible on disk and in memory; crash durability is uncertain.
+    PublishedUncertain(String),
+}
+
+impl PrefsMutationError {
+    pub(crate) fn published(&self) -> bool {
+        matches!(self, Self::PublishedUncertain(_))
+    }
+}
+
+impl std::fmt::Display for PrefsMutationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(message) | Self::PublishedUncertain(message) => f.write_str(message),
+        }
+    }
 }
 
 impl Default for HarnessRegistry {
@@ -150,6 +186,13 @@ impl HarnessRegistry {
             order: Mutex::new(Vec::new()),
             prefs: Mutex::new(HarnessPrefsFile::default()),
             prefs_path: Mutex::new(None),
+            prefs_write: Mutex::new(()),
+            prefs_write_handle: Mutex::new(None),
+            prefs_needs_sync: Mutex::new(false),
+            #[cfg(test)]
+            prefs_before_publish: Mutex::new(None),
+            #[cfg(test)]
+            prefs_after_publish: Mutex::new(None),
         }
     }
 
@@ -165,35 +208,130 @@ impl HarnessRegistry {
         self.prefs.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_prefs_before_publish_for_tests(
+        &self,
+        hook: Option<Arc<dyn Fn() -> std::io::Result<()> + Send + Sync>>,
+    ) {
+        *self
+            .prefs_before_publish
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = hook;
+    }
+
     /// Load `harness-prefs.json` from the engine data dir and remember the
     /// path for writes. Corrupt/missing files fall back to the default set.
     pub fn load_prefs(&self, data_dir: &Path) {
+        if let Err(error) = self.load_prefs_checked(data_dir) {
+            tracing::warn!(%error, "harness-prefs load or migration failed");
+        }
+    }
+
+    pub(crate) fn load_prefs_guarded(
+        &self,
+        data_dir: &Path,
+        write_handle: DeviceWriteHandle,
+    ) -> Result<(), PrefsMutationError> {
+        let _permit = write_handle.try_admit().map_err(|error| {
+            PrefsMutationError::Failed(format!(
+                "harness preferences temporarily unavailable ({error:?}); retry"
+            ))
+        })?;
+        let root = data_dir
+            .canonicalize()
+            .map_err(|error| PrefsMutationError::Failed(error.to_string()))?;
+        if root != _permit.ticket().root() {
+            return Err(PrefsMutationError::Failed(
+                "harness preferences are outside the admitted device root".into(),
+            ));
+        }
+        let _write = self
+            .prefs_write
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Bind under the mutation lock, before a legacy load can migrate.
+        // A writer admitted by a previous owner will fail the identity check
+        // when it reaches this lock rather than mutating under the new owner.
+        *self
+            .prefs_write_handle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(write_handle);
+        self.load_prefs_under_write(&root)
+    }
+
+    fn load_prefs_checked(&self, data_dir: &Path) -> Result<(), PrefsMutationError> {
+        let _permit = self.admit_prefs_write()?;
+        let guarded_root = if let Some(permit) = _permit.as_ref() {
+            let root = data_dir
+                .canonicalize()
+                .map_err(|error| PrefsMutationError::Failed(error.to_string()))?;
+            if root != permit.ticket().root() {
+                return Err(PrefsMutationError::Failed(
+                    "harness preferences are outside the admitted device root".into(),
+                ));
+            }
+            Some(root)
+        } else {
+            None
+        };
+        let _write = self
+            .prefs_write
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.check_prefs_permit(_permit.as_ref())?;
+        self.load_prefs_under_write(guarded_root.as_deref().unwrap_or(data_dir))
+    }
+
+    fn load_prefs_under_write(&self, data_dir: &Path) -> Result<(), PrefsMutationError> {
         let path = data_dir.join("harness-prefs.json");
-        let loaded = std::fs::read_to_string(&path)
+        let mut loaded = std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str::<HarnessPrefsFile>(&text).ok())
             .unwrap_or_default();
-        *self.prefs() = loaded;
-        *self
-            .prefs_path
+        let had_legacy = loaded.enabled.is_some();
+        let needs_sync = *self
+            .prefs_needs_sync
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(path);
-        self.migrate_legacy_prefs();
-    }
-
-    /// Fold a legacy allow-list into the opt-out shape: a registered harness
-    /// missing from it was a deliberate "no", so it stays off. Rewrites the
-    /// file once, which is what lets later installs auto-enable.
-    fn migrate_legacy_prefs(&self) {
-        let legacy = { self.prefs().enabled.take() };
-        let Some(legacy) = legacy else { return };
-        let registered: Vec<HarnessId> = self.order().iter().copied().collect();
-        let disabled: Vec<HarnessId> = registered
-            .into_iter()
-            .filter(|id| auto_enabled(*id) && !legacy.contains(id))
-            .collect();
-        self.prefs().disabled = disabled;
-        self.persist_prefs();
+            .unwrap_or_else(PoisonError::into_inner);
+        let result = if let Some(legacy) = loaded.enabled.take() {
+            // Fold the legacy allow-list into explicit opt-outs, but publish
+            // before exposing the migrated in-memory state.
+            loaded.disabled = self
+                .order()
+                .iter()
+                .copied()
+                .filter(|id| auto_enabled(*id) && !legacy.contains(id))
+                .collect();
+            self.publish_prefs(&path, &loaded)
+        } else if needs_sync {
+            self.publish_prefs(&path, &loaded)
+        } else {
+            Ok(())
+        };
+        if result
+            .as_ref()
+            .map_or_else(PrefsMutationError::published, |_| true)
+        {
+            *self.prefs() = loaded;
+            *self
+                .prefs_path
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(path);
+        }
+        if (had_legacy || needs_sync) && result.is_ok() {
+            *self
+                .prefs_needs_sync
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = false;
+        } else if (had_legacy || needs_sync)
+            && result.as_ref().is_err_and(|error| error.published())
+        {
+            *self
+                .prefs_needs_sync
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = true;
+        }
+        result
     }
 
     /// What this device offers: every harness whose CLI is FOUND, minus the
@@ -238,63 +376,197 @@ impl HarnessRegistry {
     /// something to run). A harness whose CLI is missing is never enabled
     /// in the first place, so turning it off is a clean no-op.
     pub fn set_enabled(&self, id: HarnessId, on: bool) -> Result<(), String> {
+        let permit = self
+            .admit_prefs_write()
+            .map_err(|error| error.to_string())?;
+        self.set_enabled_with_permit(id, on, permit.as_ref())
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn admit_prefs_write(
+        &self,
+    ) -> Result<Option<DeviceWritePermit>, PrefsMutationError> {
+        self.prefs_write_handle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .map(|handle| {
+                handle.try_admit().map_err(|error| {
+                    PrefsMutationError::Failed(format!(
+                        "harness preferences temporarily unavailable ({error:?}); retry"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    fn check_prefs_permit(
+        &self,
+        permit: Option<&DeviceWritePermit>,
+    ) -> Result<(), PrefsMutationError> {
+        let handle = self
+            .prefs_write_handle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if handle.is_some_and(|handle| !permit.is_some_and(|permit| handle.owns(permit))) {
+            return Err(PrefsMutationError::Failed(
+                "harness preferences require the current device writer; retry".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_enabled_with_permit(
+        &self,
+        id: HarnessId,
+        on: bool,
+        permit: Option<&DeviceWritePermit>,
+    ) -> Result<(), PrefsMutationError> {
+        self.check_prefs_permit(permit)?;
+        let _write = self
+            .prefs_write
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.check_prefs_permit(permit)?;
         if !self.slots().contains_key(&id) {
-            return Err(format!("unknown harness {id:?}"));
+            return Err(PrefsMutationError::Failed(format!(
+                "unknown harness {id:?}"
+            )));
         }
         if on && !auto_enabled(id) {
-            return Err(format!("{id:?} cannot be enabled from Settings"));
+            return Err(PrefsMutationError::Failed(format!(
+                "{id:?} cannot be enabled from Settings"
+            )));
         }
         if on && !self.installed_for(id) {
-            return Err(format!("{id:?} CLI is not installed on this device"));
+            return Err(PrefsMutationError::Failed(format!(
+                "{id:?} CLI is not installed on this device"
+            )));
         }
         let enabled = self.enabled_set();
+        let mut candidate = self.prefs().clone();
         match (on, enabled.contains(&id)) {
             (true, false) => {
-                let mut prefs = self.prefs();
                 if opt_in(id) {
-                    prefs.opted_in.push(id);
+                    candidate.opted_in.push(id);
                 } else {
-                    prefs.disabled.retain(|h| *h != id);
+                    candidate.disabled.retain(|h| *h != id);
                 }
             }
             (false, true) => {
                 if enabled.len() == 1 {
-                    return Err("cannot disable the last enabled harness".into());
+                    return Err(PrefsMutationError::Failed(
+                        "cannot disable the last enabled harness".into(),
+                    ));
                 }
-                let mut prefs = self.prefs();
                 if opt_in(id) {
-                    prefs.opted_in.retain(|h| *h != id);
+                    candidate.opted_in.retain(|h| *h != id);
                 } else {
-                    prefs.disabled.push(id);
+                    candidate.disabled.push(id);
                 }
             }
-            _ => return Ok(()),
+            _ => {
+                let needs_sync = *self
+                    .prefs_needs_sync
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                return if needs_sync {
+                    self.commit_prefs(candidate)
+                } else {
+                    Ok(())
+                };
+            }
         }
-        self.persist_prefs();
-        Ok(())
+        self.commit_prefs(candidate)
     }
 
-    /// Best-effort atomic write (temp + rename, the ui-settings pattern).
-    fn persist_prefs(&self) {
+    fn commit_prefs(&self, candidate: HarnessPrefsFile) -> Result<(), PrefsMutationError> {
         let Some(path) = self
             .prefs_path
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
         else {
-            return;
+            *self.prefs() = candidate;
+            return Ok(());
         };
-        let json = match serde_json::to_string_pretty(&*self.prefs()) {
-            Ok(json) => json,
-            Err(err) => {
-                tracing::warn!(error = %err, "harness-prefs serialize failed");
-                return;
-            }
-        };
-        let tmp = path.with_extension("json.tmp");
-        if let Err(err) = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, &path)) {
-            tracing::warn!(error = %err, "harness-prefs save failed");
+        let result = self.publish_prefs(&path, &candidate);
+        if result
+            .as_ref()
+            .map_or_else(PrefsMutationError::published, |_| true)
+        {
+            *self.prefs() = candidate;
         }
+        if result.is_ok() {
+            *self
+                .prefs_needs_sync
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = false;
+        } else if result.as_ref().is_err_and(|error| error.published()) {
+            *self
+                .prefs_needs_sync
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = true;
+        }
+        result
+    }
+
+    fn publish_prefs(
+        &self,
+        path: &Path,
+        candidate: &HarnessPrefsFile,
+    ) -> Result<(), PrefsMutationError> {
+        let bytes = serde_json::to_vec_pretty(candidate)
+            .map_err(|error| PrefsMutationError::Failed(error.to_string()))?;
+        let parent = path.parent().ok_or_else(|| {
+            PrefsMutationError::Failed("harness preferences have no parent directory".into())
+        })?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".harness-prefs-")
+            .suffix(".tmp")
+            .tempfile_in(parent)
+            .map_err(|error| PrefsMutationError::Failed(error.to_string()))?;
+        temporary
+            .write_all(&bytes)
+            .and_then(|()| temporary.flush())
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|error| PrefsMutationError::Failed(error.to_string()))?;
+        #[cfg(test)]
+        if let Some(hook) = self
+            .prefs_before_publish
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        {
+            hook().map_err(|error| PrefsMutationError::Failed(error.to_string()))?;
+        }
+        temporary
+            .into_temp_path()
+            .persist(path)
+            .map_err(|error| PrefsMutationError::Failed(error.to_string()))?;
+        #[cfg(test)]
+        if let Some(hook) = self
+            .prefs_after_publish
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        {
+            hook().map_err(|error| {
+                PrefsMutationError::PublishedUncertain(format!(
+                    "harness preferences were published but durability is uncertain ({error}); refresh before retrying"
+                ))
+            })?;
+        }
+        #[cfg(unix)]
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                PrefsMutationError::PublishedUncertain(format!(
+                    "harness preferences were published but directory sync failed ({error}); refresh before retrying"
+                ))
+            })?;
+        Ok(())
     }
 
     pub fn title_settings(&self) -> TitleSettings {
@@ -302,6 +574,17 @@ impl HarnessRegistry {
     }
 
     pub fn set_title_settings(&self, mut settings: TitleSettings) -> Result<(), String> {
+        let permit = self
+            .admit_prefs_write()
+            .map_err(|error| error.to_string())?;
+        self.check_prefs_permit(permit.as_ref())
+            .map_err(|error| error.to_string())?;
+        let _write = self
+            .prefs_write
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.check_prefs_permit(permit.as_ref())
+            .map_err(|error| error.to_string())?;
         if let Some(id) = settings.harness {
             if !zeron_harness::supports_titles(id) || !self.enabled_set().contains(&id) {
                 return Err("Choose an enabled harness that supports title generation".into());
@@ -310,9 +593,10 @@ impl HarnessRegistry {
             return Err("Choose a title harness before choosing a model".into());
         }
         settings.model = settings.model.filter(|model| !model.trim().is_empty());
-        self.prefs().titles = settings;
-        self.persist_prefs();
-        Ok(())
+        let mut candidate = self.prefs().clone();
+        candidate.titles = settings;
+        self.commit_prefs(candidate)
+            .map_err(|error| error.to_string())
     }
 
     pub fn register(&self, harness: Arc<dyn Harness>) {
@@ -1094,5 +1378,309 @@ mod title_tests {
         let prefs: HarnessPrefsFile = serde_json::from_str(r#"{"disabled":["codex"]}"#).unwrap();
         assert_eq!(prefs.titles, TitleSettings::default());
         assert_eq!(prefs.disabled, vec![HarnessId::Codex]);
+    }
+}
+
+#[cfg(test)]
+mod guarded_prefs_tests {
+    use super::*;
+    use crate::{InstanceLock, device_write::DeviceWriteOwner};
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use zeron_sync::write_epoch::EpochError;
+
+    fn slot(registry: &HarnessRegistry, id: HarnessId) {
+        registry.register_lazy(
+            HarnessDescriptor {
+                id,
+                name: format!("synthetic-{id:?}"),
+                supports_steering: false,
+                steering_mode: SteeringMode::TurnBoundary,
+                reasoning_levels: vec![],
+                installed: true,
+                enabled: None,
+            },
+            Box::new(|| true),
+            Box::new(|| Err(HarnessError::NotInstalled("synthetic slot".into()))),
+        );
+    }
+
+    fn guarded(root: &tempfile::TempDir) -> (DeviceWriteOwner, Arc<HarnessRegistry>) {
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        slot(&registry, HarnessId::ClaudeCode);
+        slot(&registry, HarnessId::Codex);
+        registry
+            .load_prefs_guarded(root.path(), owner.handle())
+            .unwrap();
+        (owner, registry)
+    }
+
+    #[tokio::test]
+    async fn frozen_or_retired_registry_keeps_file_and_memory_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, registry) = guarded(&root);
+        registry.set_enabled(HarnessId::Codex, false).unwrap();
+        let path = root.path().join("harness-prefs.json");
+        let before = std::fs::read(&path).unwrap();
+        let snapshot = owner
+            .epoch_for_tests()
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        assert!(
+            registry
+                .set_enabled(HarnessId::Codex, true)
+                .unwrap_err()
+                .contains("Busy")
+        );
+        assert!(
+            registry
+                .set_title_settings(TitleSettings::default())
+                .unwrap_err()
+                .contains("Busy")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(registry.enabled_set(), vec![HarnessId::ClaudeCode]);
+        drop(snapshot);
+        registry.set_enabled(HarnessId::Codex, true).unwrap();
+        let after = std::fs::read(&path).unwrap();
+        owner.retire();
+        assert!(
+            registry
+                .set_enabled(HarnessId::Codex, false)
+                .unwrap_err()
+                .contains("Retired")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), after);
+        assert_eq!(registry.enabled_set().len(), 2);
+        drop(owner);
+        let replacement =
+            DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+                .unwrap();
+        let reloaded = HarnessRegistry::new();
+        slot(&reloaded, HarnessId::ClaudeCode);
+        slot(&reloaded, HarnessId::Codex);
+        reloaded
+            .load_prefs_guarded(root.path(), replacement.handle())
+            .unwrap();
+        assert_eq!(reloaded.enabled_set().len(), 2);
+    }
+
+    #[test]
+    fn failed_publication_does_not_clobber_existing_prefs_or_state() {
+        let root = tempfile::tempdir().unwrap();
+        let (_owner, registry) = guarded(&root);
+        registry.set_enabled(HarnessId::Codex, false).unwrap();
+        let path = root.path().join("harness-prefs.json");
+        let before = std::fs::read(&path).unwrap();
+        *registry.prefs_before_publish.lock().unwrap() = Some(Arc::new(|| {
+            Err(std::io::Error::other("synthetic prepublication failure"))
+        }));
+        let error = registry.set_enabled(HarnessId::Codex, true).unwrap_err();
+        assert!(error.contains("synthetic prepublication failure"));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(registry.enabled_set(), vec![HarnessId::ClaudeCode]);
+        assert_eq!(
+            std::fs::read_dir(root.path())
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".harness-prefs-")
+                })
+                .count(),
+            0
+        );
+        *registry.prefs_before_publish.lock().unwrap() = None;
+        registry.set_enabled(HarnessId::Codex, true).unwrap();
+        assert_eq!(registry.enabled_set().len(), 2);
+    }
+
+    #[test]
+    fn postpublication_sync_failure_reports_uncertainty_with_truthful_state() {
+        let root = tempfile::tempdir().unwrap();
+        let (_owner, registry) = guarded(&root);
+        registry.set_enabled(HarnessId::Codex, false).unwrap();
+        *registry.prefs_after_publish.lock().unwrap() = Some(Arc::new(|| {
+            Err(std::io::Error::other("synthetic directory sync failure"))
+        }));
+        let error = registry.set_enabled(HarnessId::Codex, true).unwrap_err();
+        assert!(error.contains("published but durability is uncertain"));
+        assert_eq!(registry.enabled_set().len(), 2);
+        let reloaded = HarnessRegistry::new();
+        slot(&reloaded, HarnessId::ClaudeCode);
+        slot(&reloaded, HarnessId::Codex);
+        reloaded.load_prefs(root.path());
+        assert_eq!(reloaded.enabled_set(), registry.enabled_set());
+        *registry.prefs_after_publish.lock().unwrap() = None;
+        // A repeated no-op request must still retry the failed directory sync.
+        registry.set_enabled(HarnessId::Codex, true).unwrap();
+        assert!(!*registry.prefs_needs_sync.lock().unwrap());
+        registry.set_enabled(HarnessId::Codex, false).unwrap();
+        assert_eq!(registry.enabled_set(), vec![HarnessId::ClaudeCode]);
+    }
+
+    #[tokio::test]
+    async fn in_flight_publication_drains_before_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, registry) = guarded(&root);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        *registry.prefs_before_publish.lock().unwrap() = Some(Arc::new(move || {
+            entered_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            Ok(())
+        }));
+        let writer = registry.clone();
+        let join = std::thread::spawn(move || writer.set_enabled(HarnessId::Codex, false));
+        tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+            .await
+            .unwrap();
+        let epoch = owner.epoch_for_tests();
+        assert!(matches!(
+            epoch.freeze(Duration::from_millis(40)).await,
+            Err(EpochError::TimedOut)
+        ));
+        assert!(!root.path().join("harness-prefs.json").exists());
+        release_tx.send(()).unwrap();
+        tokio::task::spawn_blocking(move || join.join().unwrap().unwrap())
+            .await
+            .unwrap();
+        let snapshot = epoch
+            .freeze(Duration::from_secs(2))
+            .await
+            .unwrap()
+            .into_snapshot()
+            .unwrap();
+        assert!(
+            std::fs::read_to_string(root.path().join("harness-prefs.json"))
+                .unwrap()
+                .contains("codex")
+        );
+        drop(snapshot);
+    }
+
+    #[test]
+    fn concurrent_title_and_toggle_updates_keep_both_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let (_owner, registry) = guarded(&root);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let toggle = {
+            let registry = registry.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                registry.set_enabled(HarnessId::Codex, false).unwrap();
+            })
+        };
+        let title = {
+            let registry = registry.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                registry
+                    .set_title_settings(TitleSettings {
+                        harness: Some(HarnessId::ClaudeCode),
+                        model: Some("synthetic-model".into()),
+                    })
+                    .unwrap();
+            })
+        };
+        barrier.wait();
+        toggle.join().unwrap();
+        title.join().unwrap();
+        let reloaded = HarnessRegistry::new();
+        slot(&reloaded, HarnessId::ClaudeCode);
+        slot(&reloaded, HarnessId::Codex);
+        reloaded.load_prefs(root.path());
+        assert_eq!(reloaded.enabled_set(), vec![HarnessId::ClaudeCode]);
+        assert_eq!(reloaded.title_settings(), registry.title_settings());
+        assert_eq!(
+            reloaded.title_settings().model.as_deref(),
+            Some("synthetic-model")
+        );
+    }
+
+    #[test]
+    fn failed_legacy_migration_is_explicit_then_retries_and_survives_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("harness-prefs.json");
+        let legacy = br#"{"enabled":["claude-code"]}"#;
+        std::fs::write(&path, legacy).unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let registry = HarnessRegistry::new();
+        slot(&registry, HarnessId::ClaudeCode);
+        slot(&registry, HarnessId::Codex);
+        *registry.prefs_before_publish.lock().unwrap() = Some(Arc::new(|| {
+            Err(std::io::Error::other("synthetic migration failure"))
+        }));
+        let error = registry
+            .load_prefs_guarded(root.path(), owner.handle())
+            .unwrap_err();
+        assert!(error.to_string().contains("synthetic migration failure"));
+        assert_eq!(std::fs::read(&path).unwrap(), legacy);
+        assert_eq!(registry.enabled_set().len(), 2);
+        *registry.prefs_before_publish.lock().unwrap() = None;
+        registry
+            .load_prefs_guarded(root.path(), owner.handle())
+            .unwrap();
+        assert_eq!(registry.enabled_set(), vec![HarnessId::ClaudeCode]);
+        drop(owner);
+        let replacement =
+            DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+                .unwrap();
+        let reloaded = HarnessRegistry::new();
+        slot(&reloaded, HarnessId::ClaudeCode);
+        slot(&reloaded, HarnessId::Codex);
+        reloaded
+            .load_prefs_guarded(root.path(), replacement.handle())
+            .unwrap();
+        assert_eq!(reloaded.enabled_set(), vec![HarnessId::ClaudeCode]);
+        assert!(!std::fs::read_to_string(path).unwrap().contains("enabled"));
+    }
+
+    #[test]
+    fn guarded_registry_rejects_foreign_root_and_ticket() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let other_owner =
+            DeviceWriteOwner::new(other.path(), InstanceLock::acquire(other.path()).unwrap())
+                .unwrap();
+        let registry = HarnessRegistry::new();
+        slot(&registry, HarnessId::ClaudeCode);
+        slot(&registry, HarnessId::Codex);
+        assert!(
+            registry
+                .load_prefs_guarded(root.path(), other_owner.handle())
+                .unwrap_err()
+                .to_string()
+                .contains("outside the admitted device root")
+        );
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        registry
+            .load_prefs_guarded(root.path(), owner.handle())
+            .unwrap();
+        let foreign = other_owner.handle().try_admit().unwrap();
+        assert!(
+            registry
+                .set_enabled_with_permit(HarnessId::Codex, false, Some(&foreign))
+                .is_err()
+        );
+        assert_eq!(registry.enabled_set().len(), 2);
+        assert!(!root.path().join("harness-prefs.json").exists());
+        registry.load_prefs(other.path());
+        registry.set_enabled(HarnessId::Codex, false).unwrap();
+        assert!(root.path().join("harness-prefs.json").exists());
+        assert!(!other.path().join("harness-prefs.json").exists());
     }
 }
