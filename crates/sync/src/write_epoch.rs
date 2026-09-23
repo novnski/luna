@@ -1,15 +1,15 @@
 //! Device-root write admission for a future coordinated backup snapshot.
 //!
-//! Stage 1 is deliberately unwired: this module cannot make a live backup
+//! This module and the guarded snapshot-store seam cannot make a live backup
 //! consistent until every authoritative writer takes its permit. The lock
-//! order for Stage 2 is: engine InstanceLock (lifetime) -> WritePermit ->
+//! order is: engine InstanceLock (lifetime) -> WritePermit ->
 //! component mutex/file lock/SQLite transaction. Callers must acquire a
 //! permit before component locks and pass it to nested writes; never wait for
 //! a permit while holding one of those locks. Synchronous callers use the
 //! nonblocking `try_admit`; async callers may wait without blocking a runtime
 //! thread. A freeze owns an exclusive flush phase before snapshot capture.
 
-#![allow(dead_code)] // Stage 1 foundation; no product writer is connected yet.
+#![allow(dead_code)] // Foundation only; no product writer is connected yet.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Phase {
+pub enum Phase {
     Open,
     Quiescing,
     Flushing,
@@ -28,7 +28,7 @@ pub(crate) enum Phase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EpochError {
+pub enum EpochError {
     Busy,
     TimedOut,
     Exhausted,
@@ -77,12 +77,12 @@ impl Inner {
 /// One coordinator must be owned by the EngineCore for this device root.
 /// Construction performs no write and does not acquire InstanceLock itself.
 #[derive(Clone)]
-pub(crate) struct WriteEpoch {
+pub struct WriteEpoch {
     inner: Arc<Inner>,
 }
 
 impl WriteEpoch {
-    pub(crate) fn for_device_root(root: &Path) -> io::Result<Self> {
+    pub fn for_device_root(root: &Path) -> io::Result<Self> {
         let root = root.canonicalize()?;
         if !root.is_dir() {
             return Err(io::Error::new(
@@ -105,17 +105,17 @@ impl WriteEpoch {
         })
     }
 
-    pub(crate) fn root(&self) -> &Path {
+    pub fn root(&self) -> &Path {
         &self.inner.root
     }
 
-    pub(crate) fn phase(&self) -> Phase {
+    pub fn phase(&self) -> Phase {
         self.inner.lock().phase
     }
 
     /// Never waits: safe at a synchronous outer write boundary, including on
     /// a single-thread async runtime. Busy must be retried from outside locks.
-    pub(crate) fn try_admit(&self) -> Result<WritePermit, EpochError> {
+    pub fn try_admit(&self) -> Result<WritePermit, EpochError> {
         let mut state = self.inner.lock();
         if state.phase != Phase::Open {
             return Err(EpochError::Busy);
@@ -134,7 +134,7 @@ impl WriteEpoch {
 
     /// Waits without holding a mutex or blocking a runtime thread. Dropping
     /// the future cancels only this admission request, not an admitted write.
-    pub(crate) async fn admit_async(&self, timeout: Duration) -> Result<WritePermit, EpochError> {
+    pub async fn admit_async(&self, timeout: Duration) -> Result<WritePermit, EpochError> {
         let deadline = Instant::now() + timeout;
         let mut changed = self.inner.changed.subscribe();
         loop {
@@ -158,7 +158,7 @@ impl WriteEpoch {
     /// Close admission, drain already admitted writers, and enter an
     /// exclusive flush phase. A timeout or dropped future reopens admission.
     /// No snapshot epoch exists until `FlushGuard::into_snapshot` succeeds.
-    pub(crate) async fn freeze(&self, timeout: Duration) -> Result<FlushGuard, EpochError> {
+    pub async fn freeze(&self, timeout: Duration) -> Result<FlushGuard, EpochError> {
         let deadline = Instant::now() + timeout;
         let mut changed = self.inner.changed.subscribe();
         let mut attempt = {
@@ -192,20 +192,36 @@ impl WriteEpoch {
             }
         }
     }
+
+    pub(crate) fn permits_write(&self, permit: &WritePermit) -> bool {
+        if !Arc::ptr_eq(&self.inner, &permit.inner) {
+            return false;
+        }
+        let state = self.inner.lock();
+        state.epoch == permit.epoch && matches!(state.phase, Phase::Open | Phase::Quiescing)
+    }
+
+    pub(crate) fn permits_flush(&self, permit: &FlushPermit<'_>) -> bool {
+        if !Arc::ptr_eq(&self.inner, &permit.guard.inner) {
+            return false;
+        }
+        let state = self.inner.lock();
+        state.epoch == permit.guard.epoch && state.phase == Phase::Flushing
+    }
 }
 
 /// One admitted semantic write. Nested file/DB writes use this same token.
-pub(crate) struct WritePermit {
+pub struct WritePermit {
     inner: Arc<Inner>,
     epoch: u64,
 }
 
 impl WritePermit {
-    pub(crate) fn epoch(&self) -> u64 {
+    pub fn epoch(&self) -> u64 {
         self.epoch
     }
 
-    pub(crate) fn root(&self) -> &Path {
+    pub fn root(&self) -> &Path {
         &self.inner.root
     }
 }
@@ -255,34 +271,34 @@ impl Drop for FreezeAttempt {
 
 /// Exclusive phase for flushing debounced app state. Ordinary writers remain
 /// blocked; future flush adapters receive only the borrowed `FlushPermit`.
-pub(crate) struct FlushGuard {
+pub struct FlushGuard {
     inner: Arc<Inner>,
     epoch: u64,
     armed: bool,
 }
 
-pub(crate) struct FlushPermit<'a> {
+pub struct FlushPermit<'a> {
     guard: &'a FlushGuard,
 }
 
 impl FlushPermit<'_> {
-    pub(crate) fn epoch(&self) -> u64 {
+    pub fn epoch(&self) -> u64 {
         self.guard.epoch
     }
 
-    pub(crate) fn root(&self) -> &Path {
+    pub fn root(&self) -> &Path {
         &self.guard.inner.root
     }
 }
 
 impl FlushGuard {
-    pub(crate) fn permit(&self) -> FlushPermit<'_> {
+    pub fn permit(&self) -> FlushPermit<'_> {
         FlushPermit { guard: self }
     }
 
     /// Called only after every registered writer has flushed. Consuming the
     /// flush guard makes privileged writes unavailable during snapshot copy.
-    pub(crate) fn into_snapshot(mut self) -> Result<SnapshotGuard, EpochError> {
+    pub fn into_snapshot(mut self) -> Result<SnapshotGuard, EpochError> {
         {
             let mut state = self.inner.lock();
             if state.epoch != self.epoch || state.phase != Phase::Flushing {
@@ -309,17 +325,17 @@ impl Drop for FlushGuard {
 
 /// Stable admission boundary, not a published backup receipt. Dropping this
 /// guard releases waiting writers even if capture fails or is cancelled.
-pub(crate) struct SnapshotGuard {
+pub struct SnapshotGuard {
     inner: Arc<Inner>,
     epoch: u64,
 }
 
 impl SnapshotGuard {
-    pub(crate) fn epoch(&self) -> u64 {
+    pub fn epoch(&self) -> u64 {
         self.epoch
     }
 
-    pub(crate) fn root(&self) -> &Path {
+    pub fn root(&self) -> &Path {
         &self.inner.root
     }
 }
