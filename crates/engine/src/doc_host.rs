@@ -44,7 +44,7 @@ use zeron_sync::{DocsStore, TaskCommandBegin, TaskRecoveryTransition};
 
 use crate::http_error::describe_http_error;
 use crate::sessions::{SessionsEngine, SteerOutcome};
-use crate::workspace_host::WorkspaceHost;
+use crate::workspace_host::{TaskProjectionError, WorkspaceHost};
 use crate::{EngineError, new_id, now_ms};
 
 /// Debounce window for local snapshot saves after a doc change.
@@ -278,6 +278,8 @@ struct DocHostInner {
     task_command_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Receipts publish only after their SQLite transaction commits.
     task_receipts: broadcast::Sender<CommandReceipt>,
+    #[cfg(test)]
+    approved_queue_postcommit_fail_once: AtomicBool,
     /// Peer links (engine assembly, edge runtimes only) — the transport that
     /// pushes queued attachment bytes to a remote host.
     links: OnceLock<Arc<zeron_rpc::LinkCache>>,
@@ -855,9 +857,13 @@ impl ChatDocHandle {
         }
     }
 
-    pub(crate) fn import_transcript<T>(&self, import: impl FnOnce() -> T) -> T {
+    pub(crate) fn import_transcript<T>(&self, import: impl FnOnce() -> T) -> Option<T> {
+        let _projection = lock(&self.queue_projection_lock);
+        if self.durable_projection_uninstalled.load(Ordering::Acquire) {
+            return None;
+        }
         let _guard = lock(&self.transcript_import);
-        import()
+        Some(import())
     }
 
     /// Per-commit publish path: unwatched docs just mark the mirror dirty —
@@ -907,6 +913,8 @@ impl DocHost {
                 executing: Mutex::new(HashSet::new()),
                 task_command_gates: Mutex::new(HashMap::new()),
                 task_receipts: broadcast::channel(256).0,
+                #[cfg(test)]
+                approved_queue_postcommit_fail_once: AtomicBool::new(false),
                 links: OnceLock::new(),
                 http: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
@@ -914,6 +922,13 @@ impl DocHost {
                     .unwrap_or_else(|_| reqwest::Client::new()),
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_approved_queue_install_for_test(&self) {
+        self.inner
+            .approved_queue_postcommit_fail_once
+            .store(true, Ordering::Release);
     }
 
     /// Every background task rides the tracker, raced against the shutdown
@@ -3472,6 +3487,117 @@ impl DocHost {
         Ok((outcome, Some(receipt)))
     }
 
+    /// The approved cross-task send is a product write. Keep an older live
+    /// handle from saving over the atomic receipt/queue snapshot if storage
+    /// succeeded but the live CRDT install did not. The callback makes that
+    /// exact post-commit boundary testable without a provider or real data.
+    fn commit_approved_queue_projection_after_commit<T>(
+        &self,
+        handle: &ChatDocHandle,
+        command_id: &str,
+        mutation: impl FnOnce(&SessionDoc) -> Result<(T, bool), EngineError>,
+        after_commit: impl FnOnce() -> Result<(), EngineError>,
+    ) -> Result<(T, Option<CommandReceipt>), TaskProjectionError> {
+        let _projection = lock(&handle.queue_projection_lock);
+        if handle
+            .durable_projection_uninstalled
+            .load(Ordering::Acquire)
+        {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(
+                "a committed document projection needs recovery after restart".into(),
+            )));
+        }
+        let prepared = self
+            .prepare_queue_projection(handle, command_id, mutation)
+            .map_err(TaskProjectionError::Mutation)?;
+        let (outcome, commit) = prepared.outcome;
+        if !commit {
+            return Ok((outcome, None));
+        }
+        let prepared = PreparedQueueProjection {
+            outcome,
+            snapshot: prepared.snapshot,
+            update: prepared.update,
+            batch_id: prepared.batch_id,
+        };
+        let pending = self
+            .inner
+            .store
+            .task_command_receipt(command_id)
+            .map_err(|error| TaskProjectionError::Mutation(error.into()))?
+            .ok_or_else(|| {
+                TaskProjectionError::Mutation(EngineError::Other(
+                    "task command receipt vanished".into(),
+                ))
+            })?;
+        if pending.status != CommandReceiptStatus::Pending {
+            return Err(TaskProjectionError::Mutation(EngineError::Other(
+                "approved queue command is no longer pending".into(),
+            )));
+        }
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(handle, &prepared);
+        // A storage error can be ambiguous. Fence stale saves before starting
+        // the transaction, then clear only if a fresh receipt proves it did
+        // not commit. Receipt, snapshot and outbox share that transaction.
+        handle
+            .durable_projection_uninstalled
+            .store(true, Ordering::Release);
+        let committed = self
+            .inner
+            .store
+            .complete_task_command_with_snapshot_changes_and_updates(
+                command_id,
+                CommandReceiptStatus::Applied,
+                true,
+                pending.snapshot.binding_id.as_deref(),
+                pending.snapshot.binding_generation,
+                pending.snapshot.active_turn_id.as_deref(),
+                None,
+                None,
+                &snapshots,
+                &[],
+                &updates,
+            );
+        let receipt = match committed {
+            Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => receipt,
+            Ok(Some(_)) | Ok(None) => {
+                handle
+                    .durable_projection_uninstalled
+                    .store(false, Ordering::Release);
+                return Err(TaskProjectionError::Mutation(EngineError::Other(
+                    "approved queue command did not return an applied receipt".into(),
+                )));
+            }
+            Err(error) => {
+                let precommit =
+                    self.inner
+                        .store
+                        .task_command_receipt(command_id)
+                        .is_ok_and(|receipt| {
+                            receipt.is_some_and(|receipt| {
+                                receipt.status == CommandReceiptStatus::Pending
+                            })
+                        });
+                if precommit {
+                    handle
+                        .durable_projection_uninstalled
+                        .store(false, Ordering::Release);
+                    return Err(TaskProjectionError::Mutation(error.into()));
+                }
+                return Err(TaskProjectionError::Commit(error.into()));
+            }
+        };
+        after_commit().map_err(TaskProjectionError::Commit)?;
+        let outcome = self
+            .install_queue_projection(handle, prepared)
+            .map_err(TaskProjectionError::Commit)?;
+        handle
+            .durable_projection_uninstalled
+            .store(false, Ordering::Release);
+        Ok((outcome, Some(receipt)))
+    }
+
     fn correlate_queue_task_projection<T>(
         &self,
         handle: &ChatDocHandle,
@@ -3740,6 +3866,7 @@ impl DocHost {
             None,
         )
         .await
+        .map_err(|error| EngineError::Other(error.message().to_string()))
     }
 
     #[allow(clippy::too_many_arguments)] // Mirrors the existing queue service with one source fence.
@@ -3754,17 +3881,18 @@ impl DocHost {
         follow_up_behavior: zeron_proto::FollowUpBehavior,
         execution: Option<zeron_proto::ChatConfig>,
         source: Option<(&SessionsEngine, &crate::cross_task_tools::ApprovedSendFence)>,
-    ) -> Result<(QueueMutationOutcome, Option<CommandReceipt>), EngineError> {
+    ) -> Result<(QueueMutationOutcome, Option<CommandReceipt>), TaskProjectionError> {
         if !self.is_host(chat_id) {
-            return Err(EngineError::Other(format!(
+            return Err(TaskProjectionError::Mutation(EngineError::Other(format!(
                 "device {} does not host chat {chat_id}",
                 self.inner.config.device_id
-            )));
+            ))));
         }
-        let handle = self.open(chat_id)?;
+        let handle = self.open(chat_id).map_err(TaskProjectionError::Mutation)?;
         let _drain = handle.drain_lock.lock().await;
+        let approved = source.is_some();
         let commit = || {
-            self.commit_queue_task_projection(&handle, command_id, |doc| {
+            let mutation = |doc: &SessionDoc| {
                 if let Some(existing) = doc
                     .read_queue()?
                     .into_iter()
@@ -3799,12 +3927,37 @@ impl DocHost {
                     delivery_gate: None,
                 })?;
                 Ok((QueueMutationOutcome::Applied, true))
-            })
+            };
+            if approved {
+                self.commit_approved_queue_projection_after_commit(
+                    &handle,
+                    command_id,
+                    mutation,
+                    || {
+                        #[cfg(test)]
+                        if self
+                            .inner
+                            .approved_queue_postcommit_fail_once
+                            .swap(false, Ordering::AcqRel)
+                        {
+                            return Err(EngineError::Other(
+                                "synthetic approved queue install failure".into(),
+                            ));
+                        }
+                        Ok(())
+                    },
+                )
+            } else {
+                self.commit_queue_task_projection(&handle, command_id, mutation)
+                    .map_err(TaskProjectionError::Mutation)
+            }
         };
         let result = match source {
-            Some((sessions, fence)) => sessions.with_live_approved_send(fence, commit)?,
-            None => commit()?,
-        };
+            Some((sessions, fence)) => sessions
+                .with_live_approved_send(fence, || Ok(commit()))
+                .map_err(TaskProjectionError::Mutation)?,
+            None => commit(),
+        }?;
         if result.1.is_some() {
             self.unarchive_on_send(chat_id);
         }
@@ -7452,6 +7605,191 @@ mod publication_eviction_tests {
         );
         drop(handle);
         host.shutdown_workers().await;
+    }
+}
+
+#[cfg(test)]
+mod approved_queue_projection_tests {
+    use super::*;
+    use crate::chat2_host::EngineChatSink;
+    use zeron_sync::chat_client::{ChatDocSink, RowImportOutcome};
+
+    fn fixture() -> (
+        tempfile::TempDir,
+        Arc<DocsStore>,
+        DocHost,
+        Arc<ChatDocHandle>,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(root.path()).unwrap());
+        let doc = SessionDoc::init("target").unwrap();
+        store
+            .save_snapshot("target", &doc.export_snapshot().unwrap())
+            .unwrap();
+        store.initialize_chat_outbox("target", &[]).unwrap();
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "synthetic-device".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let handle = host.open("target").unwrap();
+        (root, store, host, handle)
+    }
+
+    fn begin(host: &DocHost, command_id: &str) {
+        let now = now_ms();
+        let pending = CommandReceipt {
+            command_id: command_id.into(),
+            task_id: "target".into(),
+            intent: "queueMessage".into(),
+            payload_hash: "synthetic-approved-send".into(),
+            status: CommandReceiptStatus::Pending,
+            snapshot: host.task_command_snapshot("target").unwrap().snapshot,
+            event_sequence: None,
+            actor_id: "luna-tool:source".into(),
+            client_id: "luna-cross-task".into(),
+            client_session_id: "source".into(),
+            execution_environment: Some("synthetic-device".into()),
+            correlation_id: None,
+            reason: None,
+            recovery_action: None,
+            accepted_at_ms: now,
+            committed_at_ms: None,
+            observed_at_ms: now,
+        };
+        assert_eq!(
+            host.begin_task_command(pending, None, None, None)
+                .unwrap()
+                .kind,
+            zeron_sync::TaskCommandBeginKind::Accepted
+        );
+    }
+
+    fn queue(doc: &SessionDoc) -> Result<((), bool), EngineError> {
+        doc.push_queued(&QueuedMessage {
+            id: "approved-send".into(),
+            text: "synthetic queued follow-up".into(),
+            attachments: Vec::new(),
+            hold_for_turn_end: true,
+            follow_up_behavior: zeron_proto::FollowUpBehavior::Queue,
+            hold_reason: None,
+            issued_by: "synthetic-device".into(),
+            issued_at: now_ms(),
+            edited_at: None,
+            revision: 1,
+            execution: None,
+            status: QueueMessageStatus::Held,
+            delivery_gate: None,
+        })?;
+        Ok(((), true))
+    }
+
+    fn stored_queue(store: &DocsStore) -> Vec<QueuedMessage> {
+        SessionDoc::from_snapshot(&store.load_snapshot("target").unwrap().unwrap())
+            .unwrap()
+            .read_queue()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn approved_send_postcommit_failure_blocks_stale_saves_and_recovers_on_restart() {
+        let (_root, store, host, handle) = fixture();
+        begin(&host, "approved-send");
+        let result = host.commit_approved_queue_projection_after_commit(
+            &handle,
+            "approved-send",
+            queue,
+            || Err(EngineError::Other("synthetic install interruption".into())),
+        );
+        assert!(matches!(result, Err(TaskProjectionError::Commit(_))));
+        let receipt = store
+            .task_command_receipt("approved-send")
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+        assert_eq!(stored_queue(&store).len(), 1);
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+        assert!(handle.doc.read_queue().unwrap().is_empty());
+        let durable = store.load_snapshot_with_cursor("target").unwrap().unwrap();
+        assert!(host.save_snapshot_checked(&handle).is_err());
+        assert!(host.flush_all_checked().is_err());
+        host.flush_all();
+        let sink = EngineChatSink::new(&handle.doc, store.clone(), "target")
+            .with_handle(Arc::downgrade(&handle));
+        assert_eq!(
+            sink.apply_row(&[0], 1),
+            RowImportOutcome::PendingDependencies
+        );
+        assert!(sink.apply_checkpoint(&[0], 1).is_err());
+        assert_eq!(
+            store.load_snapshot_with_cursor("target").unwrap().unwrap(),
+            durable
+        );
+        assert!(host.open("target").is_err());
+        drop(sink);
+        drop(handle);
+        drop(host);
+        let restarted = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "synthetic-device".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let reopened = restarted.open("target").unwrap();
+        assert_eq!(reopened.doc.read_queue().unwrap().len(), 1);
+        assert_eq!(stored_queue(&store).len(), 1);
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+        assert_eq!(
+            store
+                .task_command_receipt("approved-send")
+                .unwrap()
+                .unwrap()
+                .status,
+            CommandReceiptStatus::Applied
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_send_sql_failure_is_precommit_and_never_returns_queued() {
+        let (root, store, host, handle) = fixture();
+        begin(&host, "approved-send");
+        let db = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_approved_queue BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='target'
+             BEGIN SELECT RAISE(ABORT, 'synthetic approved queue failure'); END;",
+        )
+        .unwrap();
+        let result = host.commit_approved_queue_projection_after_commit(
+            &handle,
+            "approved-send",
+            queue,
+            || panic!("precommit failure reached install"),
+        );
+        assert!(matches!(result, Err(TaskProjectionError::Mutation(_))));
+        assert_eq!(
+            store
+                .task_command_receipt("approved-send")
+                .unwrap()
+                .unwrap()
+                .status,
+            CommandReceiptStatus::Pending
+        );
+        assert!(stored_queue(&store).is_empty());
+        assert!(store.pending_chat_updates("target").unwrap().is_empty());
+        assert!(
+            !handle
+                .durable_projection_uninstalled
+                .load(Ordering::Acquire)
+        );
+        db.execute_batch("DROP TRIGGER fail_approved_queue")
+            .unwrap();
+        host.save_snapshot_checked(&handle).unwrap();
     }
 }
 

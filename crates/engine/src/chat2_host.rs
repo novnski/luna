@@ -156,14 +156,18 @@ impl ChatDocSink for EngineChatSink {
 
     fn apply_row(&self, bytes: &[u8], cursor: u64) -> RowImportOutcome {
         match self.handle.upgrade() {
-            Some(handle) => handle.import_transcript(|| self.import_row(bytes, cursor, false)),
+            Some(handle) => handle
+                .import_transcript(|| self.import_row(bytes, cursor, false))
+                .unwrap_or(RowImportOutcome::PendingDependencies),
             None => self.import_row(bytes, cursor, false),
         }
     }
 
     fn apply_replay_row(&self, bytes: &[u8], cursor: u64) -> RowImportOutcome {
         match self.handle.upgrade() {
-            Some(handle) => handle.import_transcript(|| self.import_row(bytes, cursor, true)),
+            Some(handle) => handle
+                .import_transcript(|| self.import_row(bytes, cursor, true))
+                .unwrap_or(RowImportOutcome::PendingDependencies),
             None => self.apply_row(bytes, cursor),
         }
     }
@@ -182,7 +186,9 @@ impl ChatDocSink for EngineChatSink {
             Ok(())
         };
         match self.handle.upgrade() {
-            Some(handle) => handle.import_transcript(import),
+            Some(handle) => handle
+                .import_transcript(import)
+                .unwrap_or_else(|| Err("committed projection needs restart".into())),
             None => import(),
         }
     }

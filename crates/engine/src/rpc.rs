@@ -5391,8 +5391,7 @@ impl EngineRpc {
                         execution,
                         send_fence.map(|fence| (&self.sessions, fence)),
                     )
-                    .await
-                    .map_err(TaskProjectionError::Mutation)?;
+                    .await?;
                 if let Some(receipt) = committed {
                     let accepted_turn_id = receipt.snapshot.active_turn_id.clone();
                     if matches!(outcome, QueueMutationOutcome::Applied)

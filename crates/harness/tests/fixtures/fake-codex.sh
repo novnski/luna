@@ -232,6 +232,17 @@ tid=$(rid "$turnline")
 
 case "$turnline" in
 
+*scenario:l25-send-storage-fail:*)
+  target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send-storage-fail:\([0-9a-f-]*\).*/\1/p')
+  [ -n "$target" ] || { fail_turn "$tid" "missing storage-failure target"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-l25-storage-fail\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-l25-storage-fail"}}}'
+  emit "{\"method\":\"item/tool/call\",\"id\":89,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-storage-fail\",\"callId\":\"call-storage-fail\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Storage failure follow-up\",\"idempotencyKey\":\"l25-storage-fail\"}}}"
+  read -r response || exit 1
+  has "$response" '"success":false' || { fail_turn "$tid" "SQL failure returned queued success"; exit 0; }
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-storage-fail","status":"completed"}}}'
+  ;;
+
 *scenario:l25-send-stale:*)
   target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send-stale:\([0-9a-f-]*\).*/\1/p')
   [ -n "$target" ] || { fail_turn "$tid" "missing stale target"; exit 0; }

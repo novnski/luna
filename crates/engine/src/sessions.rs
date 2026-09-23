@@ -8825,6 +8825,77 @@ mod tests {
         core.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn approved_send_postcommit_install_failure_keeps_applied_receipt_through_rpc() {
+        use crate::cross_task_tools::CrossTaskBackend;
+        let (root, core, source) = managed_codex_wait_fixture();
+        let claim = ready_control_evidence_claim(&root, &core, &source);
+        let target = uuid::Uuid::new_v4().to_string();
+        core.workspace
+            .create_chat(&target, Some("project-a"), None, None, None)
+            .unwrap();
+        core.task_identity
+            .register_new_task(
+                &target,
+                Some("project-a"),
+                None,
+                root.path().join("project-a").to_str(),
+                zeron_proto::TaskLineage::default(),
+            )
+            .unwrap();
+        let request = zeron_proto::CrossTaskSendRequest {
+            task_id: target.clone(),
+            message: "synthetic postcommit follow-up".into(),
+            mode: zeron_proto::CrossTaskSendMode::Queue,
+            idempotency_key: "approved-postcommit".into(),
+        };
+        let fence = crate::cross_task_tools::ApprovedSendFence {
+            source_task_id: source.clone(),
+            source_run_id: claim.source_run_id,
+            source_binding_id: claim.source_binding.binding_id,
+            source_binding_generation: claim.source_binding.generation,
+            source_provider_thread_id: claim.source_binding.provider_thread_id,
+            source_provider_turn_id: claim.provider_turn_id,
+            source_provider_call_id: claim.provider_call_id,
+            target_snapshot: core
+                .doc_host
+                .task_command_snapshot(&target)
+                .unwrap()
+                .snapshot,
+            request: request.clone(),
+            expires_at_ms: crate::now_ms() + 30_000,
+        };
+        core.doc_host.fail_next_approved_queue_install_for_test();
+        let rpc = core.rpc_service();
+        let result = CrossTaskBackend::enqueue_approved_queue(
+            rpc.as_ref(),
+            request,
+            &control_evidence_authority(&core, &source),
+            &fence,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.delivery_state, "queued");
+        assert_eq!(
+            result.command.status,
+            zeron_proto::CommandReceiptStatus::Applied
+        );
+        assert_eq!(
+            core.doc_host
+                .task_command_receipt("approved-postcommit")
+                .unwrap()
+                .unwrap()
+                .status,
+            zeron_proto::CommandReceiptStatus::Applied
+        );
+        let stored = core.store.load_snapshot(&target).unwrap().unwrap();
+        let doc = zeron_doc::SessionDoc::from_snapshot(&stored).unwrap();
+        assert_eq!(doc.read_queue().unwrap().len(), 1);
+        assert!(core.doc_host.open(&target).is_err());
+        assert!(core.doc_host.flush_all_checked().is_err());
+        core.shutdown().await;
+    }
+
     async fn prospective_interrupt_fixture() -> (
         tempfile::TempDir,
         crate::EngineCore,

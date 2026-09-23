@@ -32,6 +32,8 @@ use zeron_doc::{SessionMessageEntry, TranscriptDesync, TranscriptFrame};
 use zeron_engine::{
     Engine, EngineConfig, EngineRuntime, InstanceLock, rpc::AuthRpc, sessions::LunaApprovalOutcome,
 };
+#[cfg(feature = "appshots-fixture")]
+use zeron_engine::{EngineCore, SessionsEngine};
 use zeron_proto::{
     ApprovalDecision, AuthState, ChangeRequestSummary, Chat, ChatIndicator,
     CheckoutChangeRequestStatus, Device, EngineInfo, HarnessId, Session, Space, WorkspaceScope,
@@ -246,6 +248,41 @@ struct RemoteEngine {
     lifecycle_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+/// The opt-in synthetic fixture owns the EngineCore. Its UI uses that exact
+/// core's in-memory RPC and SessionsEngine so LUNA approvals stay local.
+#[cfg(feature = "appshots-fixture")]
+struct FixtureLocalEngine {
+    client: RpcClient,
+    sessions: SessionsEngine,
+}
+
+#[cfg(feature = "appshots-fixture")]
+#[async_trait]
+impl EngineBackend for FixtureLocalEngine {
+    fn client(&self) -> &RpcClient {
+        &self.client
+    }
+
+    fn mode(&self) -> EngineMode {
+        EngineMode::InProcess
+    }
+
+    async fn respond_luna_local_ui_approval(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError> {
+        Ok(self
+            .sessions
+            .respond_luna_local_ui_approval(chat_id, request_id, decision))
+    }
+
+    async fn shutdown(&self) {
+        // The fixture's main function owns and shuts down EngineCore.
+    }
+}
+
 #[async_trait]
 impl EngineBackend for RemoteEngine {
     fn client(&self) -> &RpcClient {
@@ -281,6 +318,27 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
+    /// Opt-in native QA only: bind the UI to the already seeded local core.
+    /// Production bootstrap still probes IPC and remote handles still refuse
+    /// LUNA approvals.
+    #[cfg(feature = "appshots-fixture")]
+    pub async fn fixture_from_core(core: &EngineCore) -> anyhow::Result<Self> {
+        let client = memory_client(core.rpc_service());
+        let engine_info = query_engine_info(&client).await?;
+        anyhow::ensure!(
+            engine_info.device_id == core.device_id,
+            "fixture local handle resolved a different engine"
+        );
+        Ok(Self {
+            inner: Arc::new(FixtureLocalEngine {
+                client,
+                sessions: core.sessions.clone(),
+            }),
+            engine_info,
+            deferred_state: None,
+        })
+    }
+
     /// Probe the IPC port and connect (daemon listening) or embed (nothing there).
     /// Must run on the tokio runtime (`Tokio::spawn`): both transports spawn
     /// tokio tasks.
@@ -2646,6 +2704,60 @@ mod tests {
             Err(LocalLunaApprovalError::LocalOnly)
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    #[tokio::test]
+    async fn fixture_local_handle_delegates_approval_to_its_synthetic_core() {
+        let root = tempfile::tempdir().unwrap();
+        let accounts = AgentAccountsConfig {
+            data_dir: root.path().join("synthetic-provider-state"),
+            claude_config_dir: root.path().join("synthetic-claude"),
+            claude_config_file: root.path().join("synthetic-claude.json"),
+            codex_home: root.path().join("synthetic-codex"),
+            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
+        };
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                EngineProfile::development(
+                    &root.path().join("engine"),
+                    "fixture-org",
+                    "fixture-user",
+                ),
+                Arc::new(HarnessRegistry::new()),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )
+            .unwrap();
+        let local = EngineHandle::fixture_from_core(&core).await.unwrap();
+        assert_eq!(local.mode(), EngineMode::InProcess);
+        assert_eq!(local.engine_info().device_id, core.device_id);
+        assert_eq!(
+            local
+                .respond_luna_local_ui_approval(
+                    "missing-synthetic-task",
+                    "missing-approval",
+                    ApprovalDecision::AllowOnce,
+                )
+                .await,
+            Ok(LunaApprovalOutcome::Stale)
+        );
+        let remote = EngineHandle::from_test_client(memory_client(Arc::new(CountRpc(Arc::new(
+            AtomicUsize::new(0),
+        )))));
+        assert_eq!(
+            remote
+                .respond_luna_local_ui_approval(
+                    "missing-synthetic-task",
+                    "missing-approval",
+                    ApprovalDecision::AllowOnce,
+                )
+                .await,
+            Err(LocalLunaApprovalError::LocalOnly)
+        );
+        core.shutdown().await;
     }
 
     #[async_trait]

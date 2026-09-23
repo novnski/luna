@@ -927,6 +927,23 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
     if l20_seed_only || l24_seed_only || l25_seed_only {
+        if l25_seed_only {
+            let local = runtime.block_on(state::EngineHandle::fixture_from_core(&core))?;
+            anyhow::ensure!(
+                local.mode() == state::EngineMode::InProcess,
+                "L25 preflight did not attach the local engine"
+            );
+            let outcome = runtime.block_on(local.respond_luna_local_ui_approval(
+                TASK_L25_SOURCE,
+                "missing-synthetic-approval",
+                zeron_proto::ApprovalDecision::Deny,
+            ))?;
+            anyhow::ensure!(
+                outcome == zeron_engine::sessions::LunaApprovalOutcome::Stale,
+                "L25 local approval route did not reach the seeded SessionsEngine"
+            );
+            println!("l25_local_approval_route=ok source={TASK_L25_SOURCE}");
+        }
         runtime.block_on(core.shutdown());
         return Ok(());
     }
@@ -944,7 +961,11 @@ fn main() -> anyhow::Result<()> {
         workos_client_id: None,
         default_harness: HarnessId::Mock,
     };
-    let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
+    let handle = if l25 {
+        runtime.block_on(state::EngineHandle::fixture_from_core(&core))?
+    } else {
+        runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?
+    };
     let chats = core.workspace.read_chats()?;
     let spaces = core.workspace.read_spaces()?;
     let device = core.device_id.clone();
@@ -1009,7 +1030,9 @@ fn main() -> anyhow::Result<()> {
                 state.spaces_synced = true;
                 state.select_chat(
                     Some(
-                        if l20 {
+                        if l25 {
+                            TASK_L25_SOURCE
+                        } else if l20 {
                             TASK_L20_ISOLATED
                         } else {
                             TASK_PINNED_A
