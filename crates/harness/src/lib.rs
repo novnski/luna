@@ -110,8 +110,48 @@ pub struct RunControls {
     pub invoke_luna_tool: Option<LunaToolExecutor>,
 }
 
+/// Identity from a provider-native tool request after the adapter matched it
+/// to its active thread and turn. This is context evidence, not a user grant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LunaToolInvocationContext {
+    provider_thread_id: String,
+    provider_turn_id: String,
+    provider_call_id: String,
+}
+
+impl LunaToolInvocationContext {
+    pub(crate) fn new(thread_id: &str, turn_id: &str, call_id: &str) -> Self {
+        Self {
+            provider_thread_id: thread_id.to_owned(),
+            provider_turn_id: turn_id.to_owned(),
+            provider_call_id: call_id.to_owned(),
+        }
+    }
+
+    pub fn provider_thread_id(&self) -> &str {
+        &self.provider_thread_id
+    }
+
+    pub fn provider_turn_id(&self) -> &str {
+        &self.provider_turn_id
+    }
+
+    pub fn provider_call_id(&self) -> &str {
+        &self.provider_call_id
+    }
+}
+
+/// Model-supplied tool input and adapter-validated invocation context travel
+/// separately to the engine. The context must never be read from `arguments`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LunaToolInvocation {
+    pub name: String,
+    pub arguments: serde_json::Value,
+    pub context: LunaToolInvocationContext,
+}
+
 pub type LunaToolExecutor = Arc<
-    dyn Fn(String, serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, HarnessError>>
+    dyn Fn(LunaToolInvocation) -> BoxFuture<'static, Result<serde_json::Value, HarnessError>>
         + Send
         + Sync,
 >;

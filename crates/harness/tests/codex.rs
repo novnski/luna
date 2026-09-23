@@ -176,11 +176,19 @@ async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
         serde_json::to_value(synthetic_runtime_contract()).unwrap(),
     );
     let (mut run_controls, _steer, _token) = controls("Yes");
-    run_controls.invoke_luna_tool = Some(Arc::new(|name, arguments| {
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&invocations);
+    run_controls.invoke_luna_tool = Some(Arc::new(move |invocation| {
+        let observed = Arc::clone(&observed);
         Box::pin(async move {
-            if name != "luna_status" || arguments != serde_json::json!({}) {
+            if invocation.name != "luna_status" || invocation.arguments != serde_json::json!({}) {
                 return Err(HarnessError::Protocol("unexpected tool request".into()));
             }
+            observed.lock().unwrap().push((
+                invocation.context.provider_thread_id().to_owned(),
+                invocation.context.provider_turn_id().to_owned(),
+                invocation.context.provider_call_id().to_owned(),
+            ));
             Ok(serde_json::json!({"threadId":"thread-a"}))
         })
     }));
@@ -208,6 +216,10 @@ async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
         )),
         "{events:?}"
     );
+    assert_eq!(
+        *invocations.lock().unwrap(),
+        vec![("th-1".into(), "t-runtime".into(), "call-runtime".into())]
+    );
 
     let mut resume = request("scenario:runtime-contract-resume");
     resume.resume = Some("synthetic-resume".into());
@@ -220,9 +232,8 @@ async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
         serde_json::to_value(synthetic_runtime_contract()).unwrap(),
     );
     let (mut resume_controls, _steer, _token) = controls("Yes");
-    resume_controls.invoke_luna_tool = Some(Arc::new(|_, _| {
-        Box::pin(async { Ok(serde_json::json!({})) })
-    }));
+    resume_controls.invoke_luna_tool =
+        Some(Arc::new(|_| Box::pin(async { Ok(serde_json::json!({})) })));
     let events = run_to_end(&harness(), resume, resume_controls).await;
     assert!(
         events.iter().any(|event| matches!(
@@ -234,6 +245,63 @@ async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
         )),
         "{events:?}"
     );
+}
+
+#[tokio::test]
+async fn cancelled_luna_turn_rejects_late_tool_request_before_executor() {
+    let home = tempfile::tempdir().unwrap();
+    let mut req = request("scenario:runtime-contract-cancelled");
+    req.model_options.insert(
+        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        home.path().to_str().unwrap().into(),
+    );
+    req.model_options.insert(
+        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        serde_json::to_value(synthetic_runtime_contract()).unwrap(),
+    );
+    let (mut run_controls, _steer, token) = controls("Yes");
+    let calls = Arc::new(Mutex::new(0));
+    let observed = Arc::clone(&calls);
+    run_controls.invoke_luna_tool = Some(Arc::new(move |_| {
+        let observed = Arc::clone(&observed);
+        Box::pin(async move {
+            *observed.lock().unwrap() += 1;
+            Ok(serde_json::json!({}))
+        })
+    }));
+    let mut stream = harness().run(req, run_controls).await.expect("run starts");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(AgentEvent::ProviderCheckpoint { checkpoint_id }))
+                    if checkpoint_id == "t-runtime-cancelled" =>
+                {
+                    break;
+                }
+                Some(Ok(_)) => {}
+                other => panic!("missing synthetic turn checkpoint: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("checkpoint arrived");
+    token.cancel();
+    let events = tokio::time::timeout(
+        Duration::from_secs(10),
+        stream
+            .map(|result| result.expect("stream event"))
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .expect("cancelled run finished");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Done {
+            status: DoneStatus::Interrupted,
+            ..
+        }
+    )));
+    assert_eq!(*calls.lock().unwrap(), 0);
 }
 
 #[tokio::test]
