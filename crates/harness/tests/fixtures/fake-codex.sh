@@ -213,6 +213,18 @@ case "$turnline" in
   emit '{"method":"turn/completed","params":{"threadId":"th-resumed","turn":{"id":"t-runtime-resume","status":"completed"}}}'
   ;;
 
+*scenario:runtime-contract-cancelled*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-runtime-cancelled\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-runtime-cancelled"}}}'
+  read -r interrupt_line || exit 1
+  has "$interrupt_line" '"method":"turn/interrupt"' || { fail_turn "$tid" "expected interrupt"; exit 0; }
+  emit '{"method":"item/tool/call","id":70,"params":{"threadId":"th-1","turnId":"t-runtime-cancelled","callId":"call-cancelled","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "cancelled tool call was not denied"; exit 0; }
+  emit "{\"id\":$(rid "$interrupt_line"),\"result\":{}}"
+  emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t-runtime-cancelled","status":"aborted"}}}'
+  ;;
+
 *scenario:runtime-contract*)
   [ "$LUNA_THREAD_ID" = 'thread-a' ] || { fail_turn "$tid" "LUNA thread environment missing"; exit 0; }
   has "$thread_line" '"developerInstructions"' || { fail_turn "$tid" "LUNA instructions missing"; exit 0; }
@@ -223,13 +235,34 @@ case "$turnline" in
   emit '{"method":"item/tool/call","id":59,"params":{"threadId":"foreign-thread","turnId":"t-runtime","callId":"call-foreign","tool":"luna_status","arguments":{}}}'
   read -r denied_response || exit 1
   has "$denied_response" '"success":false' || { fail_turn "$tid" "foreign task tool call was not denied"; exit 0; }
+  emit '{"method":"item/tool/call","id":61,"params":{"threadId":"th-1","turnId":"t-stale","callId":"call-stale","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "stale turn tool call was not denied"; exit 0; }
+  emit '{"method":"item/tool/call","id":62,"params":{"threadId":"th-1","turnId":"t-runtime","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "missing call ID was not denied"; exit 0; }
+  emit '{"method":"item/tool/call","id":63,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "empty call ID was not denied"; exit 0; }
+  emit '{"method":"item/tool/call","id":64,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-namespaced","namespace":"foreign","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "foreign namespace was not denied"; exit 0; }
+  emit '{"method":"item/tool/call","id":65,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-unattached","tool":"luna_archive","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "unattached tool was not denied"; exit 0; }
   emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"dynamicToolCall","tool":"luna_status","arguments":{},"status":"inProgress"}}}'
   emit '{"method":"item/tool/call","id":60,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-runtime","tool":"luna_status","arguments":{}}}'
   read -r tool_response || exit 1
   has "$tool_response" '"success":true' || { fail_turn "$tid" "LUNA status call failed"; exit 0; }
   has "$tool_response" 'thread-a' || { fail_turn "$tid" "LUNA status response wrong"; exit 0; }
+  emit '{"method":"item/tool/call","id":66,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-runtime","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "repeated call ID was not denied"; exit 0; }
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"dynamicToolCall","tool":"luna_status","arguments":{},"status":"completed","success":true}}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-runtime","status":"completed"}}}'
+  emit '{"method":"item/tool/call","id":67,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-late","tool":"luna_status","arguments":{}}}'
+  read -r denied_response || exit 1
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "late tool call was not denied"; exit 0; }
   ;;
 
 *scenario:context-config-start*)

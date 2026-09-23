@@ -52,6 +52,7 @@ use futures::stream::BoxStream;
 use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice,
@@ -61,7 +62,10 @@ use zeron_proto::{
 
 use crate::jsonrpc::{Incoming, RpcClient, RpcRequestFailure};
 use crate::process::{Child, Command, Stdio};
-use crate::{Harness, HarnessError, ProviderForkProgressReporter, RunControls, SteerAcceptance};
+use crate::{
+    Harness, HarnessError, LunaToolInvocation, LunaToolInvocationContext,
+    ProviderForkProgressReporter, RunControls, SteerAcceptance,
+};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
 use normalize::{
     ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_type,
@@ -865,6 +869,29 @@ struct TurnRouter {
     completed: VecDeque<String>,
 }
 
+/// A provider call ID may be delivered more than once. Keep one bounded set
+/// for the active turn; an old turn cannot pass the router's active-turn check.
+#[derive(Default)]
+struct LunaCallIds {
+    turn_id: Option<String>,
+    seen: HashSet<String>,
+}
+
+impl LunaCallIds {
+    fn claim(&mut self, turn_id: &str, call_id: &str) -> bool {
+        const MAX_CALL_ID_BYTES: usize = 256;
+        const MAX_CALLS_PER_TURN: usize = 4_096;
+        if call_id.is_empty() || call_id.len() > MAX_CALL_ID_BYTES {
+            return false;
+        }
+        if self.turn_id.as_deref() != Some(turn_id) {
+            self.turn_id = Some(turn_id.to_owned());
+            self.seen.clear();
+        }
+        self.seen.len() < MAX_CALLS_PER_TURN && self.seen.insert(call_id.to_owned())
+    }
+}
+
 impl TurnRouter {
     fn is_completed(&self, id: &str) -> bool {
         self.completed.iter().any(|c| c == id)
@@ -1222,6 +1249,7 @@ async fn run_session(session: Session) {
     }
 
     let mut router = TurnRouter::default();
+    let mut luna_call_ids = LunaCallIds::default();
     match start_turn(&client, turn_params(&request.prompt)).await {
         Ok(id) => {
             router.adopt_started(id.clone());
@@ -1616,6 +1644,8 @@ async fn run_session(session: Session) {
                             active_turn_id: router.active_id(),
                             runtime_contract: runtime_contract.as_ref(),
                             invoke_luna_tool: invoke_luna_tool.as_ref(),
+                            call_ids: &mut luna_call_ids,
+                            interrupt: &interrupt,
                         },
                     );
                 }
@@ -1935,6 +1965,8 @@ struct ServerRequestContext<'a> {
     active_turn_id: Option<&'a str>,
     runtime_contract: Option<&'a zeron_proto::LunaAgentRuntimeContract>,
     invoke_luna_tool: Option<&'a crate::LunaToolExecutor>,
+    call_ids: &'a mut LunaCallIds,
+    interrupt: &'a CancellationToken,
 }
 
 /// Serve one server→client request. Approval requests round-trip through the
@@ -1954,16 +1986,16 @@ fn handle_server_request(
         active_turn_id,
         runtime_contract,
         invoke_luna_tool,
+        call_ids,
+        interrupt,
     } = context;
     if method == "item/tool/call" {
+        let call_id = params.get("callId").and_then(Value::as_str).unwrap_or("");
         let matching_context = active_turn_id.is_some()
             && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
             && params.get("turnId").and_then(Value::as_str) == active_turn_id
             && params.get("namespace").is_none_or(Value::is_null)
-            && params
-                .get("callId")
-                .and_then(Value::as_str)
-                .is_some_and(|id| !id.is_empty());
+            && !interrupt.is_cancelled();
         let name = params.get("tool").and_then(Value::as_str).unwrap_or("");
         let attached = runtime_contract
             .is_some_and(|contract| contract.tools.iter().any(|tool| tool.name == name));
@@ -1974,12 +2006,28 @@ fn handle_server_request(
             }));
             return;
         };
+        let Some(turn_id) = active_turn_id.filter(|turn_id| call_ids.claim(turn_id, call_id))
+        else {
+            client.respond(&id, json!({
+                "success": false,
+                "contentItems": [{"type":"inputText","text":"LUNA tool call ID is missing, repeated, or over limit"}]
+            }));
+            return;
+        };
         let client = client.clone();
         let executor = Arc::clone(executor);
-        let name = name.to_string();
-        let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+        let interrupt = interrupt.clone();
+        let invocation = LunaToolInvocation {
+            name: name.to_owned(),
+            arguments: params.get("arguments").cloned().unwrap_or(Value::Null),
+            context: LunaToolInvocationContext::new(thread_id, turn_id, call_id),
+        };
         tokio::spawn(async move {
-            let outcome = executor(name, arguments).await;
+            let outcome = tokio::select! {
+                biased;
+                _ = interrupt.cancelled() => Err(HarnessError::Protocol("LUNA tool call cancelled".into())),
+                result = executor(invocation) => result,
+            };
             let (success, text) = match outcome {
                 Ok(value) => (true, value.to_string()),
                 Err(error) => (false, error.to_string()),

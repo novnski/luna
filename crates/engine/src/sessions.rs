@@ -1483,13 +1483,22 @@ impl SessionsEngine {
                         .rev()
                         .find(|backend| backend.strong_count() > 0)
                         .cloned();
-                    std::sync::Arc::new(move |name: String, arguments: serde_json::Value| {
+                    std::sync::Arc::new(move |invocation: zeron_harness::LunaToolInvocation| {
                         let contract = contract.clone();
                         let cancel = cancel.clone();
                         let backend = backend.as_ref().and_then(Weak::upgrade);
                         Box::pin(async move {
+                            // The adapter validated this provider invocation against
+                            // its active thread and turn. The current registry only
+                            // dispatches read tools; a future mutating path must
+                            // bind these IDs to a separate one-use user grant.
+                            let _provider_context = invocation.context;
                             crate::runtime_contract::invoke_with_backend(
-                                &contract, &name, arguments, &cancel, backend,
+                                &contract,
+                                &invocation.name,
+                                invocation.arguments,
+                                &cancel,
+                                backend,
                             )
                             .await
                             .map_err(|error| {
