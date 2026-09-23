@@ -4,7 +4,7 @@
 //! provider homes, repository folders, credentials, and temporary files stay
 //! below that root. Auth uses an in-memory credential broker; Codex native
 //! metadata access and every platform-Keychain fallback are disabled. Only
-//! the opt-in L24 path may start the pinned repository fake Codex process.
+//! the opt-in L24/L25 paths may start the pinned repository fake Codex process.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use zeron_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, GitCheckpoints,
     HarnessRegistry, Repos,
 };
+use zeron_harness::CodexHarness;
 use zeron_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
 use zeron_rpc::{RpcClient, methods};
 use zeron_ui::*;
@@ -27,8 +28,12 @@ const TASK_NON_GIT: &str = "67676767-6767-4676-8676-676767676767";
 const TASK_L20_SHARED: &str = "78787878-7878-4787-8787-787878787878";
 const TASK_L20_ISOLATED: &str = "89898989-8989-4898-8898-898989898989";
 const TASK_L24_OTHER: &str = "90909090-9090-4090-8090-909090909090";
+const TASK_L25_SOURCE: &str = "a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1";
+const TASK_L25_TARGET: &str = "b2b2b2b2-b2b2-42b2-82b2-b2b2b2b2b2b2";
+const TASK_L25_FOREIGN: &str = "c3c3c3c3-c3c3-43c3-83c3-c3c3c3c3c3c3";
 const L20_OPT_IN: &str = "LUNA_L20_CHECKPOINT_QA";
 const L24_OPT_IN: &str = "LUNA_L24_INTEGRATION_QA";
+const L25_OPT_IN: &str = "LUNA_L25_SEND_QA";
 const REMOTE_DEVICE: &str = "fixture-offline-machine";
 const L24_GLOBAL_INSTRUCTIONS: &str =
     "L24 QA global: identify the selected synthetic task before reporting integration evidence.";
@@ -50,38 +55,38 @@ fn validate_opt_in_root(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_l24_fake_codex() -> anyhow::Result<PathBuf> {
+fn validate_fake_codex() -> anyhow::Result<PathBuf> {
     let source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../harness/tests/fixtures/fake-codex.sh");
     anyhow::ensure!(
         std::fs::symlink_metadata(&source)?.file_type().is_file(),
-        "L24 fake Codex must be a regular, non-symlink repository file"
+        "opt-in fake Codex must be a regular, non-symlink repository file"
     );
     let expected = source.canonicalize()?;
     let supplied = PathBuf::from(std::env::var_os("CODEX_EXECUTABLE").ok_or_else(|| {
-        anyhow::anyhow!("L24 requires the explicit repository fake CODEX_EXECUTABLE")
+        anyhow::anyhow!("opt-in requires the explicit repository fake CODEX_EXECUTABLE")
     })?);
     anyhow::ensure!(
         supplied.is_absolute()
             && !std::fs::symlink_metadata(&supplied)?
                 .file_type()
                 .is_symlink(),
-        "L24 CODEX_EXECUTABLE must be the absolute, non-symlink repository fake"
+        "CODEX_EXECUTABLE must be the absolute, non-symlink repository fake"
     );
     anyhow::ensure!(
         supplied.canonicalize()? == expected,
-        "L24 CODEX_EXECUTABLE differs from the audited repository fake"
+        "CODEX_EXECUTABLE differs from the audited repository fake"
     );
     anyhow::ensure!(
         std::fs::read(&expected)? == FAKE_CODEX_BYTES,
-        "L24 fake Codex changed after this fixture was built; rebuild before QA"
+        "fake Codex changed after this fixture was built; rebuild before QA"
     );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         anyhow::ensure!(
             std::fs::metadata(&expected)?.permissions().mode() & 0o111 != 0,
-            "L24 repository fake Codex is not executable"
+            "repository fake Codex is not executable"
         );
     }
     Ok(expected)
@@ -724,14 +729,78 @@ async fn preflight_l24(core: &EngineCore, newly_seeded: bool) -> anyhow::Result<
     Ok(())
 }
 
+fn seed_l25(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+    let app = root.join("workspaces/fieldnotes/apps/desktop");
+    let other = root.join("workspaces/unrelated");
+    let existing = [TASK_L25_SOURCE, TASK_L25_TARGET, TASK_L25_FOREIGN]
+        .map(|id| core.workspace.chat(id))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    anyhow::ensure!(
+        existing.iter().all(Option::is_none) || existing.iter().all(Option::is_some),
+        "partial L25 seed found; use a fresh synthetic root"
+    );
+    if existing.iter().all(Option::is_none) {
+        for (id, project, cwd, title, harness) in [
+            (
+                TASK_L25_SOURCE,
+                "fixture-app",
+                &app,
+                "L25 source",
+                HarnessId::Codex,
+            ),
+            (
+                TASK_L25_TARGET,
+                "fixture-app",
+                &app,
+                "L25 target",
+                HarnessId::Mock,
+            ),
+            (
+                TASK_L25_FOREIGN,
+                "fixture-other",
+                &other,
+                "L25 foreign project",
+                HarnessId::Mock,
+            ),
+        ] {
+            let mut config = task_config();
+            config.harness = harness;
+            core.workspace.create_chat(
+                id,
+                Some(project),
+                Some(&core.device_id),
+                Some(config),
+                Some(cwd.display().to_string()),
+            )?;
+            core.task_identity.register_new_task(
+                id,
+                Some(project),
+                None,
+                cwd.to_str(),
+                zeron_proto::TaskLineage::default(),
+            )?;
+            core.workspace.rename_chat(id, title)?;
+        }
+    }
+    std::fs::write(
+        root.join("L25-FIXTURE.txt"),
+        format!(
+            "Synthetic L25 local send only; the pinned fake Codex executable is the source provider.\nsource={TASK_L25_SOURCE}\ntarget={TASK_L25_TARGET}\nforeign={TASK_L25_FOREIGN}\nsource_project=fixture-app\ntarget_project=fixture-app\nforeign_project=fixture-other\nprompt=scenario:l25-send:{TASK_L25_TARGET}:{TASK_L25_FOREIGN}\nexpected=three local approval cards; allow first and second, deny third. The second reuses the first command ID with changed text and must conflict. One accepted follow-up is visible in target Activity or queue, with no foreign or denied message. The queued receipt proves persistence only.\n"
+        ),
+    )?;
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated fixture root"));
     let seed_action = std::env::args().nth(2);
     let l20_seed_only = seed_action.as_deref() == Some("--l20-seed-only");
     let l24_seed_only = seed_action.as_deref() == Some("--l24-seed-only");
+    let l25_seed_only = seed_action.as_deref() == Some("--l25-seed-only");
     anyhow::ensure!(
-        seed_action.is_none() || l20_seed_only || l24_seed_only,
+        seed_action.is_none() || l20_seed_only || l24_seed_only || l25_seed_only,
         "unknown fixture seed-only action"
     );
     anyhow::ensure!(root.is_absolute(), "fixture root must be absolute");
@@ -747,6 +816,12 @@ fn main() -> anyhow::Result<()> {
         Err(std::env::VarError::NotPresent) => false,
         Err(error) => return Err(error.into()),
     };
+    let l25 = match std::env::var(L25_OPT_IN) {
+        Ok(value) if value == "1" => true,
+        Ok(value) => anyhow::bail!("{L25_OPT_IN} must be 1 when set, got {value:?}"),
+        Err(std::env::VarError::NotPresent) => false,
+        Err(error) => return Err(error.into()),
+    };
     anyhow::ensure!(
         !l20_seed_only || l20,
         "--l20-seed-only requires {L20_OPT_IN}=1"
@@ -755,7 +830,11 @@ fn main() -> anyhow::Result<()> {
         !l24_seed_only || l24,
         "--l24-seed-only requires {L24_OPT_IN}=1"
     );
-    if l20 || l24 {
+    anyhow::ensure!(
+        !l25_seed_only || l25,
+        "--l25-seed-only requires {L25_OPT_IN}=1"
+    );
+    if l20 || l24 || l25 {
         anyhow::ensure!(
             root.is_dir() && !std::fs::symlink_metadata(&root)?.file_type().is_symlink(),
             "opt-in fixture requires a pre-existing, non-symlink synthetic root"
@@ -764,7 +843,7 @@ fn main() -> anyhow::Result<()> {
         std::fs::create_dir_all(&root)?;
     }
     let root = root.canonicalize()?;
-    if l20 || l24 {
+    if l20 || l24 || l25 {
         validate_opt_in_root(&root)?;
     }
     if l20 {
@@ -773,8 +852,8 @@ fn main() -> anyhow::Result<()> {
             std::env::set_var("LUNA_WORKTREES_DIR", root.join("l20-worktrees"));
         }
     }
-    let codex_executable = if l24 {
-        validate_l24_fake_codex()?
+    let codex_executable = if l24 || l25 {
+        validate_fake_codex()?
     } else {
         // A manual Check provider in the ordinary L12/L20 fixture must not
         // fall through to the user's installed Codex binary.
@@ -782,7 +861,7 @@ fn main() -> anyhow::Result<()> {
     };
     unsafe {
         std::env::set_var("CODEX_HOME", root.join("synthetic-codex"));
-        std::env::set_var("CODEX_EXECUTABLE", codex_executable);
+        std::env::set_var("CODEX_EXECUTABLE", &codex_executable);
     }
     let engine_data = root.join("engine");
     let ui_data = root.join("ui");
@@ -799,10 +878,16 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let accounts = account_config(&root);
     accounts.disable_claude_keychain_fallback()?;
+    let registry = Arc::new(HarnessRegistry::new());
+    if l25 {
+        registry.register(Arc::new(
+            CodexHarness::new().with_executable(codex_executable.clone()),
+        ));
+    }
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
             EngineProfile::development(&engine_data, "l12-fixture-org", "l12-fixture-user"),
-            Arc::new(HarnessRegistry::new()),
+            registry,
             HarnessId::Mock,
             None,
             accounts,
@@ -814,6 +899,9 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(seed(&core, &root))?;
     if l20 {
         runtime.block_on(seed_l20(&core, &root))?;
+    }
+    if l25 {
+        seed_l25(&core, &root)?;
     }
     let l24_newly_seeded = if l24 {
         runtime.block_on(seed_l24(&core, &root))?
@@ -830,15 +918,15 @@ fn main() -> anyhow::Result<()> {
     };
     std::fs::write(
         root.join("SAFETY.txt"),
-        if l24 {
+        if l24 || l25 {
             format!(
-                "{safety}L24 opt-in uses the pinned repository fake Codex executable, synthetic CODEX_HOME and two synthetic local projects. No real Codex, Keychain, login, MCP server or remote edge is used.\n"
+                "{safety}L24/L25 opt-in uses the pinned repository fake Codex executable and synthetic CODEX_HOME. No real Codex, Keychain, login, MCP server or remote edge is used.\n"
             )
         } else {
             safety.to_owned()
         },
     )?;
-    if l20_seed_only || l24_seed_only {
+    if l20_seed_only || l24_seed_only || l25_seed_only {
         runtime.block_on(core.shutdown());
         return Ok(());
     }

@@ -23,6 +23,7 @@ const MAX_PAGE: usize = 20;
 const MAX_WAIT_TARGETS: usize = 8;
 const MAX_WAIT_MS: u32 = 30_000;
 const MAX_MESSAGE_CHARS: usize = 16_000;
+pub(crate) const MAX_APPROVED_MESSAGE_CHARS: usize = 2_000;
 const MAX_SUMMARY_CHARS: usize = 240;
 const MAX_TITLE_CHARS: usize = 160;
 const MAX_CURSOR_CHARS: usize = 256;
@@ -34,6 +35,7 @@ pub struct CrossTaskCapabilities {
     pub list: bool,
     pub read: bool,
     pub durable_queue: bool,
+    pub approved_queue: bool,
     pub event_wait: bool,
 }
 
@@ -79,6 +81,22 @@ pub struct CrossTaskControlGrant {
     pub caller_task_id: String,
     pub request: CrossTaskControlRequest,
     pub expires_at_ms: i64,
+}
+
+/// Engine-minted evidence for one approved provider call. This never crosses
+/// the tool wire; the backend checks it again at the durable queue commit.
+#[derive(Debug, Clone)]
+pub struct ApprovedSendFence {
+    pub(crate) source_task_id: String,
+    pub(crate) source_run_id: String,
+    pub(crate) source_binding_id: String,
+    pub(crate) source_binding_generation: u32,
+    pub(crate) source_provider_thread_id: String,
+    pub(crate) source_provider_turn_id: String,
+    pub(crate) source_provider_call_id: String,
+    pub(crate) target_snapshot: TaskCommandSnapshot,
+    pub(crate) request: CrossTaskSendRequest,
+    pub(crate) expires_at_ms: i64,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -136,6 +154,14 @@ pub trait CrossTaskBackend: Send + Sync {
         request: CrossTaskSendRequest,
         authority: &CrossTaskAuthority,
     ) -> Result<CrossTaskSendReceipt, CrossTaskError>;
+    async fn enqueue_approved_queue(
+        &self,
+        _request: CrossTaskSendRequest,
+        _authority: &CrossTaskAuthority,
+        _fence: &ApprovedSendFence,
+    ) -> Result<CrossTaskSendReceipt, CrossTaskError> {
+        Err(CrossTaskError::Unsupported)
+    }
     async fn wait_event(
         &self,
         request: CrossTaskWaitRequest,
@@ -196,6 +222,16 @@ impl<T: CrossTaskBackend + ?Sized> CrossTaskBackend for Arc<T> {
         authority: &CrossTaskAuthority,
     ) -> Result<CrossTaskSendReceipt, CrossTaskError> {
         (**self).enqueue_queue(request, authority).await
+    }
+    async fn enqueue_approved_queue(
+        &self,
+        request: CrossTaskSendRequest,
+        authority: &CrossTaskAuthority,
+        fence: &ApprovedSendFence,
+    ) -> Result<CrossTaskSendReceipt, CrossTaskError> {
+        (**self)
+            .enqueue_approved_queue(request, authority, fence)
+            .await
     }
     async fn wait_event(
         &self,
@@ -501,10 +537,10 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
             ),
             (
                 "send_message_to_thread",
-                "threads.send",
-                capabilities.durable_queue,
-                "caller-keyed durable queue receipt",
-                5_000,
+                "threads.read",
+                capabilities.approved_queue,
+                "one-use local approval, then durable queue receipt",
+                40_000,
             ),
             (
                 "wait_threads",
@@ -521,8 +557,10 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
                 Some("the provider has no verified dynamic tool delivery")
             } else if !authority.granted_scopes.contains(scope) {
                 Some("required LUNA scope is missing")
-            } else if name == "send_message_to_thread" && !authority.explicit_user_request {
-                Some("sending requires an explicit user request in this run")
+            } else if name == "send_message_to_thread"
+                && (authority.allow_projectless || authority.visible_project_ids.len() != 1)
+            {
+                Some("approved send requires one exact local project")
             } else if !supported {
                 Some("the engine backend has no verified local implementation")
             } else {
@@ -659,6 +697,50 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
             self.backend.enqueue_queue(request.clone(), authority),
         )
         .await?;
+        Self::validate_send_receipt(&request, &receipt)?;
+        Ok(receipt)
+    }
+
+    /// Product send path. A provider call supplies only the request; the
+    /// engine supplies the approved source and target fence separately.
+    pub(crate) async fn send_approved(
+        &self,
+        authority: &CrossTaskAuthority,
+        request: CrossTaskSendRequest,
+        fence: &ApprovedSendFence,
+        cancel: &CancellationToken,
+    ) -> Result<CrossTaskSendReceipt, CrossTaskError> {
+        self.check(
+            authority,
+            "threads.read",
+            self.backend.capabilities().approved_queue,
+        )?;
+        if fence.source_task_id != authority.caller_task_id
+            || fence.request != request
+            || fence.target_snapshot.task_id != request.task_id
+            || fence.expires_at_ms <= crate::now_ms()
+            || request.mode != CrossTaskSendMode::Queue
+            || request.message.trim().is_empty()
+            || request.message.chars().count() > MAX_APPROVED_MESSAGE_CHARS
+            || !valid_key(&request.idempotency_key)
+        {
+            return Err(CrossTaskError::UserRequest);
+        }
+        self.target(authority, &request.task_id, cancel).await?;
+        let receipt = with_cancel(
+            cancel,
+            self.backend
+                .enqueue_approved_queue(request.clone(), authority, fence),
+        )
+        .await?;
+        Self::validate_send_receipt(&request, &receipt)?;
+        Ok(receipt)
+    }
+
+    fn validate_send_receipt(
+        request: &CrossTaskSendRequest,
+        receipt: &CrossTaskSendReceipt,
+    ) -> Result<(), CrossTaskError> {
         if receipt.task_id != request.task_id
             || receipt.command.task_id != request.task_id
             || receipt.command.command_id != request.idempotency_key
@@ -673,8 +755,7 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
         {
             return Err(CrossTaskError::InvalidBackendResult);
         }
-        check_output(&receipt)?;
-        Ok(receipt)
+        check_output(receipt)
     }
 
     pub async fn wait(
@@ -875,7 +956,7 @@ fn tool_description(name: &str) -> &'static str {
         "list_threads" => "List visible local LUNA tasks with bounded metadata and opaque paging.",
         "read_thread" => "Read bounded, untrusted turn summaries for one local LUNA task.",
         "send_message_to_thread" => {
-            "Queue an explicitly requested follow-up and return a durable receipt; queued is not delivered."
+            "Request one exact local approval, then queue a follow-up. The receipt proves persistence, not provider delivery."
         }
         "wait_threads" => "Wait for completion or attention on up to eight local LUNA tasks.",
         _ => "",
@@ -893,7 +974,7 @@ fn input_schema(name: &str) -> serde_json::Value {
             "limit":{"type":"integer","minimum":1,"maximum":20}
         },"required":["taskId"],"additionalProperties":false}),
         "send_message_to_thread" => serde_json::json!({"type":"object","properties":{
-            "taskId":{"type":"string"},"message":{"type":"string","maxLength":16000},
+            "taskId":{"type":"string"},"message":{"type":"string","maxLength":MAX_APPROVED_MESSAGE_CHARS},
             "mode":{"const":"queue"},"idempotencyKey":{"type":"string","maxLength":128}
         },"required":["taskId","message","idempotencyKey"],"additionalProperties":false}),
         "wait_threads" => serde_json::json!({"type":"object","properties":{
@@ -1019,6 +1100,7 @@ mod tests {
                 list: true,
                 read: true,
                 durable_queue: true,
+                approved_queue: false,
                 event_wait: true,
             }
         }
@@ -1419,7 +1501,7 @@ mod tests {
         assert!(omitted.iter().any(|tool| tool.name == "fork_thread"));
         authority.delivery = RuntimeDelivery::CodexDynamicTools;
         let (attached, _) = tools.catalog(&authority);
-        assert_eq!(attached.len(), 4);
+        assert_eq!(attached.len(), 3);
         authority.explicit_user_request = false;
         let (attached, omitted) = tools.catalog(&authority);
         assert!(

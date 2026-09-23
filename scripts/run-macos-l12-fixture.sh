@@ -8,6 +8,9 @@
 # LUNA_L24_INTEGRATION_QA=1 and actions build, preflight-l24, run, status, stop.
 # preflight-l24 seeds and checks fake-provider RPCs without opening a window;
 # expected project/task rows and instruction text are in root/L24-FIXTURE.txt.
+# L25 uses LUNA_L25_SEND_QA=1 with build, preflight-l25, run, status, stop.
+# The opt-in seed records exact local task IDs and the fake-provider prompt in
+# root/L25-FIXTURE.txt; the worker never starts the native window.
 
 set -euo pipefail
 
@@ -26,6 +29,7 @@ if [[ -z "${LUNA_L12_REFERENCE_ICNS:-}" && ! -s "$REFERENCE_ICNS" ]]; then
 fi
 L20_OPT_IN="${LUNA_L20_CHECKPOINT_QA:-}"
 L24_OPT_IN="${LUNA_L24_INTEGRATION_QA:-}"
+L25_OPT_IN="${LUNA_L25_SEND_QA:-}"
 FAKE_CODEX="$ROOT/crates/harness/tests/fixtures/fake-codex.sh"
 STAGE_ROOT=""
 BACKUP_ROOT=""
@@ -37,9 +41,10 @@ fail() {
   exit 1
 }
 
-[[ -n "$REQUESTED_PROFILE" ]] || fail "usage: scripts/run-macos-l12-fixture.sh /tmp/luna-l12-<fresh-root> [build|preflight-l24|run|stop|status]"
+[[ -n "$REQUESTED_PROFILE" ]] || fail "usage: scripts/run-macos-l12-fixture.sh /tmp/luna-l12-<fresh-root> [build|preflight-l24|preflight-l25|run|stop|status]"
 [[ -z "$L20_OPT_IN" || "$L20_OPT_IN" == "1" ]] || fail "LUNA_L20_CHECKPOINT_QA must be 1 when set"
 [[ -z "$L24_OPT_IN" || "$L24_OPT_IN" == "1" ]] || fail "LUNA_L24_INTEGRATION_QA must be 1 when set"
+[[ -z "$L25_OPT_IN" || "$L25_OPT_IN" == "1" ]] || fail "LUNA_L25_SEND_QA must be 1 when set"
 [[ "$REQUESTED_PROFILE" == /* ]] || fail "synthetic root must be absolute"
 [[ -d "$REQUESTED_PROFILE" ]] || fail "synthetic root must already exist (create it with mktemp -d /tmp/luna-l12-native-qa.XXXXXX)"
 [[ ! -L "$REQUESTED_PROFILE" ]] || fail "synthetic root must not be a symlink"
@@ -58,11 +63,11 @@ PID_FILE="$PROFILE/task-organization-fixture.pid"
 LOG_FILE="$PROFILE/task-organization-fixture.log"
 ROOT_MARKER="$PROFILE/.luna-l12-qa-root"
 
-verify_l24_fake() {
-  [[ "$L24_OPT_IN" == "1" ]] || return 0
-  [[ -f "$FAKE_CODEX" && ! -L "$FAKE_CODEX" && -x "$FAKE_CODEX" ]] || fail "L24 requires the executable repository fake Codex"
-  [[ "$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$FAKE_CODEX")" == "$FAKE_CODEX" ]] || fail "L24 fake Codex path is not canonical"
-  [[ -z "${CODEX_EXECUTABLE:-}" || "$CODEX_EXECUTABLE" == "$FAKE_CODEX" ]] || fail "L24 refuses a different CODEX_EXECUTABLE"
+verify_fake_codex() {
+  [[ "$L24_OPT_IN" == "1" || "$L25_OPT_IN" == "1" ]] || return 0
+  [[ -f "$FAKE_CODEX" && ! -L "$FAKE_CODEX" && -x "$FAKE_CODEX" ]] || fail "opt-in requires the executable repository fake Codex"
+  [[ "$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$FAKE_CODEX")" == "$FAKE_CODEX" ]] || fail "fake Codex path is not canonical"
+  [[ -z "${CODEX_EXECUTABLE:-}" || "$CODEX_EXECUTABLE" == "$FAKE_CODEX" ]] || fail "opt-in refuses a different CODEX_EXECUTABLE"
 }
 
 prepare_profile_root() {
@@ -191,7 +196,7 @@ refuse_any_running_bundle() {
 
 build_bundle() {
   refuse_any_running_bundle
-  verify_l24_fake
+  verify_fake_codex
   [[ -s "$REFERENCE_ICNS" ]] || fail "validated read-only icon is unavailable at $REFERENCE_ICNS"
   /usr/bin/file "$REFERENCE_ICNS" | /usr/bin/grep -Fq "Mac OS X icon" || fail "reference icon is not a macOS icon container"
 
@@ -247,7 +252,7 @@ case "$ACTION" in
     ;;
   preflight-l24)
     [[ "$L24_OPT_IN" == "1" ]] || fail "preflight-l24 requires LUNA_L24_INTEGRATION_QA=1"
-    verify_l24_fake
+    verify_fake_codex
     validate_bundle "$APP"
     refuse_any_running_bundle
     prepare_profile_root
@@ -259,8 +264,22 @@ case "$ACTION" in
     print -- "qa_readback=$PROFILE/L24-FIXTURE.txt"
     print -- "fake_codex_sha256=$(/usr/bin/shasum -a 256 "$FAKE_CODEX" | /usr/bin/awk '{print $1}')"
     ;;
+  preflight-l25)
+    [[ "$L25_OPT_IN" == "1" ]] || fail "preflight-l25 requires LUNA_L25_SEND_QA=1"
+    verify_fake_codex
+    validate_bundle "$APP"
+    refuse_any_running_bundle
+    prepare_profile_root
+    LUNA_L25_SEND_QA=1 CODEX_EXECUTABLE="$FAKE_CODEX" CODEX_HOME="$PROFILE/synthetic-codex" \
+      LUNA_DISABLE_SOUND=1 LUNA_DISABLE_NOTIFICATIONS=1 \
+      "$EXECUTABLE" "$PROFILE" --l25-seed-only
+    [[ -s "$PROFILE/SAFETY.txt" && -s "$PROFILE/L25-FIXTURE.txt" ]] || fail "L25 seed-only preflight did not persist safety readback"
+    print -- "l25_preflight=passed root=$PROFILE fake_codex=$FAKE_CODEX"
+    print -- "qa_readback=$PROFILE/L25-FIXTURE.txt"
+    print -- "fake_codex_sha256=$(/usr/bin/shasum -a 256 "$FAKE_CODEX" | /usr/bin/awk '{print $1}')"
+    ;;
   run)
-    verify_l24_fake
+    verify_fake_codex
     validate_bundle "$APP"
     if [[ -f "$PID_FILE" ]]; then
       fixture_pid="$(<"$PID_FILE")"
@@ -284,6 +303,9 @@ case "$ACTION" in
     fi
     if [[ "$L24_OPT_IN" == "1" ]]; then
       launch_env+=(--env LUNA_L24_INTEGRATION_QA=1 --env "CODEX_EXECUTABLE=$FAKE_CODEX" --env "CODEX_HOME=$PROFILE/synthetic-codex")
+    fi
+    if [[ "$L25_OPT_IN" == "1" ]]; then
+      launch_env+=(--env LUNA_L25_SEND_QA=1 --env "CODEX_EXECUTABLE=$FAKE_CODEX" --env "CODEX_HOME=$PROFILE/synthetic-codex")
     fi
     /usr/bin/open -n "${launch_env[@]}" \
       --stdout "$LOG_FILE" \

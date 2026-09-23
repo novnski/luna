@@ -3728,6 +3728,33 @@ impl DocHost {
         follow_up_behavior: zeron_proto::FollowUpBehavior,
         execution: Option<zeron_proto::ChatConfig>,
     ) -> Result<(QueueMutationOutcome, Option<CommandReceipt>), EngineError> {
+        self.enqueue_queued_message_guarded(
+            command_id,
+            chat_id,
+            message_id,
+            text,
+            attachments,
+            hold_for_turn_end,
+            follow_up_behavior,
+            execution,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // Mirrors the existing queue service with one source fence.
+    pub(crate) async fn enqueue_queued_message_guarded(
+        &self,
+        command_id: &str,
+        chat_id: &str,
+        message_id: &str,
+        text: &str,
+        attachments: Vec<String>,
+        hold_for_turn_end: bool,
+        follow_up_behavior: zeron_proto::FollowUpBehavior,
+        execution: Option<zeron_proto::ChatConfig>,
+        source: Option<(&SessionsEngine, &crate::cross_task_tools::ApprovedSendFence)>,
+    ) -> Result<(QueueMutationOutcome, Option<CommandReceipt>), EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(format!(
                 "device {} does not host chat {chat_id}",
@@ -3736,42 +3763,48 @@ impl DocHost {
         }
         let handle = self.open(chat_id)?;
         let _drain = handle.drain_lock.lock().await;
-        let result = self.commit_queue_task_projection(&handle, command_id, |doc| {
-            if let Some(existing) = doc
-                .read_queue()?
-                .into_iter()
-                .find(|item| item.id == message_id)
-            {
-                return Ok(
-                    if existing.text == text
-                        && existing.attachments == attachments
-                        && existing.hold_for_turn_end == hold_for_turn_end
-                        && existing.follow_up_behavior == follow_up_behavior
-                        && existing.execution == execution
-                    {
-                        (QueueMutationOutcome::Duplicate, true)
-                    } else {
-                        (QueueMutationOutcome::RevisionConflict(existing), false)
-                    },
-                );
-            }
-            doc.push_queued(&QueuedMessage {
-                id: message_id.to_string(),
-                text: text.to_string(),
-                attachments,
-                hold_for_turn_end,
-                follow_up_behavior,
-                hold_reason: None,
-                issued_by: self.inner.config.device_id.clone(),
-                issued_at: now_ms(),
-                edited_at: None,
-                revision: 1,
-                execution,
-                status: QueueMessageStatus::Held,
-                delivery_gate: None,
-            })?;
-            Ok((QueueMutationOutcome::Applied, true))
-        })?;
+        let commit = || {
+            self.commit_queue_task_projection(&handle, command_id, |doc| {
+                if let Some(existing) = doc
+                    .read_queue()?
+                    .into_iter()
+                    .find(|item| item.id == message_id)
+                {
+                    return Ok(
+                        if existing.text == text
+                            && existing.attachments == attachments
+                            && existing.hold_for_turn_end == hold_for_turn_end
+                            && existing.follow_up_behavior == follow_up_behavior
+                            && existing.execution == execution
+                        {
+                            (QueueMutationOutcome::Duplicate, true)
+                        } else {
+                            (QueueMutationOutcome::RevisionConflict(existing), false)
+                        },
+                    );
+                }
+                doc.push_queued(&QueuedMessage {
+                    id: message_id.to_string(),
+                    text: text.to_string(),
+                    attachments,
+                    hold_for_turn_end,
+                    follow_up_behavior,
+                    hold_reason: None,
+                    issued_by: self.inner.config.device_id.clone(),
+                    issued_at: now_ms(),
+                    edited_at: None,
+                    revision: 1,
+                    execution,
+                    status: QueueMessageStatus::Held,
+                    delivery_gate: None,
+                })?;
+                Ok((QueueMutationOutcome::Applied, true))
+            })
+        };
+        let result = match source {
+            Some((sessions, fence)) => sessions.with_live_approved_send(fence, commit)?,
+            None => commit()?,
+        };
         if result.1.is_some() {
             self.unarchive_on_send(chat_id);
         }
