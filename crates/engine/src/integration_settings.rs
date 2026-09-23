@@ -228,17 +228,39 @@ pub fn codex_inventory(
         machine_id: machine_id.into(),
         items,
         unavailable_reason,
-        help: "This read covers Codex-home skills, project .agents/skills, and mcp_servers in Codex config.toml. Provider-managed skills and live attachment are unverified. Manage these entries in Codex; LUNA does not install, authenticate, or duplicate them.".into(),
+        help: "This read covers Codex-home skills, project .agents/skills, and mcp_servers in Codex config.toml. Provider-managed skills and live attachment are unverified. Manage entries with their owner, Codex or the chosen gateway; LUNA cannot enable, authenticate, or register a duplicate here.".into(),
     }
 }
 
 pub fn unavailable_inventory(provider: HarnessId, machine_id: &str) -> IntegrationInventoryView {
+    let reason = match provider {
+        HarnessId::ClaudeCode => {
+            "Claude's adapter exposes slash commands and MCP tool-use events, but no verified integration catalog, enable, authentication, or session-attachment API."
+        }
+        HarnessId::Devin
+        | HarnessId::Grok
+        | HarnessId::Hermes
+        | HarnessId::Pi
+        | HarnessId::Antigravity => {
+            "This ACP adapter exposes available commands and starts sessions with an empty LUNA-supplied MCP server list; it has no verified integration enable, authentication, or session-attachment API."
+        }
+        HarnessId::Opencode => {
+            "OpenCode's adapter discovers slash commands and uses the provider's existing plugin/MCP configuration, but has no verified integration enable, authentication, or session-attachment API."
+        }
+        HarnessId::Cursor => {
+            "Cursor's adapter has no verified skill/MCP catalog, enable, authentication, or session-attachment API."
+        }
+        HarnessId::Mock => "The synthetic test harness has no provider integrations.",
+        HarnessId::Codex => {
+            "Codex configuration has a separate read-only inventory; LUNA has no verified enable, authentication, or session-attachment action."
+        }
+    };
     IntegrationInventoryView {
         provider,
         machine_id: machine_id.into(),
         items: Vec::new(),
-        unavailable_reason: Some("This adapter has no verified provider-native skill or MCP inventory API.".into()),
-        help: "Use the provider's own configuration. LUNA cannot enable or authenticate these integrations through this adapter.".into(),
+        unavailable_reason: Some(reason.into()),
+        help: "Manage integrations in the provider's own settings or the chosen MCP gateway. LUNA does not register duplicate servers or report an unverified live attachment.".into(),
     }
 }
 
@@ -277,6 +299,7 @@ mod tests {
         .unwrap();
         let view = codex_inventory(&home, Some(&project), "synthetic-machine");
         assert_eq!(view.machine_id, "synthetic-machine");
+        assert!(view.help.contains("chosen gateway"));
         assert_eq!(view.items.len(), 4);
         assert!(
             view.items
@@ -349,5 +372,28 @@ mod tests {
         let serialized = serde_json::to_string(&diagnostic).unwrap();
         assert!(!serialized.contains("private global text"));
         assert!(!serialized.contains("private project text"));
+    }
+
+    #[test]
+    fn unsupported_providers_report_specific_limits_without_inventing_attachment() {
+        for provider in [
+            HarnessId::ClaudeCode,
+            HarnessId::Opencode,
+            HarnessId::Devin,
+            HarnessId::Cursor,
+            HarnessId::Mock,
+        ] {
+            let view = unavailable_inventory(provider, "synthetic-machine");
+            assert!(view.items.is_empty());
+            assert_eq!(view.machine_id, "synthetic-machine");
+            assert!(
+                view.unavailable_reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("no verified")
+                    || provider == HarnessId::Mock
+            );
+            assert!(view.help.contains("chosen MCP gateway"));
+        }
     }
 }
