@@ -2971,9 +2971,18 @@ fn subagent_chip_update(event: &AgentEvent) -> Option<&'static str> {
     match event {
         AgentEvent::Done { status, .. } => Some(match status {
             DoneStatus::Errored => "failed",
-            _ => "done",
+            DoneStatus::Interrupted => "interrupted",
+            DoneStatus::Completed => "done",
         }),
-        _ => Some("running"),
+        AgentEvent::InputRequested { .. } => Some("waiting"),
+        AgentEvent::ChildStatus { status } => Some(match status {
+            zeron_proto::ChildRuntimeStatus::Active => "running",
+            zeron_proto::ChildRuntimeStatus::Idle => "idle",
+        }),
+        AgentEvent::InputResolved { .. }
+        | AgentEvent::UserMessage { .. }
+        | AgentEvent::Steered { .. } => Some("running"),
+        _ => None,
     }
 }
 
@@ -2997,6 +3006,7 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
                 subagent_ref,
                 subagent_status,
                 subagent_tail,
+                subagent_activity,
             } => MessagePart::Tool {
                 id: id.clone(),
                 call: sanitize_tool_call(call),
@@ -3015,6 +3025,7 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
                 subagent_ref: subagent_ref.clone(),
                 subagent_status: *subagent_status,
                 subagent_tail: subagent_tail.clone(),
+                subagent_activity: subagent_activity.clone(),
             },
             other => other.clone(),
         })
@@ -3413,6 +3424,8 @@ async fn drive_run(
     // Live subagent sinks, parent tool-use id → transcript doc state.
     let mut subagents: std::collections::HashMap<String, SubagentSink> =
         std::collections::HashMap::new();
+    let mut child_activity: std::collections::HashMap<String, zeron_doc::SubagentActivity> =
+        std::collections::HashMap::new();
 
     let mut final_completed_turn = None;
     let final_status = loop {
@@ -3615,10 +3628,20 @@ async fn drive_run(
                 continue;
             }
             let sub_id = subagent_doc_id(&chat_id, parent_tool_use_id);
+            let observation = child_activity
+                .entry(parent_tool_use_id.clone())
+                .or_default();
+            observation.apply(sub_event);
             let chip_streaming = folded
                 .iter()
                 .any(|p| matches!(p, MessagePart::Tool { id, .. } if id == parent_tool_use_id));
             let sink_known = subagents.contains_key(parent_tool_use_id);
+            let metadata_only = matches!(
+                sub_event.as_ref(),
+                AgentEvent::Usage { .. }
+                    | AgentEvent::ContextUsage { .. }
+                    | AgentEvent::ChildStatus { .. }
+            );
             // A Done with NO sink (a subagent that never streamed — codex
             // turn ends can beat registration) is chip-only: minting a doc
             // just to freeze it empty helps no one, and stamping the ref
@@ -3653,7 +3676,7 @@ async fn drive_run(
                 }
             }
             // Open the sink lazily; an open failure degrades to chip-only.
-            if !sink_known && !done_only {
+            if !sink_known && !done_only && !metadata_only {
                 let opened = inner.doc_host().and_then(|host| match host.open(&sub_id) {
                     Ok(handle) => Some(handle.doc_arc()),
                     Err(err) => {
@@ -3681,6 +3704,7 @@ async fn drive_run(
                             Some(&sub_id),
                             Some("running"),
                             None,
+                            None,
                         );
                     }
                 }
@@ -3689,23 +3713,56 @@ async fn drive_run(
             if done {
                 settled_subagents.insert(parent_tool_use_id.clone());
             }
+            if !sink_known
+                && (done_only
+                    || matches!(
+                        sub_event.as_ref(),
+                        AgentEvent::Usage { .. } | AgentEvent::ChildStatus { .. }
+                    ))
+                && !chip_streaming
+            {
+                // Completion or usage can arrive before child content. Update
+                // the chip without manufacturing an empty transcript doc.
+                let _ = doc_ref.update_subagent_chip(
+                    parent_tool_use_id,
+                    None,
+                    subagent_chip_update(sub_event),
+                    None,
+                    Some(observation.has_observation().then_some(&*observation)),
+                );
+            }
             if let Some(sink) = subagents.get_mut(parent_tool_use_id) {
                 if let AgentEvent::UserMessage { text } = sub_event.as_ref() {
                     // A steer splits ENTRIES, not parts — handled at the
                     // sink level (the fold ignores UserMessage).
                     sink.push_user(&device_id, text);
+                    if !chip_streaming {
+                        let _ = doc_ref.update_subagent_chip(
+                            parent_tool_use_id,
+                            None,
+                            Some("running"),
+                            None,
+                            Some(None),
+                        );
+                    }
                     continue;
                 }
-                zeron_doc::fold_event_into_parts(&mut sink.folded, sub_event);
-                sink.dirty = true;
-                if !chip_streaming && done {
-                    // In-place chip refresh on lifecycle transitions only —
-                    // content never rewrites the parent doc.
+                if !metadata_only {
+                    zeron_doc::fold_event_into_parts(&mut sink.folded, sub_event);
+                    sink.dirty = true;
+                }
+                if !chip_streaming
+                    && (subagent_chip_update(sub_event).is_some()
+                        || matches!(sub_event.as_ref(), AgentEvent::Usage { .. }))
+                {
+                    // In-place refresh only on observed status/usage/result.
+                    // Text deltas never rewrite the parent doc.
                     let _ = doc_ref.update_subagent_chip(
                         parent_tool_use_id,
                         None,
                         subagent_chip_update(sub_event),
                         None,
+                        Some(observation.has_observation().then_some(&*observation)),
                     );
                 }
                 if done {
@@ -4467,11 +4524,17 @@ async fn drive_run(
         }
     };
 
-    // Any subagent still streaming when the run ends freezes as-is: the
-    // parent process is gone, so nothing more can arrive on this stream.
-    for (parent_id, sink) in subagents.drain() {
+    // Parent stream closure says nothing about uncompleted provider children.
+    // This also covers metadata-only children that never opened a transcript.
+    for parent_id in child_activity.keys() {
+        if !settled_subagents.contains(parent_id) {
+            let _ = doc_ref.update_subagent_chip(parent_id, None, Some("unobserved"), None, None);
+        }
+    }
+    // Any child transcript still streaming freezes as-is: the parent event
+    // stream is gone, so this sink cannot receive more content in this run.
+    for (_, sink) in subagents.drain() {
         let doc_id = sink.doc_id.clone();
-        let _ = doc_ref.update_subagent_chip(&parent_id, None, Some("failed"), None);
         if let Some(json) = sink.finish(&device_id, MessageStatus::Aborted)
             && let Some(host) = inner.doc_host()
         {

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::{SessionCommandEntry, SessionCommandStatus};
 use crate::constants::{SESSION_SCHEMA_VERSION, TAIL_MESSAGE_COUNT};
-use crate::parts::{MessagePart, MessageStatus, SubagentStatus};
+use crate::parts::{MessagePart, MessageStatus, SubagentActivity, SubagentStatus};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
@@ -114,6 +114,8 @@ struct DocPartJson {
     /// One-line live tail of the subagent's output (additive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_tail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagent_activity: Option<SubagentActivity>,
 }
 
 /// App parts → doc part json (mirror of `toDocParts`).
@@ -158,6 +160,7 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             subagent_ref,
             subagent_status,
             subagent_tail,
+            subagent_activity,
         } => DocPartJson {
             id: id.clone(),
             kind: "tool".into(),
@@ -175,12 +178,17 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             subagent_status: subagent_status.map(|s| {
                 match s {
                     SubagentStatus::Running => "running",
+                    SubagentStatus::Idle => "idle",
+                    SubagentStatus::Waiting => "waiting",
                     SubagentStatus::Done => "done",
                     SubagentStatus::Failed => "failed",
+                    SubagentStatus::Interrupted => "interrupted",
+                    SubagentStatus::Unobserved => "unobserved",
                 }
                 .to_owned()
             }),
             subagent_tail: subagent_tail.clone(),
+            subagent_activity: subagent_activity.clone(),
             ..Default::default()
         },
         MessagePart::Input {
@@ -234,11 +242,16 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
                 subagent_ref: p.subagent_ref,
                 subagent_status: p.subagent_status.as_deref().and_then(|s| match s {
                     "running" => Some(SubagentStatus::Running),
+                    "idle" => Some(SubagentStatus::Idle),
+                    "waiting" => Some(SubagentStatus::Waiting),
                     "done" => Some(SubagentStatus::Done),
                     "failed" => Some(SubagentStatus::Failed),
+                    "interrupted" => Some(SubagentStatus::Interrupted),
+                    "unobserved" => Some(SubagentStatus::Unobserved),
                     _ => None,
                 }),
                 subagent_tail: p.subagent_tail,
+                subagent_activity: p.subagent_activity,
             },
             None => MessagePart::Text {
                 id: p.id,
@@ -758,6 +771,7 @@ impl SessionDoc {
         subagent_ref: Option<&str>,
         status: Option<&str>,
         tail: Option<&str>,
+        activity: Option<Option<&SubagentActivity>>,
     ) -> Result<bool, DocError> {
         let messages = self.doc.get_list("messages");
         for i in (0..messages.len()).rev() {
@@ -810,6 +824,16 @@ impl SessionDoc {
                     }
                     if let Some(t) = tail {
                         part.insert("subagentTail", t)?;
+                    }
+                    if let Some(activity) = activity {
+                        if let Some(activity) = activity {
+                            part.insert(
+                                "subagentActivity",
+                                loro_value_from_json(&serde_json::to_value(activity)?),
+                            )?;
+                        } else {
+                            part.delete("subagentActivity")?;
+                        }
                     }
                     self.doc.commit();
                     return Ok(true);
@@ -930,6 +954,12 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
     }
     if let Some(subagent_tail) = &doc_part.subagent_tail {
         map.insert("subagentTail", subagent_tail.as_str())?;
+    }
+    if let Some(activity) = &doc_part.subagent_activity {
+        map.insert(
+            "subagentActivity",
+            loro_value_from_json(&serde_json::to_value(activity)?),
+        )?;
     }
     Ok(())
 }
@@ -1083,6 +1113,7 @@ fn salvage_part(part: &serde_json::Value, entry_id: &str, ix: usize) -> Option<M
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            subagent_activity: None,
         });
     }
     if let Some(message) = obj.get("message").and_then(|x| x.as_str()) {
@@ -1345,6 +1376,12 @@ fn update_part_fields(map: &LoroMap, part: &MessagePart) -> Result<(), DocError>
     if let Some(subagent_tail) = &doc_part.subagent_tail {
         map.insert("subagentTail", subagent_tail.as_str())?;
     }
+    if let Some(activity) = &doc_part.subagent_activity {
+        map.insert(
+            "subagentActivity",
+            loro_value_from_json(&serde_json::to_value(activity)?),
+        )?;
+    }
     if let Some(text) = &doc_part.text {
         // Defensive path only — the fold never rewrites earlier text.
         if let Some(loro::ValueOrContainer::Container(loro::Container::Text(t))) = map.get("text") {
@@ -1530,6 +1567,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            subagent_activity: None,
         };
         w.sync(std::slice::from_ref(&part)).unwrap();
         if let MessagePart::Tool {
@@ -1582,6 +1620,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            subagent_activity: None,
         };
         let parts = vec![
             tool(
@@ -1604,6 +1643,7 @@ mod tests {
                 "toolu_spawn",
                 Some("c1--sub--toolu_spawn"),
                 Some("running"),
+                None,
                 None
             )
             .unwrap()
@@ -1613,6 +1653,7 @@ mod tests {
                 "toolu_bash",
                 Some("c1--sub--toolu_bash"),
                 Some("done"),
+                None,
                 None
             )
             .unwrap()
@@ -1635,6 +1676,67 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        let observed = SubagentActivity {
+            result: Some("scanned".into()),
+            input_tokens: Some(7),
+            output_tokens: Some(2),
+            ..Default::default()
+        };
+        assert!(
+            doc.update_subagent_chip(
+                "toolu_spawn",
+                None,
+                Some("done"),
+                None,
+                Some(Some(&observed))
+            )
+            .unwrap()
+        );
+        assert!(matches!(
+            &doc.read_entries().unwrap()[0].parts[1],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Done),
+                subagent_activity: Some(SubagentActivity {
+                    input_tokens: Some(7),
+                    ..
+                }),
+                ..
+            }
+        ));
+        assert!(
+            doc.update_subagent_chip("toolu_spawn", None, Some("running"), None, Some(None))
+                .unwrap()
+        );
+        assert!(matches!(
+            &doc.read_entries().unwrap()[0].parts[1],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Running),
+                subagent_activity: None,
+                ..
+            }
+        ));
+        assert!(
+            doc.update_subagent_chip("toolu_spawn", None, Some("idle"), None, None)
+                .unwrap()
+        );
+        assert!(matches!(
+            &doc.read_entries().unwrap()[0].parts[1],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Idle),
+                ..
+            }
+        ));
+        assert!(
+            doc.update_subagent_chip("toolu_spawn", None, Some("unobserved"), None, None)
+                .unwrap()
+        );
+        assert!(matches!(
+            &doc.read_entries().unwrap()[0].parts[1],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Unobserved),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1952,6 +2054,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                subagent_activity: None,
             }],
             created_at: 1,
             device_id: "dev-a".into(),
