@@ -43,6 +43,11 @@ impl DeviceWriteOwner {
     pub(crate) fn retire(&self) {
         self.inner.epoch.retire();
     }
+
+    #[cfg(test)]
+    pub(crate) fn epoch_for_tests(&self) -> WriteEpoch {
+        self.inner.epoch.clone()
+    }
 }
 
 impl Drop for DeviceWriteOwner {

@@ -15,6 +15,7 @@
 //! (the RPC layer supplies the cwd roots) — and only supported image types, as
 //! in zeron.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +26,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::EngineError;
+use crate::device_write::DeviceWriteHandle;
 
 /// A pending upload must finish within this window (covers slow mesh links).
 const STAGING_TTL: Duration = Duration::from_secs(10 * 60);
@@ -104,6 +106,8 @@ struct UploadsInner {
     /// them. RwLock: a local-profile import adds its source root at runtime so
     /// imported transcripts resolve without an engine restart.
     read_only_roots: std::sync::RwLock<Vec<PathBuf>>,
+    /// Only EngineCore-owned clones have device-root write admission.
+    write_handle: Option<DeviceWriteHandle>,
 }
 
 #[derive(Clone)]
@@ -124,6 +128,22 @@ impl Uploads {
 
     /// Use a profile root for all writes and an optional legacy read-only root.
     pub fn from_root_with_fallback(dir: &Path, legacy_read_root: Option<&Path>) -> Self {
+        Self::from_root_with_fallback_and_handle(dir, legacy_read_root, None)
+    }
+
+    pub(crate) fn from_root_with_fallback_guarded(
+        dir: &Path,
+        legacy_read_root: Option<&Path>,
+        write_handle: DeviceWriteHandle,
+    ) -> Self {
+        Self::from_root_with_fallback_and_handle(dir, legacy_read_root, Some(write_handle))
+    }
+
+    fn from_root_with_fallback_and_handle(
+        dir: &Path,
+        legacy_read_root: Option<&Path>,
+        write_handle: Option<DeviceWriteHandle>,
+    ) -> Self {
         Self {
             inner: Arc::new(UploadsInner {
                 tmp: dir.join("tmp"),
@@ -134,6 +154,7 @@ impl Uploads {
                         .map(Path::to_path_buf)
                         .collect(),
                 ),
+                write_handle,
             }),
         }
     }
@@ -188,6 +209,15 @@ impl Uploads {
     /// Assemble the staged chunks into a durable file and return its absolute
     /// path.
     pub fn commit(&self, upload_id: &str, file_name: &str) -> Result<String, EngineError> {
+        self.commit_before_publish(upload_id, file_name, || Ok(()))
+    }
+
+    fn commit_before_publish(
+        &self,
+        upload_id: &str,
+        file_name: &str,
+        before_publish: impl FnOnce() -> Result<(), EngineError>,
+    ) -> Result<String, EngineError> {
         let dir = self.staging_dir(upload_id)?;
         let mut parts = chunk_files(&dir)?;
         if parts.is_empty() {
@@ -207,14 +237,34 @@ impl Uploads {
             .decode(joined.as_bytes())
             .map_err(|e| EngineError::Other(format!("upload is not valid base64: {e}")))?;
         if bytes.len() as u64 > MAX_BYTES {
-            let _ = std::fs::remove_dir_all(&dir);
             return Err(EngineError::Other("Upload too large".into()));
         }
-        std::fs::create_dir_all(&self.inner.dir)?;
+        let _permit = self
+            .inner
+            .write_handle
+            .as_ref()
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(|error| {
+                EngineError::Other(format!(
+                    "Upload commit temporarily unavailable ({error:?}); retry"
+                ))
+            })?;
+        // The backup inventory excludes this entire tmp directory. Keeping
+        // the temporary on the same filesystem makes final rename atomic.
+        std::fs::create_dir_all(&self.inner.tmp)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(&self.inner.tmp)?;
+        temporary.write_all(&bytes)?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        before_publish()?;
+
         let name = sanitize(file_name);
         let id8: String = upload_id.chars().take(8).collect();
         let path = self.inner.dir.join(format!("{id8}-{name}"));
-        std::fs::write(&path, &bytes)?;
+        std::fs::rename(temporary.path(), &path)?;
+        #[cfg(unix)]
+        std::fs::File::open(&self.inner.dir)?.sync_all()?;
         let _ = std::fs::remove_dir_all(&dir);
         Ok(path.to_string_lossy().to_string())
     }
@@ -492,6 +542,8 @@ fn mime_by_ext(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{InstanceLock, device_write::DeviceWriteOwner};
+    use zeron_sync::write_epoch::Phase;
 
     #[test]
     fn sanitize_names() {
@@ -543,6 +595,118 @@ mod tests {
 
         assert_eq!(std::fs::read(&path).unwrap(), b"local");
         assert!(!dir.path().join("tmp").join("upload-1").exists());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_commit_drains_into_snapshot_and_retries_after_freeze() {
+        let root = tempfile::tempdir().unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let epoch = owner.epoch_for_tests();
+        let uploads = Uploads::from_root_with_fallback_guarded(
+            &root.path().join("uploads"),
+            None,
+            owner.handle(),
+        );
+        uploads
+            .append("first", &BASE64.encode(b"complete first image"), Some(0))
+            .unwrap();
+        uploads
+            .append("second", &BASE64.encode(b"complete second image"), Some(0))
+            .unwrap();
+
+        // The hook runs after the first commit has an admitted ticket and a
+        // synced temporary file, but before the committed path is published.
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+        let first_uploads = uploads.clone();
+        let first = std::thread::spawn(move || {
+            first_uploads.commit_before_publish("first", "first.png", || {
+                ready_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(())
+            })
+        });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let mut freezing = Box::pin(epoch.freeze(Duration::from_secs(5)));
+        assert!(matches!(
+            futures::poll!(freezing.as_mut()),
+            std::task::Poll::Pending
+        ));
+        assert_eq!(epoch.phase(), Phase::Quiescing);
+        assert!(!root.path().join("uploads/first-first.png").exists());
+        let busy = uploads.commit("second", "second.png").unwrap_err();
+        assert!(busy.to_string().contains("Busy"));
+        assert_eq!(
+            std::fs::read_to_string(uploads.staging_dir("second").unwrap().join("000000.b64"))
+                .unwrap(),
+            BASE64.encode(b"complete second image")
+        );
+        assert!(!root.path().join("uploads/second-second.png").exists());
+
+        release_tx.send(()).unwrap();
+        let first_path = first.join().unwrap().unwrap();
+        let snapshot = freezing.await.unwrap().into_snapshot().unwrap();
+        assert_eq!(epoch.phase(), Phase::Snapshot);
+        assert_eq!(std::fs::read(first_path).unwrap(), b"complete first image");
+        assert!(!root.path().join("uploads/second-second.png").exists());
+        assert!(uploads.commit("second", "second.png").is_err());
+        assert!(uploads.staging_dir("second").unwrap().exists());
+
+        drop(snapshot);
+        let second_path = uploads.commit("second", "second.png").unwrap();
+        assert_eq!(
+            std::fs::read(second_path).unwrap(),
+            b"complete second image"
+        );
+        assert!(!uploads.staging_dir("second").unwrap().exists());
+
+        uploads
+            .append("third", &BASE64.encode(b"retired"), Some(0))
+            .unwrap();
+        owner.retire();
+        let retired = uploads.commit("third", "third.png").unwrap_err();
+        assert!(retired.to_string().contains("Retired"));
+        assert_eq!(
+            std::fs::read_to_string(uploads.staging_dir("third").unwrap().join("000000.b64"))
+                .unwrap(),
+            BASE64.encode(b"retired")
+        );
+        assert!(!root.path().join("uploads/third-third.png").exists());
+    }
+
+    #[test]
+    fn guarded_commit_prepublication_io_failure_preserves_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let uploads = Uploads::from_root_with_fallback_guarded(
+            &root.path().join("uploads"),
+            None,
+            owner.handle(),
+        );
+        uploads
+            .append("failed", &BASE64.encode(b"retryable image"), Some(0))
+            .unwrap();
+
+        let error = uploads
+            .commit_before_publish("failed", "photo.png", || {
+                Err(std::io::Error::other("injected prepublication I/O failure").into())
+            })
+            .unwrap_err();
+        assert!(matches!(error, EngineError::Io(_)));
+        assert_eq!(
+            std::fs::read_to_string(uploads.staging_dir("failed").unwrap().join("000000.b64"))
+                .unwrap(),
+            BASE64.encode(b"retryable image")
+        );
+        assert!(!root.path().join("uploads/failed-photo.png").exists());
+        assert_eq!(std::fs::read_dir(&uploads.inner.tmp).unwrap().count(), 1);
+
+        let path = uploads.commit("failed", "photo.png").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"retryable image");
+        assert!(!uploads.staging_dir("failed").unwrap().exists());
     }
 
     #[test]

@@ -444,9 +444,10 @@ impl EngineCore {
             local_device_name(&device_id),
         )
         .map_err(|e| EngineError::Other(e.to_string()))?;
-        let uploads = Uploads::from_root_with_fallback(
+        let uploads = Uploads::from_root_with_fallback_guarded(
             profile.uploads_root(),
             legacy_uploads_root.as_deref(),
+            device_write.handle(),
         );
         // A recorded local→synced import grants this account the local
         // profile's uploads root read-only — transcripts imported earlier
