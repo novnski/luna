@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,7 @@ use zeron_proto::{
 };
 use zeron_sync::DocsStore;
 
+use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 use crate::workspace_host::{TaskProjectionError, WorkspaceHost};
 use crate::{EngineError, new_id, now_ms};
 
@@ -403,6 +404,7 @@ struct PendingPreview {
 struct Inner {
     store: Arc<DocsStore>,
     workspace: WorkspaceHost,
+    write_handle: OnceLock<DeviceWriteHandle>,
     state: Mutex<State>,
     previews: Mutex<HashMap<String, PendingPreview>>,
     reconcile_gates: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
@@ -417,6 +419,12 @@ struct Inner {
 #[derive(Clone)]
 pub struct TaskIdentityService {
     inner: Arc<Inner>,
+}
+
+#[derive(Clone, Copy)]
+enum CommandAdmissionEffect {
+    Local,
+    ProviderMayHaveChanged,
 }
 
 impl TaskIdentityService {
@@ -493,6 +501,7 @@ impl TaskIdentityService {
             inner: Arc::new(Inner {
                 store,
                 workspace,
+                write_handle: OnceLock::new(),
                 state: Mutex::new(State { log, projection }),
                 previews: Mutex::new(HashMap::new()),
                 reconcile_gates: Mutex::new(HashMap::new()),
@@ -504,6 +513,29 @@ impl TaskIdentityService {
                 provider_profile_id,
             }),
         })
+    }
+
+    /// Product assembly installs the owner before publishing this service to
+    /// sessions or starting reconciliation. Public fixture constructors stay
+    /// in their legacy, unguarded mode until explicitly opted in.
+    pub(crate) fn install_write_handle(
+        &self,
+        handle: DeviceWriteHandle,
+    ) -> Result<(), EngineError> {
+        self.inner.write_handle.set(handle).map_err(|_| {
+            EngineError::Other("task identity write handle is already installed".into())
+        })
+    }
+
+    fn admit_write(&self) -> Result<Option<DeviceWritePermit>, EngineError> {
+        self.inner
+            .write_handle
+            .get()
+            .map(DeviceWriteHandle::try_admit)
+            .transpose()
+            .map_err(|error| {
+                EngineError::Other(format!("task identity write admission denied ({error:?})"))
+            })
     }
 
     pub fn start_startup_reconciliation(&self) {
@@ -657,6 +689,7 @@ impl TaskIdentityService {
                 TaskIdentityEvent::WorkspaceObserved { workspace },
                 TaskIdentityEvent::TaskRegistered { task },
             ],
+            CommandAdmissionEffect::Local,
             commit,
         )
     }
@@ -754,6 +787,7 @@ impl TaskIdentityService {
                     binding: binding.clone(),
                 },
             ],
+            CommandAdmissionEffect::ProviderMayHaveChanged,
             |snapshot| commit(&binding, snapshot),
         )
     }
@@ -777,6 +811,7 @@ impl TaskIdentityService {
                 external_import_key: view.task.external_import_key,
                 at_ms: now_ms(),
             }],
+            CommandAdmissionEffect::Local,
             commit,
         )
     }
@@ -1958,7 +1993,9 @@ impl TaskIdentityService {
         events.push(TaskIdentityEvent::BindingCreated {
             binding: replacement.clone(),
         });
-        self.commit_events_with_task_command(events, |snapshot| commit(&replacement, snapshot))
+        self.commit_events_with_task_command(events, CommandAdmissionEffect::Local, |snapshot| {
+            commit(&replacement, snapshot)
+        })
     }
 
     /// Stage a replacement binding whose independently forked provider id is
@@ -2024,6 +2061,7 @@ impl TaskIdentityService {
                     binding: replacement.clone(),
                 },
             ],
+            CommandAdmissionEffect::ProviderMayHaveChanged,
             |snapshot| commit(&replacement, snapshot),
         )
     }
@@ -2107,6 +2145,8 @@ impl TaskIdentityService {
     }
 
     fn commit(&self, events: Vec<TaskIdentityEvent>) -> Result<(), EngineError> {
+        // Hold the root lease across durable storage and projection publish.
+        let _permit = self.admit_write()?;
         let mut state = lock(&self.inner.state);
         let mut projection = state.projection.clone();
         for event in &events {
@@ -2129,8 +2169,17 @@ impl TaskIdentityService {
     fn commit_events_with_task_command<R>(
         &self,
         events: Vec<TaskIdentityEvent>,
+        admission_effect: CommandAdmissionEffect,
         commit: impl FnOnce(Option<(&str, &[u8])>) -> Result<R, TaskProjectionError>,
     ) -> Result<R, TaskProjectionError> {
+        // A post-provider denial is unknown to the caller: a native fork or
+        // rewind may have landed even though this local transaction did not.
+        let _permit = self.admit_write().map_err(|error| match admission_effect {
+            CommandAdmissionEffect::Local => TaskProjectionError::Mutation(error),
+            CommandAdmissionEffect::ProviderMayHaveChanged => {
+                TaskProjectionError::ProviderUnknown(error)
+            }
+        })?;
         let mut state = lock(&self.inner.state);
         let mut projection = state.projection.clone();
         for event in &events {
@@ -2417,6 +2466,296 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device_write::DeviceWriteOwner;
+    use crate::{InstanceLock, WorkspaceHostConfig};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use zeron_sync::write_epoch::Phase;
+
+    fn guarded_fixture(
+        root: &Path,
+    ) -> (
+        DeviceWriteOwner,
+        Arc<DocsStore>,
+        WorkspaceHost,
+        TaskIdentityService,
+    ) {
+        std::fs::create_dir_all(root).unwrap();
+        let owner = DeviceWriteOwner::new(root, InstanceLock::acquire(root).unwrap()).unwrap();
+        let store = Arc::new(DocsStore::open(root.join("store")).unwrap());
+        let workspace = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "synthetic-device".into(),
+                device_name: "Synthetic device".into(),
+                platform: "test".into(),
+                org_id: "synthetic-org".into(),
+                user_id: "synthetic-user".into(),
+                edge: None,
+            },
+        )
+        .unwrap();
+        let identity = TaskIdentityService::open_without_codex_metadata(
+            store.clone(),
+            workspace.clone(),
+            "synthetic-device",
+            root.join("synthetic-codex"),
+        )
+        .unwrap();
+        identity.install_write_handle(owner.handle()).unwrap();
+        (owner, store, workspace, identity)
+    }
+
+    fn new_task(identity: &TaskIdentityService, task_id: &str) -> Result<bool, EngineError> {
+        identity.register_new_task(task_id, None, None, None, TaskLineage::default())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_log_retires_without_losing_committed_events_and_reopens() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, workspace, identity) = guarded_fixture(root.path());
+        let accepted = uuid::Uuid::new_v4().to_string();
+        let denied = uuid::Uuid::new_v4().to_string();
+        assert!(new_task(&identity, &accepted).unwrap());
+        let committed = store.load_snapshot(TASK_IDENTITY_LOG_ID).unwrap().unwrap();
+        let committed_events = identity.event_count();
+
+        let held = owner.handle().try_admit().unwrap();
+        owner.retire();
+        let error = new_task(&identity, &denied).unwrap_err().to_string();
+        assert!(error.contains("admission denied (Retired)"), "{error}");
+        assert!(identity.view(&denied).is_none());
+        assert_eq!(identity.event_count(), committed_events);
+        assert_eq!(
+            store.load_snapshot(TASK_IDENTITY_LOG_ID).unwrap().unwrap(),
+            committed
+        );
+
+        workspace.drain_tasks_checked().await.unwrap();
+        drop(identity);
+        drop(workspace);
+        drop(store);
+        drop(owner);
+        assert!(InstanceLock::acquire(root.path()).is_err());
+        drop(held);
+
+        let (_replacement, _store, workspace, identity) = guarded_fixture(root.path());
+        assert!(identity.view(&accepted).is_some());
+        assert!(identity.view(&denied).is_none());
+        assert_eq!(identity.event_count(), committed_events);
+        assert!(new_task(&identity, &denied).unwrap());
+        workspace.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guarded_log_sqlite_failure_keeps_projection_retryable_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, workspace, identity) = guarded_fixture(root.path());
+        let accepted = uuid::Uuid::new_v4().to_string();
+        let retried = uuid::Uuid::new_v4().to_string();
+        assert!(new_task(&identity, &accepted).unwrap());
+        let committed = store.load_snapshot(TASK_IDENTITY_LOG_ID).unwrap().unwrap();
+        let committed_events = identity.event_count();
+
+        let connection =
+            rusqlite::Connection::open(root.path().join("store/docs.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_identity_snapshot BEFORE UPDATE ON snapshots
+                 WHEN NEW.doc_id = 'luna-task-identity-events-v1'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic identity snapshot failure'); END;",
+            )
+            .unwrap();
+        let error = new_task(&identity, &retried).unwrap_err().to_string();
+        assert!(
+            error.contains("synthetic identity snapshot failure"),
+            "{error}"
+        );
+        assert!(identity.view(&retried).is_none());
+        assert_eq!(identity.event_count(), committed_events);
+        assert_eq!(
+            store.load_snapshot(TASK_IDENTITY_LOG_ID).unwrap().unwrap(),
+            committed
+        );
+
+        connection
+            .execute_batch("DROP TRIGGER reject_identity_snapshot")
+            .unwrap();
+        assert!(new_task(&identity, &retried).unwrap());
+        workspace.drain_tasks_checked().await.unwrap();
+        drop(identity);
+        drop(workspace);
+        drop(store);
+        drop(connection);
+        drop(owner);
+
+        let (_replacement, _store, workspace, identity) = guarded_fixture(root.path());
+        assert!(identity.view(&accepted).is_some());
+        assert!(identity.view(&retried).is_some());
+        assert_eq!(identity.event_count(), committed_events + 2);
+        workspace.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retired_command_admission_rejects_before_callback_and_marks_post_provider_unknown() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, workspace, identity) = guarded_fixture(root.path());
+        let source = uuid::Uuid::new_v4().to_string();
+        let local_target = uuid::Uuid::new_v4().to_string();
+        let fork_target = uuid::Uuid::new_v4().to_string();
+        assert!(new_task(&identity, &source).unwrap());
+        let committed = store.load_snapshot(TASK_IDENTITY_LOG_ID).unwrap().unwrap();
+        let committed_events = identity.event_count();
+        owner.retire();
+
+        let local_called = Arc::new(AtomicBool::new(false));
+        let local_probe = local_called.clone();
+        let local = identity.register_new_task_with_command(
+            &local_target,
+            None,
+            None,
+            None,
+            TaskLineage::default(),
+            move |_| {
+                local_probe.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(matches!(local, Err(TaskProjectionError::Mutation(_))));
+        assert!(!local_called.load(Ordering::SeqCst));
+
+        // The provider id is synthetic. This method stages a post-fork local
+        // projection but never launches or reads a provider in this test.
+        let fork_called = Arc::new(AtomicBool::new(false));
+        let fork_probe = fork_called.clone();
+        let fork = identity.register_fork_task_with_command(
+            &source,
+            &fork_target,
+            HarnessId::Codex,
+            "synthetic-provider-session",
+            move |_, _| {
+                fork_probe.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(matches!(fork, Err(TaskProjectionError::ProviderUnknown(_))));
+        assert!(!fork_called.load(Ordering::SeqCst));
+        assert!(identity.view(&local_target).is_none());
+        assert!(identity.view(&fork_target).is_none());
+        assert_eq!(identity.event_count(), committed_events);
+        assert_eq!(
+            store.load_snapshot(TASK_IDENTITY_LOG_ID).unwrap().unwrap(),
+            committed
+        );
+        workspace.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn guarded_command_holds_ticket_through_callback_until_freeze_can_flush() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, store, workspace, identity) = guarded_fixture(root.path());
+        let accepted = uuid::Uuid::new_v4().to_string();
+        let during_freeze = uuid::Uuid::new_v4().to_string();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let commit_identity = identity.clone();
+        let commit_store = store.clone();
+        let accepted_for_commit = accepted.clone();
+        let commit = tokio::task::spawn_blocking(move || {
+            commit_identity
+                .register_new_task_with_command(
+                    &accepted_for_commit,
+                    None,
+                    None,
+                    None,
+                    TaskLineage::default(),
+                    move |snapshot| {
+                        let _ = entered_tx.send(());
+                        release_rx.recv().unwrap();
+                        let (doc_id, bytes) = snapshot.unwrap();
+                        commit_store
+                            .save_snapshot(doc_id, bytes)
+                            .map_err(|error| TaskProjectionError::Commit(error.into()))?;
+                        Ok(())
+                    },
+                )
+                .map_err(|error| error.message().to_string())
+        });
+        tokio::time::timeout(Duration::from_secs(2), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let epoch = owner.epoch_for_tests();
+        let freeze_epoch = epoch.clone();
+        let freeze = tokio::spawn(async move { freeze_epoch.freeze(Duration::from_secs(2)).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while epoch.phase() != Phase::Quiescing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!freeze.is_finished());
+        // The callback still holds the identity mutex, so probe admission
+        // directly instead of blocking another identity method on that mutex.
+        let error = match identity.admit_write() {
+            Ok(_) => panic!("new identity writer entered while freeze is quiescing"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("admission denied (Busy)"), "{error}");
+
+        release_tx.send(()).unwrap();
+        commit.await.unwrap().unwrap();
+        let flush = freeze.await.unwrap().unwrap();
+        assert_eq!(epoch.phase(), Phase::Flushing);
+        assert!(identity.view(&accepted).is_some());
+        assert!(identity.view(&during_freeze).is_none());
+        drop(flush);
+        assert_eq!(epoch.phase(), Phase::Open);
+        assert!(new_task(&identity, &during_freeze).unwrap());
+        assert_eq!(identity.event_count(), 4);
+        workspace.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn product_assembly_installs_identity_admission_before_publication() {
+        use crate::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+
+        let root = tempfile::tempdir().unwrap();
+        let profile = EngineProfile::development(
+            &root.path().join("synthetic-engine"),
+            "synthetic-org",
+            "synthetic-user",
+        );
+        let accounts = AgentAccountsConfig {
+            data_dir: root.path().join("synthetic-provider-state"),
+            claude_config_dir: root.path().join("synthetic-claude"),
+            claude_config_file: root.path().join("synthetic-claude.json"),
+            codex_home: root.path().join("synthetic-codex"),
+            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
+        };
+        accounts.disable_claude_keychain_fallback().unwrap();
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                profile,
+                Arc::new(HarnessRegistry::new()),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )
+            .unwrap();
+        let identity = core.task_identity.clone();
+        assert!(identity.inner.write_handle.get().is_some());
+        let committed = uuid::Uuid::new_v4().to_string();
+        assert!(new_task(&identity, &committed).unwrap());
+
+        core.shutdown().await;
+        let denied = uuid::Uuid::new_v4().to_string();
+        let error = new_task(&identity, &denied).unwrap_err().to_string();
+        assert!(error.contains("admission denied (Retired)"), "{error}");
+        assert!(identity.view(&committed).is_some());
+        assert!(identity.view(&denied).is_none());
+    }
 
     #[test]
     fn external_import_key_is_deterministic_but_not_a_task_id() {
