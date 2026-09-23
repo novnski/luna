@@ -426,7 +426,8 @@ impl EngineCore {
         let change_requests = CheckoutChangeRequests::start(repos.clone(), &device_id);
         let workspace_files =
             WorkspaceFiles::new(repos.clone(), workspace.clone(), device_id.clone());
-        let terminals = Terminals::new();
+        let terminals =
+            Terminals::open_with_history(&profile.store_root().join("terminals"), &device_id)?;
         let previews = zeron_preview::PreviewService::new(
             profile.store_root().join("previews.json"),
             device_id.clone(),

@@ -6,13 +6,15 @@ use crate::settings::TaskNotificationPolicy;
 use zeron_proto::{
     AttentionItem, AttentionKind, AttentionReadRequest, AttentionSnapshot, AttentionTarget,
     AttentionTransition, AttentionTransitionBatch, AttentionTransitionClaim,
-    AttentionTransitionKind,
+    AttentionTransitionKind, TerminalInventoryEntry, TerminalProcessState,
 };
 
 #[derive(Default)]
 pub(super) struct ActivityUi {
     pub(super) view_active: bool,
     snapshot: Option<AttentionSnapshot>,
+    terminals: Vec<TerminalInventoryEntry>,
+    terminal_error: Option<SharedString>,
     error: Option<SharedString>,
     loading: bool,
     in_flight: bool,
@@ -161,6 +163,8 @@ impl Shell {
             self.activity.request_generation = self.activity.request_generation.wrapping_add(1);
             self.activity.poll_task = None;
             self.activity.snapshot = None;
+            self.activity.terminals.clear();
+            self.activity.terminal_error = None;
             self.activity.error = None;
             self.activity.armed = false;
             self.activity.in_flight = false;
@@ -216,7 +220,14 @@ impl Shell {
                         .await?,
                 )
                 .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))?;
-                Ok::<_, zeron_rpc::RpcError>((snapshot, transitions))
+                let terminals = handle
+                    .client()
+                    .call_as::<Vec<TerminalInventoryEntry>>(
+                        methods::LIST_TERMINALS,
+                        serde_json::json!({}),
+                    )
+                    .await;
+                Ok::<_, zeron_rpc::RpcError>((snapshot, transitions, terminals))
             }
             .await;
             this.update(cx, |shell, cx| {
@@ -228,8 +239,18 @@ impl Shell {
                 shell.activity.in_flight = false;
                 shell.activity.loading = false;
                 match result {
-                    Ok((snapshot, transitions)) => {
+                    Ok((snapshot, transitions, terminals)) => {
                         shell.activity.accept_snapshot(snapshot);
+                        match terminals {
+                            Ok(terminals) => {
+                                shell.activity.terminals = terminals;
+                                shell.activity.terminal_error = None;
+                            }
+                            Err(error) => {
+                                shell.activity.terminals.clear();
+                                shell.activity.terminal_error = Some(error.to_string().into());
+                            }
+                        }
                         shell.activity.error = None;
                         shell.activity.armed = true;
                         for transition in transitions.transitions {
@@ -475,6 +496,161 @@ impl Shell {
                             cx.notify();
                         })),
                 )
+                .into_any_element(),
+        )
+    }
+
+    /// Running LUNA-owned PTYs remain visible even when their task is archived.
+    /// Saved/interrupted records remain available through that task's terminal
+    /// panel, but are never presented here as live processes.
+    pub(super) fn render_terminal_inventory(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.activity.view_active {
+            return None;
+        }
+        let running = self
+            .activity
+            .terminals
+            .iter()
+            .filter(|item| item.state == TerminalProcessState::Running)
+            .cloned()
+            .collect::<Vec<_>>();
+        if running.is_empty() && self.activity.terminal_error.is_none() {
+            return None;
+        }
+        let terminal_error = self.activity.terminal_error.clone();
+        let state = self.state.read(cx);
+        let rows = running
+            .iter()
+            .map(|item| {
+                let task = state
+                    .chats
+                    .iter()
+                    .find(|chat| chat.id == item.chat_id)
+                    .and_then(|chat| chat.title.clone())
+                    .unwrap_or_else(|| item.chat_id.clone());
+                let device = state
+                    .devices
+                    .iter()
+                    .find(|device| device.id == item.device_id)
+                    .map(|device| device.name.clone())
+                    .unwrap_or_else(|| item.device_id.clone());
+                let open_task = item.chat_id.clone();
+                let open_id = item.id.clone();
+                let stop_id = item.id.clone();
+                let open_key = format!("terminal-open-{}", item.id);
+                div()
+                    .id(SharedString::from(format!(
+                        "terminal-inventory-{}",
+                        item.id
+                    )))
+                    .px(px(Theme::SPACE_SM))
+                    .py(px(6.0))
+                    .rounded(px(Theme::CONTROL_RADIUS))
+                    .bg(theme.surface_raised)
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.0))
+                    .child(
+                        div()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text)
+                            .truncate()
+                            .child(format!("{} · {}", task, item.shell)),
+                    )
+                    .child(
+                        div()
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_color(theme.text_muted)
+                            .truncate()
+                            .child(format!("{} · {}", device, item.cwd)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(5.0))
+                            .child(
+                                popover::btn_ghost(theme, "Open", open_key)
+                                    .id(SharedString::from(format!("terminal-open-{}", item.id)))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_chat(open_task.clone(), cx);
+                                        this.terminal_panel(cx).update(cx, |panel, cx| {
+                                            panel.focus_terminal_id(&open_task, &open_id, cx);
+                                        });
+                                        if !this.terminal_open(cx) {
+                                            this.toggle_terminal(window, cx);
+                                        }
+                                    })),
+                            )
+                            .child(
+                                popover::btn_ghost(
+                                    theme,
+                                    "Stop",
+                                    format!("terminal-stop-{}", item.id),
+                                )
+                                .id(SharedString::from(format!("terminal-stop-{}", item.id)))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        let Some(engine) = this.state.read(cx).engine().cloned()
+                                        else {
+                                            return;
+                                        };
+                                        let id = stop_id.clone();
+                                        cx.spawn(async move |this, cx| {
+                                            let result = engine
+                                                .client()
+                                                .call(
+                                                    methods::CLOSE_TERMINAL,
+                                                    serde_json::json!({ "terminalId": id }),
+                                                )
+                                                .await;
+                                            let _ = this.update(cx, |shell, cx| {
+                                                if let Err(error) = result {
+                                                    shell.sidebar_notice = Some(
+                                                        format!("Could not stop terminal: {error}")
+                                                            .into(),
+                                                    );
+                                                }
+                                                shell.activity.last_request = None;
+                                                shell.refresh_activity(cx);
+                                                cx.notify();
+                                            });
+                                        })
+                                        .detach();
+                                    },
+                                )),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        Some(
+            div()
+                .mt(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .px(px(Theme::SPACE_SM))
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_muted)
+                        .child(format!("Running terminals ({})", running.len())),
+                )
+                .when_some(terminal_error, |el, error| {
+                    el.child(
+                        div()
+                            .px(px(Theme::SPACE_SM))
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_color(theme.danger)
+                            .child(format!("Terminal inventory unavailable: {error}")),
+                    )
+                })
+                .children(rows)
                 .into_any_element(),
         )
     }

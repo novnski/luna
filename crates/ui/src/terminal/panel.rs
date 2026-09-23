@@ -9,11 +9,11 @@
 //! Data path per tab: `OpenTerminal` → `SubscribeTerminal` stream; Data frames
 //! (base64) feed the [`Emulator`]; query responses write back; the stream
 //! reconnects with exponential backoff resuming from `afterSeq`; Exit appends
-//! the "[process exited N]" line and stops. Keyboard bytes coalesce for 12 ms
+//! the observed exit or stop label and stops. Keyboard bytes coalesce for 12 ms
 //! before `WriteTerminal`; viewport-driven resizes debounce 80 ms before
 //! `ResizeTerminal` (the emulator resizes immediately).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -23,7 +23,7 @@ use gpui::{
     Subscription, Task, Window, actions, div, prelude::*, px,
 };
 
-use zeron_proto::{TerminalEvent, TerminalSession};
+use zeron_proto::{TerminalEvent, TerminalInventoryEntry, TerminalProcessState, TerminalSession};
 use zeron_rpc::methods;
 
 use crate::motion::{self, AnimationExt as _, TAB_SLIDE};
@@ -141,6 +141,16 @@ pub fn active_after_close(active: usize, closed: usize, len_after: usize) -> usi
 /// The `[process exited N]` trailer, dimmed (§1.10).
 pub fn exit_message(code: i32) -> Vec<u8> {
     format!("\r\n\x1b[90m[process exited {code}]\x1b[0m\r\n").into_bytes()
+}
+
+fn terminal_end_message(code: i32, signal: Option<&str>) -> Vec<u8> {
+    match signal {
+        Some("closed") => b"\r\n\x1b[90m[terminal stopped]\x1b[0m\r\n".to_vec(),
+        Some("engineExit") => {
+            b"\r\n\x1b[90m[engine exited; terminal disconnected]\x1b[0m\r\n".to_vec()
+        }
+        _ => exit_message(code),
+    }
 }
 
 /// Tab title from the session's shell path ("/bin/zsh" → "zsh").
@@ -262,6 +272,7 @@ struct TerminalTab {
     emulator: Emulator,
     exited: Option<i32>,
     last_seq: u64,
+    saved_state: TerminalProcessState,
     coalescer: InputCoalescer,
     flush_task: Option<Task<()>>,
     resize_task: Option<Task<()>>,
@@ -319,6 +330,10 @@ pub struct TerminalPanel {
     focus_handle: FocusHandle,
     focus_pending: bool,
     chats: HashMap<String, ChatTabs>,
+    hydrated_chats: HashSet<String>,
+    loading_chats: HashSet<String>,
+    desired_terminal: HashMap<String, String>,
+    engine_generation: u64,
     /// Shell-driven visibility gate: no RPC happens while closed (lazy).
     open: bool,
     /// Right-pane surface host mode: the SHELL owns the tab strip (surface
@@ -359,12 +374,17 @@ pub struct TerminalPanel {
 
 impl TerminalPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let engine_generation = state.read(cx).engine_generation();
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));
         Self {
             state,
             focus_handle: cx.focus_handle(),
             focus_pending: false,
             chats: HashMap::new(),
+            hydrated_chats: HashSet::new(),
+            loading_chats: HashSet::new(),
+            desired_terminal: HashMap::new(),
+            engine_generation,
             open: false,
             embedded: false,
             resize_suspended: false,
@@ -489,7 +509,49 @@ impl TerminalPanel {
         self.close_tab(&chat, key, window, cx);
     }
 
+    pub fn focus_terminal_id(&mut self, chat: &str, id: &str, cx: &mut Context<Self>) {
+        self.desired_terminal
+            .insert(chat.to_string(), id.to_string());
+        if let Some(tabs) = self.chats.get_mut(chat)
+            && let Some(index) = tabs
+                .tabs
+                .iter()
+                .position(|tab| tab.terminal_id.as_deref() == Some(id))
+        {
+            tabs.active = index;
+            self.desired_terminal.remove(chat);
+            cx.notify();
+            return;
+        }
+        if self.loading_chats.insert(chat.to_string()) {
+            self.load_saved_tabs(chat.to_string(), cx);
+        }
+    }
+
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        let generation = self.state.read(cx).engine_generation();
+        if generation != self.engine_generation {
+            self.engine_generation = generation;
+            self.chats.clear();
+            self.hydrated_chats.clear();
+            self.loading_chats.clear();
+            self.desired_terminal.clear();
+        }
+        let known_chats = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .map(|chat| chat.id.clone())
+            .collect::<HashSet<_>>();
+        if self.chats.keys().any(|chat| !known_chats.contains(chat)) {
+            self.chats.retain(|chat, _| known_chats.contains(chat));
+            self.hydrated_chats
+                .retain(|chat| known_chats.contains(chat));
+            self.loading_chats.retain(|chat| known_chats.contains(chat));
+            self.desired_terminal
+                .retain(|chat, _| known_chats.contains(chat));
+        }
         let selected = self.state.read(cx).selected_chat.clone();
         let switched = selected != self.last_selected;
         if switched {
@@ -533,8 +595,121 @@ impl TerminalPanel {
         let Some(chat) = self.selected_chat(cx) else {
             return;
         };
-        if self.chats.get(&chat).is_none_or(|c| c.tabs.is_empty()) {
+        if self.chats.get(&chat).is_some_and(|c| !c.tabs.is_empty()) {
+            return;
+        }
+        if self.hydrated_chats.contains(&chat) {
             self.open_tab(chat, cx);
+        } else if self.loading_chats.insert(chat.clone()) {
+            self.load_saved_tabs(chat, cx);
+        }
+    }
+
+    fn load_saved_tabs(&mut self, chat: String, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine(cx) else {
+            self.loading_chats.remove(&chat);
+            return;
+        };
+        let generation = self.engine_generation;
+        let target = self.chat_target(&chat, cx);
+        cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call_as::<Vec<TerminalInventoryEntry>>(
+                    methods::LIST_TERMINALS,
+                    with_target(serde_json::json!({ "chatId": chat }), &target),
+                )
+                .await;
+            let _ = this.update(cx, |panel, cx| {
+                if panel.engine_generation != generation {
+                    return;
+                }
+                if !panel.state.read(cx).chats.iter().any(|row| row.id == chat) {
+                    panel.loading_chats.remove(&chat);
+                    return;
+                }
+                panel.loading_chats.remove(&chat);
+                match result {
+                    Ok(entries) => {
+                        panel.hydrated_chats.insert(chat.clone());
+                        for entry in entries {
+                            if !panel.chats.get(&chat).is_some_and(|tabs| {
+                                tabs.tabs.iter().any(|tab| {
+                                    tab.terminal_id.as_deref() == Some(entry.id.as_str())
+                                })
+                            }) {
+                                panel.attach_saved_tab(&chat, entry, cx);
+                            }
+                        }
+                        if panel
+                            .chats
+                            .get(&chat)
+                            .is_none_or(|tabs| tabs.tabs.is_empty())
+                            && panel.open
+                            && !panel.embedded
+                        {
+                            panel.open_tab(chat.clone(), cx);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "terminal inventory load failed");
+                        // Keep the existing open behavior available while an
+                        // older engine has no inventory RPC.
+                        panel.hydrated_chats.insert(chat.clone());
+                        if panel.open
+                            && !panel.embedded
+                            && panel
+                                .chats
+                                .get(&chat)
+                                .is_none_or(|tabs| tabs.tabs.is_empty())
+                        {
+                            panel.open_tab(chat.clone(), cx);
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn attach_saved_tab(
+        &mut self,
+        chat: &str,
+        entry: TerminalInventoryEntry,
+        cx: &mut Context<Self>,
+    ) {
+        self.tab_seq += 1;
+        let key = self.tab_seq;
+        let tabs = self.chats.entry(chat.to_string()).or_default();
+        tabs.tabs.push(TerminalTab {
+            key,
+            title: shell_title(&entry.shell).into(),
+            terminal_id: Some(entry.id.clone()),
+            emulator: Emulator::new(80, 24),
+            exited: None,
+            last_seq: 0,
+            saved_state: entry.state,
+            coalescer: InputCoalescer::default(),
+            flush_task: None,
+            resize_task: None,
+            _run: None,
+        });
+        if self
+            .desired_terminal
+            .get(chat)
+            .is_some_and(|id| id == &entry.id)
+        {
+            tabs.active = tabs.tabs.len() - 1;
+            self.desired_terminal.remove(chat);
+        }
+        if let Some(engine) = self.engine(cx) {
+            let target = self.chat_target(chat, cx);
+            let run =
+                Self::spawn_session(chat.to_string(), key, engine, target, Some(entry.id), cx);
+            if let Some(tab) = self.tab_mut(chat, key) {
+                tab._run = Some(run);
+            }
         }
     }
 
@@ -569,6 +744,7 @@ impl TerminalPanel {
             emulator: Emulator::new(80, 24),
             exited: None,
             last_seq: 0,
+            saved_state: TerminalProcessState::Running,
             coalescer: InputCoalescer::default(),
             flush_task: None,
             resize_task: None,
@@ -577,7 +753,7 @@ impl TerminalPanel {
         entry.active = entry.tabs.len() - 1;
 
         let target = self.chat_target(&chat, cx);
-        let run = Self::spawn_session(chat.clone(), key, engine, target, cx);
+        let run = Self::spawn_session(chat.clone(), key, engine, target, None, cx);
         if let Some(tab) = self.tab_mut(&chat, key) {
             tab._run = Some(run);
         }
@@ -590,9 +766,11 @@ impl TerminalPanel {
         key: u64,
         engine: EngineHandle,
         target: Option<String>,
+        existing_id: Option<String>,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         cx.spawn(async move |this, cx| {
+            let newly_opened = existing_id.is_none();
             let (cols, rows) = this
                 .update(cx, |panel, _| {
                     panel
@@ -602,7 +780,9 @@ impl TerminalPanel {
                 })
                 .unwrap_or((80, 24));
 
-            let opened = engine
+            let opened = if let Some(id) = existing_id {
+                Ok(TerminalSession { id, cwd: String::new(), shell: String::new() })
+            } else { engine
                 .client()
                 .call_as::<TerminalSession>(
                     methods::OPEN_TERMINAL,
@@ -611,7 +791,7 @@ impl TerminalPanel {
                         &target,
                     ),
                 )
-                .await;
+                .await };
             let session = match opened {
                 Ok(session) => session,
                 Err(err) => {
@@ -641,7 +821,7 @@ impl TerminalPanel {
                     }
                 })
                 .unwrap_or(false);
-            if !attached {
+            if !attached && newly_opened {
                 // Tab was closed before the open completed — release the PTY.
                 let _ = engine
                     .client()
@@ -655,6 +835,7 @@ impl TerminalPanel {
                     .await;
                 return;
             }
+            if !attached { return; }
 
             let mut attempt: u32 = 0;
             loop {
@@ -704,6 +885,24 @@ impl TerminalPanel {
                         Ok(StreamDisposition::Stop) => return,
                         Err(_) => return,
                     }
+                }
+
+                let saved_state = this.update(cx, |panel, cx| {
+                    let tab = panel.tab_mut(&chat, key)?;
+                    if tab.exited.is_none() && tab.saved_state != TerminalProcessState::Running {
+                        let message = match tab.saved_state {
+                            TerminalProcessState::Stopped => "[terminal stopped]",
+                            TerminalProcessState::Interrupted => "[engine exited; old terminal cannot be reattached]",
+                            _ => "[process exited]",
+                        };
+                        tab.emulator.feed(format!("\r\n\x1b[90m{message}\x1b[0m\r\n").as_bytes());
+                        tab.exited = Some(-1);
+                        cx.notify();
+                    }
+                    Some(tab.saved_state)
+                }).ok().flatten();
+                if saved_state.is_some_and(|state| state != TerminalProcessState::Running) {
+                    return;
                 }
 
                 // Stream dropped without an exit — reconnect from afterSeq.
@@ -762,10 +961,15 @@ impl TerminalPanel {
                 cx.notify();
                 StreamDisposition::Continue
             }
-            TerminalEvent::Exit { seq, exit_code, .. } => {
+            TerminalEvent::Exit {
+                seq,
+                exit_code,
+                signal,
+            } => {
                 tab.last_seq = seq;
                 tab.exited = Some(exit_code);
-                tab.emulator.feed(&exit_message(exit_code));
+                tab.emulator
+                    .feed(&terminal_end_message(exit_code, signal.as_deref()));
                 cx.notify();
                 StreamDisposition::Stop
             }
@@ -786,7 +990,7 @@ impl TerminalPanel {
         let Some(tab) = tabs.tabs.get_mut(active) else {
             return;
         };
-        if tab.exited.is_some() {
+        if tab.exited.is_some() || tab.saved_state != TerminalProcessState::Running {
             return;
         }
         // A keypress while scrolled back snaps to the live bottom (xterm).

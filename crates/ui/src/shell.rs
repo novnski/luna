@@ -7376,6 +7376,7 @@ impl Shell {
         // rode the previous frame's offset, so the last frame of a content
         // shrink (row archived while scrolled) left a phantom fade stuck
         // over an unscrollable list (user report).
+        let terminal_inventory = self.render_terminal_inventory(theme, cx);
         let sidebar_lists = crate::edge_fade::edge_faded(
             SIDEBAR_GLASS_FADE_BAND,
             true,
@@ -7412,6 +7413,7 @@ impl Shell {
                             }))
                             .into_any_element()
                     })
+                    .children(terminal_inventory)
                     .children(archived_section),
             ),
         )
@@ -9179,6 +9181,10 @@ impl Shell {
                 .child(div().mt(px(6.0)).child(popover::dialog_body(
                     &theme,
                     format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
+                )))
+                .child(div().mt(px(6.0)).child(popover::dialog_body(
+                    &theme,
+                    "LUNA terminals owned by this session will stop, and their saved output will be removed.",
                 )))
                 .child(
                     div()
