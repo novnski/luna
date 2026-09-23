@@ -190,11 +190,9 @@ impl CodexHarness {
     }
 
     /// Short-lived discovery probe: a `codex app-server` handshake followed by
-    /// `skills/list` — the only invocable-listing method the 0.146.x wire has
-    /// (custom `~/.codex/prompts` are NOT exposed; the TUI-only built-ins
-    /// aren't either). Skills are what the codex TUI itself surfaces as
-    /// slash-invocables, listed per-cwd and deduped by name here.
-    async fn discover_commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+    /// `skills/list`. This separate process does not observe the selected
+    /// session or prove effective skill attachment.
+    async fn discover_skills_list(&self) -> Result<Value, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
@@ -232,8 +230,7 @@ impl CodexHarness {
                 )
                 .await?;
             client.notify("initialized", None);
-            let skills = client.request("skills/list", json!({})).await?;
-            Ok::<Vec<SlashCommand>, HarnessError>(parse_skill_commands(&skills))
+            client.request("skills/list", json!({})).await
         };
         let result = tokio::time::timeout(Duration::from_secs(10), discovery).await;
         shutdown_child(&mut child, self.kill_grace).await;
@@ -241,6 +238,22 @@ impl CodexHarness {
             Ok(inner) => inner,
             Err(_) => Err(HarnessError::Protocol("command discovery timed out".into())),
         }
+    }
+
+    /// Picker behavior remains name-deduped and description-preserving.
+    async fn discover_commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+        let skills = self.discover_skills_list().await?;
+        Ok(parse_skill_commands(&skills))
+    }
+
+    /// Internal read-only observation from a separate discovery process.
+    /// Cwd/name pairs are not configured inventory or session attachment.
+    #[doc(hidden)]
+    pub async fn discover_skill_observations(
+        &self,
+    ) -> Result<CodexSkillDiscoveryObservations, HarnessError> {
+        let skills = self.discover_skills_list().await?;
+        Ok(observe_skill_discovery(&skills))
     }
 
     /// Short-lived live catalog probe. `model/list` is paginated and already
@@ -502,6 +515,85 @@ fn parse_model_list_page(result: &Value) -> (Vec<(Model, bool)>, Option<String>)
         .and_then(Value::as_str)
         .map(str::to_owned);
     (models, next_cursor)
+}
+
+const MAX_SKILL_OBSERVATION_GROUPS: usize = 64;
+const MAX_SKILL_OBSERVATIONS_PER_GROUP: usize = 128;
+const MAX_SKILL_OBSERVATIONS_TOTAL: usize = 512;
+const MAX_SKILL_OBSERVATION_CWD_BYTES: usize = 1_024;
+const MAX_SKILL_OBSERVATION_NAME_BYTES: usize = 128;
+
+/// One sanitized provider-reported cwd/name pair from a separate discovery
+/// process. This is neither an action target nor selected-session readback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct CodexSkillDiscoveryObservation {
+    pub cwd: String,
+    pub name: String,
+}
+
+/// An omitted flag makes bounds or malformed data visible to internal callers.
+/// Even without omissions, this probe does not assert a complete inventory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct CodexSkillDiscoveryObservations {
+    pub entries: Vec<CodexSkillDiscoveryObservation>,
+    pub omitted: bool,
+}
+
+/// Keep the `skills/list` cwd grouping and duplicate names across roots. Only
+/// bounded cwd/name strings survive; descriptions and other payload are dropped.
+#[doc(hidden)]
+pub fn observe_skill_discovery(result: &Value) -> CodexSkillDiscoveryObservations {
+    let mut observed = CodexSkillDiscoveryObservations::default();
+    let Some(groups) = result.get("data").and_then(Value::as_array) else {
+        observed.omitted = true;
+        return observed;
+    };
+    if groups.len() > MAX_SKILL_OBSERVATION_GROUPS {
+        observed.omitted = true;
+        return observed;
+    }
+    for group in groups {
+        let Some(cwd) = group.get("cwd").and_then(Value::as_str).filter(|cwd| {
+            !cwd.trim().is_empty()
+                && cwd.len() <= MAX_SKILL_OBSERVATION_CWD_BYTES
+                && !cwd.chars().any(char::is_control)
+        }) else {
+            observed.omitted = true;
+            continue;
+        };
+        let Some(skills) = group.get("skills").and_then(Value::as_array) else {
+            observed.omitted = true;
+            continue;
+        };
+        if skills.len() > MAX_SKILL_OBSERVATIONS_PER_GROUP {
+            observed.omitted = true;
+            continue;
+        }
+        for skill in skills {
+            let Some(name) = skill.get("name").and_then(Value::as_str).filter(|name| {
+                !name.is_empty()
+                    && name.trim() == *name
+                    && name.len() <= MAX_SKILL_OBSERVATION_NAME_BYTES
+                    && name.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
+                    })
+            }) else {
+                observed.omitted = true;
+                continue;
+            };
+            if observed.entries.len() >= MAX_SKILL_OBSERVATIONS_TOTAL {
+                observed.omitted = true;
+                return observed;
+            }
+            observed.entries.push(CodexSkillDiscoveryObservation {
+                cwd: cwd.to_owned(),
+                name: name.to_owned(),
+            });
+        }
+    }
+    observed
 }
 
 /// `skills/list` result → picker commands. `data` groups skills by cwd; the

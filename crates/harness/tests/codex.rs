@@ -2130,6 +2130,110 @@ async fn commands_come_from_skills_list() {
     assert_eq!(h.commands().await.expect("cache hit"), commands);
 }
 
+#[tokio::test]
+async fn skill_observations_keep_duplicate_names_in_separate_cwd_groups() {
+    let observed = harness()
+        .discover_skill_observations()
+        .await
+        .expect("synthetic skills/list succeeds");
+    assert!(!observed.omitted);
+    let pairs = observed
+        .entries
+        .iter()
+        .map(|entry| (entry.cwd.as_str(), entry.name.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pairs,
+        [("/w", "imagegen"), ("/w", "bare"), ("/x", "imagegen"),]
+    );
+}
+
+#[test]
+fn skill_observation_parser_ignores_unknown_and_malformed_payloads() {
+    use zeron_harness::codex::observe_skill_discovery;
+
+    let missing = observe_skill_discovery(&serde_json::json!({}));
+    assert!(missing.omitted);
+    assert!(missing.entries.is_empty());
+    let malformed = observe_skill_discovery(&serde_json::json!({"data": {"cwd": "/bad"}}));
+    assert!(malformed.omitted);
+    assert!(malformed.entries.is_empty());
+
+    let observed = observe_skill_discovery(&serde_json::json!({
+        "data": [
+            {"cwd": "/synthetic", "skills": [
+                {"name": "good", "description": "SECRET_DESCRIPTION_SENTINEL",
+                 "auth": {"token": "SECRET_TOKEN_SENTINEL"}},
+                {"name": "bad/name"}, {"name": " leading"},
+                {"name": 42}, {"other": "unknown"}
+            ], "credentials": "SECRET_CREDENTIAL_SENTINEL"},
+            {"cwd": "/bad\npath", "skills": [{"name": "skipped"}]},
+            {"cwd": "/missing-skills"}
+        ],
+        "unknown": "SECRET_UNKNOWN_SENTINEL"
+    }));
+    assert!(observed.omitted);
+    assert_eq!(observed.entries.len(), 1);
+    assert_eq!(observed.entries[0].cwd, "/synthetic");
+    assert_eq!(observed.entries[0].name, "good");
+    let debug = format!("{observed:?}");
+    for secret in [
+        "SECRET_DESCRIPTION_SENTINEL",
+        "SECRET_TOKEN_SENTINEL",
+        "SECRET_CREDENTIAL_SENTINEL",
+        "SECRET_UNKNOWN_SENTINEL",
+    ] {
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[test]
+fn skill_observation_parser_bounds_groups_names_and_total_retention() {
+    use zeron_harness::codex::observe_skill_discovery;
+
+    let too_many_groups = (0..65)
+        .map(|index| serde_json::json!({"cwd": format!("/root-{index}"), "skills": []}))
+        .collect::<Vec<_>>();
+    let observed = observe_skill_discovery(&serde_json::json!({"data": too_many_groups}));
+    assert!(observed.omitted);
+    assert!(observed.entries.is_empty());
+
+    let too_many_skills = (0..129)
+        .map(|index| serde_json::json!({"name": format!("skill{index}")}))
+        .collect::<Vec<_>>();
+    let observed = observe_skill_discovery(&serde_json::json!({
+        "data": [{"cwd": "/synthetic", "skills": too_many_skills}]
+    }));
+    assert!(observed.omitted);
+    assert!(observed.entries.is_empty());
+
+    let observed = observe_skill_discovery(&serde_json::json!({
+        "data": [
+            {"cwd": "x".repeat(1_025), "skills": [{"name": "skipped"}]},
+            {"cwd": "/synthetic", "skills": [
+                {"name": "x".repeat(129)}, {"name": "kept"}
+            ]}
+        ]
+    }));
+    assert!(observed.omitted);
+    assert_eq!(observed.entries.len(), 1);
+    assert_eq!(observed.entries[0].name, "kept");
+
+    let groups = (0..5)
+        .map(|group| {
+            serde_json::json!({
+                "cwd": format!("/group-{group}"),
+                "skills": (0..128)
+                    .map(|skill| serde_json::json!({"name": format!("skill{skill}")}))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    let observed = observe_skill_discovery(&serde_json::json!({"data": groups}));
+    assert!(observed.omitted);
+    assert_eq!(observed.entries.len(), 512);
+}
+
 /// Live smoke against the real CLI: `cargo test -p zeron-harness --test
 /// codex -- --ignored live_commands`.
 #[tokio::test]
