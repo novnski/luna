@@ -368,7 +368,7 @@ impl WorkspaceHost {
         // dies before the first debounced save.
         host.inner.save_snapshot();
         host.join_room();
-        let mut lifecycle = lock(&host.inner.lifecycle);
+        let lifecycle = lock(&host.inner.lifecycle);
         let worker_stop = lifecycle.worker_stop.clone();
         let worker = workspace_task(Arc::downgrade(&host.inner), changed_rx);
         lifecycle.tasks.spawn(async move {
