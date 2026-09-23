@@ -198,6 +198,9 @@ pub enum ApprovalActionKind {
     ExternalPath,
     Tool,
     Other,
+    /// Engine-owned marker for a LUNA cross-task approval. Existing approval
+    /// kinds remain provider approvals when older records are deserialized.
+    LunaCrossTask,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +216,14 @@ pub struct ApprovalRequest {
     pub requested_scope: PermissionScope,
     pub expires_at_ms: i64,
     pub supports_task_allowance: bool,
+}
+
+impl ApprovalRequest {
+    /// Persisted marker for recovery only. This client-visible value cannot
+    /// authorize a live approval; SessionsEngine keeps that kind separately.
+    pub fn is_luna_cross_task(&self) -> bool {
+        self.action_kind == ApprovalActionKind::LunaCrossTask
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -501,9 +512,9 @@ pub struct UserInputQuestion {
     pub options: Vec<String>,
     #[serde(default)]
     pub multi_select: bool,
-    /// Present only for a provider permission request. Keeping this on the
-    /// existing input part gives approvals the established inline UI while
-    /// preserving a typed, fail-closed response path.
+    /// Present for typed provider or engine-owned approval requests. Keeping
+    /// this on the input part preserves the established inline UI and recovery
+    /// marker; live authorization is held separately by the engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalRequest>,
 }
@@ -824,6 +835,30 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&HarnessId::ClaudeCode).unwrap(),
             "\"claude-code\""
+        );
+    }
+
+    #[test]
+    fn older_approval_actions_remain_provider_and_luna_marker_round_trips() {
+        let old = serde_json::json!({
+            "providerRequestId": "provider-1", "provider": "codex",
+            "machineName": "synthetic", "actionKind": "tool",
+            "summary": "synthetic provider tool", "requestedScope": "workspace",
+            "expiresAtMs": 1234, "supportsTaskAllowance": false
+        });
+        let provider: ApprovalRequest = serde_json::from_value(old.clone()).unwrap();
+        assert!(!provider.is_luna_cross_task());
+        assert_eq!(serde_json::to_value(&provider).unwrap(), old);
+        let luna = ApprovalRequest {
+            action_kind: ApprovalActionKind::LunaCrossTask,
+            ..provider
+        };
+        let encoded = serde_json::to_value(&luna).unwrap();
+        assert_eq!(encoded["actionKind"], "lunaCrossTask");
+        assert!(
+            serde_json::from_value::<ApprovalRequest>(encoded)
+                .unwrap()
+                .is_luna_cross_task()
         );
     }
 }

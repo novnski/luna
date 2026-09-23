@@ -80,8 +80,18 @@ pub(crate) struct PreparedTaskConfig {
 }
 
 struct PendingInput {
+    kind: PendingInputKind,
     questions: Vec<UserInputQuestion>,
     resolver: oneshot::Sender<Vec<UserInputAnswer>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingInputKind {
+    Provider,
+    // Reserved for the later trusted local UI response path. Provider or
+    // client-supplied question metadata must never select this kind.
+    #[allow(dead_code)]
+    LunaCrossTask,
 }
 
 type PendingInputs = Arc<Mutex<HashMap<String, PendingInput>>>;
@@ -134,13 +144,15 @@ fn take_pending_ordinary_input(
 ) -> Option<PendingInput> {
     let mut pending_inputs = lock(pending_inputs);
     let pending = pending_inputs.get(request_id)?;
-    if pending
-        .questions
-        .iter()
-        .any(|question| question.approval.is_some())
+    if pending.kind == PendingInputKind::LunaCrossTask
+        || pending
+            .questions
+            .iter()
+            .any(|question| question.approval.is_some())
     {
-        // Typed approvals have stricter decision, expiry, and task-allowance
-        // semantics. They may only leave through `respond_approval`.
+        // Typed approvals cannot leave through ordinary input. Provider
+        // approvals use `respond_approval`; LUNA approvals need the future
+        // trusted local UI route.
         return None;
     }
     pending_inputs.remove(request_id)
@@ -1345,6 +1357,7 @@ impl SessionsEngine {
                 lock(&pending).insert(
                     request_id.clone(),
                     PendingInput {
+                        kind: PendingInputKind::Provider,
                         questions: questions.clone(),
                         resolver: tx,
                     },
@@ -1631,6 +1644,19 @@ impl SessionsEngine {
         Ok(true)
     }
 
+    /// A live server-owned kind, independent of the serialized question's
+    /// action/source hint. Used to keep generic command and recovery paths
+    /// from consuming a future LUNA approval.
+    pub(crate) fn is_luna_pending_approval(&self, chat_id: &str, request_id: &str) -> bool {
+        let pending = lock(&self.inner.runs)
+            .get(chat_id)
+            .map(|handle| handle.pending_inputs.clone());
+        pending
+            .as_ref()
+            .and_then(|pending| lock(pending).get(request_id).map(|item| item.kind))
+            == Some(PendingInputKind::LunaCrossTask)
+    }
+
     pub fn respond_approval(
         &self,
         chat_id: &str,
@@ -1648,11 +1674,15 @@ impl SessionsEngine {
             let Some(pending) = pending_inputs.get(request_id) else {
                 return Ok(false);
             };
-            let Some(question) = pending
-                .questions
-                .iter()
-                .find(|question| question.approval.is_some())
-            else {
+            if pending.kind != PendingInputKind::Provider {
+                return Ok(false);
+            }
+            let Some(question) = pending.questions.iter().find(|question| {
+                question
+                    .approval
+                    .as_ref()
+                    .is_some_and(|approval| !approval.is_luna_cross_task())
+            }) else {
                 // A malformed approval response must not consume an ordinary
                 // user question with the same request id.
                 return Ok(false);
@@ -2680,6 +2710,9 @@ fn approval_answer(
     decision: zeron_proto::ApprovalDecision,
 ) -> Option<UserInputAnswer> {
     let approval = question.approval.as_ref()?;
+    if approval.is_luna_cross_task() {
+        return None;
+    }
     let decision = match decision {
         _ if approval.expires_at_ms <= now_ms() => zeron_proto::ApprovalDecision::Deny,
         zeron_proto::ApprovalDecision::AllowTask if !approval.supports_task_allowance => {
@@ -4889,7 +4922,7 @@ async fn drive_run(
 #[cfg(test)]
 mod tests {
     use super::{
-        PendingInput, RunHandle, RuntimeConfig, SessionsEngine, approval_answer,
+        PendingInput, PendingInputKind, RunHandle, RuntimeConfig, SessionsEngine, approval_answer,
         expire_pending_approval, lock, reduce_provider_context_compaction,
         reduce_provider_context_terminal, subagent_doc_id, take_pending_ordinary_input,
     };
@@ -5012,6 +5045,7 @@ mod tests {
         pending.lock().unwrap().insert(
             "approval-1".into(),
             PendingInput {
+                kind: PendingInputKind::Provider,
                 questions: Vec::new(),
                 resolver,
             },
@@ -5035,6 +5069,7 @@ mod tests {
         pending.lock().unwrap().insert(
             "approval-1".into(),
             PendingInput {
+                kind: PendingInputKind::Provider,
                 questions: vec![zeron_proto::UserInputQuestion {
                     id: "question-1".into(),
                     header: "Approval".into(),
@@ -5059,6 +5094,174 @@ mod tests {
 
         assert!(take_pending_ordinary_input(&pending, "approval-1").is_none());
         assert!(pending.lock().unwrap().contains_key("approval-1"));
+    }
+
+    #[tokio::test]
+    async fn generic_answers_cannot_consume_server_owned_luna_approval() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "device-test".into(),
+            Arc::new(crate::run_journal::RunJournal::open(root.path()).unwrap()),
+            Arc::new(crate::registry::HarnessRegistry::new()),
+            Arc::new(DocsStore::open(root.path().join("store")).unwrap()),
+        );
+        let question = |id: &str, action_kind| zeron_proto::UserInputQuestion {
+            id: id.into(),
+            header: "Approval".into(),
+            question: "Allow?".into(),
+            options: vec!["Deny".into(), "Allow once".into()],
+            multi_select: false,
+            approval: Some(zeron_proto::ApprovalRequest {
+                provider_request_id: "claimed-local-ui".into(),
+                provider: HarnessId::Codex,
+                turn_id: Some("turn-a".into()),
+                machine_name: "synthetic".into(),
+                action_kind,
+                summary: "synthetic".into(),
+                requested_scope: zeron_proto::PermissionScope::Workspace,
+                expires_at_ms: i64::MAX,
+                supports_task_allowance: false,
+            }),
+        };
+        let pending = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let (luna_tx, mut luna_rx) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert(
+            "claimed-ui-approval".into(),
+            PendingInput {
+                kind: PendingInputKind::LunaCrossTask,
+                // Even a forged provider-looking serialized hint cannot
+                // override the server-owned pending kind.
+                questions: vec![question(
+                    "luna-question",
+                    zeron_proto::ApprovalActionKind::Command,
+                )],
+                resolver: luna_tx,
+            },
+        );
+        let (provider_tx, provider_rx) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert(
+            "provider-approval".into(),
+            PendingInput {
+                kind: PendingInputKind::Provider,
+                questions: vec![question(
+                    "provider-question",
+                    zeron_proto::ApprovalActionKind::Tool,
+                )],
+                resolver: provider_tx,
+            },
+        );
+        let (forged_source_tx, mut forged_source_rx) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert(
+            "forged-source".into(),
+            PendingInput {
+                kind: PendingInputKind::Provider,
+                questions: vec![question(
+                    "forged-source-question",
+                    zeron_proto::ApprovalActionKind::LunaCrossTask,
+                )],
+                resolver: forged_source_tx,
+            },
+        );
+        let (ordinary_tx, ordinary_rx) = tokio::sync::oneshot::channel();
+        pending.lock().unwrap().insert(
+            "ordinary-question".into(),
+            PendingInput {
+                kind: PendingInputKind::Provider,
+                questions: vec![zeron_proto::UserInputQuestion {
+                    id: "ordinary".into(),
+                    header: "Question".into(),
+                    question: "Which?".into(),
+                    options: vec!["A".into()],
+                    multi_select: false,
+                    approval: None,
+                }],
+                resolver: ordinary_tx,
+            },
+        );
+        let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
+        let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+        let (engine_tx, _engine_rx) = tokio::sync::mpsc::unbounded_channel();
+        lock(&sessions.inner.runs).insert(
+            "chat-a".into(),
+            RunHandle {
+                run_id: "run-a".into(),
+                steerable: false,
+                runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
+                steer_tx,
+                interrupt_token: zeron_harness::CancellationToken::new(),
+                cancel,
+                hold_recovery_on_interrupt: Arc::new(AtomicBool::new(true)),
+                engine_tx,
+                pending_inputs: pending.clone(),
+                routed_steers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            },
+        );
+
+        assert!(sessions.is_luna_pending_approval("chat-a", "claimed-ui-approval"));
+        assert!(
+            !sessions
+                .respond_approval(
+                    "chat-a",
+                    "claimed-ui-approval",
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .unwrap()
+        );
+        assert!(
+            !sessions
+                .respond_input(
+                    "chat-a",
+                    "claimed-ui-approval",
+                    vec![zeron_proto::UserInputAnswer {
+                        question_id: "luna-question".into(),
+                        labels: vec!["Allow once".into()],
+                    }],
+                )
+                .unwrap()
+        );
+        assert!(pending.lock().unwrap().contains_key("claimed-ui-approval"));
+        assert!(matches!(
+            luna_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(
+            !sessions
+                .respond_approval(
+                    "chat-a",
+                    "forged-source",
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .unwrap()
+        );
+        assert!(pending.lock().unwrap().contains_key("forged-source"));
+        assert!(matches!(
+            forged_source_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        assert!(
+            sessions
+                .respond_approval(
+                    "chat-a",
+                    "provider-approval",
+                    zeron_proto::ApprovalDecision::AllowOnce,
+                )
+                .unwrap()
+        );
+        assert_eq!(provider_rx.await.unwrap()[0].labels, vec!["Allow once"]);
+        assert!(
+            sessions
+                .respond_input(
+                    "chat-a",
+                    "ordinary-question",
+                    vec![zeron_proto::UserInputAnswer {
+                        question_id: "ordinary".into(),
+                        labels: vec!["A".into()],
+                    }],
+                )
+                .unwrap()
+        );
+        assert_eq!(ordinary_rx.await.unwrap()[0].labels, vec!["A"]);
     }
 
     #[tokio::test]
