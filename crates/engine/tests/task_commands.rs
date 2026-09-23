@@ -1062,9 +1062,10 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
         .save_composer_draft(&core.device_id, &local_draft)
         .unwrap();
     core.store
-        .prepare_task_cleanup(&core.device_id, &task_id)
+        .prepare_task_cleanup(&core.device_id, &task_id, core.cleanup_boot_id_for_tests())
         .unwrap();
     let second_service = zeron_rpc::memory_client(core.rpc_service());
+    assert_eq!(core.cleanup_worker_count_for_tests(), 1);
     assert_eq!(
         core.store.task_cleanup_state(&task_id).unwrap().unwrap().0,
         "pending",
@@ -1462,6 +1463,11 @@ async fn deletion_cleanup_failure_is_reported_and_resumes_after_restart() {
         .await
         .unwrap();
     assert_eq!(failed["state"], "failed");
+    let summary: serde_json::Value = client
+        .call_as(methods::GET_DELETION_CLEANUP_SUMMARY, serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(summary["failed"], 1);
     assert!(candidate.is_dir());
     drop(client);
     drop(core);
@@ -1479,9 +1485,216 @@ async fn deletion_cleanup_failure_is_reported_and_resumes_after_restart() {
         .await
         .unwrap();
     assert_eq!(completed["state"], "completed");
+    let summary: serde_json::Value = client
+        .call_as(methods::GET_DELETION_CLEANUP_SUMMARY, serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(summary["failed"], 0);
     assert!(!candidate.exists());
     assert!(reopened.workspace.chat("retry-delete").unwrap().is_none());
     reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandoned_task_preparation_reopens_drafts_without_deleting_data() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_configured_task(&client, &task_id, &core.device_id).await;
+    let blob = core.uploads.dir().join("abandoned-preparation.png");
+    std::fs::create_dir_all(core.uploads.dir()).unwrap();
+    std::fs::write(&blob, b"synthetic").unwrap();
+    let mut draft = composer_draft(&task_id, "before crash");
+    draft.attachments.push(zeron_proto::DraftBlob {
+        attachment_id: "abandoned-preparation".into(),
+        name: "abandoned-preparation.png".into(),
+        path: Some(blob.to_string_lossy().to_string()),
+        sha256: None,
+        size: Some(9),
+        state: zeron_proto::DraftBlobState::Saved,
+        error: None,
+    });
+    core.store
+        .save_composer_draft(&core.device_id, &draft)
+        .unwrap();
+    core.store
+        .prepare_task_cleanup(&core.device_id, &task_id, core.cleanup_boot_id_for_tests())
+        .unwrap();
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+
+    let reopened = assemble(root.path(), runs, false);
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    assert!(reopened.workspace.chat(&task_id).unwrap().is_some());
+    assert!(
+        !reopened
+            .task_identity
+            .view(&task_id)
+            .unwrap()
+            .task
+            .tombstoned
+    );
+    assert!(blob.exists());
+    draft.revision += 1;
+    draft.text = "after reopen".into();
+    reopened
+        .store
+        .save_composer_draft(&reopened.device_id, &draft)
+        .unwrap();
+    assert!(
+        reopened
+            .store
+            .task_cleanup_state(&task_id)
+            .unwrap()
+            .is_none()
+    );
+    drop(client);
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_project_preparation_never_deletes_a_moved_survivor() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let nested = repo.join("nested");
+    init_git_repo(&repo);
+    std::fs::create_dir_all(&nested).unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), false);
+    core.workspace
+        .create_space(
+            "old-project",
+            &core.device_id,
+            nested.to_str().unwrap(),
+            Some("Old".into()),
+            true,
+        )
+        .unwrap();
+    core.workspace
+        .create_space(
+            "new-project",
+            &core.device_id,
+            repo.to_str().unwrap(),
+            Some("New".into()),
+            true,
+        )
+        .unwrap();
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    create_task_in_space(&client, &task_id, "old-project", &nested).await;
+    assert!(core.task_identity.view(&task_id).is_some());
+    let handle = core.doc_host.open(&task_id).unwrap();
+    core.doc_host.flush_all();
+    drop(handle);
+    let blob = core.uploads.dir().join("moved-survivor.png");
+    std::fs::create_dir_all(core.uploads.dir()).unwrap();
+    std::fs::write(&blob, b"synthetic").unwrap();
+    let mut draft = composer_draft(&task_id, "keep me");
+    draft.attachments.push(zeron_proto::DraftBlob {
+        attachment_id: "moved-survivor".into(),
+        name: "moved-survivor.png".into(),
+        path: Some(blob.to_string_lossy().to_string()),
+        sha256: None,
+        size: Some(9),
+        state: zeron_proto::DraftBlobState::Saved,
+        error: None,
+    });
+    core.store
+        .save_composer_draft(&core.device_id, &draft)
+        .unwrap();
+    core.store
+        .prepare_project_cleanup(
+            "old-project",
+            std::slice::from_ref(&task_id),
+            core.cleanup_boot_id_for_tests(),
+        )
+        .unwrap();
+    core.store
+        .prepare_task_cleanup(&core.device_id, &task_id, core.cleanup_boot_id_for_tests())
+        .unwrap();
+    let moved = execute(
+        &client,
+        envelope(
+            "move-after-prepare",
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({"kind":"moveProject","destinationSpaceId":"new-project"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        moved.status,
+        CommandReceiptStatus::Applied,
+        "{:?}",
+        moved.reason
+    );
+    core.workspace.delete_space("old-project").unwrap();
+    core.workspace.flush();
+    drop(client);
+    drop(core);
+    tokio::task::yield_now().await;
+
+    let reopened = assemble(root.path(), runs, false);
+    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let survivor = reopened.workspace.chat(&task_id).unwrap().unwrap();
+    assert_eq!(survivor.space_id.as_deref(), Some("new-project"));
+    assert!(
+        !reopened
+            .task_identity
+            .view(&task_id)
+            .unwrap()
+            .task
+            .tombstoned
+    );
+    assert!(reopened.store.has_snapshot(&task_id).unwrap());
+    assert!(blob.exists());
+    draft.revision += 1;
+    reopened
+        .store
+        .save_composer_draft(&reopened.device_id, &draft)
+        .unwrap();
+    drop(client);
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cleanup_worker_advances_beyond_one_batch_without_touching_live_tasks() {
+    let root = tempfile::tempdir().unwrap();
+    let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), false);
+    for index in 0..21 {
+        let task = format!("pending-live-{index:02}");
+        core.workspace
+            .create_chat(&task, None, Some(&core.device_id), None, None)
+            .unwrap();
+        core.store
+            .prepare_task_cleanup(&core.device_id, &task, "prior-boot")
+            .unwrap();
+    }
+    let _first = zeron_rpc::memory_client(core.rpc_service());
+    let _second = zeron_rpc::memory_client(core.rpc_service());
+    assert_eq!(core.cleanup_worker_count_for_tests(), 1);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if core.store.pending_task_cleanups(100).unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for index in 0..21 {
+        assert!(
+            core.workspace
+                .chat(&format!("pending-live-{index:02}"))
+                .unwrap()
+                .is_some()
+        );
+    }
+    core.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

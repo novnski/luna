@@ -263,6 +263,13 @@ const MIGRATIONS: &[&str] = &[
         detail TEXT NOT NULL,
         updated_at INTEGER NOT NULL
      ) STRICT;",
+    // v11 — distinguish an in-flight preparation owned by this engine boot
+    // from one abandoned by a previous process. A second RPC service in the
+    // same engine must never clear the first service's active preparation.
+    "ALTER TABLE task_cleanup ADD COLUMN owner_boot_id TEXT NOT NULL DEFAULT '';
+     ALTER TABLE project_cleanup ADD COLUMN owner_boot_id TEXT NOT NULL DEFAULT '';
+     CREATE INDEX task_cleanup_pending ON task_cleanup(state,task_id);
+     CREATE INDEX project_cleanup_pending ON project_cleanup(state,project_id);",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1931,13 +1938,21 @@ impl DocsStore {
     /// Checkpoint an irreversible task cleanup before the registry tombstone.
     /// Only draft-only paths are candidates: submitted/queued/transcript bytes
     /// may be referenced by a surviving fork or another task.
-    pub fn prepare_task_cleanup(&self, device_id: &str, task_id: &str) -> Result<(), StoreError> {
+    pub fn prepare_task_cleanup(
+        &self,
+        device_id: &str,
+        task_id: &str,
+        owner_boot_id: &str,
+    ) -> Result<(), StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT OR IGNORE INTO task_cleanup(task_id,state,detail,updated_at)
-             VALUES(?1,'pending','Local cleanup is pending',?2)",
-            params![task_id, now_ms()],
+            "INSERT INTO task_cleanup(task_id,state,detail,updated_at,owner_boot_id)
+             VALUES(?1,'pending','Local cleanup is pending',?2,?3)
+             ON CONFLICT(task_id) DO UPDATE SET state='pending',
+               detail=excluded.detail,updated_at=excluded.updated_at,
+               owner_boot_id=excluded.owner_boot_id",
+            params![task_id, now_ms(), owner_boot_id],
         )?;
         tx.execute(
             "INSERT OR IGNORE INTO task_cleanup_paths(task_id,blob_path)
@@ -1962,7 +1977,7 @@ impl DocsStore {
             params![task_id],
         )?;
         tx.execute(
-            "DELETE FROM task_cleanup WHERE task_id=?1 AND state='pending'",
+            "DELETE FROM task_cleanup WHERE task_id=?1 AND state IN ('pending','failed')",
             params![task_id],
         )?;
         tx.commit()?;
@@ -2090,6 +2105,26 @@ impl DocsStore {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Keyset page so a permanently blocked first row cannot starve later
+    /// cleanup work. The caller wraps to the empty cursor after the last page.
+    pub fn pending_task_cleanups_after(
+        &self,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, String)>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT task_id,state,owner_boot_id FROM task_cleanup
+             WHERE state IN ('pending','failed') AND task_id>?1
+             ORDER BY task_id LIMIT ?2",
+        )?;
+        Ok(statement
+            .query_map(params![after, limit as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn task_cleanup_state(
         &self,
         task_id: &str,
@@ -2124,13 +2159,15 @@ impl DocsStore {
         &self,
         project_id: &str,
         children: &[String],
+        owner_boot_id: &str,
     ) -> Result<(), StoreError> {
         self.conn().execute(
-            "INSERT INTO project_cleanup(project_id,child_ids_json,state,detail,updated_at)
-             VALUES(?1,?2,'pending','Project cleanup is pending',?3)
+            "INSERT INTO project_cleanup(project_id,child_ids_json,state,detail,updated_at,owner_boot_id)
+             VALUES(?1,?2,'pending','Project cleanup is pending',?3,?4)
              ON CONFLICT(project_id) DO UPDATE SET child_ids_json=excluded.child_ids_json,
-               state='pending',detail=excluded.detail,updated_at=excluded.updated_at",
-            params![project_id, serde_json::to_vec(children)?, now_ms()],
+               state='pending',detail=excluded.detail,updated_at=excluded.updated_at,
+               owner_boot_id=excluded.owner_boot_id",
+            params![project_id, serde_json::to_vec(children)?, now_ms(), owner_boot_id],
         )?;
         Ok(())
     }
@@ -2187,6 +2224,64 @@ impl DocsStore {
         rows.into_iter()
             .map(|(project, bytes)| Ok((project, serde_json::from_slice(&bytes)?)))
             .collect()
+    }
+
+    pub fn pending_project_cleanups_after(
+        &self,
+        after: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, Vec<String>, String, String)>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT project_id,child_ids_json,state,owner_boot_id FROM project_cleanup
+             WHERE state IN ('pending','failed') AND project_id>?1
+             ORDER BY project_id LIMIT ?2",
+        )?;
+        let rows = statement
+            .query_map(params![after, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, bytes, state, boot)| Ok((id, serde_json::from_slice(&bytes)?, state, boot)))
+            .collect()
+    }
+
+    /// Bounded summary for the existing sidebar notice. The detail is an
+    /// already-persisted local failure string, never transcript/provider data.
+    pub fn deletion_cleanup_summary(&self) -> Result<(usize, usize, Option<String>), StoreError> {
+        let conn = self.conn();
+        let mut pending = 0usize;
+        let mut failed = 0usize;
+        for table in ["task_cleanup", "project_cleanup"] {
+            pending += conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE state='pending' AND updated_at<?1"),
+                params![now_ms() - 5_000],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+            failed += conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE state='failed'"),
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+        }
+        let first = conn
+            .query_row(
+                "SELECT detail FROM (
+               SELECT detail,updated_at FROM task_cleanup WHERE state='failed'
+               UNION ALL
+               SELECT detail,updated_at FROM project_cleanup WHERE state='failed'
+             ) ORDER BY updated_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok((pending, failed, first))
     }
 
     pub fn retire_project_local_records(&self, project_id: &str) -> Result<(), StoreError> {
@@ -5229,7 +5324,9 @@ mod task_command_tests {
         other.draft_id = "task-b".into();
         other.task_id = Some("task-b".into());
         store.save_composer_draft("device", &other).unwrap();
-        store.prepare_task_cleanup("device", "task-a").unwrap();
+        store
+            .prepare_task_cleanup("device", "task-a", "synthetic-boot")
+            .unwrap();
         assert!(matches!(
             store.save_composer_draft("device", &super::draft_tests::draft(2, "late", &path)),
             Err(StoreError::TaskCleanupPending(_))
@@ -5267,5 +5364,63 @@ mod task_command_tests {
             .set_task_cleanup_state("task-a", "completed", "done")
             .unwrap();
         assert!(store.task_cleanup_paths("task-a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn cleanup_keyset_pages_advance_past_the_first_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        for index in 0..21 {
+            let task = format!("task-{index:02}");
+            store
+                .prepare_task_cleanup("device", &task, "old-boot")
+                .unwrap();
+        }
+        for index in 0..10 {
+            let project = format!("project-{index:02}");
+            store
+                .prepare_project_cleanup(&project, &[], "old-boot")
+                .unwrap();
+        }
+        store
+            .set_task_cleanup_state("task-00", "failed", "synthetic blockage")
+            .unwrap();
+        let first = store.pending_task_cleanups_after("", 16).unwrap();
+        assert_eq!(first.len(), 16);
+        let second = store
+            .pending_task_cleanups_after(&first.last().unwrap().0, 16)
+            .unwrap();
+        assert_eq!(second.len(), 5);
+        assert_eq!(second.last().unwrap().0, "task-20");
+        assert!(
+            store
+                .pending_task_cleanups_after(&second.last().unwrap().0, 16)
+                .unwrap()
+                .is_empty()
+        );
+        let projects = store.pending_project_cleanups_after("", 8).unwrap();
+        assert_eq!(projects.len(), 8);
+        let rest = store
+            .pending_project_cleanups_after(&projects.last().unwrap().0, 8)
+            .unwrap();
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest.last().unwrap().0, "project-09");
+        store
+            .conn()
+            .execute(
+                "UPDATE task_cleanup SET updated_at=?1 WHERE state='pending'",
+                params![now_ms() - 10_000],
+            )
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "UPDATE project_cleanup SET updated_at=?1 WHERE state='pending'",
+                params![now_ms() - 10_000],
+            )
+            .unwrap();
+        let (pending, failed, detail) = store.deletion_cleanup_summary().unwrap();
+        assert_eq!((pending, failed), (30, 1));
+        assert_eq!(detail.as_deref(), Some("synthetic blockage"));
     }
 }

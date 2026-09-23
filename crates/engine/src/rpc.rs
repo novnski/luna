@@ -1086,6 +1086,7 @@ pub struct EngineRpc {
     updater: Option<zeron_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
+    cleanup_boot_id: String,
     activity_cancel: CancellationToken,
 }
 
@@ -1280,6 +1281,7 @@ impl EngineRpc {
         agent_accounts: AgentAccounts,
         task_identity: crate::TaskIdentityService,
         workspace_scope: WorkspaceScope,
+        cleanup_boot_id: String,
     ) -> Self {
         let engine_info = EngineInfo {
             device_id: doc_host.device_id().to_string(),
@@ -1312,44 +1314,82 @@ impl EngineRpc {
             updater: None,
             local_import: None,
             engine_info,
+            cleanup_boot_id,
             activity_cancel: CancellationToken::new(),
         };
-        rpc.resume_pending_task_cleanups();
-        rpc.resume_pending_project_cleanups();
         rpc.spawn_activity_bootstrap();
         rpc
     }
 
-    /// Resume at most one small batch after a clean engine open. A pending
-    /// record without an identity tombstone is left pending: a failed registry
-    /// commit must never be interpreted as permission to delete live data.
-    fn resume_pending_task_cleanups(&self) {
-        match self.store.pending_task_cleanups(16) {
-            Ok(tasks) => {
-                for task_id in tasks {
-                    if self.sessions.has_live_run(&task_id) {
-                        continue;
-                    }
-                    let tombstoned = self
-                        .task_identity
-                        .view(&task_id)
-                        .is_some_and(|view| view.task.tombstoned);
-                    let committed_delete = self
-                        .store
-                        .has_applied_task_delete(&task_id)
-                        .unwrap_or(false);
-                    if tombstoned || committed_delete {
-                        self.cleanup_deleted_task(
-                            &task_id,
-                            self.task_identity
-                                .view(&task_id)
-                                .is_some_and(|view| view.current_binding.is_some()),
-                        );
-                    }
-                }
+    pub(crate) fn resume_cleanup_initial(&self) -> (String, String) {
+        let (task_after, _) = self.resume_pending_task_cleanups_after("");
+        let (project_after, _) = self.resume_pending_project_cleanups_after("");
+        (task_after, project_after)
+    }
+
+    /// One keyset page. Only a committed receipt/identity tombstone authorizes
+    /// cleanup; a different boot's preparation with a surviving chat is
+    /// abandoned and its draft becomes writable again. Same-boot pending
+    /// records may belong to another RPC service executing right now.
+    fn resume_pending_task_cleanups_after(&self, after: &str) -> (String, usize) {
+        let tasks = match self.store.pending_task_cleanups_after(after, 16) {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                tracing::warn!(%error, "task cleanup resume scan failed");
+                return (after.to_string(), 0);
             }
-            Err(error) => tracing::warn!(%error, "task cleanup resume scan failed"),
+        };
+        let count = tasks.len();
+        let next = tasks
+            .last()
+            .map(|(id, _, _)| id.clone())
+            .unwrap_or_default();
+        for (task_id, state, owner_boot_id) in tasks {
+            if self.sessions.has_live_run(&task_id)
+                || (state == "pending" && owner_boot_id == self.cleanup_boot_id)
+            {
+                continue;
+            }
+            let Some(_gate) = self.doc_host.try_task_command_gate(&task_id) else {
+                continue;
+            };
+            let tombstoned = self
+                .task_identity
+                .view(&task_id)
+                .is_some_and(|view| view.task.tombstoned);
+            let committed_delete = match self.store.has_applied_task_delete(&task_id) {
+                Ok(committed) => committed,
+                Err(error) => {
+                    tracing::warn!(task = %task_id, %error, "delete receipt read failed");
+                    continue;
+                }
+            };
+            let chat = match self.workspace.chat(&task_id) {
+                Ok(chat) => chat,
+                Err(error) => {
+                    tracing::warn!(task = %task_id, %error, "cleanup registry read failed");
+                    continue;
+                }
+            };
+            if chat.is_some() {
+                if !tombstoned
+                    && !committed_delete
+                    && let Err(error) = self.store.abort_task_cleanup(&task_id)
+                {
+                    tracing::warn!(task = %task_id, %error, "abandoned cleanup could not be cleared");
+                }
+                continue;
+            }
+            if tombstoned || committed_delete {
+                self.cleanup_deleted_task(
+                    &task_id,
+                    self.task_identity
+                        .view(&task_id)
+                        .is_some_and(|view| view.current_binding.is_some()),
+                );
+            }
         }
+        (next, count)
     }
 
     fn cleanup_deleted_task(&self, task_id: &str, provider_bound: bool) {
@@ -1436,41 +1476,138 @@ impl EngineRpc {
         }
     }
 
-    fn resume_pending_project_cleanups(&self) {
-        if !self.workspace.registry_synced() {
-            return;
+    fn release_surviving_project_children(&self, children: &[String]) {
+        for task_id in children {
+            if matches!(self.workspace.chat(task_id), Ok(Some(_)))
+                && !self
+                    .task_identity
+                    .view(task_id)
+                    .is_some_and(|view| view.task.tombstoned)
+                && matches!(self.store.has_applied_task_delete(task_id), Ok(false))
+                && let Err(error) = self.store.abort_task_cleanup(task_id)
+            {
+                tracing::warn!(task = %task_id, %error, "surviving task cleanup marker could not be cleared");
+            }
         }
-        let projects = match self.store.pending_project_cleanups(8) {
+    }
+
+    fn resume_pending_project_cleanups_after(&self, after: &str) -> (String, usize) {
+        self.resume_pending_project_cleanups_with_readiness(after, self.workspace.registry_synced())
+    }
+
+    fn resume_pending_project_cleanups_with_readiness(
+        &self,
+        after: &str,
+        authoritative_registry: bool,
+    ) -> (String, usize) {
+        if !authoritative_registry {
+            return (after.to_string(), 0);
+        }
+        let projects = match self.store.pending_project_cleanups_after(after, 8) {
             Ok(projects) => projects,
             Err(error) => {
                 tracing::warn!(%error, "project cleanup resume scan failed");
-                return;
+                return (after.to_string(), 0);
             }
         };
-        for (project_id, children) in projects {
-            if self.workspace.space(&project_id).ok().flatten().is_some() {
-                // Another RPC service may have prepared this operation and be
-                // about to commit it. Only the initiating path can abort its
-                // marker on a proven failure; a startup scan leaves it pending.
+        let count = projects.len();
+        let next = projects
+            .last()
+            .map(|(id, _, _, _)| id.clone())
+            .unwrap_or_default();
+        for (project_id, children, state, owner_boot_id) in projects {
+            if state == "pending" && owner_boot_id == self.cleanup_boot_id {
+                continue; // the initiating service may still be committing
+            }
+            let mut gate_ids = children.clone();
+            gate_ids.sort();
+            gate_ids.dedup();
+            let mut _gates = Vec::with_capacity(gate_ids.len());
+            let mut busy = false;
+            for task_id in gate_ids {
+                match self.doc_host.try_task_command_gate(&task_id) {
+                    Some(gate) => _gates.push(gate),
+                    None => {
+                        busy = true;
+                        break;
+                    }
+                }
+            }
+            if busy {
                 continue;
             }
+            let project = match self.workspace.space(&project_id) {
+                Ok(project) => project,
+                Err(error) => {
+                    let _ = self.store.set_project_cleanup_state(
+                        &project_id,
+                        "failed",
+                        &format!("Registry read failed: {error}"),
+                    );
+                    continue;
+                }
+            };
+            if project.is_some() {
+                // An old boot prepared a deletion that never committed. Clear
+                // its markers only when every child still exists and no child
+                // has committed deletion evidence. Mixed state needs review.
+                if owner_boot_id != self.cleanup_boot_id {
+                    let intact = children.iter().all(|task_id| {
+                        self.workspace.chat(task_id).ok().flatten().is_some()
+                            && !self
+                                .task_identity
+                                .view(task_id)
+                                .is_some_and(|view| view.task.tombstoned)
+                            && matches!(self.store.has_applied_task_delete(task_id), Ok(false))
+                    });
+                    if intact {
+                        for task_id in &children {
+                            let _ = self.store.abort_task_cleanup(task_id);
+                        }
+                        let _ = self.store.abort_project_cleanup(&project_id);
+                    } else {
+                        let _ = self.store.set_project_cleanup_state(&project_id, "failed",
+                            "Project still exists but child state changed; cleanup was not resumed.");
+                    }
+                }
+                continue;
+            }
+            // An absent project row is insufficient evidence by itself. Check
+            // EVERY reviewed child before touching ANY child: a moved task is
+            // still live data even when its former project was later removed.
             let mut failure = None;
             for task_id in &children {
                 if self.sessions.has_live_run(task_id) {
-                    failure = Some(format!("task {task_id} is still executing"));
+                    failure = Some(format!("Task {task_id} is still executing"));
                     break;
                 }
-                if let Ok(Some(chat)) = self.workspace.chat(task_id)
-                    && chat.space_id.as_deref() == Some(&project_id)
-                {
-                    if let Err(error) = self
-                        .workspace
-                        .delete_chat(task_id)
-                        .and_then(|_| self.workspace.flush_checked())
-                    {
-                        failure = Some(error.to_string());
+                match self.workspace.chat(task_id) {
+                    Ok(None) => {}
+                    Ok(Some(chat)) => {
+                        failure = Some(format!(
+                            "Task {task_id} still exists in project {:?}",
+                            chat.space_id
+                        ));
                         break;
                     }
+                    Err(error) => {
+                        failure = Some(format!("Task {task_id} registry read failed: {error}"));
+                        break;
+                    }
+                }
+            }
+            if let Some(error) = failure {
+                let _ = self
+                    .store
+                    .set_project_cleanup_state(&project_id, "failed", &error);
+                self.release_surviving_project_children(&children);
+                continue;
+            }
+            for task_id in &children {
+                // Recheck immediately before each irreversible child step.
+                if !matches!(self.workspace.chat(task_id), Ok(None)) {
+                    failure = Some(format!("Task {task_id} changed during cleanup"));
+                    break;
                 }
                 if let Some(view) = self.task_identity.view(task_id)
                     && !view.task.tombstoned
@@ -1479,10 +1616,11 @@ impl EngineRpc {
                     failure = Some(error.to_string());
                     break;
                 }
-                if let Err(error) = self
-                    .store
-                    .prepare_task_cleanup(&self.engine_info.device_id, task_id)
-                {
+                if let Err(error) = self.store.prepare_task_cleanup(
+                    &self.engine_info.device_id,
+                    task_id,
+                    &self.cleanup_boot_id,
+                ) {
                     failure = Some(error.to_string());
                     break;
                 }
@@ -1496,10 +1634,59 @@ impl EngineRpc {
                 let _ = self
                     .store
                     .set_project_cleanup_state(&project_id, "failed", &error);
+                self.release_surviving_project_children(&children);
             } else {
                 self.finish_project_cleanup(&project_id, &children);
             }
         }
+        (next, count)
+    }
+
+    /// One worker per EngineCore, retained and cancelled by that owner. Full
+    /// pages continue after a yield; idle/blocked work waits for the next
+    /// thirty-second tick. The keyset cursor prevents a failed first row from
+    /// starving later rows, and every destructive step rechecks authority.
+    pub(crate) fn start_cleanup_maintenance(
+        self: &std::sync::Arc<Self>,
+        cancel: CancellationToken,
+        mut task_after: String,
+        mut project_after: String,
+    ) -> tokio::task::JoinHandle<()> {
+        let weak = std::sync::Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = interval.tick() => {},
+                }
+                let mut task_done = false;
+                let mut project_done = false;
+                loop {
+                    let Some(rpc) = weak.upgrade() else { return };
+                    if !task_done {
+                        let (next, count) = rpc.resume_pending_task_cleanups_after(&task_after);
+                        task_after = next;
+                        task_done = count < 16;
+                    }
+                    if !project_done {
+                        let (next, count) =
+                            rpc.resume_pending_project_cleanups_after(&project_after);
+                        project_after = next;
+                        project_done = count < 8;
+                    }
+                    drop(rpc);
+                    if task_done && project_done {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
+                    }
+                }
+            }
+        })
     }
 
     /// Migration/reopen ingestion plus metadata reconciliation. This runs
@@ -2159,14 +2346,15 @@ impl EngineRpc {
                     }
                 }
                 self.store
-                    .prepare_project_cleanup(&space_id, &expected)
+                    .prepare_project_cleanup(&space_id, &expected, &self.cleanup_boot_id)
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 let mut prepared = Vec::new();
                 for task_id in &expected {
-                    if let Err(error) = self
-                        .store
-                        .prepare_task_cleanup(&self.engine_info.device_id, task_id)
-                    {
+                    if let Err(error) = self.store.prepare_task_cleanup(
+                        &self.engine_info.device_id,
+                        task_id,
+                        &self.cleanup_boot_id,
+                    ) {
                         for prepared_id in prepared {
                             let _ = self.store.abort_task_cleanup(prepared_id);
                         }
@@ -2195,20 +2383,33 @@ impl EngineRpc {
                     );
                     return Err(failed(error));
                 }
+                let registry_safe = matches!(self.workspace.space(&space_id), Ok(None))
+                    && deleted
+                        .chat_ids
+                        .iter()
+                        .all(|task_id| matches!(self.workspace.chat(task_id), Ok(None)));
+                if !registry_safe {
+                    let detail = "Project or one of its tasks changed after the registry flush; local cleanup is pending review.";
+                    let _ = self
+                        .store
+                        .set_project_cleanup_state(&space_id, "failed", detail);
+                    self.release_surviving_project_children(&deleted.chat_ids);
+                    return Err(RpcError::Failed(detail.into()));
+                }
                 for task_id in &deleted.chat_ids {
                     let provider_bound = self
                         .task_identity
                         .view(task_id)
                         .is_some_and(|view| view.current_binding.is_some());
-                    if self.task_identity.view(task_id).is_some() {
-                        if let Err(error) = self.task_identity.tombstone_task(task_id) {
-                            let _ = self.store.set_project_cleanup_state(
-                                &space_id,
-                                "failed",
-                                &format!("task {task_id} identity cleanup failed: {error}"),
-                            );
-                            return Err(failed(error));
-                        }
+                    if self.task_identity.view(task_id).is_some()
+                        && let Err(error) = self.task_identity.tombstone_task(task_id)
+                    {
+                        let _ = self.store.set_project_cleanup_state(
+                            &space_id,
+                            "failed",
+                            &format!("task {task_id} identity cleanup failed: {error}"),
+                        );
+                        return Err(failed(error));
                     }
                     self.cleanup_deleted_task(task_id, provider_bound);
                 }
@@ -4791,7 +4992,11 @@ impl EngineRpc {
                     .view(task_id)
                     .is_some_and(|view| view.current_binding.is_some());
                 self.store
-                    .prepare_task_cleanup(&self.engine_info.device_id, task_id)
+                    .prepare_task_cleanup(
+                        &self.engine_info.device_id,
+                        task_id,
+                        &self.cleanup_boot_id,
+                    )
                     .map_err(|error| {
                         TaskProjectionError::Mutation(crate::EngineError::Other(error.to_string()))
                     })?;
@@ -7413,6 +7618,15 @@ impl RpcService for EngineRpc {
                     })
                 }))
             }
+            methods::GET_DELETION_CLEANUP_SUMMARY => {
+                let (pending, failed, first_failure) = self
+                    .store
+                    .deletion_cleanup_summary()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&serde_json::json!({
+                    "pending": pending, "failed": failed, "firstFailure": first_failure,
+                }))
+            }
             methods::GET_COMPOSER_DRAFT => {
                 let p: ComposerDraftReadParams = parse_params(params)?;
                 let read = self.read_composer_draft(p.task_id.as_deref(), p.draft_id.as_deref())?;
@@ -8935,6 +9149,78 @@ impl RpcService for EngineRpc {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn project_cleanup_waits_for_authoritative_registry_then_continues() {
+        let root = tempfile::tempdir().unwrap();
+        let accounts = crate::agent_accounts::AgentAccountsConfig {
+            data_dir: root.path().join("synthetic-provider-state"),
+            claude_config_dir: root.path().join("synthetic-claude"),
+            claude_config_file: root.path().join("synthetic-claude.json"),
+            codex_home: root.path().join("synthetic-codex"),
+            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
+        };
+        let core = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+            crate::EngineProfile::development(&root.path().join("synthetic-engine"), "synthetic-org", "synthetic-user"),
+            Arc::new(crate::registry::HarnessRegistry::new()), HarnessId::Mock, None, accounts,
+        ).unwrap();
+        let folder = root.path().join("workspace");
+        std::fs::create_dir_all(&folder).unwrap();
+        core.workspace
+            .create_space(
+                "delayed-project",
+                &core.device_id,
+                folder.to_str().unwrap(),
+                None,
+                false,
+            )
+            .unwrap();
+        core.workspace
+            .create_chat("delayed-task", Some("delayed-project"), None, None, None)
+            .unwrap();
+        let rpc = core.rpc_service();
+        core.store
+            .prepare_project_cleanup("delayed-project", &["delayed-task".into()], "prior-boot")
+            .unwrap();
+        core.store
+            .prepare_task_cleanup(&core.device_id, "delayed-task", "prior-boot")
+            .unwrap();
+        core.store
+            .save_snapshot("delayed-task", b"synthetic-snapshot")
+            .unwrap();
+        core.workspace.delete_space("delayed-project").unwrap();
+        core.workspace.flush_checked().unwrap();
+
+        assert_eq!(
+            rpc.resume_pending_project_cleanups_with_readiness("", false)
+                .1,
+            0
+        );
+        assert!(core.store.has_snapshot("delayed-task").unwrap());
+        assert_eq!(
+            core.store
+                .project_cleanup_state("delayed-project")
+                .unwrap()
+                .unwrap()
+                .0,
+            "pending"
+        );
+        assert_eq!(
+            rpc.resume_pending_project_cleanups_with_readiness("", true)
+                .1,
+            1
+        );
+        assert!(!core.store.has_snapshot("delayed-task").unwrap());
+        assert_eq!(
+            core.store
+                .project_cleanup_state("delayed-project")
+                .unwrap()
+                .unwrap()
+                .0,
+            "completed"
+        );
+        core.shutdown().await;
+    }
 
     #[test]
     fn disabled_agent_usage_is_removed_from_all_snapshot_sections() {

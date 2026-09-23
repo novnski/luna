@@ -3182,7 +3182,7 @@ impl Shell {
                 .child(popover::dialog_title(&theme, "Remove project?"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, copy)))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(&theme,
-                    "LUNA-owned local transcript snapshots, unsent drafts, terminal history and verified unshared draft uploads are cleaned up. Independent forks, project files, shared attachments, synced copies and provider-private data remain. Remote cleanup is unavailable; deletion will stop if this project contains remote sessions.",
+                    "Every session in this project, including any fork listed in the count, is deleted. Forks outside this project, project files, shared attachments, synced copies and provider-private data remain. LUNA cleans up local transcript snapshots, unsent drafts, terminal history and verified unshared draft uploads. Remote cleanup is unavailable; deletion stops if this project contains remote sessions.",
                 )))
                 .child(
                     div()

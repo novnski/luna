@@ -1816,6 +1816,8 @@ pub struct Shell {
     user_menu: popover::Popup<()>,
     /// Inline sidebar error strip (mutation failures); click dismisses.
     sidebar_notice: Option<SharedString>,
+    cleanup_summary_generation: Option<u64>,
+    cleanup_summary_last: Option<String>,
     /// Local lifecycle of an in-app update (macOS bundle swap) — the engine's
     /// UpdateStatus stream says WHETHER one exists; this says how far the
     /// download/stage of it has come in this process.
@@ -2024,6 +2026,9 @@ impl Shell {
                     if live || minute_changed {
                         cx.notify();
                     }
+                    if minute_changed {
+                        shell.refresh_deletion_cleanup_summary(cx);
+                    }
                 });
                 if alive.is_err() {
                     break;
@@ -2202,6 +2207,8 @@ impl Shell {
             space_boot_applied: false,
             user_menu: popover::Popup::default(),
             sidebar_notice: None,
+            cleanup_summary_generation: None,
+            cleanup_summary_last: None,
             update_flow: UpdateFlow::Idle,
             update_task: None,
             update_dismissed: None,
@@ -2359,6 +2366,11 @@ impl Shell {
             engine_generation,
         );
         if engine_changed {
+            if self.sidebar_notice.as_ref().map(ToString::to_string) == self.cleanup_summary_last {
+                self.sidebar_notice = None;
+            }
+            self.cleanup_summary_generation = None;
+            self.cleanup_summary_last = None;
             self.usage_request_epoch = self.usage_request_epoch.wrapping_add(1);
             self.usage_task = None;
             self.usage_refreshing = false;
@@ -2368,6 +2380,12 @@ impl Shell {
             self.usage_error = Some("Engine changed · refresh usage for this environment".into());
         }
         self.reconcile_session_history_scope(engine_changed, cx);
+        if matches!(state.read(cx).connection, ConnectionStatus::Ready)
+            && self.cleanup_summary_generation != Some(engine_generation)
+        {
+            self.cleanup_summary_generation = Some(engine_generation);
+            self.refresh_deletion_cleanup_summary(cx);
+        }
         self.reconcile_keep_awake(cx);
         self.ensure_activity_polling(cx);
         self.refresh_activity(cx);
@@ -4453,6 +4471,50 @@ impl Shell {
     }
 
     // ---- sidebar mutations ----
+
+    fn refresh_deletion_cleanup_summary(&mut self, cx: &mut Context<Self>) {
+        let (generation, engine) = {
+            let state = self.state.read(cx);
+            if !matches!(state.connection, ConnectionStatus::Ready) {
+                return;
+            }
+            (state.engine_generation(), state.engine().cloned())
+        };
+        let Some(engine) = engine else { return };
+        cx.spawn(async move |this, cx| {
+            let Ok(summary) = engine.client().call(
+                methods::GET_DELETION_CLEANUP_SUMMARY, serde_json::json!({}),
+            ).await else { return };
+            let pending = summary.get("pending").and_then(|value| value.as_u64()).unwrap_or(0);
+            let failed = summary.get("failed").and_then(|value| value.as_u64()).unwrap_or(0);
+            let notice = if failed > 0 {
+                let detail = summary.get("firstFailure").and_then(|value| value.as_str())
+                    .unwrap_or("Review the local cleanup status.");
+                Some(format!("Deletion cleanup: {failed} failed, {pending} pending. {detail}"))
+            } else if pending > 0 {
+                Some(format!("Deletion cleanup: {pending} pending. LUNA will retry after the registry is ready."))
+            } else {
+                None
+            };
+            this.update(cx, |shell, cx| {
+                if shell.state.read(cx).engine_generation() != generation {
+                    return;
+                }
+                if notice == shell.cleanup_summary_last {
+                    return;
+                }
+                let old_notice = shell.cleanup_summary_last.take();
+                if let Some(message) = notice.clone() {
+                    shell.sidebar_notice = Some(message.into());
+                    cx.notify();
+                } else if shell.sidebar_notice.as_ref().map(ToString::to_string) == old_notice {
+                    shell.sidebar_notice = None;
+                    cx.notify();
+                }
+                shell.cleanup_summary_last = notice;
+            }).ok();
+        }).detach();
+    }
 
     /// Execute a durable task command; failures surface in the sidebar notice strip.
     fn mutate_task(&mut self, task_id: String, intent: serde_json::Value, cx: &mut Context<Self>) {
