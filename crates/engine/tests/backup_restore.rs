@@ -189,24 +189,179 @@ fn staged_activity_rebuild_survives_restart_and_detects_interrupted_readback() {
 fn chat2_snapshot_requires_full_engine_replay_before_activation() {
     let (_parent, root, backups) = fixture();
     add_synthetic_task(&root, Some(2));
+    let profile = root.join("profiles/local");
+    let store = DocsStore::open(&profile).unwrap();
+    let bytes = store.load_snapshot("synthetic-task").unwrap().unwrap();
+    let doc = SessionDoc::from_snapshot(&bytes).unwrap();
+    let frontier = doc.doc().oplog_vv();
+    doc.push_message(&SessionMessageEntry {
+        id: "pending-message".into(),
+        role: MessageRole::User,
+        parts: vec![MessagePart::Text {
+            id: "pending-part".into(),
+            text: "pending synthetic prompt".into(),
+        }],
+        created_at: chrono::Utc::now().timestamp_millis(),
+        device_id: "synthetic-device".into(),
+        status: Some(MessageStatus::Complete),
+        continuation_of: None,
+    })
+    .unwrap();
+    let update = doc
+        .doc()
+        .export(loro::ExportMode::updates(&frontier))
+        .unwrap();
+    store
+        .save_snapshot_with_cursor("synthetic-task", &bytes, 4, 2)
+        .unwrap();
+    store
+        .enqueue_chat_update("synthetic-task", "pending-batch", &update)
+        .unwrap();
+    drop(store);
     let backup = service(&root)
         .export(&backups.join("chat2.lunabk"))
         .unwrap();
     assert_eq!(backup.manifest.databases[0].tasks, Some(1));
-    assert!(
-        backup.manifest.databases[0]
-            .activity_events_expected
-            .is_none()
+    assert_eq!(
+        backup.manifest.databases[0].activity_events_expected,
+        Some(2)
     );
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    let conn = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();
+    let indexed: i64 = conn
+        .query_row("SELECT count(*) FROM activity_events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(indexed, 2);
     assert!(
         staged
             .preview
             .unsupported
             .iter()
-            .any(|reason| reason.contains("chat2"))
+            .any(|reason| reason.contains("chat2 remote frontier and pending updates"))
     );
     assert!(service(&root).activate(staged).is_err());
+
+    let store = DocsStore::open(&profile).unwrap();
+    store
+        .reject_chat_update("synthetic-task", "pending-batch")
+        .unwrap();
+    drop(store);
+    let rejected = service(&root)
+        .export(&backups.join("chat2-rejected.lunabk"))
+        .unwrap();
+    assert!(
+        rejected.manifest.databases[0]
+            .derived_rebuild_blocker
+            .as_deref()
+            .is_some_and(|reason| reason.contains("rejected chat2 updates"))
+    );
+}
+
+#[test]
+fn staged_activity_replays_luna_task_identity_without_provider_access() {
+    let (_parent, root, backups) = fixture();
+    add_synthetic_task(&root, None);
+    let store = DocsStore::open(root.join("profiles/local")).unwrap();
+    let log = serde_json::json!({
+        "schemaVersion": 1,
+        "events": [
+            {"type":"workspaceObserved", "workspace": {
+                "schemaVersion":1, "workspaceId":"identity-workspace",
+                "environmentId":"synthetic-device", "currentPath":root.display().to_string(),
+                "observedAtMs":1
+            }},
+            {"type":"taskRegistered", "task": {
+                "schemaVersion":1, "taskId":"synthetic-task", "origin":"lunaCreated",
+                "lineage":{}, "workspaceId":"identity-workspace", "createdAtMs":1
+            }}
+        ]
+    });
+    store
+        .save_snapshot(
+            "luna-task-identity-events-v1",
+            &serde_json::to_vec(&log).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    let backup = service(&root)
+        .export(&backups.join("identity.lunabk"))
+        .unwrap();
+    assert_eq!(
+        backup.manifest.databases[0].activity_events_expected,
+        Some(1)
+    );
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    let conn = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();
+    let json: Vec<u8> = conn
+        .query_row("SELECT envelope_json FROM activity_events", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let event: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(event["workspaceId"], "identity-workspace");
+    assert!(
+        staged
+            .preview
+            .unsupported
+            .iter()
+            .any(|s| s.contains("usage cache"))
+    );
+}
+
+#[test]
+fn invalid_task_identity_log_blocks_staged_rebuild() {
+    let (_parent, root, backups) = fixture();
+    add_synthetic_task(&root, None);
+    let store = DocsStore::open(root.join("profiles/local")).unwrap();
+    store
+        .save_snapshot(
+            "luna-task-identity-events-v1",
+            b"invalid synthetic identity log",
+        )
+        .unwrap();
+    drop(store);
+    let backup = service(&root)
+        .export(&backups.join("invalid-identity.lunabk"))
+        .unwrap();
+    assert!(
+        backup.manifest.databases[0]
+            .derived_rebuild_blocker
+            .as_deref()
+            .is_some_and(|reason| reason.contains("task identity replay failed"))
+    );
+    assert!(service(&root).stage_restore(&backup.archive).is_err());
+
+    let orphan_log = serde_json::json!({
+        "schemaVersion": 1,
+        "events": [
+            {"type":"workspaceObserved", "workspace": {
+                "schemaVersion":1, "workspaceId":"identity-workspace",
+                "environmentId":"synthetic-device", "currentPath":root.display().to_string(),
+                "observedAtMs":1
+            }},
+            {"type":"taskRegistered", "task": {
+                "schemaVersion":1, "taskId":"missing-task", "origin":"lunaCreated",
+                "lineage":{}, "workspaceId":"identity-workspace", "createdAtMs":1
+            }}
+        ]
+    });
+    let store = DocsStore::open(root.join("profiles/local")).unwrap();
+    store
+        .save_snapshot(
+            "luna-task-identity-events-v1",
+            &serde_json::to_vec(&orphan_log).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    let orphan = service(&root)
+        .export(&backups.join("orphan-identity.lunabk"))
+        .unwrap();
+    assert!(
+        orphan.manifest.databases[0]
+            .derived_rebuild_blocker
+            .as_deref()
+            .is_some_and(|reason| reason.contains("no registry task"))
+    );
 }
 
 #[test]

@@ -312,6 +312,12 @@ impl CredentialBroker {
         )
     }
 
+    /// Distinguish the explicit hermetic broker from the platform store
+    /// without probing either backend or reading any credential material.
+    pub(crate) fn is_in_memory_for_tests(&self) -> bool {
+        self.inner.test_key_store.is_some()
+    }
+
     fn with_store(
         vault_file: PathBuf,
         key_store: Arc<dyn VaultKeyStore>,

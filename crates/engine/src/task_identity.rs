@@ -351,6 +351,42 @@ impl Projection {
     }
 }
 
+/// Replay only the LUNA-owned identity log for an offline backup stage. This
+/// does not construct a workspace host or provider client, and cannot trigger
+/// startup reconciliation against native provider homes.
+pub(crate) fn offline_views_for_backup(
+    store: &DocsStore,
+) -> Result<Option<HashMap<String, TaskIdentityView>>, EngineError> {
+    let Some(bytes) = store.load_snapshot(TASK_IDENTITY_LOG_ID)? else {
+        return Ok(None);
+    };
+    let log: TaskIdentityLog = serde_json::from_slice(&bytes)
+        .map_err(|error| EngineError::Other(format!("task identity log decode failed: {error}")))?;
+    if log.schema_version != TASK_IDENTITY_SCHEMA_VERSION {
+        return Err(EngineError::Other(format!(
+            "unsupported task identity schema {}, expected {}",
+            log.schema_version, TASK_IDENTITY_SCHEMA_VERSION
+        )));
+    }
+    let mut projection = Projection::default();
+    for event in &log.events {
+        projection.apply(event)?;
+    }
+    if !projection.pending_materializations.is_empty() {
+        return Err(EngineError::Other(
+            "task identity materialization is pending and needs engine recovery".into(),
+        ));
+    }
+    let mut views = HashMap::new();
+    for task_id in projection.tasks.keys() {
+        let view = projection.view(task_id).ok_or_else(|| {
+            EngineError::Other(format!("task identity {task_id} has no replayed workspace"))
+        })?;
+        views.insert(task_id.clone(), view);
+    }
+    Ok(Some(views))
+}
+
 struct State {
     log: TaskIdentityLog,
     projection: Projection,

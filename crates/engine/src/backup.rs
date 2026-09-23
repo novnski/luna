@@ -161,6 +161,8 @@ pub struct DatabaseCounts {
     pub activity_events_expected: Option<i64>,
     #[serde(default)]
     pub derived_rebuild_blocker: Option<String>,
+    #[serde(default)]
+    pub activation_blocker: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -529,6 +531,9 @@ fn collect_profile(
             counts.tasks = Some(projection.tasks);
             counts.activity_events_expected = projection.activity_count();
             counts.derived_rebuild_blocker = projection.blocker;
+            if !projection.activation_blockers.is_empty() {
+                counts.activation_blocker = Some(projection.activation_blockers.join("; "));
+            }
             if projection.tasks == 0
                 && (counts.task_events > 0 || counts.derived_events_discarded > 0)
             {
@@ -714,6 +719,7 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         attachment_blobs: None,
         activity_events_expected: None,
         derived_rebuild_blocker: None,
+        activation_blocker: None,
     })
 }
 
@@ -731,6 +737,7 @@ struct ProfileProjection {
     tasks: i64,
     activity: Vec<(String, Vec<ActivityEnvelope>)>,
     blocker: Option<String>,
+    activation_blockers: Vec<String>,
 }
 
 impl ProfileProjection {
@@ -787,6 +794,7 @@ fn derive_profile(
             } else {
                 None
             },
+            activation_blockers: Vec::new(),
         });
     };
     let registry = RegistryDoc::from_bytes(&registry_bytes, local_device_id.unwrap_or("backup"))
@@ -808,7 +816,27 @@ fn derive_profile(
         tasks: chats.len() as i64,
         activity: Vec::new(),
         blocker: None,
+        activation_blockers: Vec::new(),
     };
+    let identity_views = crate::task_identity::offline_views_for_backup(&store)
+        .map_err(|e| BackupError::Unsupported(format!("task identity replay failed: {e}")))?;
+    if let Some(views) = &identity_views {
+        let chat_ids = chats
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if let Some(task_id) = views
+            .iter()
+            .filter(|(task_id, view)| !view.task.tombstoned && !chat_ids.contains(task_id.as_str()))
+            .map(|(task_id, _)| task_id)
+            .min()
+        {
+            projection.blocker = Some(format!(
+                "active task identity {task_id} has no registry task"
+            ));
+            return Ok(projection);
+        }
+    }
     if chats.is_empty() {
         return Ok(projection);
     }
@@ -816,16 +844,6 @@ fn derive_profile(
         projection.blocker = Some("source device identity is missing for activity rebuild".into());
         return Ok(projection);
     };
-    if store
-        .load_snapshot("luna-task-identity-events-v1")
-        .map_err(|e| BackupError::Invalid(format!("task identity read failed: {e}")))?
-        .is_some()
-    {
-        projection.blocker = Some(
-            "task identity projection needs its engine-owned replay before activity rebuild".into(),
-        );
-        return Ok(projection);
-    }
     let journal_dir = journal_profile.join("journals");
     if journal_dir.exists() {
         ensure_real_dir(&journal_dir)?;
@@ -841,15 +859,50 @@ fn derive_profile(
             ));
             break;
         };
-        if chat.on_chat2() || cursor != 0 || epoch >= 2 {
+        let chat2 = chat.on_chat2() || epoch >= crate::chat2_host::CHAT2_DOC_EPOCH;
+        if chat2 && epoch < crate::chat2_host::CHAT2_DOC_EPOCH {
             projection.blocker = Some(format!(
-                "task {} requires chat2 checkpoint and update replay before activity rebuild",
+                "task {} has an incomplete chat2 adoption checkpoint",
+                chat.id
+            ));
+            break;
+        }
+        if !chat2 && cursor != 0 {
+            projection.blocker = Some(format!(
+                "task {} has an unexpected snapshot cursor",
                 chat.id
             ));
             break;
         }
         let doc = SessionDoc::from_snapshot(&bytes)
             .map_err(|e| BackupError::Invalid(format!("task transcript invalid: {e}")))?;
+        if chat2 {
+            if !store
+                .rejected_chat_updates(&chat.id)
+                .map_err(|e| BackupError::Invalid(format!("chat2 update state invalid: {e}")))?
+                .is_empty()
+            {
+                projection.blocker = Some(format!("task {} has rejected chat2 updates", chat.id));
+                break;
+            }
+            let pending = store
+                .pending_chat_updates(&chat.id)
+                .map_err(|e| BackupError::Invalid(format!("chat2 outbox invalid: {e}")))?;
+            for (_, update) in &pending {
+                doc.doc()
+                    .import(update)
+                    .map_err(|e| BackupError::Invalid(format!("chat2 update invalid: {e}")))?;
+            }
+            projection.activation_blockers.push(format!(
+                "task {} chat2 remote frontier{} needs reconciliation before activation",
+                chat.id,
+                if pending.is_empty() {
+                    ""
+                } else {
+                    " and pending updates"
+                }
+            ));
+        }
         let entries = doc
             .read_entries()
             .map_err(|e| BackupError::Invalid(format!("task entries invalid: {e}")))?;
@@ -878,10 +931,19 @@ fn derive_profile(
         } else {
             HashMap::new()
         };
+        let identity = identity_views
+            .as_ref()
+            .and_then(|views| views.get(&chat.id));
+        if identity.is_some_and(|view| view.current_binding.is_some()) {
+            projection.activation_blockers.push(format!(
+                "task {} provider mapping needs owner review before activation",
+                chat.id
+            ));
+        }
         let events = crate::activity_history::build_activity_envelopes(
             device_id,
             &chat,
-            None,
+            identity,
             &entries,
             &receipts,
             false,
@@ -1518,6 +1580,9 @@ impl BackupService {
                 unsupported.push(format!("{}: {reason}", db.path));
             } else if db.activity_events_expected.is_none() {
                 unsupported.push(format!("{}: activity event count is unavailable", db.path));
+            }
+            if let Some(reason) = &db.activation_blocker {
+                unsupported.push(format!("{}: {reason}", db.path));
             }
             if db.tasks.unwrap_or_default() > 0 {
                 unsupported.push(format!(
