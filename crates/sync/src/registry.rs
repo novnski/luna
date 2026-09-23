@@ -14,6 +14,7 @@
 //! down for a fresh dial.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -386,36 +387,75 @@ impl OfflineTasks {
 }
 
 /// Aborts an actor if construction is canceled before it returns a client.
-/// Dropping a bare JoinHandle would detach that actor and its HTTPS child.
+/// Dropping the constructor future, even during `abort_and_join`, only aborts
+/// these tasks; only an awaited cancellation proves they have exited.
 struct PendingConnection {
     task: Option<tokio::task::JoinHandle<()>>,
     offline: Arc<OfflineTasks>,
+    child: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl PendingConnection {
     async fn abort_and_join(&mut self) {
-        let child = self.offline.stop();
-        if let Some(child) = &child {
+        if self.child.is_none() {
+            self.child = self.offline.stop();
+        }
+        if let Some(child) = &self.child {
             child.abort();
         }
-        if let Some(task) = self.task.take() {
+        if let Some(task) = self.task.as_mut() {
             task.abort();
             let _ = task.await;
         }
-        if let Some(child) = child {
+        drop(self.task.take());
+        if let Some(child) = self.child.as_mut() {
             let _ = child.await;
+        }
+        drop(self.child.take());
+    }
+
+    async fn ready_or_stop<F>(
+        &mut self,
+        ready_rx: oneshot::Receiver<Result<(), SyncError>>,
+        stop: F,
+    ) -> Result<(), SyncError>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        tokio::pin!(stop);
+        let ready = tokio::select! {
+            biased;
+            _ = &mut stop => {
+                self.abort_and_join().await;
+                return Err(SyncError::Closed);
+            }
+            ready = ready_rx => ready,
+        };
+        match ready {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => {
+                self.abort_and_join().await;
+                Err(err)
+            }
+            Err(_) => {
+                self.abort_and_join().await;
+                Err(SyncError::Closed)
+            }
         }
     }
 }
 
 impl Drop for PendingConnection {
     fn drop(&mut self) {
+        if self.task.is_none() && self.child.is_none() {
+            return;
+        }
+        let child = self.child.take().or_else(|| self.offline.stop());
         if let Some(task) = self.task.take() {
-            let child = self.offline.stop();
             task.abort();
-            if let Some(child) = child {
-                child.abort();
-            }
+        }
+        if let Some(child) = child {
+            child.abort();
         }
     }
 }
@@ -521,6 +561,33 @@ impl RegistryClient {
             .await
     }
 
+    /// Guarded WebSocket membership with an awaited initial-join stop path.
+    /// The caller must await this future when signaling `stop`: externally
+    /// dropping it only triggers PendingConnection's abort-on-drop fallback.
+    pub async fn connect_via_tuned_guarded_until<F>(
+        provider: Arc<dyn UrlProvider>,
+        doc: Arc<Mutex<RegistryDoc>>,
+        device_id: &str,
+        tuning: RegistryTuning,
+        admission: RegistryAdmission,
+        stop: F,
+    ) -> Result<Self, SyncError>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let connector = Arc::new(WsTextConnector { url: provider });
+        Self::connect_with_transport_mode_until(
+            connector,
+            doc,
+            device_id,
+            tuning,
+            None,
+            Some(admission),
+            stop,
+        )
+        .await
+    }
+
     /// Connect with a plain-HTTPS pull/push seam alongside the socket (the
     /// airplane-wifi transport): an immediate delta GET bootstraps the doc
     /// in ~1 RTT while the WS dials, and every backoff cycle syncs over
@@ -558,6 +625,34 @@ impl RegistryClient {
         .await
     }
 
+    /// Guarded dual transport with an awaited initial-join stop path. The
+    /// HTTPS child and socket actor are joined before a stop returns `Closed`.
+    /// External future drop remains abort-only.
+    pub async fn connect_via_transport_guarded_until<F>(
+        provider: Arc<dyn UrlProvider>,
+        doc: Arc<Mutex<RegistryDoc>>,
+        device_id: &str,
+        tuning: RegistryTuning,
+        transport: Arc<dyn RegistryTransport>,
+        admission: RegistryAdmission,
+        stop: F,
+    ) -> Result<Self, SyncError>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let connector = Arc::new(WsTextConnector { url: provider });
+        Self::connect_with_transport_mode_until(
+            connector,
+            doc,
+            device_id,
+            tuning,
+            Some(transport),
+            Some(admission),
+            stop,
+        )
+        .await
+    }
+
     pub(crate) async fn connect_with_tuned(
         connector: Arc<dyn TextConnector>,
         doc: Arc<Mutex<RegistryDoc>>,
@@ -585,6 +680,30 @@ impl RegistryClient {
         transport: Option<Arc<dyn RegistryTransport>>,
         admission: Option<RegistryAdmission>,
     ) -> Result<Self, SyncError> {
+        Self::connect_with_transport_mode_until(
+            connector,
+            doc,
+            device_id,
+            tuning,
+            transport,
+            admission,
+            std::future::pending::<()>(),
+        )
+        .await
+    }
+
+    async fn connect_with_transport_mode_until<F>(
+        connector: Arc<dyn TextConnector>,
+        doc: Arc<Mutex<RegistryDoc>>,
+        device_id: &str,
+        tuning: RegistryTuning,
+        transport: Option<Arc<dyn RegistryTransport>>,
+        admission: Option<RegistryAdmission>,
+        stop: F,
+    ) -> Result<Self, SyncError>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
         let (events, _) = broadcast::channel(256);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -621,10 +740,11 @@ impl RegistryClient {
         let mut pending = PendingConnection {
             task: Some(tokio::spawn(actor.run(ready_tx))),
             offline: offline.clone(),
+            child: None,
         };
 
-        match ready_rx.await {
-            Ok(Ok(())) => Ok(Self {
+        match pending.ready_or_stop(ready_rx, stop).await {
+            Ok(()) => Ok(Self {
                 doc,
                 events,
                 shutdown: shutdown_tx,
@@ -637,14 +757,7 @@ impl RegistryClient {
                 task: pending.task.take(),
                 offline,
             }),
-            Ok(Err(err)) => {
-                pending.abort_and_join().await;
-                Err(err)
-            }
-            Err(_) => {
-                pending.abort_and_join().await;
-                Err(SyncError::Closed)
-            }
+            Err(err) => Err(err),
         }
     }
 
@@ -2045,6 +2158,91 @@ mod admission_tests {
         let _ = connecting.await;
         wait_until(|| dropped.load(Ordering::Acquire)).await;
         assert_eq!(lock(&doc).cursor(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn signaled_stop_awaits_pending_guarded_constructor_actor() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let connector = Arc::new(PendingConnector {
+            started: started.clone(),
+            dropped: dropped.clone(),
+        });
+        let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let connecting = tokio::spawn({
+            let doc = doc.clone();
+            async move {
+                RegistryClient::connect_with_transport_mode_until(
+                    connector,
+                    doc,
+                    "device-a",
+                    RegistryTuning::default(),
+                    None,
+                    Some(admission(epoch)),
+                    async move {
+                        let _ = stop_rx.await;
+                    },
+                )
+                .await
+            }
+        });
+        wait_until(|| started.load(Ordering::Acquire)).await;
+        stop_tx.send(()).unwrap();
+        let result = connecting.await.unwrap();
+        assert!(matches!(result, Err(SyncError::Closed)));
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(lock(&doc).cursor(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stop_wins_ready_tie_and_awaits_pending_actor_and_https_child() {
+        let offline = Arc::new(OfflineTasks::default());
+        let actor_dropped = Arc::new(AtomicBool::new(false));
+        let child_dropped = Arc::new(AtomicBool::new(false));
+        let (actor_started_tx, actor_started_rx) = oneshot::channel();
+        let (child_started_tx, child_started_rx) = oneshot::channel();
+        let actor = tokio::spawn({
+            let dropped = actor_dropped.clone();
+            async move {
+                let _guard = FetchDrop(dropped);
+                let _ = actor_started_tx.send(());
+                std::future::pending::<()>().await;
+            }
+        });
+        let child = tokio::spawn({
+            let dropped = child_dropped.clone();
+            async move {
+                let _guard = FetchDrop(dropped);
+                let _ = child_started_tx.send(());
+                std::future::pending::<()>().await;
+            }
+        });
+        lock(&offline.0).handle = Some(child);
+        let mut pending = PendingConnection {
+            task: Some(actor),
+            offline,
+            child: None,
+        };
+        tokio::time::timeout(Duration::from_secs(2), actor_started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), child_started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        ready_tx.send(Ok(())).unwrap();
+
+        let result = pending
+            .ready_or_stop(ready_rx, std::future::ready(()))
+            .await;
+        assert!(matches!(result, Err(SyncError::Closed)));
+        assert!(actor_dropped.load(Ordering::Acquire));
+        assert!(child_dropped.load(Ordering::Acquire));
     }
 }
 
