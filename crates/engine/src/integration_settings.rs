@@ -355,6 +355,8 @@ mod tests {
             workspace_instructions,
             resume: false,
             acknowledged_contract: None,
+            cross_task_tools: Vec::new(),
+            cross_task_omissions: Vec::new(),
         })
         .unwrap();
         let sections = &compiled.contract.instructions;

@@ -5,15 +5,17 @@
 //! transaction; attaching these handlers to a runtime is a separate step.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use zeron_proto::{
-    CommandReceiptStatus, CrossTaskListPage, CrossTaskListRequest, CrossTaskReadPage,
-    CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendReceipt, CrossTaskSendRequest,
-    CrossTaskSummary, CrossTaskWaitEvent, CrossTaskWaitRequest, CrossTaskWaitResult,
-    OmittedRuntimeTool, RuntimeDelivery, RuntimeToolDefinition,
+    CommandReasonCode, CommandReceiptStatus, CrossTaskListPage, CrossTaskListRequest,
+    CrossTaskReadPage, CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendReceipt,
+    CrossTaskSendRequest, CrossTaskSummary, CrossTaskWaitEvent, CrossTaskWaitRequest,
+    CrossTaskWaitResult, OmittedRuntimeTool, RuntimeContext, RuntimeDelivery,
+    RuntimeToolDefinition,
 };
 
 const MAX_PAGE: usize = 20;
@@ -47,6 +49,27 @@ pub struct CrossTaskAuthority {
     pub delivery: RuntimeDelivery,
 }
 
+impl CrossTaskAuthority {
+    /// The run context is assembled by the engine from its task binding. This
+    /// grant is deliberately limited to the caller's local project; a model
+    /// cannot widen it through tool arguments or another task's content.
+    pub fn from_context(
+        context: &RuntimeContext,
+        delivery: RuntimeDelivery,
+        explicit_user_request: bool,
+    ) -> Self {
+        Self {
+            caller_task_id: context.thread_id.clone(),
+            local_environment_id: context.environment_id.clone(),
+            visible_project_ids: context.project_id.iter().cloned().collect(),
+            allow_projectless: context.project_id.is_none(),
+            granted_scopes: context.granted_scopes.iter().cloned().collect(),
+            explicit_user_request,
+            delivery,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CrossTaskError {
     #[error("cross-task tool is not available on this provider/runtime")]
@@ -69,6 +92,11 @@ pub enum CrossTaskError {
     Deadline,
     #[error("cross-task backend failed: {0}")]
     Backend(String),
+    #[error("cross-task command ended in {status:?} ({reason:?})")]
+    CommandOutcome {
+        status: CommandReceiptStatus,
+        reason: Option<CommandReasonCode>,
+    },
 }
 
 /// Implementations must use authoritative task identity, not provider IDs.
@@ -101,6 +129,42 @@ pub trait CrossTaskBackend: Send + Sync {
     ) -> Result<Option<CrossTaskWaitEvent>, CrossTaskError>;
 }
 
+#[async_trait]
+impl<T: CrossTaskBackend + ?Sized> CrossTaskBackend for Arc<T> {
+    fn capabilities(&self) -> CrossTaskCapabilities {
+        (**self).capabilities()
+    }
+    async fn task(&self, task_id: &str) -> Result<Option<CrossTaskSummary>, CrossTaskError> {
+        (**self).task(task_id).await
+    }
+    async fn list(
+        &self,
+        request: CrossTaskListRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<CrossTaskListPage, CrossTaskError> {
+        (**self).list(request, authority).await
+    }
+    async fn read(
+        &self,
+        request: CrossTaskReadRequest,
+    ) -> Result<CrossTaskReadPage, CrossTaskError> {
+        (**self).read(request).await
+    }
+    async fn enqueue_queue(
+        &self,
+        request: CrossTaskSendRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<CrossTaskSendReceipt, CrossTaskError> {
+        (**self).enqueue_queue(request, authority).await
+    }
+    async fn wait_event(
+        &self,
+        request: CrossTaskWaitRequest,
+    ) -> Result<Option<CrossTaskWaitEvent>, CrossTaskError> {
+        (**self).wait_event(request).await
+    }
+}
+
 pub struct CrossTaskTools<B> {
     backend: B,
 }
@@ -108,6 +172,33 @@ pub struct CrossTaskTools<B> {
 impl<B: CrossTaskBackend> CrossTaskTools<B> {
     pub fn new(backend: B) -> Self {
         Self { backend }
+    }
+
+    pub async fn invoke(
+        &self,
+        authority: &CrossTaskAuthority,
+        name: &str,
+        arguments: serde_json::Value,
+        cancel: &CancellationToken,
+    ) -> Result<serde_json::Value, CrossTaskError> {
+        let output = match name {
+            "list_threads" => {
+                serde_json::to_value(self.list(authority, parse(arguments)?, cancel).await?)
+            }
+            "read_thread" => {
+                serde_json::to_value(self.read(authority, parse(arguments)?, cancel).await?)
+            }
+            "send_message_to_thread" => {
+                serde_json::to_value(self.send(authority, parse(arguments)?, cancel).await?)
+            }
+            "wait_threads" => {
+                serde_json::to_value(self.wait(authority, parse(arguments)?, cancel).await?)
+            }
+            _ => return Err(CrossTaskError::Unavailable),
+        }
+        .map_err(|_| CrossTaskError::InvalidBackendResult)?;
+        check_output(&output)?;
+        Ok(output)
     }
 
     pub fn catalog(
@@ -464,6 +555,12 @@ fn check_output(value: &impl serde::Serialize) -> Result<(), CrossTaskError> {
     } else {
         Ok(())
     }
+}
+
+fn parse<T: serde::de::DeserializeOwned>(
+    arguments: serde_json::Value,
+) -> Result<T, CrossTaskError> {
+    serde_json::from_value(arguments).map_err(|_| CrossTaskError::Input)
 }
 
 async fn with_cancel<T>(
@@ -826,6 +923,71 @@ mod tests {
             omitted
                 .iter()
                 .any(|tool| tool.name == "send_message_to_thread")
+        );
+    }
+
+    #[tokio::test]
+    async fn compiled_runtime_dispatches_only_attached_local_reads() {
+        let backend: Arc<dyn CrossTaskBackend> = Arc::new(FakeBackend::default());
+        let mut authority = authority();
+        authority.explicit_user_request = false;
+        let (cross_task_tools, cross_task_omissions) =
+            CrossTaskTools::new(backend.clone()).catalog(&authority);
+        let context = zeron_proto::RuntimeContext {
+            app_version: "synthetic".into(),
+            protocol_version: 1,
+            thread_id: "caller".into(),
+            parent_thread_id: None,
+            source_thread_id: None,
+            project_id: Some("project-a".into()),
+            project_name: Some("Synthetic".into()),
+            environment_id: "local".into(),
+            machine_id: "local".into(),
+            machine_name: "Synthetic".into(),
+            workspace_root: "/synthetic/workspace".into(),
+            worktree_id: None,
+            binding_generation: None,
+            provider_profile_id: None,
+            branch: None,
+            harness: zeron_proto::HarnessId::Codex,
+            model: None,
+            reasoning: None,
+            execution_route: "local".into(),
+            granted_scopes: vec!["threads.read".into()],
+        };
+        let contract = crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
+            context,
+            provider_delivery: RuntimeDelivery::CodexDynamicTools,
+            user_instructions: Vec::new(),
+            workspace_instructions: Vec::new(),
+            resume: false,
+            acknowledged_contract: None,
+            cross_task_tools,
+            cross_task_omissions,
+        })
+        .unwrap()
+        .contract;
+        let cancel = CancellationToken::new();
+        let list = crate::runtime_contract::invoke_with_backend(
+            &contract,
+            "list_threads",
+            serde_json::json!({}),
+            &cancel,
+            Some(backend.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(list["tasks"][0]["taskId"], "task-a");
+        assert!(
+            crate::runtime_contract::invoke_with_backend(
+                &contract,
+                "send_message_to_thread",
+                serde_json::json!({"taskId":"task-a","message":"synthetic","idempotencyKey":"one"}),
+                &cancel,
+                Some(backend),
+            )
+            .await
+            .is_err()
         );
     }
 }

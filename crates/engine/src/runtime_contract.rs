@@ -5,6 +5,7 @@
 
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use zeron_proto::{
     LUNA_RUNTIME_CONTRACT_VERSION, LunaAgentRuntimeContract, OmittedRuntimeTool, RuntimeContext,
@@ -13,6 +14,7 @@ use zeron_proto::{
 };
 
 use crate::EngineError;
+use crate::cross_task_tools::{CrossTaskAuthority, CrossTaskBackend, CrossTaskTools};
 
 const MAX_INSTRUCTION_CHARS: usize = 16_000;
 const STATUS_TOOL: &str = "luna_status";
@@ -35,6 +37,10 @@ pub struct CompileInput {
     pub resume: bool,
     /// Redacted, durable readback of the provider session being resumed.
     pub acknowledged_contract: Option<RuntimeContractDiagnostics>,
+    /// Definitions come from the engine's verified local backend and the
+    /// active run authority, never from provider-visible model options.
+    pub cross_task_tools: Vec<RuntimeToolDefinition>,
+    pub cross_task_omissions: Vec<OmittedRuntimeTool>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +141,8 @@ fn assemble(
     user: &[InstructionContribution],
     workspace: &[InstructionContribution],
     delivery: RuntimeDelivery,
+    cross_task_tools: &[RuntimeToolDefinition],
+    cross_task_omissions: &[OmittedRuntimeTool],
 ) -> Result<LunaAgentRuntimeContract, EngineError> {
     let instructions_supported = delivery != RuntimeDelivery::Unsupported;
     let tools_supported = delivery == RuntimeDelivery::CodexDynamicTools;
@@ -200,6 +208,29 @@ fn assemble(
             text: context_text(&context)?,
         });
     }
+    let mut tools = tools_supported
+        .then_some(tool)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut omitted_tools = (!tools_supported).then(|| OmittedRuntimeTool {
+        name: STATUS_TOOL.into(),
+        reason: match delivery {
+            RuntimeDelivery::CodexInstructionsOnly => "Existing Codex session has no verified dynamic-tool registration; start a new provider session to attach tools.",
+            RuntimeDelivery::ClaudeInstructionsOnly => "Claude MCP tool transport is not yet verified by this LUNA adapter.",
+            RuntimeDelivery::Unsupported => "This provider has no verified LUNA instruction/tool delivery path.",
+            RuntimeDelivery::CodexDynamicTools => unreachable!(),
+        }.into(),
+    }).into_iter().collect::<Vec<_>>();
+    if tools_supported {
+        tools.extend_from_slice(cross_task_tools);
+        omitted_tools.extend_from_slice(cross_task_omissions);
+    } else {
+        omitted_tools.extend(cross_task_tools.iter().map(|tool| OmittedRuntimeTool {
+            name: tool.name.clone(),
+            reason: "this provider session has no verified dynamic cross-task tools".into(),
+        }));
+        omitted_tools.extend_from_slice(cross_task_omissions);
+    }
     let mut contract = LunaAgentRuntimeContract {
         version: LUNA_RUNTIME_CONTRACT_VERSION,
         content_hash: String::new(),
@@ -216,16 +247,8 @@ fn assemble(
         local_endpoints: Vec::new(),
         context,
         instructions,
-        tools: tools_supported.then_some(tool).into_iter().collect(),
-        omitted_tools: (!tools_supported).then(|| OmittedRuntimeTool {
-            name: STATUS_TOOL.into(),
-            reason: match delivery {
-                RuntimeDelivery::CodexInstructionsOnly => "Existing Codex session has no verified dynamic-tool registration; start a new provider session to attach tools.",
-                RuntimeDelivery::ClaudeInstructionsOnly => "Claude MCP tool transport is not yet verified by this LUNA adapter.",
-                RuntimeDelivery::Unsupported => "This provider has no verified LUNA instruction/tool delivery path.",
-                RuntimeDelivery::CodexDynamicTools => unreachable!(),
-            }.into(),
-        }).into_iter().collect(),
+        tools,
+        omitted_tools,
         delivery,
     };
     contract.content_hash = hash_contract(&contract)?;
@@ -239,6 +262,8 @@ pub fn compile(input: CompileInput) -> Result<CompiledRuntime, EngineError> {
         &input.user_instructions,
         &input.workspace_instructions,
         candidate_delivery,
+        &input.cross_task_tools,
+        &input.cross_task_omissions,
     )?;
     if !input.resume {
         return Ok(CompiledRuntime {
@@ -258,6 +283,8 @@ pub fn compile(input: CompileInput) -> Result<CompiledRuntime, EngineError> {
         &input.user_instructions,
         &input.workspace_instructions,
         legacy_delivery,
+        &input.cross_task_tools,
+        &input.cross_task_omissions,
     )?;
     let Some(prior) = input.acknowledged_contract else {
         // The old session predates L23. Never claim that dynamic tools were
@@ -311,6 +338,16 @@ pub async fn invoke(
     arguments: serde_json::Value,
     cancel: &CancellationToken,
 ) -> Result<serde_json::Value, EngineError> {
+    invoke_with_backend(contract, name, arguments, cancel, None).await
+}
+
+pub async fn invoke_with_backend(
+    contract: &LunaAgentRuntimeContract,
+    name: &str,
+    arguments: serde_json::Value,
+    cancel: &CancellationToken,
+    backend: Option<Arc<dyn CrossTaskBackend>>,
+) -> Result<serde_json::Value, EngineError> {
     if cancel.is_cancelled() {
         return Err(EngineError::Other("LUNA tool call cancelled".into()));
     }
@@ -328,22 +365,33 @@ pub async fn invoke(
             "LUNA tool authorization scope is missing".into(),
         ));
     }
-    if name != STATUS_TOOL || arguments != serde_json::json!({}) {
-        return Err(EngineError::Other("Invalid LUNA tool name or input".into()));
-    }
-    let output = tokio::select! {
-        _ = cancel.cancelled() => return Err(EngineError::Other("LUNA tool call cancelled".into())),
-        result = tokio::time::timeout(std::time::Duration::from_millis(tool.deadline_ms), async {
-            serde_json::json!({
+    let output = if name == STATUS_TOOL {
+        if arguments != serde_json::json!({}) {
+            return Err(EngineError::Other("Invalid LUNA tool input".into()));
+        }
+        serde_json::json!({
                 "threadId": contract.context.thread_id,
                 "projectId": contract.context.project_id,
                 "environmentId": contract.context.environment_id,
                 "machineId": contract.context.machine_id,
                 "grantedScopes": contract.context.granted_scopes,
-            })
-        }) => result.map_err(|_| EngineError::Other("LUNA tool deadline exceeded".into()))?,
+        })
+    } else {
+        let backend = backend
+            .ok_or_else(|| EngineError::Other("LUNA cross-task backend is unavailable".into()))?;
+        let authority =
+            CrossTaskAuthority::from_context(&contract.context, contract.delivery, false);
+        let tools = CrossTaskTools::new(backend);
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(EngineError::Other("LUNA tool call cancelled".into())),
+            result = tokio::time::timeout(std::time::Duration::from_millis(tool.deadline_ms), tools.invoke(&authority, name, arguments, cancel)) => {
+                result.map_err(|_| EngineError::Other("LUNA tool deadline exceeded".into()))?
+                    .map_err(|error| EngineError::Other(error.to_string()))?
+            }
+        }
     };
-    if serde_json::to_vec(&output)?.len() > 4_096 {
+    let output_limit = if name == STATUS_TOOL { 4_096 } else { 16_384 };
+    if serde_json::to_vec(&output)?.len() > output_limit {
         return Err(EngineError::Other(
             "LUNA tool output exceeds size limit".into(),
         ));
@@ -393,6 +441,8 @@ mod tests {
             workspace_instructions: vec![],
             resume: false,
             acknowledged_contract: None,
+            cross_task_tools: Vec::new(),
+            cross_task_omissions: Vec::new(),
         }
     }
 

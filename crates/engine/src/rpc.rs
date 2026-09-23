@@ -73,7 +73,7 @@ use zeron_proto::{
     CommandReceiptReason, CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead,
     ContextBoundary, ContextBoundaryKind, ContextControlState, ContextHandoff,
     ContextOperationStatus, ConversationForkBoundaryKind, DraftBlobState, EngineInfo,
-    FollowUpBehavior, HarnessId, HistoryCapabilityView, HistoryProjectPolicy,
+    FollowUpBehavior, HarnessId, HistoryCapabilityView, HistoryCursor, HistoryProjectPolicy,
     HistoryRebuildRequest, HistoryRebuildResult, HistoryRecoveryView, HistorySearchRequest,
     ImportOwnership, PermissionMode, ProviderForkCapability, ProviderForkRequest, TaskCommandEvent,
     TaskCommandSnapshot, TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
@@ -85,6 +85,9 @@ use crate::agent_accounts::AgentAccounts;
 use crate::auth::Auth;
 use crate::backup_control::{BackupControl, BackupControlError};
 use crate::change_requests::CheckoutChangeRequests;
+use crate::cross_task_tools::{
+    CrossTaskAuthority, CrossTaskBackend, CrossTaskCapabilities, CrossTaskError,
+};
 use crate::diff_sync::CheckoutDiffSync;
 use crate::doc_host::DocHost;
 use crate::history_operations::{
@@ -5501,6 +5504,345 @@ fn index_activity_task(
     Ok(count)
 }
 
+fn cross_task_summary(
+    chat: &Chat,
+    session: Option<&zeron_proto::Session>,
+) -> zeron_proto::CrossTaskSummary {
+    let live = session.filter(|session| {
+        session.device_id == chat.device_id
+            && session.updated_at.timestamp_millis().saturating_add(45_000) >= crate::now_ms()
+    });
+    let indicator = zeron_proto::chat_indicator(chat, live);
+    let status = serde_json::to_value(indicator)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".into());
+    zeron_proto::CrossTaskSummary {
+        task_id: chat.id.clone(),
+        project_id: chat.space_id.clone(),
+        environment_id: chat.device_id.clone(),
+        title: chat.title.clone().unwrap_or_else(|| "Untitled task".into()),
+        status,
+        archived: chat.archived,
+        updated_at_ms: chat
+            .last_message_at
+            .map(|date| date.timestamp_millis())
+            .unwrap_or_else(|| chat.created_at.timestamp_millis())
+            .max(
+                live.map(|session| session.updated_at.timestamp_millis())
+                    .unwrap_or(i64::MIN),
+            ),
+    }
+}
+
+fn cross_task_queue_command(
+    request: &zeron_proto::CrossTaskSendRequest,
+    authority: &CrossTaskAuthority,
+) -> TaskCommandParams {
+    TaskCommandParams {
+        command_id: request.idempotency_key.clone(),
+        actor_id: format!("luna-tool:{}", authority.caller_task_id),
+        client_id: "luna-cross-task".into(),
+        client_session_id: authority.caller_task_id.clone(),
+        task_id: request.task_id.clone(),
+        expected_task_revision: None,
+        expected_binding_generation: None,
+        expected_turn_id: None,
+        issued_at_ms: crate::now_ms(),
+        intent: TaskCommandIntent::QueueMessage {
+            message_id: request.idempotency_key.clone(),
+            text: request.message.clone(),
+            attachments: Vec::new(),
+            hold_for_turn_end: true,
+            follow_up_behavior: FollowUpBehavior::Queue,
+            execution: None,
+        },
+    }
+}
+
+#[async_trait]
+impl CrossTaskBackend for EngineRpc {
+    fn capabilities(&self) -> CrossTaskCapabilities {
+        CrossTaskCapabilities {
+            list: true,
+            read: true,
+            durable_queue: true,
+            event_wait: true,
+        }
+    }
+
+    async fn task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<zeron_proto::CrossTaskSummary>, CrossTaskError> {
+        let Some(identity) = self.task_identity.view(task_id) else {
+            return Ok(None);
+        };
+        if identity.task.tombstoned
+            || identity.workspace.environment_id != self.engine_info.device_id
+        {
+            return Ok(None);
+        }
+        let chat = self
+            .workspace
+            .chat(task_id)
+            .map_err(|_| CrossTaskError::Backend("task lookup failed".into()))?;
+        let Some(chat) = chat.filter(|chat| chat.device_id == self.engine_info.device_id) else {
+            return Ok(None);
+        };
+        let sessions = self
+            .workspace
+            .read_sessions()
+            .map_err(|_| CrossTaskError::Backend("status lookup failed".into()))?;
+        Ok(Some(cross_task_summary(
+            &chat,
+            sessions.iter().find(|session| session.chat_id == task_id),
+        )))
+    }
+
+    async fn list(
+        &self,
+        request: zeron_proto::CrossTaskListRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<zeron_proto::CrossTaskListPage, CrossTaskError> {
+        let managed = self
+            .task_identity
+            .managed_task_ids()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let sessions = self
+            .workspace
+            .read_sessions()
+            .map_err(|_| CrossTaskError::Backend("status lookup failed".into()))?;
+        let mut tasks = self
+            .workspace
+            .read_chats()
+            .map_err(|_| CrossTaskError::Backend("task list failed".into()))?
+            .into_iter()
+            .filter(|chat| {
+                managed.contains(&chat.id) && chat.device_id == self.engine_info.device_id
+            })
+            .filter(|chat| {
+                self.task_identity.view(&chat.id).is_some_and(|identity| {
+                    !identity.task.tombstoned
+                        && identity.workspace.environment_id == self.engine_info.device_id
+                })
+            })
+            .filter(|chat| {
+                chat.space_id
+                    .as_ref()
+                    .is_some_and(|id| authority.visible_project_ids.contains(id))
+                    || chat.space_id.is_none() && authority.allow_projectless
+            })
+            .filter(|chat| {
+                request
+                    .project_id
+                    .as_ref()
+                    .is_none_or(|id| chat.space_id.as_ref() == Some(id))
+            })
+            .map(|chat| {
+                let session = sessions.iter().find(|session| session.chat_id == chat.id);
+                cross_task_summary(&chat, session)
+            })
+            .filter(|task| {
+                request
+                    .text
+                    .as_ref()
+                    .is_none_or(|text| task.title.to_lowercase().contains(&text.to_lowercase()))
+            })
+            .collect::<Vec<_>>();
+        tasks.sort_by(|a, b| {
+            b.updated_at_ms
+                .cmp(&a.updated_at_ms)
+                .then_with(|| a.task_id.cmp(&b.task_id))
+        });
+        let after = request
+            .cursor
+            .as_deref()
+            .map(|cursor| {
+                serde_json::from_str::<(i64, String)>(cursor).map_err(|_| CrossTaskError::Input)
+            })
+            .transpose()?;
+        if let Some((time, id)) = after {
+            tasks.retain(|task| {
+                task.updated_at_ms < time || task.updated_at_ms == time && task.task_id > id
+            });
+        }
+        let limit = usize::from(request.limit.unwrap_or(10));
+        let has_more = tasks.len() > limit;
+        tasks.truncate(limit);
+        let next_cursor = if has_more {
+            tasks
+                .last()
+                .map(|task| serde_json::to_string(&(task.updated_at_ms, &task.task_id)))
+                .transpose()
+                .map_err(|_| CrossTaskError::InvalidBackendResult)?
+        } else {
+            None
+        };
+        Ok(zeron_proto::CrossTaskListPage {
+            tasks,
+            next_cursor,
+            has_more,
+        })
+    }
+
+    async fn read(
+        &self,
+        request: zeron_proto::CrossTaskReadRequest,
+    ) -> Result<zeron_proto::CrossTaskReadPage, CrossTaskError> {
+        let task = CrossTaskBackend::task(self, &request.task_id)
+            .await?
+            .ok_or(CrossTaskError::TargetScope)?;
+        let cursor = request
+            .cursor
+            .as_deref()
+            .map(|cursor| {
+                serde_json::from_str::<HistoryCursor>(cursor).map_err(|_| CrossTaskError::Input)
+            })
+            .transpose()?;
+        let (events, next_cursor, has_more) = self
+            .store
+            .read_activity_task_page(
+                &request.task_id,
+                cursor.as_ref(),
+                usize::from(request.limit.unwrap_or(10)),
+            )
+            .map_err(|_| CrossTaskError::Backend("redacted history read failed".into()))?;
+        let turns = events
+            .into_iter()
+            .map(|event| zeron_proto::CrossTaskTurnSummary {
+                turn_id: event.turn_id,
+                status: serde_json::to_value(event.outcome)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unknown".into()),
+                summary: event.summary,
+            })
+            .collect();
+        let next_cursor = next_cursor
+            .map(|cursor| serde_json::to_string(&cursor))
+            .transpose()
+            .map_err(|_| CrossTaskError::InvalidBackendResult)?;
+        Ok(zeron_proto::CrossTaskReadPage {
+            task,
+            turns,
+            next_cursor,
+            has_more,
+            content_untrusted: true,
+        })
+    }
+
+    async fn enqueue_queue(
+        &self,
+        request: zeron_proto::CrossTaskSendRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<zeron_proto::CrossTaskSendReceipt, CrossTaskError> {
+        if !authority.explicit_user_request || !authority.granted_scopes.contains("threads.send") {
+            return Err(CrossTaskError::UserRequest);
+        }
+        if request.mode != zeron_proto::CrossTaskSendMode::Queue {
+            return Err(CrossTaskError::Unsupported);
+        }
+        let task = CrossTaskBackend::task(self, &request.task_id)
+            .await?
+            .ok_or(CrossTaskError::TargetScope)?;
+        if task.environment_id != authority.local_environment_id
+            || !task
+                .project_id
+                .as_ref()
+                .is_some_and(|id| authority.visible_project_ids.contains(id))
+                && !(task.project_id.is_none() && authority.allow_projectless)
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let command = cross_task_queue_command(&request, authority);
+        let receipt = self
+            .execute_task_command(command, true)
+            .await
+            .map_err(|_| CrossTaskError::Backend("durable queue command failed".into()))?;
+        if receipt.status != CommandReceiptStatus::Applied {
+            return Err(CrossTaskError::CommandOutcome {
+                status: receipt.status,
+                reason: receipt.reason.as_ref().map(|reason| reason.code),
+            });
+        }
+        let sequence = receipt
+            .event_sequence
+            .ok_or(CrossTaskError::InvalidBackendResult)?;
+        Ok(zeron_proto::CrossTaskSendReceipt {
+            task_id: request.task_id,
+            queued_message_id: request.idempotency_key,
+            activity_cursor: format!("command:{sequence}"),
+            command: receipt,
+            delivery_state: "queued".into(),
+        })
+    }
+
+    async fn wait_event(
+        &self,
+        request: zeron_proto::CrossTaskWaitRequest,
+    ) -> Result<Option<zeron_proto::CrossTaskWaitEvent>, CrossTaskError> {
+        let mut sessions = self.workspace.watch_session_rows();
+        let mut chats = self.workspace.watch_chats();
+        loop {
+            for target in &request.targets {
+                let Some(task) = CrossTaskBackend::task(self, &target.task_id).await? else {
+                    continue;
+                };
+                let row = sessions
+                    .borrow()
+                    .iter()
+                    .find(|row| row.chat_id == target.task_id)
+                    .cloned();
+                let needs_attention = matches!(
+                    task.status.as_str(),
+                    "awaitingApproval" | "awaitingInput" | "errored"
+                ) || row.as_ref().is_some_and(|row| {
+                    matches!(
+                        row.status,
+                        zeron_proto::SessionStatus::AwaitingApproval
+                            | zeron_proto::SessionStatus::AwaitingInput
+                            | zeron_proto::SessionStatus::Errored
+                    )
+                });
+                let completed = task.status == "completed"
+                    || row.as_ref().is_some_and(|row| {
+                        row.status == zeron_proto::SessionStatus::Idle
+                            && row.last_completed_turn.is_some()
+                    });
+                if !needs_attention && !completed {
+                    continue;
+                }
+                let cursor_material = format!(
+                    "{}:{}:{}:{}",
+                    task.task_id,
+                    row.as_ref()
+                        .map(|row| row.updated_at.timestamp_millis())
+                        .unwrap_or(task.updated_at_ms),
+                    task.status,
+                    row.as_ref()
+                        .and_then(|row| row.last_completed_turn.as_deref())
+                        .unwrap_or("")
+                );
+                let cursor = format!("state:{:x}", Sha256::digest(cursor_material.as_bytes()));
+                if target.after_cursor.as_deref() != Some(cursor.as_str()) {
+                    return Ok(Some(zeron_proto::CrossTaskWaitEvent {
+                        task,
+                        cursor,
+                        needs_attention,
+                        completed,
+                    }));
+                }
+            }
+            tokio::select! {
+                changed = sessions.changed() => if changed.is_err() { return Err(CrossTaskError::Unavailable); },
+                changed = chats.changed() => if changed.is_err() { return Err(CrossTaskError::Unavailable); },
+            }
+        }
+    }
+}
+
 async fn backup_rpc_reply<T, F>(operation: F) -> Result<RpcReply, RpcError>
 where
     T: Serialize + Send + 'static,
@@ -5853,6 +6195,9 @@ impl RpcService for EngineRpc {
                         .integration_settings()
                         .map(|settings| settings.contributions(context.project_id.as_deref()))
                         .unwrap_or_default();
+                    let (cross_task_tools, cross_task_omissions) = self
+                        .sessions
+                        .cross_task_catalog(&context, provider_delivery);
                     let compiled =
                         crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
                             context,
@@ -5861,6 +6206,8 @@ impl RpcService for EngineRpc {
                             workspace_instructions,
                             resume: true,
                             acknowledged_contract: Some(receipt.clone()),
+                            cross_task_tools,
+                            cross_task_omissions,
                         })
                         .map_err(|error| RpcError::Failed(error.to_string()))?;
                     receipt.restart_required =
@@ -7569,6 +7916,34 @@ impl RpcService for EngineRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cross_task_queue_uses_one_stable_id_and_waits_for_run_end() {
+        let authority = CrossTaskAuthority {
+            caller_task_id: "caller-task".into(),
+            local_environment_id: "synthetic-environment".into(),
+            visible_project_ids: HashSet::from(["synthetic-project".into()]),
+            allow_projectless: false,
+            granted_scopes: HashSet::from(["threads.send".into()]),
+            explicit_user_request: true,
+            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+        };
+        let request = zeron_proto::CrossTaskSendRequest {
+            task_id: "target-task".into(),
+            message: "synthetic follow-up".into(),
+            mode: zeron_proto::CrossTaskSendMode::Queue,
+            idempotency_key: "command-a".into(),
+        };
+        let command = cross_task_queue_command(&request, &authority);
+        assert_eq!(command.command_id, "command-a");
+        assert_eq!(command.task_id, "target-task");
+        assert_eq!(command.actor_id, "luna-tool:caller-task");
+        assert!(matches!(command.intent, TaskCommandIntent::QueueMessage {
+            message_id, hold_for_turn_end: true,
+            follow_up_behavior: FollowUpBehavior::Queue, attachments,
+            ..
+        } if message_id == "command-a" && attachments.is_empty()));
+    }
 
     #[test]
     fn integration_reads_do_not_silently_use_the_wrong_device() {

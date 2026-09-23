@@ -673,7 +673,11 @@ impl EngineCore {
         if let Some(importer) = self.local_import.clone() {
             rpc = rpc.with_local_import(importer);
         }
-        Arc::new(rpc)
+        let rpc = Arc::new(rpc);
+        let backend: Arc<dyn cross_task_tools::CrossTaskBackend> = rpc.clone();
+        self.sessions
+            .set_cross_task_backend(Arc::downgrade(&backend));
+        rpc
     }
 
     /// Revoke every account-scoped transport before any slower graceful

@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use chrono::Utc;
 use futures::StreamExt;
@@ -299,6 +299,9 @@ struct Inner {
     titles: OnceLock<crate::titles::TitleGenerator>,
     /// Stable task/provider bindings (wired at engine assembly; absent in bare tests).
     task_identity: OnceLock<crate::task_identity::TaskIdentityService>,
+    /// A weak edge to the RPC-owned L07/L09 command path. A provider run must
+    /// not keep the RPC service (which owns this engine) alive indefinitely.
+    cross_task_backends: Mutex<Vec<Weak<dyn crate::cross_task_tools::CrossTaskBackend>>>,
     /// Local provider-auth selection and lifecycle state. L06 keeps using its
     /// canonical session-home identity; this service only resolves execution auth.
     agent_accounts: OnceLock<crate::agent_accounts::AgentAccounts>,
@@ -350,6 +353,7 @@ impl SessionsEngine {
                 harness_sessions: Mutex::new(HashMap::new()),
                 titles: OnceLock::new(),
                 task_identity: OnceLock::new(),
+                cross_task_backends: Mutex::new(Vec::new()),
                 agent_accounts: OnceLock::new(),
                 integration_settings: OnceLock::new(),
                 account_transition: Arc::new(AsyncMutex::new(())),
@@ -397,6 +401,38 @@ impl SessionsEngine {
 
     pub fn set_task_identity(&self, task_identity: crate::task_identity::TaskIdentityService) {
         let _ = self.inner.task_identity.set(task_identity);
+    }
+
+    pub fn set_cross_task_backend(
+        &self,
+        backend: Weak<dyn crate::cross_task_tools::CrossTaskBackend>,
+    ) {
+        let mut backends = lock(&self.inner.cross_task_backends);
+        backends.retain(|existing| existing.strong_count() > 0);
+        backends.push(backend);
+    }
+
+    fn cross_task_backend(&self) -> Option<Arc<dyn crate::cross_task_tools::CrossTaskBackend>> {
+        lock(&self.inner.cross_task_backends)
+            .iter()
+            .rev()
+            .find_map(Weak::upgrade)
+    }
+
+    pub(crate) fn cross_task_catalog(
+        &self,
+        context: &zeron_proto::RuntimeContext,
+        delivery: zeron_proto::RuntimeDelivery,
+    ) -> (
+        Vec<zeron_proto::RuntimeToolDefinition>,
+        Vec<zeron_proto::OmittedRuntimeTool>,
+    ) {
+        let Some(backend) = self.cross_task_backend() else {
+            return (Vec::new(), Vec::new());
+        };
+        let authority =
+            crate::cross_task_tools::CrossTaskAuthority::from_context(context, delivery, false);
+        crate::cross_task_tools::CrossTaskTools::new(backend).catalog(&authority)
     }
 
     pub fn set_agent_accounts(&self, accounts: crate::agent_accounts::AgentAccounts) {
@@ -508,6 +544,12 @@ impl SessionsEngine {
             .find(|device| device.id == machine_id)
             .map(|device| device.name)
             .unwrap_or_else(|| machine_id.clone());
+        let local_managed_task = identity.as_ref().is_some_and(|view| {
+            !view.task.tombstoned && view.workspace.environment_id == machine_id
+        }) && chat
+            .as_ref()
+            .is_some_and(|chat| chat.device_id == machine_id);
+        let read_granted = local_managed_task && self.cross_task_backend().is_some();
         Ok(zeron_proto::RuntimeContext {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: 1,
@@ -538,9 +580,13 @@ impl SessionsEngine {
             model: request.model.clone(),
             reasoning: request.reasoning,
             execution_route: "local".into(),
-            // L23 has no cross-task authorization grant issuance. L25 must
-            // populate this from verified caller scopes before adding tools.
-            granted_scopes: Vec::new(),
+            // Only same-project local reads are granted automatically. No
+            // model-visible content or user prompt grants mutation scopes.
+            granted_scopes: if read_granted {
+                vec!["threads.read".into()]
+            } else {
+                Vec::new()
+            },
         })
     }
 
@@ -1082,6 +1128,8 @@ impl SessionsEngine {
                 .registry
                 .resolve(harness_id)?
                 .luna_runtime_delivery();
+            let (cross_task_tools, cross_task_omissions) =
+                self.cross_task_catalog(&context, provider_delivery);
             let compiled =
                 crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
                     context,
@@ -1090,6 +1138,8 @@ impl SessionsEngine {
                     workspace_instructions,
                     resume: known_session_id.is_some(),
                     acknowledged_contract: prior,
+                    cross_task_tools,
+                    cross_task_omissions,
                 })?;
             if compiled.must_reconstruct {
                 return Err(EngineError::Other(
@@ -1328,15 +1378,23 @@ impl SessionsEngine {
                 .filter(|contract| !contract.tools.is_empty())
                 .map(|contract| {
                     let cancel = interrupt_token.clone();
+                    let backend = lock(&self.inner.cross_task_backends)
+                        .iter()
+                        .rev()
+                        .find(|backend| backend.strong_count() > 0)
+                        .cloned();
                     std::sync::Arc::new(move |name: String, arguments: serde_json::Value| {
                         let contract = contract.clone();
                         let cancel = cancel.clone();
+                        let backend = backend.as_ref().and_then(Weak::upgrade);
                         Box::pin(async move {
-                            crate::runtime_contract::invoke(&contract, &name, arguments, &cancel)
-                                .await
-                                .map_err(|error| {
-                                    zeron_harness::HarnessError::Protocol(error.to_string())
-                                })
+                            crate::runtime_contract::invoke_with_backend(
+                                &contract, &name, arguments, &cancel, backend,
+                            )
+                            .await
+                            .map_err(|error| {
+                                zeron_harness::HarnessError::Protocol(error.to_string())
+                            })
                         })
                             as futures::future::BoxFuture<
                                 'static,
