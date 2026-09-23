@@ -855,9 +855,17 @@ impl ChatDocHandle {
         }
     }
 
-    pub(crate) fn import_transcript<T>(&self, import: impl FnOnce() -> T) -> T {
+    /// A handle-backed chat2 import also writes the room cursor. Serialize
+    /// both the live import and that SQLite write with detached projections,
+    /// then refuse a stale handle after a committed projection failed to
+    /// install. The caller must leave the remote cursor unadvanced on None.
+    pub(crate) fn import_transcript<T>(&self, import: impl FnOnce() -> T) -> Option<T> {
+        let _projection = lock(&self.queue_projection_lock);
+        if self.durable_projection_uninstalled.load(Ordering::Acquire) {
+            return None;
+        }
         let _guard = lock(&self.transcript_import);
-        import()
+        Some(import())
     }
 
     /// Per-commit publish path: unwatched docs just mark the mirror dirty —
@@ -7390,6 +7398,8 @@ mod publication_eviction_tests {
 #[cfg(test)]
 mod unwired_interrupt_projection_tests {
     use super::*;
+    use crate::chat2_host::EngineChatSink;
+    use zeron_sync::chat_client::{ChatDocSink, RowImportOutcome};
 
     fn fixture() -> (
         tempfile::TempDir,
@@ -7421,6 +7431,37 @@ mod unwired_interrupt_projection_tests {
             .unwrap()
             .read_commands()
             .unwrap()
+    }
+
+    fn remote_row(store: &DocsStore) -> (Vec<u8>, Vec<u8>) {
+        let source =
+            SessionDoc::from_snapshot(&store.load_snapshot("target").unwrap().unwrap()).unwrap();
+        let frontier = source.doc().oplog_vv();
+        source.doc().get_text("body").insert(0, "remote").unwrap();
+        source.doc().commit();
+        (
+            source
+                .doc()
+                .export(loro::ExportMode::updates(&frontier))
+                .unwrap(),
+            source.export_snapshot().unwrap(),
+        )
+    }
+
+    fn remote_sink(store: Arc<DocsStore>, handle: &Arc<ChatDocHandle>) -> Arc<EngineChatSink> {
+        Arc::new(
+            EngineChatSink::new(&handle.doc, store, "target").with_handle(Arc::downgrade(handle)),
+        )
+    }
+
+    fn stored_stop_and_remote(store: &DocsStore, command_id: &str) -> u64 {
+        let (snapshot, cursor, _) = store.load_snapshot_with_cursor("target").unwrap().unwrap();
+        let doc = SessionDoc::from_snapshot(&snapshot).unwrap();
+        let commands = doc.read_commands().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].id, command_id);
+        assert_eq!(doc.doc().get_text("body").to_string(), "remote");
+        cursor
     }
 
     #[tokio::test]
@@ -7588,5 +7629,165 @@ mod unwired_interrupt_projection_tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].id, "stop-race");
         assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn remote_row_before_projection_survives_with_cursor_and_stop() {
+        let (_root, store, host, handle) = fixture();
+        let (row, _) = remote_row(&store);
+        let sink = remote_sink(store.clone(), &handle);
+        assert_eq!(sink.apply_row(&row, 1), RowImportOutcome::Applied);
+        assert!(
+            host.persist_unwired_interrupt_with_id("target", "stop-after-remote")
+                .unwrap()
+        );
+        assert_eq!(stored_stop_and_remote(&store, "stop-after-remote"), 1);
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handle_backed_checkpoint_and_replay_keep_cursor_with_stop() {
+        let (_root, store, host, handle) = fixture();
+        let (row, checkpoint) = remote_row(&store);
+        let sink = remote_sink(store.clone(), &handle);
+        sink.apply_checkpoint(&checkpoint, 1).unwrap();
+        assert_eq!(sink.apply_replay_row(&row, 1), RowImportOutcome::Applied);
+        assert!(host
+            .persist_unwired_interrupt_with_id("target", "stop-after-checkpoint")
+            .unwrap());
+        assert_eq!(stored_stop_and_remote(&store, "stop-after-checkpoint"), 1);
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn projection_blocks_remote_row_until_stop_is_installed() {
+        let (_root, store, host, handle) = fixture();
+        let (row, _) = remote_row(&store);
+        let sink = remote_sink(store.clone(), &handle);
+        let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let attempted_for_row = attempted.clone();
+        let finished_for_row = finished.clone();
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let remote = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            attempted_for_row.store(true, Ordering::Release);
+            let outcome = sink.apply_row(&row, 1);
+            finished_for_row.store(true, Ordering::Release);
+            outcome
+        });
+        assert!(
+            host.persist_unwired_interrupt_with_id_after_commit(
+                "target",
+                "stop-before-remote",
+                || {
+                    start_tx.send(()).unwrap();
+                    while !attempted.load(Ordering::Acquire) {
+                        std::thread::yield_now();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                    assert!(!finished.load(Ordering::Acquire));
+                    Ok(())
+                }
+            )
+            .unwrap()
+        );
+        assert_eq!(remote.join().unwrap(), RowImportOutcome::Applied);
+        assert_eq!(stored_stop_and_remote(&store, "stop-before-remote"), 1);
+        assert_eq!(store.pending_chat_updates("target").unwrap().len(), 1);
+        drop(handle);
+        drop(host);
+        let restarted = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "synthetic-device".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let reopened = restarted.open("target").unwrap();
+        assert_eq!(reopened.doc.read_commands().unwrap().len(), 1);
+        assert_eq!(reopened.doc.doc().get_text("body").to_string(), "remote");
+    }
+
+    #[tokio::test]
+    async fn poisoned_projection_defers_remote_rows_and_checkpoint_without_cursor_change() {
+        let (_root, store, host, handle) = fixture();
+        let (row, checkpoint) = remote_row(&store);
+        let sink = remote_sink(store.clone(), &handle);
+        assert!(
+            host.persist_unwired_interrupt_with_id_after_commit("target", "stop-poisoned", || {
+                Err(EngineError::Other("synthetic failure before import".into()))
+            })
+            .is_err()
+        );
+        let before = store.load_snapshot_with_cursor("target").unwrap().unwrap();
+        let outbox_before = store.pending_chat_updates("target").unwrap();
+        assert_eq!(
+            sink.apply_row(&row, 1),
+            RowImportOutcome::PendingDependencies
+        );
+        assert_eq!(
+            sink.apply_replay_row(&row, 1),
+            RowImportOutcome::PendingDependencies
+        );
+        assert!(sink.apply_checkpoint(&checkpoint, 1).is_err());
+        assert_eq!(
+            store.load_snapshot_with_cursor("target").unwrap().unwrap(),
+            before
+        );
+        assert_eq!(store.pending_chat_updates("target").unwrap(), outbox_before);
+        assert!(handle.doc.read_commands().unwrap().is_empty());
+        assert_eq!(handle.doc.doc().get_text("body").to_string(), "");
+        drop(handle);
+        drop(host);
+        let restarted = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "synthetic-device".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let reopened = restarted.open("target").unwrap();
+        let commands = reopened.doc.read_commands().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].id, "stop-poisoned");
+        assert_eq!(
+            store
+                .load_snapshot_with_cursor("target")
+                .unwrap()
+                .unwrap()
+                .1,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_cursor_sql_failure_keeps_committed_stop_and_old_cursor() {
+        let (root, store, host, handle) = fixture();
+        let (row, _) = remote_row(&store);
+        assert!(
+            host.persist_unwired_interrupt_with_id("target", "stop-cursor-failure")
+                .unwrap()
+        );
+        let before = store.load_snapshot_with_cursor("target").unwrap().unwrap();
+        let outbox_before = store.pending_chat_updates("target").unwrap();
+        let db = rusqlite::Connection::open(root.path().join("docs.sqlite3")).unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER fail_remote_cursor BEFORE UPDATE ON snapshots
+             WHEN OLD.doc_id='target'
+             BEGIN SELECT RAISE(ABORT, 'synthetic cursor failure'); END;",
+        )
+        .unwrap();
+        let sink = remote_sink(store.clone(), &handle);
+        assert_eq!(sink.apply_row(&row, 1), RowImportOutcome::Applied);
+        assert_eq!(
+            store.load_snapshot_with_cursor("target").unwrap().unwrap(),
+            before
+        );
+        assert_eq!(store.pending_chat_updates("target").unwrap(), outbox_before);
+        assert_eq!(stored_commands(&store)[0].id, "stop-cursor-failure");
+        db.execute_batch("DROP TRIGGER fail_remote_cursor").unwrap();
     }
 }
