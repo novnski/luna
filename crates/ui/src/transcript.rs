@@ -898,6 +898,21 @@ pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
             ),
             None => format!("{server} · {tool}"),
         },
+        ToolCall::ComputerUse {
+            action,
+            app,
+            task_id,
+            thread_id,
+            turn_id,
+            status,
+            screenshot_observed,
+        } => {
+            format!(
+                "Provider-owned computer use: {action}\nApp: {}\nLUNA task: {}\nProvider thread: {thread_id}\nTurn: {turn_id}\nStatus: {status:?}\nScreenshot observed: {screenshot_observed}\nA screenshot does not confirm the action succeeded in the app.",
+                app.as_deref().unwrap_or("unreported"),
+                task_id.as_deref().unwrap_or("unavailable")
+            )
+        }
         ToolCall::Unknown { name, input } => match input {
             Some(input) => format!(
                 "{name}\n{}",
@@ -7297,7 +7312,9 @@ fn tool_icon_path(call: &ToolCall) -> &'static str {
         ToolCall::Todo { .. } => crate::icons::CHECKLIST,
         call if is_agent_call(call) => crate::icons::BOT,
         ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::BOT,
-        ToolCall::Mcp { .. } | ToolCall::Unknown { .. } => crate::icons::WIDGET,
+        ToolCall::Mcp { .. } | ToolCall::ComputerUse { .. } | ToolCall::Unknown { .. } => {
+            crate::icons::WIDGET
+        }
     }
 }
 
@@ -12540,6 +12557,29 @@ mod tests {
 
     #[test]
     fn tool_chip_labels_per_kind() {
+        let computer = ToolCall::ComputerUse {
+            action: "click".into(),
+            app: Some("Finder".into()),
+            task_id: Some("task-1".into()),
+            thread_id: "provider-1".into(),
+            turn_id: "turn-1".into(),
+            status: zeron_proto::ComputerUseStatus::Unknown,
+            screenshot_observed: true,
+        };
+        let (label, detail) = tool_chip_content(&computer);
+        assert_eq!(label, "Computer use");
+        assert!(detail.starts_with("outcome unknown; do not replay"));
+        assert!(detail.contains("screenshot observed"));
+        let Some(ToolDetail::Output { lines, .. }) = call_block(&computer) else {
+            panic!("computer use evidence detail missing")
+        };
+        let detail = lines
+            .iter()
+            .map(|line| line.as_ref())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        assert!(detail.contains("LUNA task: task-1"));
+        assert!(detail.contains("A screenshot does not confirm"));
         assert_eq!(
             tool_chip_content(&ToolCall::Exec {
                 command: "cargo test".into()

@@ -404,11 +404,31 @@ pub enum ToolCall {
         #[serde(skip_serializing_if = "Option::is_none")]
         input: Option<serde_json::Value>,
     },
+    /// A provider-owned computer-use call observed on this Codex turn. The
+    /// status describes provider events, never success in the target app.
+    ComputerUse {
+        action: String,
+        app: Option<String>,
+        task_id: Option<String>,
+        thread_id: String,
+        turn_id: String,
+        status: ComputerUseStatus,
+        screenshot_observed: bool,
+    },
     Unknown {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         input: Option<serde_json::Value>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerUseStatus {
+    Running,
+    ProviderCompleted,
+    ProviderFailed,
+    Unknown,
 }
 
 impl ToolCall {

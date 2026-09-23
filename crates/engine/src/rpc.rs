@@ -821,6 +821,7 @@ fn tool_file_path(call: &ToolCall) -> Option<&str> {
         | ToolCall::WebSearch { .. }
         | ToolCall::Todo { .. }
         | ToolCall::Mcp { .. }
+        | ToolCall::ComputerUse { .. }
         | ToolCall::Unknown { .. } => None,
     }
 }

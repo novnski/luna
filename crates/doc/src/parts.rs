@@ -687,6 +687,7 @@ pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
             tool: tool.clone(),
             input: spawn_badge(call),
         },
+        ToolCall::ComputerUse { .. } => call.clone(),
         ToolCall::Unknown { name, .. } => ToolCall::Unknown {
             name: name.clone(),
             input: spawn_badge(call),
@@ -802,6 +803,59 @@ pub fn join_continuations(entries: Vec<Vec<MessagePart>>) -> Vec<MessagePart> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn computer_use_unknown_refreshes_the_same_persisted_tool_part() {
+        let call = |status, screenshot_observed| ToolCall::ComputerUse {
+            action: "click".into(),
+            app: Some("Finder".into()),
+            task_id: Some("task-1".into()),
+            thread_id: "provider-1".into(),
+            turn_id: "turn-1".into(),
+            status,
+            screenshot_observed,
+        };
+        let mut parts = Vec::new();
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ToolCall {
+                id: "item-1".into(),
+                call: call(zeron_proto::ComputerUseStatus::Running, false),
+            },
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ToolCall {
+                id: "item-1".into(),
+                call: call(zeron_proto::ComputerUseStatus::Unknown, true),
+            },
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ToolResult {
+                id: "item-1".into(),
+                is_error: false,
+                output: None,
+                diff: None,
+            },
+        );
+        assert!(matches!(
+            parts.as_slice(),
+            [MessagePart::Tool {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    screenshot_observed: true,
+                    ..
+                },
+                resolved: true,
+                ..
+            }]
+        ));
+        assert_eq!(
+            sanitize_tool_call(&call(zeron_proto::ComputerUseStatus::Unknown, true)),
+            call(zeron_proto::ComputerUseStatus::Unknown, true)
+        );
+    }
 
     #[test]
     fn async_question_folds_once_without_becoming_pending_input() {

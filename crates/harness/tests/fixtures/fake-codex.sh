@@ -232,6 +232,62 @@ tid=$(rid "$turnline")
 
 case "$turnline" in
 
+*scenario:computer-use:disconnect*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","arguments":{"app":"Finder"},"status":"inProgress"}}}'
+  exit 0
+  ;;
+
+*scenario:computer-use:cancel*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","arguments":{"app":"Finder"},"status":"inProgress"}}}'
+  read -r intline || exit 1
+  if has "$intline" '"method":"turn/interrupt"' && has "$intline" '"turnId":"t-computer"'; then
+    emit "{\"id\":$(rid "$intline"),\"result\":{}}"
+    emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  else
+    fail_turn "$tid" "expected computer-use turn interrupt"
+  fi
+  ;;
+
+*scenario:computer-use:permission-*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"id":910,"method":"item/permissions/requestApproval","params":{"threadId":"th-1","turnId":"stale","itemId":"perm-1","permissions":{"network":{"enabled":true}},"reason":"Synthetic access"}}'
+  read -r rejected || exit 1
+  has "$rejected" '"permissions":{}' || { fail_turn "$tid" "stale permission was granted"; exit 0; }
+  emit '{"id":911,"method":"item/permissions/requestApproval","params":{"threadId":"th-1","turnId":"t-computer","itemId":"perm-2","permissions":{"network":{"enabled":true}},"reason":"Synthetic access"}}'
+  read -r answer || exit 1
+  if has "$turnline" 'scenario:computer-use:permission-allow'; then
+    has "$answer" '"permissions":{"network":{"enabled":true}}' || { fail_turn "$tid" "provider permission not granted once"; exit 0; }
+  else
+    has "$answer" '"permissions":{}' || { fail_turn "$tid" "provider permission not denied"; exit 0; }
+  fi
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-computer","status":"completed"}}}'
+  ;;
+
+*scenario:computer-use:*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"id":900,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"foreign","turnId":"t-computer","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"},{"const":"always"}]}}}}}'
+  read -r rejected || exit 1
+  has "$rejected" '"action":"decline"' || { fail_turn "$tid" "foreign target was accepted"; exit 0; }
+  emit '{"id":901,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"th-1","turnId":"t-computer","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"},{"const":"always"}]}}}}}'
+  read -r answer || exit 1
+  if has "$turnline" 'scenario:computer-use:allow'; then
+    { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t-computer","error":{"message":"one-request approval was not returned"}}}}'; exit 0; }
+    emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","arguments":{"app":"Finder","x":10},"status":"inProgress"}}}'
+    emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"stale-turn","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed"}}}'
+    emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed","result":{"content":[{"type":"image","data":"private pixels"}]}}}}'
+    emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed"}}}'
+  else
+    has "$answer" '"action":"decline"' || { fail_turn "$tid" "computer use was not denied"; exit 0; }
+  fi
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-computer","status":"completed"}}}'
+  ;;
+
 *scenario:l25-send-storage-fail:*)
   target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send-storage-fail:\([0-9a-f-]*\).*/\1/p')
   [ -n "$target" ] || { fail_turn "$tid" "missing storage-failure target"; exit 0; }

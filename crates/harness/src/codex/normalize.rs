@@ -5,15 +5,503 @@
 //! (`delta`/`textDelta`, `exitCode`/`exit_code`, camelCase/snake_case item
 //! types) are accepted, and unknown item types map to nothing.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use serde_json::Value;
-use zeron_proto::{AgentEvent, ContextOperationStatus, DoneStatus, TodoItem, ToolCall};
+use zeron_proto::{
+    AgentEvent, ComputerUseStatus, ContextOperationStatus, DoneStatus, TodoItem, ToolCall,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     Started,
     Completed,
+}
+
+#[derive(Clone)]
+struct ActiveComputerUse {
+    thread_id: String,
+    turn_id: String,
+    call: ToolCall,
+}
+
+/// Computer use is observed from a provider-owned item, never inferred from
+/// an installed CLI, an MCP config entry, or an app name alone.
+#[derive(Default)]
+pub(crate) struct ComputerUseStream {
+    active: HashMap<String, ActiveComputerUse>,
+    settled: VecDeque<(String, String, String)>,
+    task_id: Option<String>,
+}
+
+impl ComputerUseStream {
+    pub(crate) fn for_task(task_id: Option<&str>) -> Self {
+        Self {
+            task_id: task_id.filter(|value| !value.is_empty()).map(str::to_owned),
+            ..Self::default()
+        }
+    }
+    pub(crate) fn map_item(
+        &mut self,
+        phase: Phase,
+        root_thread: &str,
+        active_turn: Option<&str>,
+        params: &Value,
+        item: &Value,
+    ) -> Option<Vec<AgentEvent>> {
+        if !matches!(item_type(item), "mcpToolCall" | "mcp_tool_call") {
+            return None;
+        }
+        let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+        let thread = notification_thread_id("item/started", params);
+        let turn = field(params, &["turnId", "turn_id"]).and_then(Value::as_str);
+        let settled = thread.as_deref().zip(turn).is_some_and(|(thread, turn)| {
+            self.settled
+                .iter()
+                .any(|old| old.0 == thread && old.1 == turn && old.2 == id)
+        });
+        if !is_computer_use(item) && !self.active.contains_key(id) && !settled {
+            return None;
+        }
+        let Some(thread) = thread else {
+            return Some(Vec::new());
+        };
+        let Some(turn) = turn else {
+            return Some(Vec::new());
+        };
+        if thread != root_thread || active_turn != Some(turn) || id.is_empty() || settled {
+            return Some(Vec::new());
+        }
+        match phase {
+            Phase::Started => {
+                if self.active.contains_key(id) || self.active.len() >= 128 {
+                    return Some(Vec::new());
+                }
+                let call = computer_use_call(
+                    item,
+                    self.task_id.as_deref(),
+                    &thread,
+                    turn,
+                    ComputerUseStatus::Running,
+                );
+                self.active.insert(
+                    id.to_owned(),
+                    ActiveComputerUse {
+                        thread_id: thread,
+                        turn_id: turn.to_owned(),
+                        call: call.clone(),
+                    },
+                );
+                Some(vec![AgentEvent::ToolCall {
+                    id: id.to_owned(),
+                    call,
+                }])
+            }
+            Phase::Completed => {
+                if self
+                    .active
+                    .get(id)
+                    .is_some_and(|active| active.thread_id != thread || active.turn_id != turn)
+                {
+                    return Some(Vec::new());
+                }
+                // The provider may attach its computer-use surface only to
+                // the completed item. Its live thread/turn still identifies
+                // the call without inventing a start event.
+                if !self.active.contains_key(id) && !is_computer_use(item) {
+                    return Some(Vec::new());
+                }
+                let failed = matches!(
+                    item.get("status").and_then(Value::as_str),
+                    Some("failed" | "declined" | "cancelled" | "canceled")
+                ) || item.get("error").is_some_and(|error| !error.is_null());
+                let status = if failed {
+                    ComputerUseStatus::ProviderFailed
+                } else if item.get("status").and_then(Value::as_str) == Some("completed") {
+                    ComputerUseStatus::ProviderCompleted
+                } else {
+                    ComputerUseStatus::Unknown
+                };
+                let mut call =
+                    computer_use_call(item, self.task_id.as_deref(), &thread, turn, status);
+                if let Some(active) = self.active.get(id)
+                    && let (
+                        ToolCall::ComputerUse {
+                            app,
+                            screenshot_observed,
+                            ..
+                        },
+                        ToolCall::ComputerUse {
+                            app: previous_app,
+                            screenshot_observed: previous_screenshot,
+                            ..
+                        },
+                    ) = (&mut call, &active.call)
+                {
+                    if app.is_none() {
+                        *app = previous_app.clone();
+                    }
+                    *screenshot_observed |= *previous_screenshot;
+                }
+                self.active.remove(id);
+                self.remember(&thread, turn, id);
+                Some(vec![
+                    AgentEvent::ToolCall {
+                        id: id.to_owned(),
+                        call,
+                    },
+                    AgentEvent::ToolResult {
+                        id: id.to_owned(),
+                        is_error: failed,
+                        output: None,
+                        diff: None,
+                    },
+                ])
+            }
+        }
+    }
+
+    pub(crate) fn unknown_for_turn(&mut self, thread: &str, turn: &str) -> Vec<AgentEvent> {
+        let ids: Vec<String> = self
+            .active
+            .iter()
+            .filter(|(_, active)| active.thread_id == thread && active.turn_id == turn)
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.unknown_ids(ids)
+    }
+
+    pub(crate) fn unknown_before_turn(&mut self, thread: &str, next_turn: &str) -> Vec<AgentEvent> {
+        let ids: Vec<String> = self
+            .active
+            .iter()
+            .filter(|(_, active)| active.thread_id == thread && active.turn_id != next_turn)
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.unknown_ids(ids)
+    }
+
+    pub(crate) fn take_unknown(&mut self) -> Vec<AgentEvent> {
+        self.unknown_ids(self.active.keys().cloned().collect())
+    }
+
+    fn unknown_ids(&mut self, ids: Vec<String>) -> Vec<AgentEvent> {
+        let mut events = Vec::new();
+        for id in ids {
+            if let Some(mut active) = self.active.remove(&id) {
+                if let ToolCall::ComputerUse { status, .. } = &mut active.call {
+                    *status = ComputerUseStatus::Unknown;
+                }
+                self.remember(&active.thread_id, &active.turn_id, &id);
+                events.push(AgentEvent::ToolCall {
+                    id: id.clone(),
+                    call: active.call,
+                });
+                events.push(AgentEvent::ToolResult {
+                    id,
+                    is_error: false,
+                    output: None,
+                    diff: None,
+                });
+            }
+        }
+        events
+    }
+
+    fn remember(&mut self, thread: &str, turn: &str, id: &str) {
+        self.settled
+            .push_back((thread.to_owned(), turn.to_owned(), id.to_owned()));
+        if self.settled.len() > 256 {
+            self.settled.pop_front();
+        }
+    }
+}
+
+fn is_computer_use(item: &Value) -> bool {
+    item.get("server").and_then(Value::as_str) == Some("computer-use")
+        || item
+            .pointer("/result/_meta/codex~1toolSurface/kind")
+            .and_then(Value::as_str)
+            == Some("computerUse")
+}
+
+fn computer_use_call(
+    item: &Value,
+    task_id: Option<&str>,
+    thread: &str,
+    turn: &str,
+    status: ComputerUseStatus,
+) -> ToolCall {
+    let app = item
+        .pointer("/result/_meta/codex~1toolSurface/app/displayName")
+        .or_else(|| item.pointer("/result/_meta/codex~1toolSurface/app/appId"))
+        .or_else(|| item.pointer("/arguments/app"))
+        .or_else(|| item.pointer("/arguments/appName"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.chars().take(120).collect());
+    let screenshot_observed = item
+        .pointer("/result/content")
+        .and_then(Value::as_array)
+        .is_some_and(|content| {
+            content.iter().any(|entry| {
+                matches!(
+                    entry.get("type").and_then(Value::as_str),
+                    Some("image" | "image/png" | "image/jpeg")
+                )
+            })
+        });
+    ToolCall::ComputerUse {
+        action: item
+            .get("tool")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unreported action")
+            .chars()
+            .take(80)
+            .collect(),
+        app,
+        task_id: task_id.map(str::to_owned),
+        thread_id: thread.to_owned(),
+        turn_id: turn.to_owned(),
+        status,
+        screenshot_observed,
+    }
+}
+
+#[cfg(test)]
+mod computer_use_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn item(status: &str) -> Value {
+        json!({
+            "type":"mcpToolCall", "id":"computer-1", "server":"computer-use",
+            "tool":"click", "arguments":{"app":"Finder", "x":10},
+            "status":status,
+            "result":{"_meta":{"codex/toolSurface":{"kind":"computerUse"}},
+                "content":[{"type":"image","data":"private pixels"}]}
+        })
+    }
+
+    #[test]
+    fn exact_provider_turn_lifecycle_and_evidence_without_payload() {
+        let mut stream = ComputerUseStream::default();
+        let params = json!({"threadId":"provider-1","turnId":"turn-1"});
+        assert!(
+            stream
+                .map_item(
+                    Phase::Started,
+                    "provider-1",
+                    Some("turn-1"),
+                    &params,
+                    &item("inProgress")
+                )
+                .is_some()
+        );
+        let events = stream
+            .map_item(
+                Phase::Completed,
+                "provider-1",
+                Some("turn-1"),
+                &params,
+                &item("completed"),
+            )
+            .unwrap();
+        assert!(
+            matches!(&events[0], AgentEvent::ToolCall { call: ToolCall::ComputerUse { app: Some(app), status: ComputerUseStatus::ProviderCompleted, screenshot_observed: true, thread_id, turn_id, .. }, .. } if app == "Finder" && thread_id == "provider-1" && turn_id == "turn-1")
+        );
+        assert!(matches!(
+            &events[1],
+            AgentEvent::ToolResult {
+                is_error: false,
+                output: None,
+                ..
+            }
+        ));
+        assert!(!format!("{events:?}").contains("private pixels"));
+        assert!(
+            stream
+                .map_item(
+                    Phase::Completed,
+                    "provider-1",
+                    Some("turn-1"),
+                    &params,
+                    &item("completed")
+                )
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn wrong_target_and_late_results_cannot_settle_an_active_call() {
+        let mut stream = ComputerUseStream::default();
+        let params = json!({"threadId":"provider-1","turnId":"turn-1"});
+        assert!(
+            stream
+                .map_item(
+                    Phase::Started,
+                    "provider-1",
+                    Some("turn-1"),
+                    &json!({"threadId":"foreign","turnId":"turn-1"}),
+                    &item("inProgress")
+                )
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            stream
+                .map_item(
+                    Phase::Started,
+                    "provider-1",
+                    Some("turn-1"),
+                    &params,
+                    &item("inProgress")
+                )
+                .unwrap()
+                .len()
+                == 1
+        );
+        assert!(
+            stream
+                .map_item(
+                    Phase::Completed,
+                    "provider-1",
+                    Some("turn-2"),
+                    &params,
+                    &item("completed")
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let unknown = stream.unknown_for_turn("provider-1", "turn-1");
+        assert!(matches!(
+            &unknown[0],
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: ComputerUseStatus::Unknown,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(
+            stream
+                .map_item(
+                    Phase::Completed,
+                    "provider-1",
+                    Some("turn-1"),
+                    &params,
+                    &item("completed")
+                )
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_observed_computer_use_remains_generic_and_disconnect_is_unknown() {
+        let mut stream = ComputerUseStream::default();
+        let params = json!({"threadId":"provider-1","turnId":"turn-1"});
+        let ordinary = json!({"type":"mcpToolCall","id":"ordinary","server":"other","tool":"read"});
+        assert!(
+            stream
+                .map_item(
+                    Phase::Started,
+                    "provider-1",
+                    Some("turn-1"),
+                    &params,
+                    &ordinary
+                )
+                .is_none()
+        );
+        stream.map_item(
+            Phase::Started,
+            "provider-1",
+            Some("turn-1"),
+            &params,
+            &item("inProgress"),
+        );
+        let unknown = stream.take_unknown();
+        assert!(matches!(
+            &unknown[0],
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: ComputerUseStatus::Unknown,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(stream.take_unknown().is_empty());
+    }
+
+    #[test]
+    fn completion_only_surface_is_observed_on_current_turn() {
+        let mut stream = ComputerUseStream::for_task(Some("task-1"));
+        let params = json!({"threadId":"provider-1","turnId":"turn-1"});
+        let mut completed = item("completed");
+        completed["server"] = json!("node_repl");
+        let events = stream
+            .map_item(
+                Phase::Completed,
+                "provider-1",
+                Some("turn-1"),
+                &params,
+                &completed,
+            )
+            .unwrap();
+        assert!(
+            matches!(&events[0], AgentEvent::ToolCall { call: ToolCall::ComputerUse { task_id: Some(task_id), status: ComputerUseStatus::ProviderCompleted, .. }, .. } if task_id == "task-1")
+        );
+        assert!(
+            stream
+                .map_item(
+                    Phase::Completed,
+                    "provider-1",
+                    Some("turn-1"),
+                    &params,
+                    &completed
+                )
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn settled_item_id_may_be_reused_on_a_later_turn() {
+        let mut stream = ComputerUseStream::default();
+        let first = json!({"threadId":"provider-1","turnId":"turn-1"});
+        let second = json!({"threadId":"provider-1","turnId":"turn-2"});
+        assert_eq!(
+            stream
+                .map_item(
+                    Phase::Started,
+                    "provider-1",
+                    Some("turn-1"),
+                    &first,
+                    &item("inProgress")
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(stream.unknown_for_turn("provider-1", "turn-1").len(), 2);
+        assert_eq!(
+            stream
+                .map_item(
+                    Phase::Started,
+                    "provider-1",
+                    Some("turn-2"),
+                    &second,
+                    &item("inProgress")
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

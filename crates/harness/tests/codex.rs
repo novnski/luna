@@ -1439,6 +1439,256 @@ async fn approval_no_answer_becomes_decline() {
 }
 
 #[tokio::test]
+async fn computer_use_approval_and_provider_evidence_stay_on_exact_turn() {
+    let (controls, _steer, _token) = controls("Allow once");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        computer_use_request("scenario:computer-use:allow", home.path()),
+        controls,
+    )
+    .await;
+    let calls: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ToolCall {
+                call:
+                    ToolCall::ComputerUse {
+                        status,
+                        app,
+                        screenshot_observed,
+                        ..
+                    },
+                ..
+            } => Some((*status, app.as_deref(), *screenshot_observed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            (
+                zeron_proto::ComputerUseStatus::Running,
+                Some("Finder"),
+                false
+            ),
+            (
+                zeron_proto::ComputerUseStatus::ProviderCompleted,
+                Some("Finder"),
+                true
+            ),
+        ],
+        "{events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+            .count(),
+        1
+    );
+    assert!(!format!("{events:?}").contains("private pixels"));
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn computer_use_denial_has_no_computer_action() {
+    let (controls, _steer, _token) = controls("Deny");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        computer_use_request("scenario:computer-use:deny", home.path()),
+        controls,
+    )
+    .await;
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse { .. },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn computer_use_without_luna_task_binding_remains_unavailable() {
+    let (controls, _steer, _token) = controls("Allow once");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        isolated_computer_request("scenario:computer-use:allow", home.path()),
+        controls,
+    )
+    .await;
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse { .. },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn provider_permission_event_uses_exact_turn_and_one_request_grant() {
+    let home = tempfile::tempdir().unwrap();
+    for (scenario, choice) in [
+        ("scenario:computer-use:permission-allow", "Allow once"),
+        ("scenario:computer-use:permission-deny", "Deny"),
+    ] {
+        let (controls, _steer, _token) = controls(choice);
+        let events = run_to_end(
+            &harness(),
+            computer_use_request(scenario, home.path()),
+            controls,
+        )
+        .await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                })
+            ),
+            "{scenario}: {events:?}"
+        );
+    }
+}
+
+fn isolated_computer_request(prompt: &str, home: &std::path::Path) -> RunRequest {
+    let mut request = request(prompt);
+    request.model_options.insert(
+        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        home.to_string_lossy().to_string().into(),
+    );
+    request
+}
+
+fn computer_use_request(prompt: &str, home: &std::path::Path) -> RunRequest {
+    let mut request = isolated_computer_request(prompt, home);
+    let mut contract = synthetic_runtime_contract();
+    contract.tools.clear();
+    request.model_options.insert(
+        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        serde_json::to_value(contract).unwrap(),
+    );
+    request
+}
+
+#[tokio::test]
+async fn computer_use_disconnect_reports_unknown_without_replay() {
+    let (controls, _steer, _token) = controls("Deny");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        computer_use_request("scenario:computer-use:disconnect", home.path()),
+        controls,
+    )
+    .await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    ..
+                },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn computer_use_interrupt_reports_unknown_without_provider_success() {
+    let (controls, _steer, token) = controls("Deny");
+    let home = tempfile::tempdir().unwrap();
+    let mut stream = harness()
+        .run(
+            computer_use_request("scenario:computer-use:cancel", home.path()),
+            controls,
+        )
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = tokio::time::timeout(Duration::from_secs(10), stream.next())
+        .await
+        .unwrap()
+    {
+        let event = event.unwrap();
+        let started = matches!(
+            &event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::Running,
+                    ..
+                },
+                ..
+            }
+        );
+        events.push(event);
+        if started {
+            token.cancel();
+        }
+    }
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    ..
+                },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Interrupted,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
 async fn interrupt_sends_turn_interrupt_and_maps_aborted() {
     let (controls, _steer, token) = controls("Yes");
     let mut stream = harness()
