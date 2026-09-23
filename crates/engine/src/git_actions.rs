@@ -10,10 +10,14 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use zeron_proto::{
     GitActionKind, GitActionPreview, GitActionReceipt, GitActionRequest, GitFileState,
-    GitMessageRequest,
+    GitMessageRequest, GitPrStatus, GitPrStatusRequest,
 };
 
 use crate::Repos;
+use crate::source_control::{
+    BranchHeadContext, ChangeRequestError, ChangeRequestResolver, CheckoutSourceContext,
+    parse_git_remote,
+};
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
@@ -77,6 +81,65 @@ impl GitActions {
             return Err("Staged diff is too large to generate a message".into());
         }
         Ok(String::from_utf8(diff).map_err(|_| "Staged diff is not UTF-8".to_string())?)
+    }
+
+    /// Resolve a link/status through Zeron's existing GitHub provider. The
+    /// selected push remote owns this card's PR context; an unrelated tracking
+    /// remote must not silently supply a different repository's PR.
+    pub async fn pr_status(&self, request: GitPrStatusRequest) -> Result<GitPrStatus, String> {
+        let before = self.preview(&request.cwd).await?;
+        validate(&before, &request.checkout_id, &request.expected_token)?;
+        let mut selected_url = None;
+        let result = match before.remote.as_deref() {
+            None => GitPrStatus::UnsupportedHost,
+            Some(remote) => {
+                let root = Path::new(&before.cwd);
+                match git_string(root, &["remote", "get-url", "--push", remote]).await {
+                    Err(_) => GitPrStatus::Unavailable {
+                        reason: "Push remote is unavailable".into(),
+                    },
+                    Ok(url) if parse_git_remote(&url).is_none() => {
+                        selected_url = Some(url);
+                        GitPrStatus::UnsupportedHost
+                    }
+                    Ok(url) => {
+                        selected_url = Some(url.clone());
+                        let resolver = ChangeRequestResolver::new();
+                        match resolver.inspect_checkout(root).await {
+                            Err(error) => pr_lookup_error(error),
+                            Ok(source) => {
+                                match pr_source_for_push(source, &before.branch, remote, &url) {
+                                    None => GitPrStatus::Unavailable {
+                                        reason: "PR lookup for this push remote is unavailable; configure the branch tracking remote".into(),
+                                    },
+                                    Some(source) => match resolver.resolve_github_source(&source).await {
+                                        Ok(Some(change_request)) => GitPrStatus::Linked { change_request },
+                                        Ok(None) => GitPrStatus::NoMatch,
+                                        Err(error) => pr_lookup_error(error),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let after = self.preview(&request.cwd).await?;
+        validate_pr_context(&after, &request)?;
+        if let Some(remote) = after.remote.as_deref()
+            && let Some(url) = selected_url.as_deref()
+            && git_string(
+                Path::new(&after.cwd),
+                &["remote", "get-url", "--push", remote],
+            )
+            .await
+            .ok()
+            .as_deref()
+                != Some(url)
+        {
+            return Err("Push remote changed; refresh the preview".into());
+        }
+        Ok(result)
     }
 
     pub async fn execute(&self, request: GitActionRequest) -> Result<GitActionReceipt, String> {
@@ -277,6 +340,46 @@ impl GitActions {
             preview,
         })
     }
+}
+
+fn pr_lookup_error(error: ChangeRequestError) -> GitPrStatus {
+    match error {
+        ChangeRequestError::UnsupportedRepository => GitPrStatus::UnsupportedHost,
+        other => GitPrStatus::Unavailable {
+            reason: other.to_string(),
+        },
+    }
+}
+
+fn validate_pr_context(
+    preview: &GitActionPreview,
+    request: &GitPrStatusRequest,
+) -> Result<(), String> {
+    if preview.checkout_id != request.checkout_id
+        || preview.branch != request.branch
+        || preview.remote != request.remote
+    {
+        Err("Checkout branch or remote changed; refresh the preview".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn pr_source_for_push(
+    mut source: CheckoutSourceContext,
+    branch: &str,
+    remote: &str,
+    url: &str,
+) -> Option<CheckoutSourceContext> {
+    // The existing gh resolver runs inside the checkout. If its selected
+    // repository differs from Push, it cannot prove which repository it queried.
+    if source.branch.remote_name.as_deref() != Some(remote) {
+        return None;
+    }
+    // Push uses HEAD:refs/heads/<local branch>. An upstream with a different
+    // name must not link this card to that other branch's PR.
+    source.branch = BranchHeadContext::resolve(branch, None, Some(remote), Some(url));
+    Some(source)
 }
 
 fn validate(snapshot: &GitActionPreview, checkout_id: &str, token: &str) -> Result<(), String> {
@@ -585,6 +688,79 @@ mod tests {
             message: Some("Update selected file".into()),
             remote: preview.remote.clone(),
         }
+    }
+
+    fn pr_request(preview: &GitActionPreview) -> GitPrStatusRequest {
+        GitPrStatusRequest {
+            cwd: preview.cwd.clone(),
+            checkout_id: preview.checkout_id.clone(),
+            expected_token: preview.token.clone(),
+            branch: preview.branch.clone(),
+            remote: preview.remote.clone(),
+        }
+    }
+
+    #[test]
+    fn pr_link_uses_pushed_branch_even_when_upstream_tracks_another_name() {
+        let url = "git@github.invalid:alice/repo.git";
+        let source = CheckoutSourceContext {
+            checkout_root: PathBuf::from("/not-used"),
+            branch: BranchHeadContext::resolve(
+                "local-feature",
+                Some("origin/other-feature"),
+                Some("origin"),
+                Some(url),
+            ),
+            default_branch: Some("main".into()),
+        };
+        assert_eq!(source.branch.head_branch, "other-feature");
+        let pushed = pr_source_for_push(source, "local-feature", "origin", url).unwrap();
+        assert_eq!(pushed.branch.head_branch, "local-feature");
+        assert_eq!(
+            pushed.branch.head_selectors,
+            ["alice:local-feature", "local-feature"]
+        );
+        assert!(pr_source_for_push(pushed, "local-feature", "fork", url).is_none());
+    }
+
+    #[tokio::test]
+    async fn pr_status_explicitly_rejects_local_bare_remote() {
+        let (dir, service, cwd) = fixture();
+        let root = Path::new(&cwd);
+        let bare = dir.path().join("bare.git");
+        std::fs::create_dir(&bare).unwrap();
+        run(&bare, &["init", "-q", "--bare"]);
+        run(root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        let preview = service.preview(&cwd).await.unwrap();
+        assert_eq!(
+            service.pr_status(pr_request(&preview)).await.unwrap(),
+            GitPrStatus::UnsupportedHost
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_status_rejects_stale_branch_preview_before_provider_lookup() {
+        let (_dir, service, cwd) = fixture();
+        let root = Path::new(&cwd);
+        let preview = service.preview(&cwd).await.unwrap();
+        run(root, &["switch", "-q", "-c", "topic"]);
+        assert!(
+            service
+                .pr_status(pr_request(&preview))
+                .await
+                .unwrap_err()
+                .contains("changed")
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_context_remains_valid_when_only_file_token_changes() {
+        let (_dir, service, cwd) = fixture();
+        let preview = service.preview(&cwd).await.unwrap();
+        let request = pr_request(&preview);
+        let mut after = preview;
+        after.token = "new worktree contents".into();
+        assert!(validate_pr_context(&after, &request).is_ok());
     }
 
     #[tokio::test]

@@ -3,6 +3,7 @@
 //! Process execution and provider calls intentionally live outside this layer so
 //! remote parsing and head selector construction remain deterministic and testable.
 
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -200,11 +201,20 @@ impl GitHubCli {
         source: &CheckoutSourceContext,
         selector: &str,
     ) -> Result<Vec<GhPullRequest>, ChangeRequestError> {
+        let (Some(host), Some(owner), Some(repository)) = (
+            source.branch.host.as_deref(),
+            source.branch.owner.as_deref(),
+            source.branch.repository.as_deref(),
+        ) else {
+            return Err(ChangeRequestError::UnsupportedRepository);
+        };
         let request = ProcessRequest {
             program: "gh".into(),
             args: vec![
                 "pr".into(),
                 "list".into(),
+                "--repo".into(),
+                format!("{host}/{owner}/{repository}"),
                 "--head".into(),
                 selector.into(),
                 "--state".into(),
@@ -292,8 +302,17 @@ impl ChangeRequestProvider for GitHubCli {
             return Ok(None);
         }
 
+        let mut tried_branches = HashSet::new();
         for selector in &source.branch.head_selectors {
-            let candidates = self.list_for_selector(source, selector).await?;
+            // `gh pr list --head` accepts only a branch name, not
+            // `owner:branch`. Keep the owner check on returned rows below.
+            let branch = selector
+                .rsplit_once(':')
+                .map_or(selector.as_str(), |(_, branch)| branch);
+            if !tried_branches.insert(branch) {
+                continue;
+            }
+            let candidates = self.list_for_selector(source, branch).await?;
             if candidates.is_empty() {
                 continue;
             }
@@ -1032,8 +1051,10 @@ mod tests {
             [
                 "pr",
                 "list",
+                "--repo",
+                "github.com/acme/zeron",
                 "--head",
-                "acme:feature/status",
+                "feature/status",
                 "--state",
                 "all",
                 "--limit",
@@ -1045,6 +1066,26 @@ mod tests {
         assert_eq!(requests[0].env, [("GH_PROMPT_DISABLED".into(), "1".into())]);
         assert_eq!(requests[0].timeout, GITHUB_TIMEOUT);
         assert_eq!(requests[0].output_limit, GITHUB_OUTPUT_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn github_cli_selects_the_inspected_enterprise_repository() {
+        let mut source = source("feature/status", "acme", Some("main"));
+        source.branch.host = Some("github.example.com".into());
+        source.branch.repository = Some("mobile".into());
+        let json = serde_json::to_vec(&vec![pull_request(
+            91,
+            "OPEN",
+            "acme",
+            "feature/status",
+            "2026-08-15T12:00:00Z",
+        )])
+        .unwrap();
+        let (result, runner) = resolve_with(&source, command_success(json)).await;
+        assert_eq!(result.unwrap().unwrap().number, 91);
+        let requests = runner.requests();
+        assert_eq!(requests[0].args[3], "github.example.com/acme/mobile");
+        assert_eq!(requests[0].args[5], "feature/status");
     }
 
     #[tokio::test]
@@ -1303,29 +1344,18 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
     }
 
     #[tokio::test]
-    async fn empty_specific_lookup_uses_the_next_safe_selector() {
+    async fn empty_branch_lookup_does_not_repeat_owner_prefixed_selector() {
         let source = source("feature/status", "acme", Some("main"));
-        let json = serde_json::to_vec(&vec![pull_request(
-            100,
-            "OPEN",
-            "acme",
-            "feature/status",
-            "2026-08-15T12:00:00Z",
-        )])
-        .unwrap();
-        let runner = FakeProcessRunner::with_responses([
-            command_success(b"[]".to_vec()),
-            command_success(json),
-        ]);
+        let runner = FakeProcessRunner::with_responses([command_success(b"[]".to_vec())]);
         let github = GitHubCli::with_runner(runner.clone());
 
-        let result = github.find_for_branch(&source).await.unwrap().unwrap();
+        let result = github.find_for_branch(&source).await.unwrap();
 
-        assert_eq!(result.number, 100);
+        assert!(result.is_none());
         let requests = runner.requests();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].args[3], "acme:feature/status");
-        assert_eq!(requests[1].args[3], "feature/status");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].args[3], "github.com/acme/zeron");
+        assert_eq!(requests[0].args[5], "feature/status");
     }
 
     #[tokio::test]

@@ -43,7 +43,7 @@ use gpui::{
 };
 use unicode_width::UnicodeWidthChar as _;
 
-use zeron_proto::{Chat, CheckoutDiff, GitActionPreview, GitHistoryCommit};
+use zeron_proto::{Chat, CheckoutDiff, GitActionPreview, GitHistoryCommit, GitPrStatus};
 use zeron_rpc::methods;
 
 use crate::comments::{self, CommentSide, ReviewComment};
@@ -1704,6 +1704,8 @@ pub struct Changes {
     git_busy: bool,
     git_notice: Option<String>,
     git_task: Option<Task<()>>,
+    git_pr_status: Option<GitPrStatus>,
+    git_pr_task: Option<Task<()>>,
     _observe: Subscription,
 }
 
@@ -1792,6 +1794,8 @@ impl Changes {
             git_busy: false,
             git_notice: None,
             git_task: None,
+            git_pr_status: None,
+            git_pr_task: None,
             _observe: observe,
         }
     }
@@ -4910,6 +4914,8 @@ impl Render for Changes {
             if current != self.git_target {
                 self.git_preview = None;
                 self.git_selected.clear();
+                self.git_pr_status = None;
+                self.git_pr_task = None;
                 self.git_target = current;
                 self.load_git(cx);
             }
