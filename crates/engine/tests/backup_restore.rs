@@ -1,6 +1,7 @@
 //! L17 tests use only fresh synthetic roots and an injected fake key.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -60,6 +61,24 @@ fn service(root: &Path) -> BackupService {
         IsolatedRoot::open(root).unwrap(),
         RecoveryKey::injected([17; 32]),
     )
+}
+
+#[test]
+fn bb_style_archive_is_gzip_manifest_verified_and_staged_without_a_key() {
+    let (_parent, root, backups) = fixture();
+    let backup = BackupService::new_bb_style(IsolatedRoot::open(&root).unwrap());
+    let receipt = backup.backup_now(&backups, 1_700_000_000_000).unwrap();
+    assert_eq!(receipt.manifest.format_version, 3);
+    assert_eq!(receipt.archive.extension().unwrap(), "gz");
+    let mut prefix = [0u8; 2];
+    fs::File::open(&receipt.archive)
+        .unwrap()
+        .read_exact(&mut prefix)
+        .unwrap();
+    assert_eq!(prefix, [0x1f, 0x8b]);
+    let staged = backup.stage_restore(&receipt.archive).unwrap();
+    backup.verify_staged_for_tests(&staged).unwrap();
+    assert_eq!(staged.preview.manifest, receipt.manifest);
 }
 
 fn copy_synthetic_tree(source: &Path, target: &Path) {

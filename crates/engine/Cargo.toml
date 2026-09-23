@@ -33,6 +33,8 @@ libc.workspace = true
 gethostname.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 sha2.workspace = true
+flate2.workspace = true
+tar.workspace = true
 aes-gcm.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true

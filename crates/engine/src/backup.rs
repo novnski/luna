@@ -1,6 +1,6 @@
-//! L17 offline backup core. Every filesystem entry point requires a deliberately
-//! marked synthetic or copy-isolated root. The production engine/Keychain/RPC
-//! integration must supply a separate authority boundary before using this.
+//! L17 offline backup core. Every filesystem entry point currently requires a
+//! deliberately marked synthetic or copy-isolated root. Product backup still
+//! needs an offline lifecycle and destination authority boundary.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use chrono::{Datelike, Utc};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use getrandom::fill as random_fill;
 use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
@@ -283,7 +284,12 @@ pub struct RestoreReceipt {
 
 pub struct BackupService {
     root: IsolatedRoot,
-    key: RecoveryKey,
+    codec: ArchiveCodec,
+}
+
+enum ArchiveCodec {
+    Encrypted(RecoveryKey),
+    BbStylePlain,
 }
 
 struct SourceEntry {
@@ -293,10 +299,36 @@ struct SourceEntry {
 
 impl BackupService {
     pub fn new(root: IsolatedRoot, key: RecoveryKey) -> Self {
-        Self { root, key }
+        Self {
+            root,
+            codec: ArchiveCodec::Encrypted(key),
+        }
     }
 
-    /// Encrypted manual export to a caller-selected destination. Existing
+    /// BB-style private gzip/tar archive. Entries are checksummed but not
+    /// encrypted; caller must keep the archive in a private destination.
+    pub fn new_bb_style(root: IsolatedRoot) -> Self {
+        Self {
+            root,
+            codec: ArchiveCodec::BbStylePlain,
+        }
+    }
+
+    fn inspect(&self, path: &Path) -> Result<BackupManifest> {
+        match &self.codec {
+            ArchiveCodec::Encrypted(key) => inspect_archive(path, key),
+            ArchiveCodec::BbStylePlain => inspect_bb_style_archive(path),
+        }
+    }
+
+    fn archive_suffix(&self) -> &'static str {
+        match &self.codec {
+            ArchiveCodec::Encrypted(_) => "lunabk",
+            ArchiveCodec::BbStylePlain => "tar.gz",
+        }
+    }
+
+    /// Manual export to a caller-selected destination. Existing
     /// archives are never overwritten; successful output is reopen-verified.
     pub fn export(&self, destination: &Path) -> Result<BackupReceipt> {
         self.export_at(destination, now_ms(), None)
@@ -326,7 +358,12 @@ impl BackupService {
     /// can use [`Self::backup_if_due`] with the same verified output path.
     pub fn backup_now(&self, destination_dir: &Path, now_ms: i64) -> Result<BackupReceipt> {
         ensure_isolated_destination(destination_dir)?;
-        let name = format!("luna-{}-{}.lunabk", now_ms, uuid::Uuid::new_v4());
+        let name = format!(
+            "luna-{}-{}.{}",
+            now_ms,
+            uuid::Uuid::new_v4(),
+            self.archive_suffix()
+        );
         self.export_at(&destination_dir.join(name), now_ms, None)
     }
 
@@ -340,7 +377,7 @@ impl BackupService {
     ) -> Result<Option<BackupReceipt>> {
         if let Some(previous) = last_success {
             if hash_file(&previous.archive)? != previous.archive_sha256
-                || inspect_archive(&previous.archive, &self.key)? != previous.manifest
+                || self.inspect(&previous.archive)? != previous.manifest
             {
                 return Err(BackupError::Invalid(
                     "previous backup receipt is not verified".into(),
@@ -355,7 +392,12 @@ impl BackupService {
             }
         }
         ensure_isolated_destination(destination_dir)?;
-        let name = format!("luna-{}-{}.lunabk", now_ms, uuid::Uuid::new_v4());
+        let name = format!(
+            "luna-{}-{}.{}",
+            now_ms,
+            uuid::Uuid::new_v4(),
+            self.archive_suffix()
+        );
         self.export_at(
             &destination_dir.join(name),
             now_ms,
@@ -402,7 +444,10 @@ impl BackupService {
             None
         };
         let manifest = BackupManifest {
-            format_version: 2,
+            format_version: match &self.codec {
+                ArchiveCodec::Encrypted(_) => 2,
+                ArchiveCodec::BbStylePlain => 3,
+            },
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
             created_at_ms,
             source_environment_id,
@@ -419,21 +464,26 @@ impl BackupService {
             return Err(BackupError::Invalid("manifest too large".into()));
         }
         let mut output = NamedTempFile::new_in(parent)?;
-        {
-            let mut cipher = EncryptedWriter::new(output.as_file_mut(), &self.key)?;
-            cipher.write_all(&(json.len() as u32).to_be_bytes())?;
-            cipher.write_all(&json)?;
-            for entry in &entries {
-                let mut file = File::open(&entry.source)?;
-                let (size, digest) = copy_and_hash(&mut file, &mut cipher)?;
-                if size != entry.manifest.size || digest != entry.manifest.sha256 {
-                    return Err(BackupError::SourceChanged(entry.manifest.path.clone()));
+        match &self.codec {
+            ArchiveCodec::Encrypted(key) => {
+                let mut cipher = EncryptedWriter::new(output.as_file_mut(), key)?;
+                cipher.write_all(&(json.len() as u32).to_be_bytes())?;
+                cipher.write_all(&json)?;
+                for entry in &entries {
+                    let mut file = File::open(&entry.source)?;
+                    let (size, digest) = copy_and_hash(&mut file, &mut cipher)?;
+                    if size != entry.manifest.size || digest != entry.manifest.sha256 {
+                        return Err(BackupError::SourceChanged(entry.manifest.path.clone()));
+                    }
                 }
+                cipher.finish()?;
             }
-            cipher.finish()?;
+            ArchiveCodec::BbStylePlain => {
+                write_bb_style_archive(output.as_file_mut(), &json, &entries)?;
+            }
         }
         output.as_file_mut().sync_all()?;
-        let verified = inspect_archive(output.path(), &self.key)?;
+        let verified = self.inspect(output.path())?;
         if verified != manifest {
             return Err(BackupError::Invalid("reopened manifest differs".into()));
         }
@@ -1143,7 +1193,7 @@ fn validate_entry_path(path: &str, category: &str) -> Result<()> {
 }
 
 fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
-    if !matches!(manifest.format_version, 1 | 2)
+    if !matches!(manifest.format_version, 1..=3)
         || manifest.entries.len() > MAX_ENTRIES
         || manifest.databases.is_empty()
     {
@@ -1196,7 +1246,7 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
             .into_iter()
             .flatten()
             .any(|value| value < 0)
-            || (manifest.format_version == 2
+            || (manifest.format_version >= 2
                 && (db.projects.is_none() || db.tasks.is_none() || db.attachment_blobs.is_none())
                 && db.derived_rebuild_blocker.is_none())
             || !db_paths.insert(&db.path)
@@ -1307,6 +1357,115 @@ fn ensure_isolated_destination(path: &Path) -> Result<()> {
 /// backup configuration. The marker is prepared outside this API.
 pub fn validate_isolated_destination(path: &Path) -> Result<()> {
     ensure_isolated_destination(path)
+}
+
+const BB_STYLE_MANIFEST: &str = "manifest.json";
+
+fn bb_style_header(size: u64) -> tar::Header {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(size);
+    header.set_mode(0o600);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_cksum();
+    header
+}
+
+fn write_bb_style_archive(output: &mut File, json: &[u8], entries: &[SourceEntry]) -> Result<()> {
+    let gzip = GzEncoder::new(output, Compression::default());
+    let mut tar = tar::Builder::new(gzip);
+    tar.append_data(
+        &mut bb_style_header(json.len() as u64),
+        BB_STYLE_MANIFEST,
+        json,
+    )?;
+    for entry in entries {
+        let file = File::open(&entry.source)?;
+        tar.append_data(
+            &mut bb_style_header(entry.manifest.size),
+            &entry.manifest.path,
+            file,
+        )?;
+        let (size, digest) = measure_file(&entry.source)?;
+        if size != entry.manifest.size || digest != entry.manifest.sha256 {
+            return Err(BackupError::SourceChanged(entry.manifest.path.clone()));
+        }
+    }
+    let gzip = tar.into_inner()?;
+    gzip.finish()?;
+    Ok(())
+}
+
+fn read_bb_style_archive(path: &Path, stage: Option<&Path>) -> Result<BackupManifest> {
+    ensure_real_file(path)?;
+    let gzip = GzDecoder::new(File::open(path)?);
+    let mut archive = tar::Archive::new(gzip);
+    let mut entries = archive.entries()?;
+    let mut first = entries
+        .next()
+        .ok_or_else(|| BackupError::Invalid("archive has no manifest".into()))??;
+    if !first.header().entry_type().is_file()
+        || first.path()?.as_ref() != Path::new(BB_STYLE_MANIFEST)
+        || first.size() > MAX_MANIFEST as u64
+    {
+        return Err(BackupError::Invalid(
+            "archive manifest entry is invalid".into(),
+        ));
+    }
+    let mut json = Vec::with_capacity(first.size() as usize);
+    first.read_to_end(&mut json)?;
+    drop(first);
+    let manifest: BackupManifest = serde_json::from_slice(&json)?;
+    if manifest.format_version != 3 {
+        return Err(BackupError::Invalid(
+            "BB-style manifest version differs".into(),
+        ));
+    }
+    validate_manifest(&manifest)?;
+    for expected in &manifest.entries {
+        let mut entry = entries
+            .next()
+            .ok_or_else(|| BackupError::Invalid("archive entry is missing".into()))??;
+        if !entry.header().entry_type().is_file()
+            || entry.path()?.as_ref() != Path::new(&expected.path)
+            || entry.size() != expected.size
+        {
+            return Err(BackupError::Invalid(format!(
+                "archive entry differs: {}",
+                expected.path
+            )));
+        }
+        let digest = if let Some(stage) = stage {
+            let dest = stage.join(&expected.path);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut file = create_private_file(&dest)?;
+            let (_, digest) = copy_and_hash(&mut entry, &mut file)?;
+            file.sync_all()?;
+            digest
+        } else {
+            let (_, digest) = copy_and_hash(&mut entry, &mut io::sink())?;
+            digest
+        };
+        if digest != expected.sha256 {
+            return Err(BackupError::Invalid(format!(
+                "digest mismatch: {}",
+                expected.path
+            )));
+        }
+    }
+    if entries.next().is_some() {
+        return Err(BackupError::Invalid("archive has excess entries".into()));
+    }
+    Ok(manifest)
+}
+
+fn inspect_bb_style_archive(path: &Path) -> Result<BackupManifest> {
+    read_bb_style_archive(path, None)
+}
+
+fn extract_bb_style_archive(path: &Path, stage: &Path) -> Result<BackupManifest> {
+    read_bb_style_archive(path, Some(stage))
 }
 
 /// Independently authenticated frames keep memory bounded and authenticate
@@ -1562,10 +1721,10 @@ pub fn inspect_archive(path: &Path, key: &RecoveryKey) -> Result<BackupManifest>
 }
 
 impl BackupService {
-    /// Decrypt and verify every entry before extracting. Preview never writes
+    /// Verify every entry before extracting. Preview never writes
     /// to the current root; it reports path and compatibility limits.
     pub fn preview_restore(&self, archive: &Path) -> Result<RestorePreview> {
-        let manifest = inspect_archive(archive, &self.key)?;
+        let manifest = self.inspect(archive)?;
         let mut conflicts = Vec::new();
         for entry in &manifest.entries {
             if self.root.path().join(&entry.path).exists() {
@@ -1733,7 +1892,10 @@ impl BackupService {
         create_private_dir(&stage)?;
         let extraction = (|| -> Result<()> {
             fs::write(stage.join(ISOLATION_MARKER), ISOLATION_VALUE)?;
-            let extracted_manifest = extract_archive(archive, &self.key, &stage)?;
+            let extracted_manifest = match &self.codec {
+                ArchiveCodec::Encrypted(key) => extract_archive(archive, key, &stage)?,
+                ArchiveCodec::BbStylePlain => extract_bb_style_archive(archive, &stage)?,
+            };
             if extracted_manifest != preview.manifest {
                 return Err(BackupError::SourceChanged(
                     "archive changed after preview".into(),

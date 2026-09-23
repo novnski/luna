@@ -119,6 +119,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
 aes-gcm = "0.10"
 getrandom = "0.3"
 zeroize = "1"
