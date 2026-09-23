@@ -5,14 +5,24 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
-use zeron_engine::cross_task_tools::{CrossTaskAuthority, CrossTaskError, CrossTaskTools};
+use zeron_engine::cross_task_tools::{
+    CrossTaskAuthority, CrossTaskControlGrant, CrossTaskError, CrossTaskTools,
+};
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_proto::{
     ACTIVITY_ENVELOPE_VERSION, ActivityEnvelope, ActivityKind, ActivityOutcome, ActivityRedaction,
-    ActivitySourceRef, CrossTaskListRequest, CrossTaskReadRequest, CrossTaskSendMode,
-    CrossTaskSendRequest, CrossTaskWaitRequest, CrossTaskWaitTarget, HarnessId, RuntimeDelivery,
-    Session, SessionStatus, TaskLineage,
+    ActivitySourceRef, CrossTaskControlAction, CrossTaskControlRequest, CrossTaskListRequest,
+    CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendRequest, CrossTaskWaitRequest,
+    CrossTaskWaitTarget, HarnessId, RuntimeDelivery, Session, SessionStatus, TaskLineage,
 };
+
+fn control_grant(caller: &str, request: &CrossTaskControlRequest) -> CrossTaskControlGrant {
+    CrossTaskControlGrant {
+        caller_task_id: caller.into(),
+        request: request.clone(),
+        expires_at_ms: chrono::Utc::now().timestamp_millis() + 30_000,
+    }
+}
 
 fn account_config(root: &std::path::Path) -> AgentAccountsConfig {
     let config = AgentAccountsConfig {
@@ -221,7 +231,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
     core.workspace.record_session(&Session {
         last_completed_turn: Some("synthetic-turn".into()),
         chat_id: task_a.clone(),
-        device_id: device,
+        device_id: device.clone(),
         status: SessionStatus::Idle,
         started_at: None,
         updated_at: chrono::Utc::now(),
@@ -258,6 +268,203 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         .await
         .unwrap();
     assert!(unchanged.timed_out);
+
+    let mut control_authority = authority.clone();
+    control_authority.explicit_user_request = true;
+    control_authority
+        .granted_scopes
+        .insert("threads.manage".into());
+    let new_task = uuid::Uuid::new_v4().to_string();
+    let create = CrossTaskControlRequest {
+        action: CrossTaskControlAction::Create,
+        task_id: new_task.clone(),
+        project_id: "project-a".into(),
+        environment_id: device.clone(),
+        command_id: "synthetic-create".into(),
+        destination_project_id: None,
+        expected_task_revision: None,
+        expected_binding_generation: None,
+        expected_turn_id: None,
+    };
+    let created = tools
+        .control(
+            &control_authority,
+            &control_grant(&task_a, &create),
+            create.clone(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        created.command.status,
+        zeron_proto::CommandReceiptStatus::Applied
+    );
+    assert!(core.workspace.chat(&new_task).unwrap().is_some());
+    let created_retry = tools
+        .control(
+            &control_authority,
+            &control_grant(&task_a, &create),
+            create,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(created_retry.command.command_id, created.command.command_id);
+
+    let snapshot = core
+        .doc_host
+        .task_command_snapshot(&task_c)
+        .unwrap()
+        .snapshot;
+    let archive = CrossTaskControlRequest {
+        action: CrossTaskControlAction::Archive,
+        task_id: task_c.clone(),
+        project_id: "project-a".into(),
+        environment_id: device.clone(),
+        command_id: "synthetic-archive".into(),
+        destination_project_id: None,
+        expected_task_revision: Some(snapshot.task_revision),
+        expected_binding_generation: snapshot.binding_generation,
+        expected_turn_id: None,
+    };
+    let denied = tools
+        .control(
+            &authority,
+            &control_grant(&task_a, &archive),
+            archive.clone(),
+            &cancel,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(denied, CrossTaskError::Scope);
+    let archived = tools
+        .control(
+            &control_authority,
+            &control_grant(&task_a, &archive),
+            archive.clone(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        archived.command.status,
+        zeron_proto::CommandReceiptStatus::Applied
+    );
+    assert!(core.workspace.chat(&task_c).unwrap().unwrap().archived);
+    let retried = tools
+        .control(
+            &control_authority,
+            &control_grant(&task_a, &archive),
+            archive,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retried.command.command_id, archived.command.command_id);
+
+    let snapshot = core
+        .doc_host
+        .task_command_snapshot(&task_c)
+        .unwrap()
+        .snapshot;
+    let unarchive = CrossTaskControlRequest {
+        action: CrossTaskControlAction::Unarchive,
+        task_id: task_c.clone(),
+        project_id: "project-a".into(),
+        environment_id: device.clone(),
+        command_id: "synthetic-unarchive".into(),
+        destination_project_id: None,
+        expected_task_revision: Some(snapshot.task_revision),
+        expected_binding_generation: snapshot.binding_generation,
+        expected_turn_id: None,
+    };
+    let unarchived = tools
+        .control(
+            &control_authority,
+            &control_grant(&task_a, &unarchive),
+            unarchive,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        unarchived.command.status,
+        zeron_proto::CommandReceiptStatus::Applied
+    );
+    assert!(!core.workspace.chat(&task_c).unwrap().unwrap().archived);
+
+    let mut move_authority = control_authority.clone();
+    move_authority
+        .visible_project_ids
+        .insert("project-b".into());
+    let snapshot = core
+        .doc_host
+        .task_command_snapshot(&task_c)
+        .unwrap()
+        .snapshot;
+    let move_request = CrossTaskControlRequest {
+        action: CrossTaskControlAction::Move,
+        task_id: task_c.clone(),
+        project_id: "project-a".into(),
+        environment_id: device.clone(),
+        command_id: "synthetic-move".into(),
+        destination_project_id: Some("project-b".into()),
+        expected_task_revision: Some(snapshot.task_revision),
+        expected_binding_generation: snapshot.binding_generation,
+        expected_turn_id: None,
+    };
+    let move_result = tools
+        .control(
+            &move_authority,
+            &control_grant(&task_a, &move_request),
+            move_request,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        move_result.command.status,
+        zeron_proto::CommandReceiptStatus::Applied
+    );
+    assert_eq!(
+        core.workspace
+            .chat(&task_c)
+            .unwrap()
+            .unwrap()
+            .space_id
+            .as_deref(),
+        Some("project-a")
+    );
+
+    let snapshot = core
+        .doc_host
+        .task_command_snapshot(&task_c)
+        .unwrap()
+        .snapshot;
+    let interrupt = CrossTaskControlRequest {
+        action: CrossTaskControlAction::Interrupt,
+        task_id: task_c.clone(),
+        project_id: "project-a".into(),
+        environment_id: device.clone(),
+        command_id: "synthetic-stop".into(),
+        destination_project_id: None,
+        expected_task_revision: Some(snapshot.task_revision),
+        expected_binding_generation: snapshot.binding_generation,
+        expected_turn_id: Some("absent-turn".into()),
+    };
+    let stopped = tools
+        .control(
+            &control_authority,
+            &control_grant(&task_a, &interrupt),
+            interrupt,
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stopped.command.status,
+        zeron_proto::CommandReceiptStatus::Conflict
+    );
 
     let mut send_authority = authority;
     send_authority.explicit_user_request = true;

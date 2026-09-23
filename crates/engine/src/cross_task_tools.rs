@@ -11,11 +11,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use zeron_proto::{
-    CommandReasonCode, CommandReceiptStatus, CrossTaskListPage, CrossTaskListRequest,
-    CrossTaskReadPage, CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendReceipt,
-    CrossTaskSendRequest, CrossTaskSummary, CrossTaskWaitEvent, CrossTaskWaitRequest,
-    CrossTaskWaitResult, OmittedRuntimeTool, RuntimeContext, RuntimeDelivery,
-    RuntimeToolDefinition,
+    CommandReasonCode, CommandReceiptStatus, CrossTaskControlAction, CrossTaskControlReceipt,
+    CrossTaskControlRequest, CrossTaskListPage, CrossTaskListRequest, CrossTaskReadPage,
+    CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendReceipt, CrossTaskSendRequest,
+    CrossTaskSummary, CrossTaskWaitEvent, CrossTaskWaitRequest, CrossTaskWaitResult,
+    OmittedRuntimeTool, RuntimeContext, RuntimeDelivery, RuntimeToolDefinition,
 };
 
 const MAX_PAGE: usize = 20;
@@ -68,6 +68,16 @@ impl CrossTaskAuthority {
             delivery,
         }
     }
+}
+
+/// Exact, short-lived authorization minted from a trusted user action by a
+/// future caller. No current provider-run path mints one, so controls stay out
+/// of model catalogs. This value is never deserialized from tool arguments.
+#[derive(Debug, Clone)]
+pub struct CrossTaskControlGrant {
+    pub caller_task_id: String,
+    pub request: CrossTaskControlRequest,
+    pub expires_at_ms: i64,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -127,6 +137,14 @@ pub trait CrossTaskBackend: Send + Sync {
         &self,
         request: CrossTaskWaitRequest,
     ) -> Result<Option<CrossTaskWaitEvent>, CrossTaskError>;
+    async fn control(
+        &self,
+        _request: CrossTaskControlRequest,
+        _authority: &CrossTaskAuthority,
+        _grant: &CrossTaskControlGrant,
+    ) -> Result<CrossTaskControlReceipt, CrossTaskError> {
+        Err(CrossTaskError::Unsupported)
+    }
 }
 
 #[async_trait]
@@ -163,6 +181,14 @@ impl<T: CrossTaskBackend + ?Sized> CrossTaskBackend for Arc<T> {
     ) -> Result<Option<CrossTaskWaitEvent>, CrossTaskError> {
         (**self).wait_event(request).await
     }
+    async fn control(
+        &self,
+        request: CrossTaskControlRequest,
+        authority: &CrossTaskAuthority,
+        grant: &CrossTaskControlGrant,
+    ) -> Result<CrossTaskControlReceipt, CrossTaskError> {
+        (**self).control(request, authority, grant).await
+    }
 }
 
 pub struct CrossTaskTools<B> {
@@ -172,6 +198,115 @@ pub struct CrossTaskTools<B> {
 impl<B: CrossTaskBackend> CrossTaskTools<B> {
     pub fn new(backend: B) -> Self {
         Self { backend }
+    }
+
+    /// Internal control path. A model request alone can never supply `grant`.
+    pub async fn control(
+        &self,
+        authority: &CrossTaskAuthority,
+        grant: &CrossTaskControlGrant,
+        request: CrossTaskControlRequest,
+        cancel: &CancellationToken,
+    ) -> Result<CrossTaskControlReceipt, CrossTaskError> {
+        self.check(authority, "threads.manage", true)?;
+        if !authority.explicit_user_request
+            || grant.caller_task_id != authority.caller_task_id
+            || grant.request != request
+            || grant.expires_at_ms <= crate::now_ms()
+            || grant.expires_at_ms > crate::now_ms().saturating_add(60_000)
+        {
+            return Err(CrossTaskError::UserRequest);
+        }
+        if request.environment_id != authority.local_environment_id
+            || !authority.visible_project_ids.contains(&request.project_id)
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        if request.task_id.is_empty()
+            || request.task_id.len() > 128
+            || request.project_id.is_empty()
+            || request.project_id.len() > 128
+            || !valid_key(&request.command_id)
+        {
+            return Err(CrossTaskError::Input);
+        }
+        match request.action {
+            CrossTaskControlAction::Create => {
+                if uuid::Uuid::parse_str(&request.task_id).is_err()
+                    || request.expected_task_revision.is_some()
+                    || request.expected_binding_generation.is_some()
+                    || request.expected_turn_id.is_some()
+                    || request.destination_project_id.is_some()
+                {
+                    return Err(CrossTaskError::Input);
+                }
+            }
+            CrossTaskControlAction::Interrupt
+            | CrossTaskControlAction::Archive
+            | CrossTaskControlAction::Unarchive
+            | CrossTaskControlAction::Move => {
+                if request.task_id == authority.caller_task_id
+                    || request.expected_task_revision.is_none()
+                {
+                    return Err(CrossTaskError::Input);
+                }
+                let target = self.target(authority, &request.task_id, cancel).await?;
+                if target.project_id.as_deref() != Some(request.project_id.as_str()) {
+                    return Err(CrossTaskError::TargetScope);
+                }
+                match request.action {
+                    CrossTaskControlAction::Interrupt => {
+                        if request
+                            .expected_turn_id
+                            .as_deref()
+                            .is_none_or(str::is_empty)
+                            || request.destination_project_id.is_some()
+                        {
+                            return Err(CrossTaskError::Input);
+                        }
+                    }
+                    CrossTaskControlAction::Move => {
+                        if request.expected_turn_id.is_some()
+                            || request.destination_project_id.as_ref().is_none_or(|id| {
+                                id == &request.project_id
+                                    || !authority.visible_project_ids.contains(id)
+                            })
+                        {
+                            return Err(CrossTaskError::TargetScope);
+                        }
+                    }
+                    _ => {
+                        if request.expected_turn_id.is_some()
+                            || request.destination_project_id.is_some()
+                        {
+                            return Err(CrossTaskError::Input);
+                        }
+                    }
+                }
+            }
+        }
+        let receipt = with_cancel(
+            cancel,
+            self.backend.control(request.clone(), authority, grant),
+        )
+        .await?;
+        let intent = match request.action {
+            CrossTaskControlAction::Create => "createChat",
+            CrossTaskControlAction::Interrupt => "stop",
+            CrossTaskControlAction::Archive | CrossTaskControlAction::Unarchive => "setArchived",
+            CrossTaskControlAction::Move => "moveProject",
+        };
+        if receipt.task_id != request.task_id
+            || receipt.command.task_id != request.task_id
+            || receipt.command.command_id != request.command_id
+            || receipt.command.intent != intent
+            || receipt.observed_status.chars().count() > 80
+            || receipt.settled && !receipt.command.status.is_terminal()
+        {
+            return Err(CrossTaskError::InvalidBackendResult);
+        }
+        check_output(&receipt)?;
+        Ok(receipt)
     }
 
     pub async fn invoke(
@@ -923,6 +1058,62 @@ mod tests {
             omitted
                 .iter()
                 .any(|tool| tool.name == "send_message_to_thread")
+        );
+        assert!(!attached.iter().any(|tool| tool.name == "create_thread"));
+        assert!(!attached.iter().any(|tool| tool.name == "interrupt_thread"));
+    }
+
+    #[tokio::test]
+    async fn control_requires_exact_short_lived_user_grant() {
+        let tools = CrossTaskTools::new(FakeBackend::default());
+        let mut authority = authority();
+        authority.granted_scopes.insert("threads.manage".into());
+        let request = CrossTaskControlRequest {
+            action: CrossTaskControlAction::Archive,
+            task_id: "task-a".into(),
+            project_id: "project-a".into(),
+            environment_id: "local".into(),
+            command_id: "archive-a".into(),
+            destination_project_id: None,
+            expected_task_revision: Some(1),
+            expected_binding_generation: None,
+            expected_turn_id: None,
+        };
+        let grant = CrossTaskControlGrant {
+            caller_task_id: "caller".into(),
+            request: request.clone(),
+            expires_at_ms: crate::now_ms() + 30_000,
+        };
+        let cancel = CancellationToken::new();
+        let changed = CrossTaskControlRequest {
+            command_id: "archive-b".into(),
+            ..request.clone()
+        };
+        assert_eq!(
+            tools
+                .control(&authority, &grant, changed, &cancel)
+                .await
+                .unwrap_err(),
+            CrossTaskError::UserRequest
+        );
+        let far_future = CrossTaskControlGrant {
+            expires_at_ms: crate::now_ms() + 120_000,
+            ..grant.clone()
+        };
+        assert_eq!(
+            tools
+                .control(&authority, &far_future, request.clone(), &cancel)
+                .await
+                .unwrap_err(),
+            CrossTaskError::UserRequest
+        );
+        authority.explicit_user_request = false;
+        assert_eq!(
+            tools
+                .control(&authority, &grant, request, &cancel)
+                .await
+                .unwrap_err(),
+            CrossTaskError::UserRequest
         );
     }
 
