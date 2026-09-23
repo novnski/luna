@@ -8,15 +8,45 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use zeron_proto::{
-    HarnessId, InstructionSettingsView, IntegrationInventoryItem, IntegrationInventoryView,
-    IntegrationKind,
+    HarnessId, InstructionSettingsView, IntegrationActionAvailability, IntegrationActionFacts,
+    IntegrationHelpRoute, IntegrationInventoryItem, IntegrationInventoryView, IntegrationKind,
+    IntegrationOwner, IntegrationSkillScope,
 };
 
 use crate::EngineError;
 use crate::runtime_contract::InstructionContribution;
 
 const MAX_INSTRUCTION_CHARS: usize = 16_000;
+
+/// Identifier only, never an authorization token. Length framing prevents
+/// ambiguous tuples; the private source path is never returned to the UI.
+fn inventory_identity(machine_id: &str, source: &str, root: &Path, name: &str) -> String {
+    let mut hash = Sha256::new();
+    let root_text = root.to_string_lossy();
+    for value in [
+        "luna-integration-v1",
+        machine_id,
+        "codex",
+        source,
+        root_text.as_ref(),
+        name,
+    ] {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    format!("intg_v1_{:x}", hash.finalize())
+}
+
+fn unsupported_actions() -> IntegrationActionFacts {
+    IntegrationActionFacts {
+        enable: IntegrationActionAvailability::Unavailable,
+        disable: IntegrationActionAvailability::Unavailable,
+        authenticate: IntegrationActionAvailability::Unavailable,
+        reason: Some("No verified LUNA action for this integration source.".into()),
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -147,20 +177,30 @@ pub fn codex_inventory(
     machine_id: &str,
 ) -> IntegrationInventoryView {
     let mut items = Vec::new();
-    for (root, scope, source) in [
+    for (root, scope, source, source_id, owner, help_route) in [
         (
             Some(codex_home.join("skills")),
             "global",
             "Codex home / skills",
+            "codex-home-skill",
+            IntegrationOwner::ProviderNative,
+            IntegrationHelpRoute::SkillSource {
+                scope: IntegrationSkillScope::Global,
+            },
         ),
         (
             project_root.map(|p| p.join(".agents/skills")),
             "project",
             "project / .agents/skills",
+            "project-agents-skill",
+            IntegrationOwner::Unknown,
+            IntegrationHelpRoute::SkillSource {
+                scope: IntegrationSkillScope::Project,
+            },
         ),
     ] {
         let Some(root) = root else { continue };
-        let Ok(entries) = std::fs::read_dir(root) else {
+        let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
         };
         for entry in entries.flatten() {
@@ -168,8 +208,10 @@ pub fn codex_inventory(
             if !path.is_file() {
                 continue;
             }
+            let name = entry.file_name().to_string_lossy().into_owned();
             items.push(IntegrationInventoryItem {
-                name: entry.file_name().to_string_lossy().into_owned(),
+                identity: Some(inventory_identity(machine_id, source_id, &root, &name)),
+                name,
                 kind: IntegrationKind::Skill,
                 source: source.into(),
                 scope: scope.into(),
@@ -180,6 +222,9 @@ pub fn codex_inventory(
                     "Found on disk; provider availability and session inclusion are unverified."
                         .into(),
                 ),
+                owner,
+                actions: unsupported_actions(),
+                help_route: help_route.clone(),
             });
         }
     }
@@ -194,6 +239,12 @@ pub fn codex_inventory(
                             .and_then(toml::Value::as_bool)
                             .unwrap_or(true);
                         items.push(IntegrationInventoryItem {
+                            identity: Some(inventory_identity(
+                                machine_id,
+                                "codex-mcp-config",
+                                &codex_home.join("config.toml"),
+                                name,
+                            )),
                             name: name.clone(),
                             kind: IntegrationKind::McpServer,
                             source: "Codex home / config.toml".into(),
@@ -206,6 +257,9 @@ pub fn codex_inventory(
                             } else {
                                 "Disabled in provider-native configuration.".into()
                             }),
+                            owner: IntegrationOwner::ProviderNative,
+                            actions: unsupported_actions(),
+                            help_route: IntegrationHelpRoute::ProviderMcpConfig,
                         });
                     }
                 }
@@ -222,7 +276,9 @@ pub fn codex_inventory(
                 Some("Codex configuration could not be read; MCP inventory is unavailable.".into())
         }
     }
-    items.sort_by(|a, b| (&a.kind, &a.scope, &a.name).cmp(&(&b.kind, &b.scope, &b.name)));
+    items.sort_by(|a, b| {
+        (&a.kind, &a.scope, &a.name, &a.identity).cmp(&(&b.kind, &b.scope, &b.name, &b.identity))
+    });
     IntegrationInventoryView {
         provider: HarnessId::Codex,
         machine_id: machine_id.into(),
@@ -301,6 +357,15 @@ mod tests {
         assert_eq!(view.machine_id, "synthetic-machine");
         assert!(view.help.contains("chosen gateway"));
         assert_eq!(view.items.len(), 4);
+        assert_eq!(
+            view.items
+                .iter()
+                .find(|item| item.name == "gateway")
+                .unwrap()
+                .owner,
+            IntegrationOwner::ProviderNative,
+            "a server name cannot prove gateway ownership"
+        );
         assert!(
             view.items
                 .iter()
@@ -315,6 +380,99 @@ mod tests {
                 .available,
             Some(false)
         );
+    }
+
+    #[test]
+    fn synthetic_duplicate_names_keep_source_identity_and_leak_no_private_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("PRIVATE_PATH_SENTINEL/codex");
+        let project = dir.path().join("project-one");
+        let other_project = dir.path().join("project-two");
+        for root in [
+            home.join("skills/duplicate"),
+            project.join(".agents/skills/duplicate"),
+            other_project.join(".agents/skills/duplicate"),
+        ] {
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("SKILL.md"), "# Synthetic").unwrap();
+        }
+        std::fs::write(
+            home.join("config.toml"),
+            "[mcp_servers.duplicate]\ncommand = 'SECRET_COMMAND_SENTINEL'\nenv = { TOKEN = 'SECRET_TOKEN_SENTINEL' }\n",
+        )
+        .unwrap();
+
+        let first = codex_inventory(&home, Some(&project), "synthetic-machine");
+        let again = codex_inventory(&home, Some(&project), "synthetic-machine");
+        let other = codex_inventory(&home, Some(&other_project), "synthetic-machine");
+        assert_eq!(first.items, again.items);
+        assert_eq!(first.items.len(), 3);
+        assert!(first.items.iter().all(|item| item.name == "duplicate"));
+        let ids: std::collections::HashSet<_> = first
+            .items
+            .iter()
+            .map(|item| item.identity.as_deref().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 3);
+        fn project_skill(view: &IntegrationInventoryView) -> &IntegrationInventoryItem {
+            view.items
+                .iter()
+                .find(|item| item.scope == "project")
+                .unwrap()
+        }
+        assert_ne!(
+            project_skill(&first).identity,
+            project_skill(&other).identity
+        );
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .find(|item| item.scope == "global" && item.kind == IntegrationKind::Skill)
+                .unwrap()
+                .identity,
+            other
+                .items
+                .iter()
+                .find(|item| item.scope == "global" && item.kind == IntegrationKind::Skill)
+                .unwrap()
+                .identity,
+        );
+        assert!(first.items.iter().all(|item| {
+            item.owner
+                == (if item.scope == "project" {
+                    IntegrationOwner::Unknown
+                } else {
+                    IntegrationOwner::ProviderNative
+                })
+                && item.actions.enable == IntegrationActionAvailability::Unavailable
+                && item.actions.disable == IntegrationActionAvailability::Unavailable
+                && item.actions.authenticate == IntegrationActionAvailability::Unavailable
+                && item.attached.is_none()
+        }));
+        assert!(matches!(
+            project_skill(&first).help_route,
+            IntegrationHelpRoute::SkillSource {
+                scope: IntegrationSkillScope::Project
+            }
+        ));
+        assert!(matches!(
+            first
+                .items
+                .iter()
+                .find(|item| item.kind == IntegrationKind::McpServer)
+                .unwrap()
+                .help_route,
+            IntegrationHelpRoute::ProviderMcpConfig
+        ));
+        let public_json = serde_json::to_string(&first).unwrap();
+        for private in [
+            "PRIVATE_PATH_SENTINEL",
+            "SECRET_COMMAND_SENTINEL",
+            "SECRET_TOKEN_SENTINEL",
+        ] {
+            assert!(!public_json.contains(private));
+        }
     }
 
     #[test]
