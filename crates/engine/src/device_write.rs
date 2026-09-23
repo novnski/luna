@@ -1,6 +1,6 @@
-//! Engine-owned lifetime for a future device-root write coordinator.
+//! Engine-owned lifetime for the device-root write coordinator.
 //!
-//! No product writer receives this handle yet. A ticket owns the InstanceLock
+//! A ticket owns the InstanceLock
 //! lease until its epoch count is released, even if EngineCore is dropped.
 
 #![allow(dead_code)] // Internal lifecycle prerequisite; product writers are unwired.
@@ -38,6 +38,10 @@ impl DeviceWriteOwner {
         DeviceWriteHandle {
             inner: Arc::downgrade(&self.inner),
         }
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        self.inner.epoch.root()
     }
 
     pub(crate) fn retire(&self) {

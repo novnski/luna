@@ -254,6 +254,9 @@ impl Render for BackupsPage {
             .as_ref()
             .is_some_and(|value| value.availability == BackupAvailability::Ready)
             && !self.busy;
+        let offline_automatic = status.as_ref().is_some_and(|value| {
+            value.automatic_enabled && value.availability == BackupAvailability::Unavailable
+        });
         let can_inspect = ready
             && status
                 .as_ref()
@@ -270,6 +273,11 @@ impl Render for BackupsPage {
             Some(BackupAvailability::Ready) => "Ready for isolated copies",
             Some(BackupAvailability::Unconfigured) => "Configuration needed",
             Some(BackupAvailability::Error) => "Verification failed",
+            Some(BackupAvailability::Unavailable)
+                if status.as_ref().is_some_and(|value| value.automatic_enabled) =>
+            {
+                "Automatic after shutdown"
+            }
             Some(BackupAvailability::Unavailable) => "Unavailable for live data",
             None => {
                 if self.status.is_loading() {
@@ -296,12 +304,12 @@ impl Render for BackupsPage {
             .as_ref()
             .and_then(|s| s.source_root.as_ref())
             .cloned()
-            .unwrap_or_else(|| "No copy-isolated source configured".into());
+            .unwrap_or_else(|| "No backup source configured".into());
         let destination = status
             .as_ref()
             .and_then(|s| s.destination_dir.as_ref())
             .cloned()
-            .unwrap_or_else(|| "No marked destination configured".into());
+            .unwrap_or_else(|| "No backup destination configured".into());
         let reason = status.as_ref().and_then(|s| s.reason.as_ref()).cloned();
         let restore_reason = status
             .as_ref()
@@ -328,7 +336,7 @@ impl Render for BackupsPage {
                         widgets::page_column()
                             .child(widgets::page_header(&theme, "Backups", None))
                             .child(widgets::page_subtitle(&theme,
-                                "Verified BB-style archives for explicitly isolated LUNA copies."))
+                                "Private BB-style archives after clean shutdown; manual restore runs while LUNA is stopped."))
                             .when_some(self.status.error().map(str::to_owned), |page, error| page.child(widgets::error_strip(&theme, SharedString::from(error))))
                             .when_some(reason, |page, reason| page.child(widgets::warning_strip(&theme, SharedString::from(reason))))
                             .when_some(self.error.clone(), |page, error| page.child(widgets::error_strip(&theme, SharedString::from(error))))
@@ -340,10 +348,10 @@ impl Render for BackupsPage {
                                         .child(div().flex_1().min_w_0()
                                             .child(widgets::row_title(&theme, "Backup status"))
                                             .child(widgets::meta_line(&theme, vec![div().child(SharedString::from(status_label)).into_any_element()])))
-                                        .child(widgets::badge(&theme, if ready { "Isolated" } else { "Paused" })))
+                                        .child(widgets::badge(&theme, if ready { "Isolated" } else if offline_automatic { "Offline" } else { "Paused" })))
                                     .child(widgets::card_row(&theme, false)
                                         .child(div().flex_1().min_w_0()
-                                            .child(widgets::row_title(&theme, "Source copy"))
+                                            .child(widgets::row_title(&theme, "Source data"))
                                             .child(widgets::meta_line(&theme, vec![div().child(SharedString::from(source)).into_any_element()]))))
                                     .child(widgets::card_row(&theme, false)
                                         .child(div().flex_1().min_w_0()

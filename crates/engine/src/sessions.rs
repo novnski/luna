@@ -4189,7 +4189,8 @@ impl SessionsEngine {
     }
 
     /// Graceful shutdown: interrupt every live run so streaming entries settle.
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> bool {
+        let mut clean = true;
         for (_, timer) in lock(&self.inner.recovery_tasks).drain() {
             timer.abort();
         }
@@ -4197,8 +4198,10 @@ impl SessionsEngine {
         for chat_id in chats {
             if let Err(err) = self.interrupt(&chat_id).await {
                 tracing::warn!(chat = %chat_id, error = %err, "shutdown interrupt failed");
+                clean = false;
             }
         }
+        clean
     }
 
     fn is_live(&self, chat_id: &str, run_id: &str) -> bool {

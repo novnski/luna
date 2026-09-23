@@ -365,6 +365,8 @@ impl EngineCore {
         codex_metadata: CodexMetadataAssembly,
     ) -> Result<Self, EngineError> {
         let data_dir = profile.device_root();
+        backup::ensure_no_pending_managed_restore(data_dir)
+            .map_err(|error| EngineError::Other(error.to_string()))?;
         std::fs::create_dir_all(data_dir)?;
         let device_write = device_write::DeviceWriteOwner::new(data_dir, lock)?;
         let legacy_uploads_root = profile.claim_legacy_uploads_root()?;
@@ -675,6 +677,8 @@ impl EngineCore {
         .with_previews(self.previews.clone());
         if let Some(control) = self.backup_control.clone().filter(|_| include_backup) {
             rpc = rpc.with_backup_control(control);
+        } else if include_backup {
+            rpc = rpc.with_managed_backup_root(self.device_write.root().to_path_buf());
         }
         if let Some(links) = self.links() {
             rpc = rpc.with_links(links);
@@ -707,13 +711,13 @@ impl EngineCore {
     /// Graceful teardown: settle live runs (streaming entries stamped `aborted`),
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> bool {
         self.previews.shutdown().await;
         // A run interruption transitions its chat to Idle, and Idle normally
         // releases the next queued row. Freeze first so quitting never starts
         // recovered work while the engine is being torn down.
         self.doc_host.pause_all_queues();
-        self.sessions.shutdown().await;
+        let mut clean = self.sessions.shutdown().await;
         self.terminals.shutdown();
         self.agent_accounts.shutdown();
         self.change_requests.shutdown();
@@ -742,14 +746,17 @@ impl EngineCore {
         self.spaces_sync.shutdown().await;
         if let Err(error) = self.doc_host.shutdown_workers_checked().await {
             tracing::error!(%error, "doc host final snapshot flush failed during shutdown");
+            clean = false;
         }
         if let Err(error) = self.workspace.shutdown_checked().await {
             tracing::error!(%error, "workspace final snapshot or task drain failed during shutdown");
+            clean = false;
         }
         // Break the sessions ⇄ doc-host retain cycle so the replaced graph can
         // actually be freed once the last handle drops.
         self.sessions.clear_doc_host();
         self.device_write.retire();
+        clean
     }
 }
 
@@ -817,9 +824,9 @@ impl EngineRuntime {
         self.core.disconnect_edge();
     }
 
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> bool {
         self.disconnect_edge();
-        self.core.shutdown().await;
+        self.core.shutdown().await
     }
 }
 
@@ -1142,7 +1149,21 @@ impl Engine {
         }
         tracing::info!("shutting down");
         server.abort();
-        runtime.shutdown().await;
+        let _ = server.await;
+        let clean = runtime.shutdown().await;
+        drop(runtime);
+        if clean {
+            match backup::BackupService::run_managed_offline_if_due(&config.data_dir, now_ms()) {
+                Ok(Some(receipt)) => tracing::info!(
+                    archive = %receipt.archive.display(),
+                    "verified offline backup completed"
+                ),
+                Ok(None) => {}
+                Err(backup::BackupError::UnauthorizedRoot)
+                    if !config.data_dir.join("device-id").exists() => {}
+                Err(error) => tracing::warn!(%error, "offline backup skipped"),
+            }
+        }
         Ok(())
     }
 }

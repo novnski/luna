@@ -102,6 +102,7 @@ trait EngineBackend: Send + Sync {
 /// Embedded engine: owns the [`EngineCore`] and an in-memory RPC loop.
 struct InProcessEngine {
     runtime: Arc<tokio::sync::Mutex<Option<EngineRuntime>>>,
+    data_dir: PathBuf,
     boot_task: tokio::task::JoinHandle<()>,
     refresh_task: tokio::task::JoinHandle<()>,
     /// Serves this engine to other viewports over the IPC port. `None` when the
@@ -145,7 +146,23 @@ impl EngineBackend for InProcessEngine {
             let _ = ipc.await;
         }
         if let Some(runtime) = self.runtime.lock().await.take() {
-            runtime.shutdown().await;
+            let clean = runtime.shutdown().await;
+            drop(runtime);
+            if clean {
+                match zeron_engine::backup::BackupService::run_managed_offline_if_due(
+                    &self.data_dir,
+                    Utc::now().timestamp_millis(),
+                ) {
+                    Ok(Some(receipt)) => tracing::info!(
+                        archive = %receipt.archive.display(),
+                        "verified offline backup completed"
+                    ),
+                    Ok(None) => {}
+                    Err(zeron_engine::backup::BackupError::UnauthorizedRoot)
+                        if !self.data_dir.join("device-id").exists() => {}
+                    Err(error) => tracing::warn!(%error, "offline backup skipped"),
+                }
+            }
         }
         self.refresh_task.abort();
     }
@@ -353,6 +370,7 @@ impl EngineHandle {
         // The instance lock rides into the boot task and is consumed by
         // assembly — held through sign-in onboarding too, because this process
         // owns the data dir from the moment it decided to embed.
+        let data_dir_for_backup = engine_config.data_dir.clone();
         let boot_task = tokio::spawn(async move {
             let profile = match initial_profile {
                 Some(profile) => profile,
@@ -403,6 +421,7 @@ impl EngineHandle {
         let handle = EngineHandle {
             inner: Arc::new(InProcessEngine {
                 runtime,
+                data_dir: data_dir_for_backup,
                 boot_task,
                 refresh_task,
                 ipc_task: tokio::sync::Mutex::new(ipc_task),

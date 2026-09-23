@@ -1,6 +1,5 @@
-//! L17 offline backup core. Every filesystem entry point currently requires a
-//! deliberately marked synthetic or copy-isolated root. Product backup still
-//! needs an offline lifecycle and destination authority boundary.
+//! L17 offline backup core. Live app roots may be archived only after shutdown
+//! under the instance lock; restore activation remains isolated-copy only.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
@@ -32,6 +31,8 @@ const ISOLATION_MARKER: &str = ".luna-l17-isolated-root";
 const ISOLATION_VALUE: &str = "L17 synthetic or copy-isolated root\n";
 const DESTINATION_MARKER: &str = ".luna-l17-isolated-backups";
 const DESTINATION_VALUE: &str = "L17 synthetic or copy-isolated backup destination\n";
+const MANAGED_DESTINATION_VALUE: &str = "LUNA private offline backup destination\n";
+const MANAGED_RESTORE_JOURNAL: &str = ".luna-l17-managed-restore.json";
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 100_000;
 const CHUNK: usize = 64 * 1024;
@@ -58,7 +59,7 @@ pub enum BackupError {
     Sqlite(#[from] rusqlite::Error),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("backup root must be an explicitly marked synthetic or copy-isolated LUNA root")]
+    #[error("backup root or destination is not authorized for this operation")]
     UnauthorizedRoot,
     #[error("backup root has an active engine")]
     EngineRunning,
@@ -282,9 +283,32 @@ pub struct RestoreReceipt {
     old_fingerprint: String,
 }
 
+/// Offline managed restore leaves the previous allowlisted files in this
+/// private sibling directory. No credential or provider-owned file is moved.
+#[derive(Debug)]
+pub struct ManagedRestoreReceipt {
+    pub rollback_dir: PathBuf,
+    pub restored_entries: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ManagedRestoreJournal {
+    version: u32,
+    root: PathBuf,
+    rollback_dir: PathBuf,
+    entries: Vec<ManagedRestoreEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ManagedRestoreEntry {
+    path: String,
+    existed: bool,
+}
+
 pub struct BackupService {
     root: IsolatedRoot,
     codec: ArchiveCodec,
+    managed_offline: bool,
 }
 
 enum ArchiveCodec {
@@ -302,6 +326,7 @@ impl BackupService {
         Self {
             root,
             codec: ArchiveCodec::Encrypted(key),
+            managed_offline: false,
         }
     }
 
@@ -311,7 +336,30 @@ impl BackupService {
         Self {
             root,
             codec: ArchiveCodec::BbStylePlain,
+            managed_offline: false,
         }
+    }
+
+    /// The app-owned root may be backed up only after its engine has stopped.
+    /// The actual export acquires InstanceLock; this constructor does not make
+    /// the root eligible for restore activation or bypass that lock.
+    pub(crate) fn new_bb_style_managed_offline(root: &Path) -> Result<Self> {
+        if !root.is_absolute() || is_provider_private_root(root) {
+            return Err(BackupError::UnauthorizedRoot);
+        }
+        let metadata = fs::symlink_metadata(root)?;
+        if !metadata.file_type().is_dir() {
+            return Err(BackupError::UnauthorizedRoot);
+        }
+        let canonical = root.canonicalize()?;
+        if is_provider_private_root(&canonical) || read_device_id(&canonical)?.is_none() {
+            return Err(BackupError::UnauthorizedRoot);
+        }
+        Ok(Self {
+            root: IsolatedRoot(canonical),
+            codec: ArchiveCodec::BbStylePlain,
+            managed_offline: true,
+        })
     }
 
     pub(crate) fn inspect(&self, path: &Path) -> Result<BackupManifest> {
@@ -328,6 +376,266 @@ impl BackupService {
         }
     }
 
+    /// Run the daily BB-style backup policy only while no engine owns this
+    /// LUNA root. The sibling destination is private and never inside the
+    /// source inventory. This API does not activate restores.
+    pub fn run_managed_offline_if_due(root: &Path, now_ms: i64) -> Result<Option<BackupReceipt>> {
+        let service = Self::new_bb_style_managed_offline(root)?;
+        let _lock = service.root.lock()?;
+        ensure_no_pending_managed_restore(service.root.path())?;
+        let destination = managed_destination(service.root.path())?;
+        let last = service.latest_managed_receipt(&destination)?;
+        service.backup_if_due_locked(&destination, now_ms, last.as_ref())
+    }
+
+    /// Explicit offline export for `luna backup now`. It refuses an active
+    /// engine and links to the newest verified archive without deleting it.
+    pub fn run_managed_offline_now(root: &Path, now_ms: i64) -> Result<BackupReceipt> {
+        let service = Self::new_bb_style_managed_offline(root)?;
+        let _lock = service.root.lock()?;
+        ensure_no_pending_managed_restore(service.root.path())?;
+        let destination = managed_destination(service.root.path())?;
+        let last = service.latest_managed_receipt(&destination)?;
+        let name = format!("luna-{}-{}.tar.gz", now_ms, uuid::Uuid::new_v4());
+        service.export_at_locked(
+            &destination.join(name),
+            now_ms,
+            last.map(|receipt| receipt.archive_sha256),
+        )
+    }
+
+    /// Read-only status for the running app. Archives are atomically published
+    /// while the engine is stopped, so this does not acquire its live lock.
+    pub fn managed_offline_status(root: &Path) -> Result<(PathBuf, Option<BackupReceipt>)> {
+        let service = Self::new_bb_style_managed_offline(root)?;
+        ensure_no_pending_managed_restore(service.root.path())?;
+        let destination = managed_destination_path(service.root.path())?;
+        if !destination.exists() {
+            return Ok((destination, None));
+        }
+        validate_managed_destination(&destination)?;
+        let last = service.latest_managed_receipt(&destination)?;
+        Ok((destination, last))
+    }
+
+    /// BB-style offline import: stage and verify first, then replace only the
+    /// allowlisted data files. Existing files stay in a private sibling
+    /// rollback directory. Credentials, identity and provider stores stay put.
+    pub fn restore_managed_offline(root: &Path, archive: &Path) -> Result<ManagedRestoreReceipt> {
+        Self::restore_managed_offline_with_readback(root, archive, |_| Ok(()))
+    }
+
+    /// Synthetic failure seam for verifying the journaled rollback path.
+    #[doc(hidden)]
+    pub fn restore_managed_offline_with_readback_for_tests<F>(
+        root: &Path,
+        archive: &Path,
+        readback: F,
+    ) -> Result<ManagedRestoreReceipt>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        Self::restore_managed_offline_with_readback(root, archive, readback)
+    }
+
+    fn restore_managed_offline_with_readback<F>(
+        root: &Path,
+        archive: &Path,
+        readback: F,
+    ) -> Result<ManagedRestoreReceipt>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        let service = Self::new_bb_style_managed_offline(root)?;
+        let root = service.root.path();
+        let _lock = service.root.lock()?;
+        let journal_path = root.join(MANAGED_RESTORE_JOURNAL);
+        if fs::symlink_metadata(&journal_path).is_ok() {
+            return Err(BackupError::Unsupported(
+                "an interrupted restore must be recovered before retrying".into(),
+            ));
+        }
+        let manifest = service.inspect(archive)?;
+        if manifest.source_root != root.display().to_string()
+            || manifest.source_environment_id != read_device_id(root)?
+            || manifest.databases.iter().any(|db| {
+                db.derived_rebuild_blocker.is_some()
+                    || db.activation_blocker.is_some()
+                    || db.activity_events_expected.is_none()
+            })
+        {
+            return Err(BackupError::Unsupported(
+                "archive root, device identity or staged rebuild contract differs".into(),
+            ));
+        }
+        let parent = root
+            .parent()
+            .ok_or_else(|| BackupError::Invalid("root has no parent".into()))?;
+        let required = manifest
+            .total_bytes
+            .saturating_mul(2)
+            .saturating_add(64 * 1024 * 1024);
+        if available_space(parent)? < required {
+            return Err(BackupError::Unsupported(format!(
+                "offline restore needs at least {required} free bytes for staging and rollback"
+            )));
+        }
+        let stage = tempfile::Builder::new()
+            .prefix(".luna-l17-restore-stage-")
+            .tempdir_in(parent)?;
+        let extracted = extract_bb_style_archive(archive, stage.path())?;
+        if extracted != manifest {
+            return Err(BackupError::SourceChanged(
+                "archive changed during staging".into(),
+            ));
+        }
+        ensure_real_file(&root.join("device-id"))?;
+        fs::copy(root.join("device-id"), stage.path().join("device-id"))?;
+        verify_stage_base(stage.path(), &manifest, true)?;
+        rebuild_stage_activity(stage.path(), &manifest)?;
+        verify_stage(stage.path(), &manifest)?;
+
+        // Discover only the same owned paths as export. The temporary SQLite
+        // snapshots are read-only preflight material and are discarded before
+        // the first target file is moved.
+        let snapshots = tempfile::Builder::new()
+            .prefix(".luna-l17-restore-inventory-")
+            .tempdir_in(root)?;
+        let (old_entries, _) = inventory(root, &snapshots)?;
+        drop(snapshots);
+        let mut paths = BTreeSet::new();
+        let mut database_paths = BTreeSet::new();
+        for entry in old_entries {
+            if entry.manifest.category == "database" {
+                database_paths.insert(entry.manifest.path.clone());
+            }
+            paths.insert(entry.manifest.path);
+        }
+        for entry in &manifest.entries {
+            if entry.category == "database" {
+                database_paths.insert(entry.path.clone());
+            }
+            paths.insert(entry.path.clone());
+        }
+        for db in database_paths {
+            for suffix in ["-wal", "-shm", "-journal"] {
+                let sidecar = format!("{db}{suffix}");
+                if fs::symlink_metadata(root.join(&sidecar)).is_ok() {
+                    paths.insert(sidecar);
+                }
+            }
+        }
+        let mut entries = Vec::with_capacity(paths.len());
+        for path in paths {
+            validate_managed_restore_path(&path)?;
+            verify_existing_parent_chain(root, &path)?;
+            let target = root.join(&path);
+            let existed = match fs::symlink_metadata(&target) {
+                Ok(metadata) if metadata.file_type().is_file() => true,
+                Ok(_) => {
+                    return Err(BackupError::Invalid(format!(
+                        "unsafe restore target: {path}"
+                    )));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            };
+            entries.push(ManagedRestoreEntry { path, existed });
+        }
+        let rollback_dir = parent.join(format!(
+            ".luna-l17-managed-rollback-{}",
+            uuid::Uuid::new_v4()
+        ));
+        create_private_dir(&rollback_dir)?;
+        let journal = ManagedRestoreJournal {
+            version: 1,
+            root: root.to_path_buf(),
+            rollback_dir: rollback_dir.clone(),
+            entries,
+        };
+        write_managed_restore_journal(&journal_path, &journal)?;
+        let install = (|| -> Result<()> {
+            for entry in &journal.entries {
+                let target = root.join(&entry.path);
+                let previous = rollback_dir.join(&entry.path);
+                if entry.existed {
+                    create_private_parents(&rollback_dir, &entry.path)?;
+                    fs::rename(&target, &previous)?;
+                    sync_parent(previous.parent().unwrap())?;
+                }
+                let staged = stage.path().join(&entry.path);
+                if staged.exists() {
+                    ensure_real_file(&staged)?;
+                    create_private_parents(root, &entry.path)?;
+                    fs::rename(&staged, &target)?;
+                }
+                sync_parent(target.parent().unwrap())?;
+            }
+            verify_stage(root, &manifest)?;
+            readback(root)?;
+            sync_parent(&rollback_dir)?;
+            Ok(())
+        })();
+        if let Err(error) = install {
+            recover_managed_restore_locked(root, &journal_path, &journal)?;
+            return Err(error);
+        }
+        fs::remove_file(&journal_path)?;
+        sync_parent(root)?;
+        Ok(ManagedRestoreReceipt {
+            rollback_dir,
+            restored_entries: manifest.entries.len(),
+        })
+    }
+
+    /// Resume rollback after a process failure. This never deletes the private
+    /// previous-file directory; it moves those exact files back into place.
+    pub fn recover_managed_restore(root: &Path) -> Result<bool> {
+        let service = Self::new_bb_style_managed_offline(root)?;
+        let root = service.root.path();
+        let _lock = service.root.lock()?;
+        let journal_path = root.join(MANAGED_RESTORE_JOURNAL);
+        if fs::symlink_metadata(&journal_path).is_ok() {
+            ensure_real_file(&journal_path)?;
+        }
+        let journal = match fs::read(&journal_path) {
+            Ok(bytes) => serde_json::from_slice::<ManagedRestoreJournal>(&bytes)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        recover_managed_restore_locked(root, &journal_path, &journal)?;
+        Ok(true)
+    }
+
+    fn latest_managed_receipt(&self, destination: &Path) -> Result<Option<BackupReceipt>> {
+        let mut archives = fs::read_dir(destination)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        archives.retain(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("luna-") && name.ends_with(".tar.gz"))
+        });
+        archives.sort();
+        let last = if let Some(path) = archives.last() {
+            ensure_real_file(path)?;
+            let manifest = self.inspect(path)?;
+            if manifest.source_root != self.root.path().display().to_string() {
+                return Err(BackupError::SourceChanged(
+                    "latest backup belongs to another LUNA root".into(),
+                ));
+            }
+            Some(BackupReceipt {
+                archive: path.clone(),
+                archive_sha256: hash_file(path)?,
+                manifest,
+            })
+        } else {
+            None
+        };
+        Ok(last)
+    }
+
     /// Manual export to a caller-selected destination. Existing
     /// archives are never overwritten; successful output is reopen-verified.
     pub fn export(&self, destination: &Path) -> Result<BackupReceipt> {
@@ -341,6 +649,15 @@ impl BackupService {
         previous_backup_sha256: Option<String>,
     ) -> Result<BackupReceipt> {
         let _lock = self.root.lock()?;
+        self.export_at_locked(destination, created_at_ms, previous_backup_sha256)
+    }
+
+    fn export_at_locked(
+        &self,
+        destination: &Path,
+        created_at_ms: i64,
+        previous_backup_sha256: Option<String>,
+    ) -> Result<BackupReceipt> {
         let snapshot_dir = tempfile::Builder::new()
             .prefix(".luna-l17-snapshot-")
             .tempdir_in(self.root.path())?;
@@ -375,6 +692,16 @@ impl BackupService {
         now_ms: i64,
         last_success: Option<&BackupReceipt>,
     ) -> Result<Option<BackupReceipt>> {
+        let _lock = self.root.lock()?;
+        self.backup_if_due_locked(destination_dir, now_ms, last_success)
+    }
+
+    fn backup_if_due_locked(
+        &self,
+        destination_dir: &Path,
+        now_ms: i64,
+        last_success: Option<&BackupReceipt>,
+    ) -> Result<Option<BackupReceipt>> {
         if let Some(previous) = last_success {
             if hash_file(&previous.archive)? != previous.archive_sha256
                 || self.inspect(&previous.archive)? != previous.manifest
@@ -398,7 +725,7 @@ impl BackupService {
             uuid::Uuid::new_v4(),
             self.archive_suffix()
         );
-        self.export_at(
+        self.export_at_locked(
             &destination_dir.join(name),
             now_ms,
             last_success.map(|v| v.archive_sha256.clone()),
@@ -1298,22 +1625,65 @@ fn now_ms() -> i64 {
 }
 
 fn latest_authoritative_mtime(root: &Path) -> Result<i64> {
-    fn visit(path: &Path, latest: &mut i64) -> Result<()> {
-        let md = fs::symlink_metadata(path)?;
-        if md.file_type().is_symlink() {
-            return Err(BackupError::Invalid("symlink in source".into()));
-        }
-        if md.is_dir() {
-            for child in sorted_children(path)? {
-                visit(&child, latest)?;
+    fn file_mtime(path: &Path, latest: &mut i64) -> Result<()> {
+        ensure_real_file(path)?;
+        let modified = fs::metadata(path)?
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        *latest = (*latest).max(modified);
+        Ok(())
+    }
+    fn tree_mtime(path: &Path, latest: &mut i64, journals_only: bool) -> Result<()> {
+        ensure_real_dir(path)?;
+        for child in sorted_children(path)? {
+            let metadata = fs::symlink_metadata(&child)?;
+            if metadata.file_type().is_dir() {
+                tree_mtime(&child, latest, journals_only)?;
+            } else if metadata.file_type().is_file() {
+                if !journals_only || child.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+                {
+                    file_mtime(&child, latest)?;
+                }
+            } else {
+                return Err(BackupError::Invalid(
+                    "unsafe authoritative source entry".into(),
+                ));
             }
-        } else if md.is_file() {
-            let modified = md
-                .modified()?
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64;
-            *latest = (*latest).max(modified);
+        }
+        Ok(())
+    }
+    fn profile_mtime(profile: &Path, latest: &mut i64) -> Result<()> {
+        ensure_real_dir(profile)?;
+        let db = profile.join("docs.sqlite3");
+        file_mtime(&db, latest)?;
+        for suffix in ["-wal", "-journal"] {
+            let sidecar = profile.join(format!("docs.sqlite3{suffix}"));
+            if sidecar.exists() {
+                file_mtime(&sidecar, latest)?;
+            }
+        }
+        let journals = profile.join("journals");
+        if journals.exists() {
+            tree_mtime(&journals, latest, true)?;
+        }
+        let uploads = profile.join("uploads");
+        if uploads.exists() {
+            ensure_real_dir(&uploads)?;
+            for child in sorted_children(&uploads)? {
+                if child.file_name().and_then(|name| name.to_str()) == Some("tmp") {
+                    continue;
+                }
+                let metadata = fs::symlink_metadata(&child)?;
+                if metadata.file_type().is_dir() {
+                    tree_mtime(&child, latest, false)?;
+                } else if metadata.file_type().is_file() {
+                    file_mtime(&child, latest)?;
+                } else {
+                    return Err(BackupError::Invalid("unsafe upload source entry".into()));
+                }
+            }
         }
         Ok(())
     }
@@ -1323,12 +1693,24 @@ fn latest_authoritative_mtime(root: &Path) -> Result<i64> {
         "ui-settings.json",
         "harness-prefs.json",
         "repos.json",
-        "profiles",
-        "orgs",
     ] {
         let path = root.join(name);
         if path.exists() {
-            visit(&path, &mut latest)?;
+            file_mtime(&path, &mut latest)?;
+        }
+    }
+    let local = root.join("profiles/local");
+    if local.exists() {
+        profile_mtime(&local, &mut latest)?;
+    }
+    let orgs = root.join("orgs");
+    if orgs.exists() {
+        ensure_real_dir(&orgs)?;
+        for org in sorted_children(&orgs)? {
+            ensure_real_dir(&org)?;
+            for user in sorted_children(&org)? {
+                profile_mtime(&user, &mut latest)?;
+            }
         }
     }
     Ok(latest)
@@ -1346,7 +1728,10 @@ fn ensure_isolated_destination(path: &Path) -> Result<()> {
     ensure_real_dir(path)?;
     let marker = path.join(DESTINATION_MARKER);
     if !fs::symlink_metadata(&marker).is_ok_and(|m| m.file_type().is_file())
-        || fs::read_to_string(marker).ok().as_deref() != Some(DESTINATION_VALUE)
+        || !matches!(
+            fs::read_to_string(marker).ok().as_deref(),
+            Some(DESTINATION_VALUE | MANAGED_DESTINATION_VALUE)
+        )
     {
         return Err(BackupError::UnauthorizedRoot);
     }
@@ -1357,6 +1742,241 @@ fn ensure_isolated_destination(path: &Path) -> Result<()> {
 /// backup configuration. The marker is prepared outside this API.
 pub fn validate_isolated_destination(path: &Path) -> Result<()> {
     ensure_isolated_destination(path)
+}
+
+fn is_provider_private_root(path: &Path) -> bool {
+    let mut homes = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        homes.extend([
+            home.join(".codex"),
+            home.join(".claude"),
+            home.join(".config/opencode"),
+            home.join(".local/share/opencode"),
+        ]);
+    }
+    for variable in [
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "OPENCODE_HOME",
+        "OPENCODE_CONFIG_DIR",
+    ] {
+        if let Some(home) = std::env::var_os(variable).map(PathBuf::from)
+            && home.is_absolute()
+        {
+            homes.push(home);
+        }
+    }
+    homes.into_iter().any(|home| path.starts_with(home))
+}
+
+fn managed_destination_path(root: &Path) -> Result<PathBuf> {
+    let parent = root
+        .parent()
+        .ok_or_else(|| BackupError::Invalid("managed root has no parent".into()))?;
+    let name = root
+        .file_name()
+        .ok_or_else(|| BackupError::Invalid("managed root has no name".into()))?;
+    let mut destination_name = name.to_os_string();
+    destination_name.push(".backups");
+    Ok(parent.join(destination_name))
+}
+
+fn validate_managed_destination(destination: &Path) -> Result<()> {
+    ensure_real_dir(destination)?;
+    let marker = destination.join(DESTINATION_MARKER);
+    if !fs::symlink_metadata(&marker).is_ok_and(|m| m.file_type().is_file())
+        || fs::read_to_string(marker).ok().as_deref() != Some(MANAGED_DESTINATION_VALUE)
+    {
+        return Err(BackupError::UnauthorizedRoot);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let metadata = fs::metadata(destination)?;
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o777 != 0o700
+        {
+            return Err(BackupError::UnauthorizedRoot);
+        }
+    }
+    Ok(())
+}
+
+/// Engine startup must not open a profile left half-imported by a crash.
+pub(crate) fn ensure_no_pending_managed_restore(root: &Path) -> Result<()> {
+    match fs::symlink_metadata(root.join(MANAGED_RESTORE_JOURNAL)) {
+        Ok(_) => Err(BackupError::Unsupported(
+            "offline restore was interrupted; run `luna backup recover` before starting LUNA"
+                .into(),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_managed_restore_path(path: &str) -> Result<()> {
+    for category in ["settings", "database", "journal", "attachment"] {
+        if validate_entry_path(path, category).is_ok() {
+            return Ok(());
+        }
+    }
+    for suffix in ["-wal", "-shm", "-journal"] {
+        if let Some(database) = path.strip_suffix(suffix) {
+            return validate_entry_path(database, "database");
+        }
+    }
+    Err(BackupError::Invalid(format!(
+        "unapproved managed restore path: {path}"
+    )))
+}
+
+fn verify_existing_parent_chain(root: &Path, path: &str) -> Result<()> {
+    let mut parent = root.to_path_buf();
+    for component in Path::new(path)
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+    {
+        parent.push(component.as_os_str());
+        match fs::symlink_metadata(&parent) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(BackupError::Invalid(format!(
+                    "unsafe restore parent: {}",
+                    parent.display()
+                )));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn create_private_parents(root: &Path, path: &str) -> Result<()> {
+    let mut parent = root.to_path_buf();
+    for component in Path::new(path)
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+    {
+        parent.push(component.as_os_str());
+        match fs::symlink_metadata(&parent) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(BackupError::Invalid(format!(
+                    "unsafe restore parent: {}",
+                    parent.display()
+                )));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => create_private_dir(&parent)?,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn write_managed_restore_journal(path: &Path, journal: &ManagedRestoreJournal) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| BackupError::Invalid("journal has no parent".into()))?;
+    let json = serde_json::to_vec(journal)?;
+    let mut temporary = NamedTempFile::new_in(parent)?;
+    temporary.write_all(&json)?;
+    temporary.as_file_mut().sync_all()?;
+    temporary
+        .persist_noclobber(path)
+        .map_err(|error| BackupError::Io(error.error))?;
+    sync_parent(parent)?;
+    Ok(())
+}
+
+fn recover_managed_restore_locked(
+    root: &Path,
+    journal_path: &Path,
+    journal: &ManagedRestoreJournal,
+) -> Result<()> {
+    if journal.version != 1 || journal.root != root {
+        return Err(BackupError::UnauthorizedRoot);
+    }
+    let rollback = &journal.rollback_dir;
+    if rollback.parent() != root.parent()
+        || !rollback
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".luna-l17-managed-rollback-"))
+    {
+        return Err(BackupError::UnauthorizedRoot);
+    }
+    ensure_real_dir(rollback)?;
+    let mut seen = BTreeSet::new();
+    for entry in &journal.entries {
+        validate_managed_restore_path(&entry.path)?;
+        if !seen.insert(&entry.path) {
+            return Err(BackupError::Invalid(
+                "duplicate restore journal path".into(),
+            ));
+        }
+        verify_existing_parent_chain(root, &entry.path)?;
+        verify_existing_parent_chain(rollback, &entry.path)?;
+    }
+    for entry in journal.entries.iter().rev() {
+        let target = root.join(&entry.path);
+        let previous = rollback.join(&entry.path);
+        let backed_up = match fs::symlink_metadata(&previous) {
+            Ok(metadata) if metadata.file_type().is_file() => true,
+            Ok(_) => return Err(BackupError::Invalid("unsafe rollback file".into())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        if backed_up || !entry.existed {
+            match fs::symlink_metadata(&target) {
+                Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(&target)?,
+                Ok(_) => return Err(BackupError::Invalid("unsafe installed file".into())),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if backed_up {
+            create_private_parents(root, &entry.path)?;
+            fs::rename(&previous, &target)?;
+        } else if entry.existed && !target.is_file() {
+            return Err(BackupError::Invalid(format!(
+                "previous file missing during recovery: {}",
+                entry.path
+            )));
+        }
+    }
+    fs::remove_file(journal_path)?;
+    sync_parent(root)?;
+    Ok(())
+}
+
+/// Create a private sibling destination only when no unrelated directory is
+/// already there. The marker makes later runs refuse a swapped-in directory.
+fn managed_destination(root: &Path) -> Result<PathBuf> {
+    let parent = root
+        .parent()
+        .ok_or_else(|| BackupError::Invalid("managed root has no parent".into()))?;
+    let destination = managed_destination_path(root)?;
+    match fs::symlink_metadata(&destination) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_private_dir(&destination)?;
+            let marker = destination.join(DESTINATION_MARKER);
+            let mut file = create_private_file(&marker)?;
+            file.write_all(MANAGED_DESTINATION_VALUE.as_bytes())?;
+            file.sync_all()?;
+            sync_parent(&destination)?;
+            sync_parent(parent)?;
+        }
+        Err(error) => return Err(error.into()),
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return Err(BackupError::UnauthorizedRoot);
+        }
+        Ok(_) => {}
+    }
+    validate_managed_destination(&destination)?;
+    Ok(destination)
 }
 
 const BB_STYLE_MANIFEST: &str = "manifest.json";
@@ -1756,12 +2376,6 @@ impl BackupService {
             if let Some(reason) = &db.activation_blocker {
                 unsupported.push(format!("{}: {reason}", db.path));
             }
-            if db.tasks.unwrap_or_default() > 0 {
-                unsupported.push(format!(
-                    "{}: L16 usage cache has no staged-record rebuild contract on this branch",
-                    db.path
-                ));
-            }
         }
         Ok(RestorePreview {
             required_bytes: manifest.total_bytes,
@@ -1933,6 +2547,11 @@ impl BackupService {
     /// material. Both old and new roots retain an engine lock during the swap.
     /// A journal is left for explicit interruption recovery if the process dies.
     pub fn activate(&self, staged: StagedRestore) -> Result<RestoreReceipt> {
+        if self.managed_offline {
+            return Err(BackupError::Unsupported(
+                "managed-profile restore activation is not wired".into(),
+            ));
+        }
         self.activate_with_readback(staged, |_| Ok(()))
     }
 
@@ -1958,6 +2577,11 @@ impl BackupService {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
+        if self.managed_offline {
+            return Err(BackupError::Unsupported(
+                "managed-profile restore activation is not wired".into(),
+            ));
+        }
         if staged.target != self.root.path() || !staged.preview.unsupported.is_empty() {
             return Err(BackupError::Unsupported(
                 staged.preview.unsupported.join("; "),

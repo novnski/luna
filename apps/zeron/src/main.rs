@@ -41,6 +41,11 @@ enum Command {
     /// Live sync introspection from the running engine: per-room connection
     /// state, last pushed-frame/ack ages, rejoin/probe/resync counters.
     Sync,
+    /// Private BB-style archives. `now` requires LUNA to be stopped.
+    Backup {
+        #[command(subcommand)]
+        command: BackupCommand,
+    },
     #[cfg(target_os = "linux")]
     /// Trigger an Appshot in the running headed instance (desktop shortcut fallback).
     Appshot,
@@ -70,6 +75,18 @@ enum DaemonCommand {
     Restart,
     /// Show the service manager's view of the daemon.
     Status,
+}
+
+#[derive(Subcommand)]
+enum BackupCommand {
+    /// Create and verify an archive while no LUNA engine owns the data root.
+    Now,
+    /// Show the newest verified automatic or manual archive.
+    Status,
+    /// Restore a verified archive while LUNA is stopped; keep previous files.
+    Restore { archive: std::path::PathBuf },
+    /// Roll back an interrupted offline restore before starting LUNA.
+    Recover,
 }
 
 /// Production edge (Cloudflare Worker + Durable Objects on the zeron.sh zone).
@@ -202,6 +219,47 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Sync) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(sync_cli(engine_config_from_env().ipc_port))
+        }
+        Some(Command::Backup { command }) => {
+            let root = engine_config_from_env().data_dir;
+            match command {
+                BackupCommand::Now => {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_millis() as i64;
+                    let receipt = zeron_engine::backup::BackupService::run_managed_offline_now(
+                        &root, now_ms,
+                    )?;
+                    println!("{}", receipt.archive.display());
+                    println!("sha256 {}", receipt.archive_sha256);
+                }
+                BackupCommand::Status => {
+                    let (destination, latest) =
+                        zeron_engine::backup::BackupService::managed_offline_status(&root)?;
+                    println!("destination {}", destination.display());
+                    if let Some(receipt) = latest {
+                        println!("latest {}", receipt.archive.display());
+                        println!("sha256 {}", receipt.archive_sha256);
+                    } else {
+                        println!("no verified backup");
+                    }
+                }
+                BackupCommand::Restore { archive } => {
+                    let receipt = zeron_engine::backup::BackupService::restore_managed_offline(
+                        &root, &archive,
+                    )?;
+                    println!("restored {} files", receipt.restored_entries);
+                    println!("previous files {}", receipt.rollback_dir.display());
+                }
+                BackupCommand::Recover => {
+                    if zeron_engine::backup::BackupService::recover_managed_restore(&root)? {
+                        println!("interrupted restore rolled back");
+                    } else {
+                        println!("no interrupted restore");
+                    }
+                }
+            }
+            Ok(())
         }
         #[cfg(target_os = "linux")]
         Some(Command::Appshot) => {

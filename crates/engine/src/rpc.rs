@@ -68,8 +68,8 @@ use zeron_doc::{
 use zeron_proto::{
     AttentionMutationRequest, AttentionMutationResult, AttentionProducerAvailability,
     AttentionReadRequest, AttentionSnapshot, AttentionTransitionBatch, AttentionTransitionClaim,
-    BackupArchiveRequest, BackupAvailability, BackupConfigureRequest, BackupStatus, BindingOrigin,
-    Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
+    BackupArchiveRequest, BackupAvailability, BackupConfigureRequest, BackupStatus, BackupSummary,
+    BindingOrigin, Chat, ChatConfig, CommandReasonCode, CommandReceipt, CommandReceiptReason,
     CommandReceiptStatus, CompactOperation, ComposerDraft, ComposerDraftRead, ContextBoundary,
     ContextBoundaryKind, ContextControlState, ContextHandoff, ContextOperationStatus,
     ConversationForkBoundaryKind, DraftBlobState, EngineInfo, FollowUpBehavior, HarnessId,
@@ -1060,6 +1060,7 @@ enum MutateParams {
 
 pub struct EngineRpc {
     backup_control: Option<BackupControl>,
+    managed_backup_root: Option<std::path::PathBuf>,
     store: std::sync::Arc<DocsStore>,
     sessions: SessionsEngine,
     doc_host: DocHost,
@@ -1285,6 +1286,7 @@ impl EngineRpc {
         };
         let rpc = Self {
             backup_control: None,
+            managed_backup_root: None,
             store,
             sessions,
             doc_host,
@@ -1436,6 +1438,11 @@ impl EngineRpc {
             });
         }
         self.backup_control = Some(control);
+        self
+    }
+
+    pub fn with_managed_backup_root(mut self, root: std::path::PathBuf) -> Self {
+        self.managed_backup_root = Some(root);
         self
     }
 
@@ -6454,19 +6461,37 @@ impl RpcService for EngineRpc {
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::GET_BACKUP_STATUS => {
                 let Some(control) = self.backup_control.clone() else {
-                    return RpcReply::value(&BackupStatus {
-                        availability: BackupAvailability::Unavailable,
-                        reason: Some("Live-profile backup is unavailable until the offline shutdown/startup handoff is wired.".into()),
-                        source_root: None,
-                        destination_dir: None,
-                        automatic_enabled: false,
-                        key_configured: false,
-                        last_success: None,
-                        retention_candidates: 0,
-                        staged_restore: None,
-                        restore_activation_available: false,
-                        restore_reason: "Live restore is unavailable until staged verification and post-start rollback are complete.".into(),
-                    });
+                    let root = self.managed_backup_root.clone();
+                    return backup_rpc_reply(move || {
+                        let (destination, last) = match root.as_deref() {
+                            Some(root) => match crate::backup::BackupService::managed_offline_status(root) {
+                                Ok((destination, last)) => (Some(destination), last),
+                                Err(crate::backup::BackupError::UnauthorizedRoot) => (None, None),
+                                Err(error) => return Err(BackupControlError::Backup(error)),
+                            },
+                            None => (None, None),
+                        };
+                        let automatic_enabled = destination.is_some();
+                        Ok(BackupStatus {
+                            availability: BackupAvailability::Unavailable,
+                            reason: Some("Automatic BB-style backups run after a clean engine shutdown; manual live backup is unavailable.".into()),
+                            source_root: root.as_ref().map(|root| root.display().to_string()),
+                            destination_dir: destination.map(|path| path.display().to_string()),
+                            automatic_enabled,
+                            key_configured: false,
+                            last_success: last.map(|receipt| BackupSummary {
+                                archive_path: receipt.archive.display().to_string(),
+                                archive_sha256: receipt.archive_sha256,
+                                created_at_ms: receipt.manifest.created_at_ms,
+                                total_bytes: receipt.manifest.total_bytes,
+                                entry_count: receipt.manifest.entries.len(),
+                            }),
+                            retention_candidates: 0,
+                            staged_restore: None,
+                            restore_activation_available: false,
+                            restore_reason: "Quit LUNA, then use `luna backup restore <archive>` for a staged, verified offline restore. Live restore is unavailable.".into(),
+                        })
+                    }).await;
                 };
                 backup_rpc_reply(move || control.status()).await
             }

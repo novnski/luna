@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::sync::Arc;
 use tempfile::TempDir;
-use zeron_engine::backup::IsolatedRoot;
-use zeron_engine::backup_control::{BackupControl, BackupControlError};
+use zeron_engine::backup::{BackupService, IsolatedRoot};
+use zeron_engine::backup_control::BackupControl;
 use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_proto::HarnessId;
 use zeron_proto::{BackupArchiveRequest, BackupAvailability, BackupConfigureRequest};
@@ -384,5 +384,21 @@ async fn ordinary_unmarked_fixture_root_has_no_backup_control_or_vault_probe() {
             .is_err()
     );
     assert!(!owner.join("credentials").exists());
-    core.shutdown().await;
+    assert!(core.shutdown().await);
+    drop(core);
+    let receipt = BackupService::run_managed_offline_if_due(&owner, 1_700_000_000_000)
+        .unwrap()
+        .unwrap();
+    let after: zeron_proto::BackupStatus = serde_json::from_value(
+        client
+            .call(methods::GET_BACKUP_STATUS, serde_json::json!({}))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        after.last_success.unwrap().archive_path,
+        receipt.archive.display().to_string()
+    );
+    assert!(after.automatic_enabled);
 }

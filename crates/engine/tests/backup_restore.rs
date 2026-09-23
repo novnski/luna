@@ -81,6 +81,159 @@ fn bb_style_archive_is_gzip_manifest_verified_and_staged_without_a_key() {
     assert_eq!(staged.preview.manifest, receipt.manifest);
 }
 
+#[test]
+fn managed_offline_daily_backup_requires_stopped_engine_and_private_sibling() {
+    let (parent, root, _backups) = fixture();
+    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+    let lock = InstanceLock::acquire(&root).unwrap();
+    assert!(matches!(
+        BackupService::run_managed_offline_if_due(&root, 1_700_000_000_000),
+        Err(BackupError::EngineRunning)
+    ));
+    drop(lock);
+    let first = BackupService::run_managed_offline_if_due(&root, 1_700_000_000_000)
+        .unwrap()
+        .unwrap();
+    let destination = parent
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("synthetic-luna.backups");
+    assert!(first.archive.starts_with(&destination));
+    assert!(first.archive.is_file());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&first.archive).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert!(
+        BackupService::run_managed_offline_if_due(&root, 1_700_000_000_001)
+            .unwrap()
+            .is_none()
+    );
+    fs::write(root.join("ui-settings.json"), b"synthetic changed").unwrap();
+    let second = BackupService::run_managed_offline_if_due(&root, 1_700_086_400_001)
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.archive_sha256, second.archive_sha256);
+    assert_eq!(
+        second.manifest.previous_backup_sha256,
+        Some(first.archive_sha256)
+    );
+}
+
+#[test]
+fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
+    let (_parent, root, _backups) = fixture();
+    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+    fs::create_dir(root.join("credentials")).unwrap();
+    fs::write(root.join("credentials/synthetic-only.txt"), b"do not touch").unwrap();
+    let receipt = BackupService::run_managed_offline_now(&root, 1_700_000_000_000).unwrap();
+    fs::write(root.join("ui-settings.json"), b"synthetic newer settings").unwrap();
+    let journals = root.join("profiles/local/journals");
+    fs::create_dir_all(&journals).unwrap();
+    fs::write(journals.join("new.jsonl"), b"synthetic newer journal\n").unwrap();
+    let lock = InstanceLock::acquire(&root).unwrap();
+    assert!(matches!(
+        BackupService::restore_managed_offline(&root, &receipt.archive),
+        Err(BackupError::EngineRunning)
+    ));
+    drop(lock);
+    let restored = BackupService::restore_managed_offline(&root, &receipt.archive).unwrap();
+    assert!(restored.restored_entries > 0);
+    assert_eq!(
+        fs::read(root.join("ui-settings.json")).unwrap(),
+        br#"{"theme":"synthetic"}"#
+    );
+    assert!(!journals.join("new.jsonl").exists());
+    assert_eq!(
+        fs::read(root.join("credentials/synthetic-only.txt")).unwrap(),
+        b"do not touch"
+    );
+    assert_eq!(
+        fs::read(restored.rollback_dir.join("ui-settings.json")).unwrap(),
+        b"synthetic newer settings"
+    );
+    assert_eq!(
+        fs::read(
+            restored
+                .rollback_dir
+                .join("profiles/local/journals/new.jsonl")
+        )
+        .unwrap(),
+        b"synthetic newer journal\n"
+    );
+    assert!(!BackupService::recover_managed_restore(&root).unwrap());
+}
+
+#[test]
+fn managed_offline_recovery_replays_only_journaled_owned_paths() {
+    let (parent, root, _backups) = fixture();
+    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+    let root = root.canonicalize().unwrap();
+    let rollback = parent
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join(".luna-l17-managed-rollback-synthetic");
+    fs::create_dir(&rollback).unwrap();
+    fs::rename(
+        root.join("ui-settings.json"),
+        rollback.join("ui-settings.json"),
+    )
+    .unwrap();
+    fs::write(root.join("ui-settings.json"), b"partial import").unwrap();
+    let journal = serde_json::json!({
+        "version": 1,
+        "root": root,
+        "rollback_dir": rollback,
+        "entries": [{"path":"ui-settings.json","existed":true}],
+    });
+    fs::write(
+        root.join(".luna-l17-managed-restore.json"),
+        serde_json::to_vec(&journal).unwrap(),
+    )
+    .unwrap();
+    assert!(BackupService::run_managed_offline_now(&root, 1_700_000_000_001).is_err());
+    assert!(BackupService::recover_managed_restore(&root).unwrap());
+    assert_eq!(
+        fs::read(root.join("ui-settings.json")).unwrap(),
+        br#"{"theme":"synthetic"}"#
+    );
+    assert!(!root.join(".luna-l17-managed-restore.json").exists());
+}
+
+#[test]
+fn managed_offline_failed_readback_rolls_back_without_touching_exclusions() {
+    let (_parent, root, _backups) = fixture();
+    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+    let receipt = BackupService::run_managed_offline_now(&root, 1_700_000_000_000).unwrap();
+    fs::write(root.join("ui-settings.json"), b"newer synthetic settings").unwrap();
+    fs::write(root.join("session.json"), b"synthetic excluded auth").unwrap();
+    let result = BackupService::restore_managed_offline_with_readback_for_tests(
+        &root,
+        &receipt.archive,
+        |_| Err(BackupError::Invalid("synthetic readback failure".into())),
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        fs::read(root.join("ui-settings.json")).unwrap(),
+        b"newer synthetic settings"
+    );
+    assert_eq!(
+        fs::read(root.join("session.json")).unwrap(),
+        b"synthetic excluded auth"
+    );
+    assert!(!root.join(".luna-l17-managed-restore.json").exists());
+}
+
 fn copy_synthetic_tree(source: &Path, target: &Path) {
     fs::create_dir(target).unwrap();
     for entry in fs::read_dir(source).unwrap() {
@@ -202,7 +355,7 @@ fn staged_activity_rebuild_survives_restart_and_detects_interrupted_readback() {
     assert_eq!(counts.activity_events_expected, Some(1));
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     assert!(
-        staged
+        !staged
             .preview
             .unsupported
             .iter()
@@ -229,7 +382,7 @@ fn staged_activity_rebuild_survives_restart_and_detects_interrupted_readback() {
     assert!(service(&root).verify_staged_for_tests(&retry).is_err());
     fs::write(&staged_blob, b"synthetic attachment").unwrap();
     service(&root).verify_staged_for_tests(&retry).unwrap();
-    assert!(service(&root).activate(retry).is_err());
+    assert!(service(&root).activate(retry).is_ok());
 }
 
 #[test]
@@ -406,11 +559,11 @@ fn staged_activity_replays_luna_task_identity_without_provider_access() {
     let event: serde_json::Value = serde_json::from_slice(&json).unwrap();
     assert_eq!(event["workspaceId"], "identity-workspace");
     assert!(
-        staged
+        !staged
             .preview
             .unsupported
             .iter()
-            .any(|s| s.contains("usage cache"))
+            .any(|reason| reason.contains("usage cache"))
     );
 }
 
