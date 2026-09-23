@@ -1431,7 +1431,17 @@ async fn run_session(session: Session) {
                 match method.as_str() {
                     "turn/started" => {
                         let id = turn_id(&params);
-                        if computer_use_turn_cancel.is_cancelled() || router.active_id() != Some(id.as_str()) {
+                        let previous = router.active_id().map(str::to_owned);
+                        router.note_started(id.clone());
+                        // A late start for a completed turn must not rotate
+                        // the live turn's approval token or settle its calls.
+                        if router.active_id() != Some(id.as_str()) {
+                            continue;
+                        }
+                        if previous.as_deref() != Some(id.as_str()) {
+                            done_current = false;
+                        }
+                        if computer_use_turn_cancel.is_cancelled() || previous.as_deref() != Some(id.as_str()) {
                             computer_use_turn_cancel.cancel();
                             computer_use_turn_cancel = CancellationToken::new();
                         }
@@ -1444,7 +1454,6 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                        router.note_started(id);
                     }
 
                     "thread/name/updated"
@@ -1490,6 +1499,17 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
+                        if interrupt.is_cancelled() {
+                            // An OS action may already be running when Stop
+                            // arrives. A late item completion cannot turn its
+                            // uncertain outcome into a successful chip.
+                            for event in computer_use.unknown_for_turn(&thread_id, router.active_id().unwrap_or("")) {
+                                if !send(&event_tx, event).await { break 'main; }
+                            }
+                            if normalize::is_computer_use(item) {
+                                continue;
+                            }
+                        }
                         if matches!(item_type(item), "contextCompaction" | "context_compaction") {
                             if let Some(event) = context_compactions.map_item(
                                 phase,
@@ -1587,6 +1607,10 @@ async fn run_session(session: Session) {
 
                     "turn/completed" => {
                         let id = turn_id(&params);
+                        if router.active_id() != Some(id.as_str()) {
+                            router.note_completed(&id);
+                            continue;
+                        }
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -1651,6 +1675,7 @@ async fn run_session(session: Session) {
                                 &event_tx,
                                 &mut assistant_message_id,
                                 &mut done_current,
+                                &mut computer_use_turn_cancel,
                             )
                             .await
                             {
@@ -1663,6 +1688,10 @@ async fn run_session(session: Session) {
 
                     "turn/failed" => {
                         let id = turn_id(&params);
+                        if router.active_id() != Some(id.as_str()) {
+                            router.note_completed(&id);
+                            continue;
+                        }
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -1705,6 +1734,10 @@ async fn run_session(session: Session) {
 
                     "turn/aborted" => {
                         let id = turn_id(&params);
+                        if router.active_id() != Some(id.as_str()) {
+                            router.note_completed(&id);
+                            continue;
+                        }
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -1861,6 +1894,7 @@ async fn run_session(session: Session) {
                                     &event_tx,
                                     &mut assistant_message_id,
                                     &mut done_current,
+                                    &mut computer_use_turn_cancel,
                                 )
                                 .await
                                 {
@@ -1881,6 +1915,7 @@ async fn run_session(session: Session) {
                         &event_tx,
                         &mut assistant_message_id,
                         &mut done_current,
+                        &mut computer_use_turn_cancel,
                     )
                     .await
                     {
@@ -1901,7 +1936,11 @@ async fn run_session(session: Session) {
             _ = interrupt.cancelled(), if !interrupt_sent => {
                 interrupt_sent = true;
                 interrupted = true;
+                computer_use_turn_cancel.cancel();
                 if let Some(turn) = router.active.clone() {
+                    for event in computer_use.unknown_for_turn(&thread_id, &turn) {
+                        if !send(&event_tx, event).await { break 'main; }
+                    }
                     let client = client.clone();
                     let thread = thread_id.clone();
                     tokio::spawn(async move {
@@ -2027,10 +2066,15 @@ async fn steer_as_new_turn(
     event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
     assistant_message_id: &mut String,
     done_current: &mut bool,
+    computer_use_turn_cancel: &mut CancellationToken,
 ) -> bool {
     match start_turn(client, params).await {
         Ok(id) => {
             router.adopt_started(id.clone());
+            if router.active_id() == Some(id.as_str()) {
+                computer_use_turn_cancel.cancel();
+                *computer_use_turn_cancel = CancellationToken::new();
+            }
             *done_current = false;
             let (prev, next) = rotate(assistant_message_id);
             if !send(

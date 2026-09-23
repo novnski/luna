@@ -217,7 +217,7 @@ impl ComputerUseStream {
     }
 }
 
-fn is_computer_use(item: &Value) -> bool {
+pub(crate) fn is_computer_use(item: &Value) -> bool {
     item.get("server").and_then(Value::as_str) == Some("computer-use")
         || item
             .pointer("/result/_meta/codex~1toolSurface/kind")
