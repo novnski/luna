@@ -32,7 +32,7 @@ use zeron_sync::DocsStore;
 
 use crate::EngineError;
 use crate::chat2_host::CHAT2_DOC_EPOCH;
-use crate::device_write::DeviceWriteHandle;
+use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 use crate::run_journal::{journal_paths, runtime_receipt_paths};
 use crate::uploads::Uploads;
 use crate::workspace_host::WorkspaceHost;
@@ -418,7 +418,7 @@ impl LocalImporter {
         // through every target write and the terminal progress event. The
         // public `new` constructor remains unguarded for standalone callers;
         // product assembly uses `new_guarded`.
-        let _permit = self
+        let permit = self
             .inner
             .write_handle
             .as_ref()
@@ -504,7 +504,14 @@ impl LocalImporter {
         let mut imported_spaces = 0;
         if ledger_ok {
             for space in &pending_spaces {
-                match self.inner.workspace.import_space_row(space) {
+                let result = match permit.as_ref() {
+                    Some(permit) => self
+                        .inner
+                        .workspace
+                        .import_space_row_admitted(space, permit),
+                    None => self.inner.workspace.import_space_row(space),
+                };
+                match result {
                     Ok(()) => imported_spaces += 1,
                     Err(err) => errors.push(format!("space {}: {err}", space.id)),
                 }
@@ -523,7 +530,7 @@ impl LocalImporter {
                     chat_id: chat.id.clone(),
                     title: chat.title.clone(),
                 });
-                match self.import_chat(&source_store, chat, &source_journals) {
+                match self.import_chat(&source_store, chat, &source_journals, permit.as_ref()) {
                     Ok(journal) => {
                         imported_chats += 1;
                         if journal {
@@ -547,7 +554,11 @@ impl LocalImporter {
         // Persist imported registry rows before publishing a marker that will
         // re-arm their uploads root on a future boot. Partial attempts remain
         // retryable and never claim completion.
-        if let Err(err) = self.inner.workspace.flush_checked() {
+        let flush = match permit.as_ref() {
+            Some(permit) => self.inner.workspace.flush_checked_admitted(permit),
+            None => self.inner.workspace.flush_checked(),
+        };
+        if let Err(err) = flush {
             errors.push(format!("registry snapshot: {err}"));
         }
         if errors.is_empty()
@@ -575,6 +586,7 @@ impl LocalImporter {
         source_store: &DocsStore,
         chat: &zeron_proto::Chat,
         source_journals: &Path,
+        permit: Option<&DeviceWritePermit>,
     ) -> Result<bool, EngineError> {
         // Doc bytes may be absent (a chat row created but never opened) — the
         // row alone is still worth carrying; a doc materializes on first open.
@@ -618,7 +630,10 @@ impl LocalImporter {
         // s2 adopt branch.
         let mut row = chat.clone();
         row.room_gen = Some(CHAT2_DOC_EPOCH);
-        self.inner.workspace.import_chat_row(&row)?;
+        match permit {
+            Some(permit) => self.inner.workspace.import_chat_row_admitted(&row, permit)?,
+            None => self.inner.workspace.import_chat_row(&row)?,
+        }
         Ok(copied)
     }
 }
@@ -643,7 +658,7 @@ mod tests {
     ) -> (Arc<DocsStore>, WorkspaceHost, LocalImporter) {
         let target_root = root.join("orgs/synthetic-org/synthetic-user");
         let store = Arc::new(DocsStore::open(&target_root).unwrap());
-        let workspace = WorkspaceHost::open(
+        let workspace = WorkspaceHost::open_with_registry_write_handle(
             store.clone(),
             WorkspaceHostConfig {
                 device_id: "synthetic-device".into(),
@@ -653,6 +668,7 @@ mod tests {
                 user_id: "synthetic-user".into(),
                 edge: None,
             },
+            owner.handle(),
         )
         .unwrap();
         let importer = LocalImporter::new_guarded(
@@ -714,6 +730,136 @@ mod tests {
             ImportEvent::Summary { errors, .. } => errors,
             other => panic!("expected summary, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admitted_import_finishes_rows_marker_and_summary_while_freeze_quiesces() {
+        use zeron_sync::write_epoch::Phase;
+
+        let root = tempfile::tempdir().unwrap();
+        seed_synthetic_source(root.path());
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let (store, workspace, importer) = synthetic_target(root.path(), &owner);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let (summary_tx, summary_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let run = tokio::task::spawn_blocking(move || {
+            let mut events = Vec::new();
+            let mut started_tx = Some(started_tx);
+            let mut resume_rx = Some(resume_rx);
+            let mut summary_tx = Some(summary_tx);
+            let mut finish_rx = Some(finish_rx);
+            importer.run(|event| {
+                match &event {
+                    ImportEvent::Start { .. } => {
+                        started_tx.take().unwrap().send(()).unwrap();
+                        resume_rx
+                            .take()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap();
+                    }
+                    ImportEvent::Summary { .. } => {
+                        summary_tx.take().unwrap().send(()).unwrap();
+                        finish_rx
+                            .take()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(5))
+                            .unwrap();
+                    }
+                    _ => {}
+                }
+                events.push(event);
+            })?;
+            Ok::<_, crate::EngineError>(events)
+        });
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let epoch = owner.epoch_for_tests();
+        let mut freeze = Box::pin(epoch.freeze(Duration::from_secs(5)));
+        assert!(matches!(futures::poll!(freeze.as_mut()), std::task::Poll::Pending));
+        assert_eq!(epoch.phase(), Phase::Quiescing);
+        resume_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), summary_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(root.path().join("local-import.json").is_file());
+        assert!(matches!(futures::poll!(freeze.as_mut()), std::task::Poll::Pending));
+        finish_tx.send(()).unwrap();
+        let events = run.await.unwrap().unwrap();
+        assert!(summary_errors(&events).is_empty(), "{events:?}");
+        assert!(matches!(
+            events.last().unwrap(),
+            ImportEvent::Summary {
+                imported_chats: 1,
+                imported_spaces: 1,
+                ..
+            }
+        ));
+        let snapshot = freeze.await.unwrap().into_snapshot().unwrap();
+        assert!(workspace.chat("chat-1").unwrap().is_some());
+        assert!(workspace.space("space-1").unwrap().is_some());
+        assert!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().is_some());
+        drop(snapshot);
+        workspace.drain_tasks_checked().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admitted_import_finishes_after_owner_retirement() {
+        let root = tempfile::tempdir().unwrap();
+        seed_synthetic_source(root.path());
+        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
+            .unwrap();
+        let (store, workspace, importer) = synthetic_target(root.path(), &owner);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let run = tokio::task::spawn_blocking(move || {
+            let mut events = Vec::new();
+            let mut started_tx = Some(started_tx);
+            let mut resume_rx = Some(resume_rx);
+            importer.run(|event| {
+                if matches!(event, ImportEvent::Start { .. }) {
+                    started_tx.take().unwrap().send(()).unwrap();
+                    resume_rx
+                        .take()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap();
+                }
+                events.push(event);
+            })?;
+            Ok::<_, crate::EngineError>(events)
+        });
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        owner.retire();
+        drop(owner);
+        assert!(InstanceLock::acquire(root.path()).is_err());
+        resume_tx.send(()).unwrap();
+        let events = run.await.unwrap().unwrap();
+        assert!(summary_errors(&events).is_empty(), "{events:?}");
+        assert!(root.path().join("local-import.json").is_file());
+        assert!(workspace.chat("chat-1").unwrap().is_some());
+        assert!(workspace.space("space-1").unwrap().is_some());
+        assert!(store.load_snapshot(REGISTRY_DOC_ID).unwrap().is_some());
+        let _ = workspace.drain_tasks_checked().await;
+        drop(workspace);
+        drop(store);
+        let replacement = DeviceWriteOwner::new(
+            root.path(),
+            InstanceLock::acquire(root.path()).unwrap(),
+        )
+        .unwrap();
+        let (_, reopened, _) = synthetic_target(root.path(), &replacement);
+        assert!(reopened.chat("chat-1").unwrap().is_some());
+        reopened.drain_tasks_checked().await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
