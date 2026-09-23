@@ -427,6 +427,7 @@ impl EngineCore {
                 codex,
             )?,
         };
+        task_identity.install_write_handle(device_write.handle())?;
         doc_host.set_workspace(workspace.clone());
         doc_host.set_sessions(sessions.clone());
         sessions.set_doc_host(doc_host.clone());
