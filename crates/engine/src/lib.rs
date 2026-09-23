@@ -26,6 +26,7 @@ pub mod chat2_host;
 pub mod context_controls;
 pub mod credentials;
 pub mod cross_task_tools;
+mod device_write;
 pub mod diff_sync;
 pub mod doc_host;
 pub mod git_actions;
@@ -203,8 +204,8 @@ pub struct EngineCore {
     updater: std::sync::Mutex<Option<zeron_update::Updater>>,
     /// The updater's token-change wake forwarder — owned so shutdown can end it.
     updater_wake: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Exclusive data-dir lock — held for the engine's lifetime (single-instance).
-    _instance_lock: InstanceLock,
+    /// Owns the exclusive data-dir lock and retires future write admission.
+    device_write: device_write::DeviceWriteOwner,
 }
 
 impl EngineCore {
@@ -361,6 +362,7 @@ impl EngineCore {
     ) -> Result<Self, EngineError> {
         let data_dir = profile.device_root();
         std::fs::create_dir_all(data_dir)?;
+        let device_write = device_write::DeviceWriteOwner::new(data_dir, lock)?;
         let legacy_uploads_root = profile.claim_legacy_uploads_root()?;
         let device_id = load_or_create_device_id(data_dir)?;
         // This device's harness enablement (Settings → Agents) rides the
@@ -514,7 +516,7 @@ impl EngineCore {
             links: std::sync::Mutex::new(None),
             updater: std::sync::Mutex::new(None),
             updater_wake: std::sync::Mutex::new(None),
-            _instance_lock: lock,
+            device_write,
         })
     }
 
@@ -734,6 +736,13 @@ impl EngineCore {
         // Break the sessions ⇄ doc-host retain cycle so the replaced graph can
         // actually be freed once the last handle drops.
         self.sessions.clear_doc_host();
+        self.device_write.retire();
+    }
+}
+
+impl Drop for EngineCore {
+    fn drop(&mut self) {
+        self.device_write.retire();
     }
 }
 
