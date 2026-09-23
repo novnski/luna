@@ -55,6 +55,7 @@ pub mod uploads;
 pub mod usage;
 pub mod workspace_files;
 pub mod workspace_host;
+pub(crate) mod write_epoch;
 
 pub use agent_accounts::{
     AgentAccounts, AgentAccountsConfig, CLAUDE_NATIVE_ACCOUNT_ID, CODEX_NATIVE_ACCOUNT_ID,
