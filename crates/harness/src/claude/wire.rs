@@ -7,6 +7,9 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+const MAX_INIT_OBSERVATIONS: usize = 128;
+const MAX_INIT_NAME_BYTES: usize = 256;
+
 /// One parsed stdout line.
 #[derive(Debug)]
 pub(crate) enum Frame {
@@ -33,6 +36,11 @@ pub(crate) struct SystemFrame {
     pub cwd: String,
     #[serde(default)]
     pub session_id: String,
+    /// Read-only wire observation. This is not a configured inventory, health
+    /// check, authorization, or proof of selected-session attachment.
+    #[serde(skip)]
+    #[allow(dead_code)] // Downstream inventory mapping needs owner evidence.
+    pub integration_observation: Option<InitIntegrationObservation>,
     /// `task_notification` (a background subagent settling): the spawning
     /// Agent tool's id — the only TAGGED terminal signal the 2.1.x wire has
     /// for a background subagent (its frames otherwise just stop).
@@ -49,6 +57,86 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+}
+
+/// Allowlisted names and status words from one `system:init` frame. Unknown
+/// fields and credential-bearing payloads are never retained here.
+#[derive(Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)] // Deliberately internal until a source owner can be mapped.
+pub(crate) struct InitIntegrationObservation {
+    pub mcp_servers: Vec<ObservedMcpServer>,
+    pub skill_names: Vec<String>,
+    pub tool_names: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct ObservedMcpServer {
+    pub name: String,
+    pub status: ObservedMcpStatus,
+}
+
+/// Only status values seen in the checked-in Claude init fixture. An unknown
+/// future status omits that observation; it never becomes a health claim.
+#[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ObservedMcpStatus {
+    Connected,
+    NeedsAuth,
+}
+
+fn observed_name(value: &Value) -> Option<String> {
+    let name = value.as_str()?;
+    if name.trim() != name
+        || !name.bytes().any(|byte| byte.is_ascii_alphanumeric())
+        || name.len() > MAX_INIT_NAME_BYTES
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b' '))
+    {
+        return None;
+    }
+    Some(name.to_owned())
+}
+
+fn observed_names(value: Option<&Value>) -> Vec<String> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    if items.len() > MAX_INIT_OBSERVATIONS {
+        return Vec::new();
+    }
+    items.iter().filter_map(observed_name).collect()
+}
+
+fn observed_mcp_servers(value: Option<&Value>) -> Vec<ObservedMcpServer> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    if items.len() > MAX_INIT_OBSERVATIONS {
+        return Vec::new();
+    }
+    items
+        .iter()
+        .filter_map(|item| {
+            let object = item.as_object()?;
+            let name = observed_name(object.get("name")?)?;
+            let status = match object.get("status")?.as_str()? {
+                "connected" => ObservedMcpStatus::Connected,
+                "needs-auth" => ObservedMcpStatus::NeedsAuth,
+                _ => return None,
+            };
+            Some(ObservedMcpServer { name, status })
+        })
+        .collect()
+}
+
+fn init_integration_observation(value: &Value) -> InitIntegrationObservation {
+    InitIntegrationObservation {
+        mcp_servers: observed_mcp_servers(value.get("mcp_servers")),
+        skill_names: observed_names(value.get("skills")),
+        tool_names: observed_names(value.get("tools")),
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -191,7 +279,13 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
     let value: Value = serde_json::from_str(line)?;
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
     let frame = match kind {
-        "system" => Frame::System(serde_json::from_value(value)?),
+        "system" => {
+            let observation = (value.get("subtype").and_then(Value::as_str) == Some("init"))
+                .then(|| init_integration_observation(&value));
+            let mut system: SystemFrame = serde_json::from_value(value)?;
+            system.integration_observation = observation;
+            Frame::System(system)
+        }
         "stream_event" => Frame::StreamEvent(serde_json::from_value(value)?),
         "assistant" => Frame::Assistant(serde_json::from_value(value)?),
         "user" => Frame::User(serde_json::from_value(value)?),
@@ -299,6 +393,139 @@ mod tests {
             Frame::Other
         ));
         assert!(parse_frame("not json").is_err());
+    }
+
+    #[test]
+    fn init_observation_keeps_only_allowlisted_names_and_statuses() {
+        let frame = json!({
+            "type": "system",
+            "subtype": "init",
+            "model": "synthetic-model",
+            "cwd": "/synthetic-project",
+            "session_id": "synthetic-session",
+            "tools": ["Bash", "mcp__demo__read", "bad/tool"],
+            "skills": ["review", "code-review", "bad/skill", "  ", 42],
+            "mcp_servers": [
+                {"name": "Local Demo", "status": "connected", "auth": {"token": "SECRET_SENTINEL"}},
+                {"name": "Second", "status": "needs-auth", "url": "SECRET_URL_SENTINEL"},
+                {"name": "Future", "status": "warming-up"},
+                {"name": "bad/server", "status": "connected"},
+                {"name": " leading", "status": "connected"}
+            ],
+            "credentials": {"value": "SECRET_OTHER_SENTINEL"}
+        });
+        let Frame::System(system) = parse_frame(&frame.to_string()).unwrap() else {
+            panic!("expected system frame");
+        };
+        // The established SessionStarted inputs remain intact.
+        assert_eq!(system.model, "synthetic-model");
+        assert_eq!(system.cwd, "/synthetic-project");
+        assert_eq!(system.session_id, "synthetic-session");
+        assert_eq!(system.tools, ["Bash", "mcp__demo__read", "bad/tool"]);
+        let frame_debug = format!("{system:?}");
+        assert!(!frame_debug.contains("SECRET_SENTINEL"));
+        assert!(!frame_debug.contains("SECRET_URL_SENTINEL"));
+        assert!(!frame_debug.contains("SECRET_OTHER_SENTINEL"));
+
+        let observed = system.integration_observation.unwrap();
+        assert_eq!(observed.tool_names, ["Bash", "mcp__demo__read"]);
+        assert_eq!(observed.skill_names, ["review", "code-review"]);
+        assert_eq!(
+            observed.mcp_servers,
+            [
+                ObservedMcpServer {
+                    name: "Local Demo".into(),
+                    status: ObservedMcpStatus::Connected,
+                },
+                ObservedMcpServer {
+                    name: "Second".into(),
+                    status: ObservedMcpStatus::NeedsAuth,
+                },
+            ]
+        );
+        let public_debug = format!("{observed:?}");
+        assert!(!public_debug.contains("SECRET_SENTINEL"));
+        assert!(!public_debug.contains("SECRET_URL_SENTINEL"));
+        assert!(!public_debug.contains("SECRET_OTHER_SENTINEL"));
+    }
+
+    #[test]
+    fn missing_unknown_and_malformed_observation_fields_do_not_break_init() {
+        let Frame::System(empty) =
+            parse_frame(r#"{"type":"system","subtype":"init","model":"m","session_id":"s"}"#)
+                .unwrap()
+        else {
+            panic!("expected system frame");
+        };
+        assert_eq!(empty.model, "m");
+        assert_eq!(
+            empty.integration_observation,
+            Some(InitIntegrationObservation::default())
+        );
+
+        let malformed = json!({
+            "type": "system", "subtype": "init", "session_id": "s",
+            "tools": ["Bash"], "skills": {"name": "not-an-array"},
+            "mcp_servers": [null, 12, {"name": "Missing status"},
+                {"name": "Unknown status", "status": "future-status"}]
+        });
+        let Frame::System(system) = parse_frame(&malformed.to_string()).unwrap() else {
+            panic!("expected system frame");
+        };
+        let observed = system.integration_observation.unwrap();
+        assert_eq!(observed.tool_names, ["Bash"]);
+        assert!(observed.skill_names.is_empty());
+        assert!(observed.mcp_servers.is_empty());
+        assert_eq!(system.tools, ["Bash"]);
+
+        let Frame::System(non_init) = parse_frame(
+            r#"{"type":"system","subtype":"task_notification","mcp_servers":[{"name":"Other","status":"connected"}]}"#,
+        )
+        .unwrap() else {
+            panic!("expected system frame");
+        };
+        assert!(non_init.integration_observation.is_none());
+        // The established parser rejects a malformed `tools` event field.
+        assert!(parse_frame(r#"{"type":"system","subtype":"init","tools":{}}"#).is_err());
+    }
+
+    #[test]
+    fn oversized_observation_fields_are_ignored_without_truncation_claims() {
+        let too_many = (0..=MAX_INIT_OBSERVATIONS)
+            .map(|index| format!("item{index}"))
+            .collect::<Vec<_>>();
+        let too_many_servers = too_many
+            .iter()
+            .map(|name| json!({"name": name, "status": "connected"}))
+            .collect::<Vec<_>>();
+        let frame = json!({
+            "type": "system", "subtype": "init", "session_id": "s",
+            "tools": too_many, "skills": too_many,
+            "mcp_servers": too_many_servers
+        });
+        let Frame::System(system) = parse_frame(&frame.to_string()).unwrap() else {
+            panic!("expected system frame");
+        };
+        assert_eq!(system.tools.len(), MAX_INIT_OBSERVATIONS + 1);
+        assert_eq!(
+            system.integration_observation,
+            Some(InitIntegrationObservation::default())
+        );
+
+        let too_long = "x".repeat(MAX_INIT_NAME_BYTES + 1);
+        let frame = json!({
+            "type": "system", "subtype": "init", "tools": [too_long],
+            "skills": [too_long],
+            "mcp_servers": [{"name": too_long, "status": "connected"}]
+        });
+        let Frame::System(system) = parse_frame(&frame.to_string()).unwrap() else {
+            panic!("expected system frame");
+        };
+        assert_eq!(system.tools.len(), 1);
+        assert_eq!(
+            system.integration_observation,
+            Some(InitIntegrationObservation::default())
+        );
     }
 
     #[test]
