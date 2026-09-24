@@ -22,6 +22,9 @@ struct Args {
     /// Separate local-owner IPC port. Never forward this over SSH.
     #[arg(long)]
     ipc_port: Option<u16>,
+    /// Hermetic test startup under the system temporary directory.
+    #[arg(long, hide = true)]
+    synthetic_fixture_root: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -145,6 +148,37 @@ async fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("--ipc-port is required"))?;
     if remote_port == 0 || ipc_port == 0 || remote_port == ipc_port {
         anyhow::bail!("remote port must differ from local IPC port");
+    }
+    if let Some(root) = args.synthetic_fixture_root {
+        let metadata = std::fs::symlink_metadata(&root)?;
+        if !metadata.file_type().is_dir() {
+            anyhow::bail!("synthetic fixture root must be a real directory");
+        }
+        let root = std::fs::canonicalize(root)?;
+        let temporary = std::fs::canonicalize(std::env::temp_dir())?;
+        if !root.starts_with(&temporary) || root == temporary {
+            anyhow::bail!(
+                "synthetic fixture root must be a child of the system temporary directory"
+            );
+        }
+        let accounts = zeron_engine::AgentAccountsConfig {
+            data_dir: root.join("provider-state"),
+            claude_config_dir: root.join("synthetic-claude"),
+            claude_config_file: root.join("synthetic-claude.json"),
+            codex_home: root.join("synthetic-codex"),
+            cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
+        };
+        return Engine::new(EngineConfig {
+            data_dir: root.join("data"),
+            edge_url: "http://127.0.0.1:1".into(),
+            edge_token: None,
+            ipc_port,
+            default_harness: HarnessId::Mock,
+            org_id: None,
+            workos_client_id: None,
+        })
+        .run_synthetic_with_remote_port(remote_port, accounts)
+        .await;
     }
     let data_dir = std::env::var_os("LUNA_DATA_DIR")
         .map(PathBuf::from)

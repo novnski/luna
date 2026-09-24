@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-use tokio::io::copy_bidirectional;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use zeron_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessId, HarnessRegistry,
@@ -32,7 +32,10 @@ if [ "$1" = '-N' ]; then
   local_port=${local_port%%:*}
   printf '%s\n' "$local_port" > "$root/forward-port"
   if [ -e "$root/fail-forward" ]; then exit 255; fi
-  sleep 30
+  count=0
+  while [ ! -e "$root/drop-forward" ] && [ "$count" -lt 300 ]; do
+    count=$((count + 1)); sleep 0.1
+  done
   exit 0
 fi
 while [ "$#" -gt 0 ] && [ "$1" != 'sh' ]; do shift; done
@@ -44,12 +47,20 @@ shift 3
 mode=$1 version=$2 sha=$3 port=$4 ipc=$5 key=$6 owner=$7
 cat >/dev/null
 printf '%s\n' "$mode" >> "$root/modes"
+if [ "$mode" = 'platform' ] && [ -e "$root/hang-platform" ]; then sleep 30; fi
 case "$mode" in
   platform) cat "$root/platform" ;;
   inspect)
     if [ -e "$root/installed" ]; then printf 'installed\n'; else printf 'missing\n'; fi ;;
   install)
     [ -s "$root/uploaded" ] || exit 1
+    if [ -e "$root/remote-version-check" ]; then
+      chmod 700 "$root/uploaded"
+      remote_version=$(FAKE_REMOTE_EXECUTION=1 "$root/uploaded" --version)
+      [ "$remote_version" = "luna-headless $version" ] || {
+        printf 'staged artifact version mismatch\n' >&2; exit 1;
+      }
+    fi
     printf '%s\n' "$sha" > "$root/installed" ;;
   start)
     if [ -e "$root/remote-owner" ]; then
@@ -59,6 +70,8 @@ case "$mode" in
       printf '%s\n' "$owner" > "$root/remote-owner"
       kind=owned
     fi
+    if [ -e "$root/deny-state-finalize" ]; then chmod 500 "$LUNA_DATA_DIR/ssh-launch"; fi
+    if [ -e "$root/fail-start-reply" ]; then exit 255; fi
     printf 'port=%s\nkind=%s\n' "$port" "$kind" ;;
   status)
     [ -e "$root/remote-owner" ] || exit 1
@@ -66,6 +79,7 @@ case "$mode" in
     if [ "$saved" = "$owner" ]; then printf 'running-owned\n'; else printf 'running-reused\n'; fi ;;
   pair) cat "$root/pairing.json" ;;
   stop)
+    if [ -e "$root/fail-stop" ]; then exit 255; fi
     [ "$(cat "$root/remote-owner")" = "$owner" ] || exit 1
     rm "$root/remote-owner"
     printf 'stopped\n' ;;
@@ -144,6 +158,54 @@ async fn relay_from_forward_file(root: PathBuf, remote_port: u16) -> tokio::task
             });
         }
     })
+}
+
+async fn relay_all_forward_files(root: PathBuf, remote_port: u16) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ports = std::collections::HashSet::new();
+        let mut listeners = tokio::task::JoinSet::new();
+        loop {
+            if let Ok(value) = fs::read_to_string(root.join("forward-port"))
+                && let Ok(port) = value.trim().parse::<u16>()
+                && ports.insert(port)
+            {
+                listeners.spawn(async move {
+                    let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+                    while let Ok((mut local, _)) = listener.accept().await {
+                        tokio::spawn(async move {
+                            if let Ok(mut remote) =
+                                TcpStream::connect(("127.0.0.1", remote_port)).await
+                            {
+                                let _ = copy_bidirectional(&mut local, &mut remote).await;
+                            }
+                        });
+                    }
+                });
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+}
+
+async fn next_view_state(
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    expected: &str,
+) -> serde_json::Value {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let line = lines
+                .next_line()
+                .await
+                .unwrap()
+                .expect("view process ended");
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if value["state"] == expected {
+                return value;
+            }
+        }
+    })
+    .await
+    .expect("remote view state timed out")
 }
 
 fn probe_args<'a>(
@@ -312,6 +374,29 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
     );
     assert!(String::from_utf8_lossy(&again.stdout).contains("process=owned"));
 
+    let modes_before = fs::read_to_string(root.join("modes")).unwrap();
+    let mut conflict = args.clone();
+    let scope = conflict
+        .iter_mut()
+        .find(|value| *value == "development")
+        .unwrap();
+    *scope = "local".into();
+    fs::write(root.join("fail-forward"), "1").unwrap();
+    let rejected_scope = invoke(
+        root,
+        &ssh,
+        &conflict.iter().map(String::as_str).collect::<Vec<_>>(),
+        remote_port,
+    )
+    .await;
+    fs::remove_file(root.join("fail-forward")).unwrap();
+    assert!(!rejected_scope.status.success());
+    assert_eq!(
+        fs::read_to_string(root.join("modes")).unwrap(),
+        modes_before,
+        "scope conflict must fail before SSH remote side effects"
+    );
+
     fs::remove_file(root.join("forward-port")).unwrap();
     let mut exact_task = args.clone();
     exact_task.extend([
@@ -330,6 +415,87 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
         String::from_utf8_lossy(&exact.stderr)
     );
     assert!(String::from_utf8_lossy(&exact.stdout).contains(&format!("task={task}")));
+
+    fs::remove_file(root.join("forward-port")).unwrap();
+    let relay = relay_all_forward_files(root.to_path_buf(), remote_port).await;
+    let view_pairing: IssuedPairing = local
+        .call_as(
+            zeron_rpc::methods::CREATE_REMOTE_PAIRING,
+            serde_json::to_value(CreatePairing {
+                label: "synthetic desktop view".into(),
+                scopes: vec![RemoteScope::EnvironmentRead, RemoteScope::TasksRead],
+                pairing_ttl_secs: 300,
+                session_ttl_secs: 86_400,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let view_pairing_file = root.join("view-pairing.secret");
+    fs::write(&view_pairing_file, view_pairing.credential).unwrap();
+    fs::set_permissions(&view_pairing_file, fs::Permissions::from_mode(0o600)).unwrap();
+    let view_session = root.join("client-profile/view-session.token");
+    let mut view_args = args.clone();
+    view_args[0] = "view".into();
+    let session_index = view_args
+        .iter()
+        .position(|value| value == "--session-file")
+        .unwrap()
+        + 1;
+    view_args[session_index] = view_session.display().to_string();
+    view_args.extend([
+        "--project".into(),
+        project.into(),
+        "--task".into(),
+        task.into(),
+        "--pairing-file".into(),
+        view_pairing_file.display().to_string(),
+        "--fixture-stdio".into(),
+    ]);
+    let mut view = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .arg("ssh")
+        .args(&view_args)
+        .env("LUNA_DATA_DIR", root.join("client-profile"))
+        .env("LUNA_SSH_BIN", &ssh)
+        .env("FAKE_SSH_ROOT", root)
+        .env("CODEX_HOME", root.join("synthetic-codex"))
+        .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))
+        .env("ZERON_WORKOS_CLIENT_ID", "")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut view_input = view.stdin.take().unwrap();
+    let mut view_output = tokio::io::BufReader::new(view.stdout.take().unwrap()).lines();
+    let connected = next_view_state(&mut view_output, "connected").await;
+    assert_eq!(connected["data"]["task"], task);
+    view_input.write_all(b"disconnect\n").await.unwrap();
+    let disconnected = next_view_state(&mut view_output, "disconnected").await;
+    assert!(disconnected["data"].as_str().unwrap().contains("by user"));
+    view_input.write_all(b"reconnect\n").await.unwrap();
+    next_view_state(&mut view_output, "connected").await;
+    fs::write(root.join("drop-forward"), "1").unwrap();
+    let lost = next_view_state(&mut view_output, "disconnected").await;
+    assert!(
+        lost["data"]
+            .as_str()
+            .unwrap()
+            .contains("SSH transport closed")
+    );
+    fs::remove_file(root.join("drop-forward")).unwrap();
+    view_input.write_all(b"reconnect\n").await.unwrap();
+    next_view_state(&mut view_output, "connected").await;
+    view_input.write_all(b"exit\n").await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(8), view.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+    relay.abort();
 
     fs::remove_file(root.join("forward-port")).unwrap();
     let mut wrong_task = args.clone();
@@ -366,14 +532,15 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
         )
         .await
         .unwrap();
-    let id = &sessions.last().unwrap().id;
-    let _: serde_json::Value = local
-        .call_as(
-            zeron_rpc::methods::REVOKE_REMOTE_SESSION,
-            serde_json::json!({"id": id}),
-        )
-        .await
-        .unwrap();
+    for session in sessions {
+        let _: serde_json::Value = local
+            .call_as(
+                zeron_rpc::methods::REVOKE_REMOTE_SESSION,
+                serde_json::json!({"id": session.id}),
+            )
+            .await
+            .unwrap();
+    }
     fs::remove_file(root.join("forward-port")).unwrap();
     let relay = relay_from_forward_file(root.to_path_buf(), remote_port).await;
     let refs: Vec<_> = args.iter().map(String::as_str).collect();
@@ -452,6 +619,153 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
         !root.join("remote-owner").exists(),
         "new failed launch should be stopped"
     );
+    fs::remove_file(root.join("fail-forward")).unwrap();
+    fs::write(root.join("fail-start-reply"), "1").unwrap();
+    let uncertain = invoke(
+        root,
+        &ssh,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        remote_port,
+    )
+    .await;
+    assert!(!uncertain.status.success());
+    assert!(
+        root.join("remote-owner").exists(),
+        "fake remote launch completed before SSH lost reply"
+    );
+    assert!(
+        root.join("client-profile/ssh-launch")
+            .read_dir()
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "json")),
+        "uncertain launch must retain a durable ownership intent"
+    );
+    fs::remove_file(root.join("fail-start-reply")).unwrap();
+    fs::remove_file(root.join("forward-port")).ok();
+    let relay = relay_from_forward_file(root.to_path_buf(), remote_port).await;
+    let recovered = invoke(
+        root,
+        &ssh,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        remote_port,
+    )
+    .await;
+    relay.abort();
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    assert!(String::from_utf8_lossy(&recovered.stdout).contains("process=owned"));
+    let stopped = invoke(root, &ssh, &stop, remote_port).await;
+    assert!(stopped.status.success());
+    assert!(!root.join("remote-owner").exists());
+    fs::write(root.join("fail-forward"), "1").unwrap();
+    fs::write(root.join("fail-stop"), "1").unwrap();
+    fs::remove_file(root.join("forward-port")).ok();
+    let failed_cleanup = invoke(
+        root,
+        &ssh,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        remote_port,
+    )
+    .await;
+    assert!(!failed_cleanup.status.success());
+    assert!(String::from_utf8_lossy(&failed_cleanup.stderr).contains("ownership intent retained"));
+    assert!(root.join("remote-owner").exists());
+    fs::remove_file(root.join("fail-stop")).unwrap();
+    fs::remove_file(root.join("fail-forward")).unwrap();
+    let stopped = invoke(root, &ssh, &stop, remote_port).await;
+    assert!(stopped.status.success());
+    assert!(!root.join("remote-owner").exists());
+
+    fs::write(root.join("deny-state-finalize"), "1").unwrap();
+    fs::remove_file(root.join("forward-port")).ok();
+    let relay = relay_from_forward_file(root.to_path_buf(), remote_port).await;
+    let state_failure = invoke(
+        root,
+        &ssh,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        remote_port,
+    )
+    .await;
+    relay.abort();
+    fs::remove_file(root.join("deny-state-finalize")).unwrap();
+    fs::set_permissions(
+        root.join("client-profile/ssh-launch"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    assert!(!state_failure.status.success());
+    assert!(
+        String::from_utf8_lossy(&state_failure.stderr)
+            .contains("ownership intent could not be finalized")
+    );
+    let state_path = fs::read_dir(root.join("client-profile/ssh-launch"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .unwrap();
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path).unwrap()).unwrap();
+    assert_eq!(state["phase"], "intent");
+    assert!(
+        invoke(root, &ssh, &stop, remote_port)
+            .await
+            .status
+            .success()
+    );
+
+    let blocker = root.join("blocker");
+    fs::write(&blocker, "file").unwrap();
+    let new_pairing: IssuedPairing = local
+        .call_as(
+            zeron_rpc::methods::CREATE_REMOTE_PAIRING,
+            serde_json::to_value(CreatePairing {
+                label: "synthetic token failure".into(),
+                scopes: vec![RemoteScope::EnvironmentRead, RemoteScope::TasksRead],
+                pairing_ttl_secs: 300,
+                session_ttl_secs: 86_400,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    fs::write(
+        root.join("pairing.json"),
+        serde_json::to_vec(&new_pairing).unwrap(),
+    )
+    .unwrap();
+    let mut invalid_token = probe_args(
+        &core.device_id,
+        &issued.target.environment_id,
+        &artifact,
+        &blocker.join("token"),
+    );
+    invalid_token.push("--enroll".into());
+    fs::remove_file(root.join("forward-port")).ok();
+    let relay = relay_from_forward_file(root.to_path_buf(), remote_port).await;
+    let token_failure = invoke(
+        root,
+        &ssh,
+        &invalid_token.iter().map(String::as_str).collect::<Vec<_>>(),
+        remote_port,
+    )
+    .await;
+    relay.abort();
+    assert!(!token_failure.status.success());
+    assert!(String::from_utf8_lossy(&token_failure.stderr).contains("ownership intent retained"));
+    assert!(root.join("remote-owner").exists());
+    assert!(
+        invoke(root, &ssh, &stop, remote_port)
+            .await
+            .status
+            .success()
+    );
     wrong[2] = "-bad-host".into();
     let refs: Vec<_> = wrong.iter().map(String::as_str).collect();
     let invalid_host = invoke(root, &ssh, &refs, remote_port).await;
@@ -482,6 +796,7 @@ async fn ssh_cli_rejects_local_checksum_and_version_before_transport() {
 
     let (_, artifact) = fixture(root);
     fs::write(&artifact, "#!/bin/sh\necho 'luna-headless 0.0.0'\n").unwrap();
+    fs::write(root.join("remote-version-check"), "1").unwrap();
     let name = artifact.file_name().unwrap().to_str().unwrap();
     let hash = format!("{:x}", Sha256::digest(fs::read(&artifact).unwrap()));
     fs::write(
@@ -492,5 +807,113 @@ async fn ssh_cli_rejects_local_checksum_and_version_before_transport() {
     let bad_version = invoke(root, &ssh, &refs, 0).await;
     assert!(!bad_version.status.success());
     assert!(String::from_utf8_lossy(&bad_version.stderr).contains("version"));
-    assert!(!root.join("modes").exists());
+    assert!(
+        fs::read_to_string(root.join("modes"))
+            .unwrap()
+            .contains("install")
+    );
+}
+
+#[tokio::test]
+async fn foreign_platform_artifact_is_never_executed_on_client() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (ssh, _) = fixture(root);
+    fs::write(root.join("platform"), "Linux x86_64\n").unwrap();
+    fs::write(root.join("remote-version-check"), "1").unwrap();
+    let name = format!("luna-headless-v{}-linux-x64", env!("CARGO_PKG_VERSION"));
+    let artifact = root.join(&name);
+    let marker = root.join("client-executed-foreign");
+    fs::write(&artifact, format!(
+        "#!/bin/sh\nif [ -z \"${{FAKE_REMOTE_EXECUTION:-}}\" ]; then touch '{}'; echo 'luna-headless {}'; else echo 'luna-headless 0.0.0'; fi\n",
+        marker.display(), env!("CARGO_PKG_VERSION"),
+    )).unwrap();
+    fs::set_permissions(&artifact, fs::Permissions::from_mode(0o700)).unwrap();
+    let hash = format!("{:x}", Sha256::digest(fs::read(&artifact).unwrap()));
+    fs::write(
+        root.join(format!("{name}.sha256")),
+        format!("{hash}  {name}\n"),
+    )
+    .unwrap();
+    let session = root.join("session.token");
+    fs::write(&session, "synthetic-token\n").unwrap();
+    fs::set_permissions(&session, fs::Permissions::from_mode(0o600)).unwrap();
+    let args = probe_args(
+        "22222222-2222-4222-8222-222222222222",
+        &"0".repeat(64),
+        &artifact,
+        &session,
+    );
+    let output = invoke(
+        root,
+        &ssh,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        0,
+    )
+    .await;
+    assert!(!output.status.success());
+    assert!(!marker.exists(), "foreign executable ran on the client");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("staged artifact version mismatch"));
+}
+
+#[tokio::test]
+async fn persistent_remote_read_view_is_available() {
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .args(["ssh", "view", "--help"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("--task"));
+}
+
+#[tokio::test]
+async fn remote_read_window_exit_cancels_a_pending_ssh_connect() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (ssh, artifact) = fixture(root);
+    fs::write(root.join("hang-platform"), "1").unwrap();
+    let session = root.join("session.token");
+    fs::write(&session, "synthetic-token\n").unwrap();
+    fs::set_permissions(&session, fs::Permissions::from_mode(0o600)).unwrap();
+    let mut args = probe_args(
+        "22222222-2222-4222-8222-222222222222",
+        &"0".repeat(64),
+        &artifact,
+        &session,
+    );
+    args[0] = "view".into();
+    args.extend([
+        "--project".into(),
+        "30303030-3030-4030-8030-303030303030".into(),
+        "--task".into(),
+        "31313131-3131-4131-8131-313131313131".into(),
+        "--fixture-stdio".into(),
+    ]);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .arg("ssh")
+        .args(&args)
+        .env("LUNA_DATA_DIR", root.join("client-profile"))
+        .env("LUNA_SSH_BIN", &ssh)
+        .env("FAKE_SSH_ROOT", root)
+        .env("ZERON_WORKOS_CLIENT_ID", "")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    next_view_state(&mut output, "connecting").await;
+    input.write_all(b"exit\n").await.unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+    assert!(
+        status.is_ok(),
+        "closing the read view should cancel pending SSH"
+    );
 }

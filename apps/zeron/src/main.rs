@@ -250,10 +250,7 @@ fn main() -> anyhow::Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(remote_cli::run(args, engine_config_from_env().ipc_port))
         }
-        Some(Command::Ssh(args)) => {
-            let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(ssh_cli::run(args, paths::data_dir()))
-        }
+        Some(Command::Ssh(args)) => ssh_cli::run(args, paths::data_dir()),
         Some(Command::Sync) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(sync_cli(engine_config_from_env().ipc_port))

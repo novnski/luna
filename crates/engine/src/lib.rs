@@ -1215,7 +1215,7 @@ impl Engine {
 
         std::fs::create_dir_all(&config.data_dir)?;
         let auth = Self::build_auth(&config).await;
-        let mut auth_state = auth.watch_state();
+        let auth_state = auth.watch_state();
         let workspace_scope = Self::initial_workspace_scope(&auth);
         let mut profile = Self::resolve_profile(&config, &auth, workspace_scope)?;
         let _refresh_loop = auth.spawn_refresh_loop();
@@ -1232,6 +1232,69 @@ impl Engine {
 
         let runtime = Self::assemble_runtime(&config, auth, profile).await?;
 
+        Self::serve_headless_runtime(
+            config,
+            runtime,
+            auth_state,
+            workspace_scope,
+            remote_port,
+            true,
+        )
+        .await
+    }
+
+    /// Explicit hermetic binary fixture. The caller supplies isolated account
+    /// paths; native provider metadata, Keychain fallback, Edge and preview
+    /// supervisors are absent while the real headless listeners still run.
+    #[doc(hidden)]
+    pub async fn run_synthetic_with_remote_port(
+        self,
+        remote_port: u16,
+        accounts: AgentAccountsConfig,
+    ) -> anyhow::Result<()> {
+        accounts.disable_claude_keychain_fallback()?;
+        let config = self.config;
+        if config.workos_client_id.is_some() || config.edge_token.is_some() {
+            anyhow::bail!("synthetic headless startup requires offline auth");
+        }
+        let mut auth_config = AuthConfig::new(config.edge_url.clone(), config.data_dir.clone());
+        auth_config.use_in_memory_credentials_for_tests();
+        let auth = Auth::new(auth_config);
+        let auth_state = auth.watch_state();
+        let profile =
+            EngineProfile::development(&config.data_dir, "l30-synthetic-org", "l30-synthetic-user");
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                profile,
+                Arc::new(HarnessRegistry::new()),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )?;
+        core.set_auth(auth);
+        let runtime = EngineRuntime {
+            core,
+            host_relay: std::sync::Mutex::new(None),
+        };
+        Self::serve_headless_runtime(
+            config,
+            runtime,
+            auth_state,
+            WorkspaceScope::Development,
+            Some(remote_port),
+            false,
+        )
+        .await
+    }
+
+    async fn serve_headless_runtime(
+        config: EngineConfig,
+        runtime: EngineRuntime,
+        mut auth_state: tokio::sync::watch::Receiver<AuthState>,
+        workspace_scope: WorkspaceScope,
+        remote_port: Option<u16>,
+        managed_backup: bool,
+    ) -> anyhow::Result<()> {
         // A daemon exists to serve this port, so a bind failure is fatal here —
         // unlike the headed app, which can still work over its in-process
         // transport (see `serve_ipc`).
@@ -1284,7 +1347,7 @@ impl Engine {
         }
         let clean = runtime.shutdown().await;
         drop(runtime);
-        if clean {
+        if clean && managed_backup {
             match backup::BackupService::run_managed_offline_if_due(&config.data_dir, now_ms()) {
                 Ok(Some(receipt)) => tracing::info!(
                     archive = %receipt.archive.display(),

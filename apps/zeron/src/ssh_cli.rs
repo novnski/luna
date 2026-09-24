@@ -14,11 +14,12 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
-use zeron_proto::{EngineInfo, TaskIdentityView, WorkspaceScope};
+use zeron_proto::{EngineInfo, TaskCommandRead, TaskIdentityView, WorkspaceScope};
 use zeron_rpc::remote_auth::{
     AuthenticateRemote, CAPABILITY, IssuedPairing, PROTOCOL_VERSION, RedeemPairing, RemoteTarget,
 };
 use zeron_rpc::{RpcClient, methods};
+use zeron_ui::remote_read::{RemoteReadCommand, RemoteReadState, RemoteTaskReadback};
 
 const REMOTE_SCRIPT: &str = include_str!("ssh_remote.sh");
 const READY_WAIT: Duration = Duration::from_secs(20);
@@ -28,6 +29,12 @@ struct Launch<'a> {
     sha: &'a str,
     key: &'a str,
     owner: &'a str,
+}
+
+struct AuthenticatedForward {
+    client: RpcClient,
+    readback: Option<(String, String)>,
+    issued_token: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -42,9 +49,20 @@ enum SshCommand {
     Probe(ProbeArgs),
     /// Stop only the remote process recorded as owned by this client.
     Stop(StopArgs),
+    /// Open an exact-task read window with explicit disconnect and reconnect.
+    View(ViewArgs),
 }
 
 #[derive(Debug, Args)]
+struct ViewArgs {
+    #[command(flatten)]
+    probe: ProbeArgs,
+    /// Exercise the same read lifecycle without launching a desktop window.
+    #[arg(long, hide = true)]
+    fixture_stdio: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 struct TargetArgs {
     /// SSH config alias or user@host; system known_hosts must already trust it.
     #[arg(long)]
@@ -88,7 +106,7 @@ impl ScopeArg {
     }
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 struct ProbeArgs {
     #[command(flatten)]
     target: TargetArgs,
@@ -128,19 +146,270 @@ struct OwnedLaunch {
     remote_port: u16,
     ipc_port: u16,
     owner: String,
+    #[serde(default)]
+    phase: LaunchPhase,
 }
 
-pub async fn run(args: SshArgs, data_dir: PathBuf) -> anyhow::Result<()> {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum LaunchPhase {
+    Intent,
+    #[default]
+    Verified,
+}
+
+pub fn run(args: SshArgs, data_dir: PathBuf) -> anyhow::Result<()> {
     match args.command {
-        SshCommand::Probe(args) => probe(args, &data_dir).await,
-        SshCommand::Stop(args) => stop(args, &data_dir).await,
+        SshCommand::Probe(args) => {
+            tokio::runtime::Runtime::new()?.block_on(probe(args, &data_dir, true))
+        }
+        SshCommand::Stop(args) => tokio::runtime::Runtime::new()?.block_on(stop(args, &data_dir)),
+        SshCommand::View(args) => run_view(args, data_dir),
     }
 }
 
-async fn probe(args: ProbeArgs, data_dir: &Path) -> anyhow::Result<()> {
+fn run_view(args: ViewArgs, data_dir: PathBuf) -> anyhow::Result<()> {
+    if args.probe.project.is_none() || args.probe.task.is_none() {
+        bail!("remote read view requires an exact --project and --task");
+    }
+    let (state_tx, state_rx) = tokio::sync::watch::channel(RemoteReadState::Connecting);
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    if args.fixture_stdio {
+        return tokio::runtime::Runtime::new()?.block_on(async move {
+            let worker = tokio::spawn(view_worker(args.probe, data_dir, state_tx, command_rx));
+            let mut state = state_rx;
+            println!("{}", serde_json::to_string(&*state.borrow())?);
+            let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = stdin.lines();
+            loop {
+                tokio::select! {
+                    changed = state.changed() => {
+                        if changed.is_err() { break; }
+                        println!("{}", serde_json::to_string(&*state.borrow_and_update())?);
+                    }
+                    line = lines.next_line() => {
+                        let command = match line?.as_deref() {
+                            Some("disconnect") => RemoteReadCommand::Disconnect,
+                            Some("reconnect") => RemoteReadCommand::Reconnect,
+                            Some("exit") | None => RemoteReadCommand::Exit,
+                            _ => continue,
+                        };
+                        let _ = command_tx.send(command);
+                        if command == RemoteReadCommand::Exit { break; }
+                    }
+                }
+            }
+            let _ = command_tx.send(RemoteReadCommand::Exit);
+            worker.await?;
+            Ok(())
+        });
+    }
+    let worker = std::thread::spawn(move || -> anyhow::Result<()> {
+        tokio::runtime::Runtime::new()?
+            .block_on(view_worker(args.probe, data_dir, state_tx, command_rx));
+        Ok(())
+    });
+    zeron_ui::remote_read::run_remote_read_view(state_rx, command_tx.clone());
+    let _ = command_tx.send(RemoteReadCommand::Exit);
+    worker
+        .join()
+        .map_err(|_| anyhow!("remote read worker panicked"))??;
+    Ok(())
+}
+
+async fn view_worker(
+    mut args: ProbeArgs,
+    data_dir: PathBuf,
+    state: tokio::sync::watch::Sender<RemoteReadState>,
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<RemoteReadCommand>,
+) {
+    'connection: loop {
+        let mut active = None;
+        state.send_replace(RemoteReadState::Connecting);
+        let opened = {
+            let opening = open_read_view(&mut args, &data_dir);
+            tokio::pin!(opening);
+            tokio::select! {
+                result = &mut opening => Ok(result),
+                command = commands.recv() => Err(command),
+            }
+        };
+        match opened {
+            Ok(Ok((tunnel, client, readback))) => {
+                state.send_replace(RemoteReadState::Connected(readback));
+                active = Some((tunnel, client));
+            }
+            Ok(Err(error)) => {
+                state.send_replace(RemoteReadState::Disconnected(format!("{error:#}")));
+            }
+            Err(Some(RemoteReadCommand::Disconnect)) => {
+                state.send_replace(RemoteReadState::Disconnected("Disconnected by user".into()));
+            }
+            Err(Some(RemoteReadCommand::Reconnect)) => continue 'connection,
+            Err(Some(RemoteReadCommand::Exit)) | Err(None) => return,
+        }
+        let mut ticker = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            let command = if let Some((tunnel, client)) = &mut active {
+                tokio::select! {
+                    command = commands.recv() => command,
+                    _ = ticker.tick() => {
+                        if let Ok(Some(status)) = tunnel.try_wait() {
+                            state.send_replace(RemoteReadState::Disconnected(format!("SSH transport closed: {status}")));
+                            active = None;
+                            continue;
+                        }
+                        match read_task_view(client.client(), &args).await {
+                            Ok(readback) => { state.send_replace(RemoteReadState::Connected(readback)); }
+                            Err(error) => {
+                                state.send_replace(RemoteReadState::Disconnected(format!("remote read failed: {error:#}")));
+                                let _ = tunnel.start_kill();
+                                let _ = tunnel.wait().await;
+                                active = None;
+                            }
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                commands.recv().await
+            };
+            if let Some((mut tunnel, _)) = active.take() {
+                let _ = tunnel.start_kill();
+                let _ = tunnel.wait().await;
+            }
+            match command {
+                Some(RemoteReadCommand::Disconnect) => {
+                    state
+                        .send_replace(RemoteReadState::Disconnected("Disconnected by user".into()));
+                }
+                Some(RemoteReadCommand::Reconnect) => break,
+                Some(RemoteReadCommand::Exit) | None => return,
+            }
+        }
+    }
+}
+
+async fn open_read_view(
+    args: &mut ProbeArgs,
+    data_dir: &Path,
+) -> anyhow::Result<(Child, zeron_ui::EngineHandle, RemoteTaskReadback)> {
+    probe(args.clone(), data_dir, false).await?;
+    // Pairing is one-time. Once the first probe saved the device session,
+    // every reconnect must reuse that session and authenticate a new socket.
+    args.enroll = false;
+    args.pairing_file = None;
+    let token = read_private_token(&args.session_file)?;
+    let launch = Launch {
+        version: "",
+        sha: "",
+        key: "",
+        owner: "",
+    };
+    let (mut tunnel, authenticated) = open_forward(args, Some(&token), None, &launch).await?;
+    let info: EngineInfo = rpc_call(&authenticated.client, methods::ENGINE_INFO, json!({})).await?;
+    let handle = zeron_ui::EngineHandle::from_authenticated_remote(
+        authenticated.client,
+        info,
+        format!("ssh://{}", args.target.host),
+    );
+    match read_task_view(handle.client(), args).await {
+        Ok(readback) => Ok((tunnel, handle, readback)),
+        Err(error) => {
+            let _ = tunnel.start_kill();
+            let _ = tunnel.wait().await;
+            Err(error)
+        }
+    }
+}
+
+async fn read_task_view(
+    client: &RpcClient,
+    args: &ProbeArgs,
+) -> anyhow::Result<RemoteTaskReadback> {
+    let project = args
+        .project
+        .as_deref()
+        .ok_or_else(|| anyhow!("project target missing"))?;
+    let task = args
+        .task
+        .as_deref()
+        .ok_or_else(|| anyhow!("task target missing"))?;
+    let info: EngineInfo = rpc_call(client, methods::ENGINE_INFO, json!({})).await?;
+    if info.device_id != args.target.machine
+        || info.workspace_scope != args.target.workspace_scope.into()
+    {
+        bail!("remote read switched machine or scope");
+    }
+    let identity: TaskIdentityView =
+        rpc_call(client, methods::GET_TASK_IDENTITY, json!({"taskId": task})).await?;
+    if identity.task.task_id != task
+        || identity.task.workspace_id != identity.workspace.workspace_id
+        || identity.workspace.environment_id != info.device_id
+        || identity.workspace.source_space_id.as_deref() != Some(project)
+        || identity
+            .bindings
+            .iter()
+            .any(|binding| binding.task_id != task)
+        || identity.current_binding.as_ref().is_some_and(|binding| {
+            binding.task_id != task
+                || binding.environment_id != info.device_id
+                || binding.workspace_id != identity.workspace.workspace_id
+                || identity.task.current_binding_id.as_deref() != Some(binding.binding_id.as_str())
+        })
+    {
+        bail!("remote task changed identity or project");
+    }
+    let commands: TaskCommandRead = rpc_call(
+        client,
+        methods::GET_TASK_COMMAND_SNAPSHOT,
+        json!({"taskId": task, "afterTaskSequence": 0, "limit": 20}),
+    )
+    .await?;
+    if commands.snapshot.task_id != task
+        || commands.events.len() > 20
+        || commands
+            .snapshot
+            .binding_id
+            .as_deref()
+            .is_some_and(|binding| identity.task.current_binding_id.as_deref() != Some(binding))
+        || commands.events.iter().any(|event| {
+            event.receipt.task_id != task
+                || event.receipt.snapshot.task_id != task
+                || event.command_id != event.receipt.command_id
+        })
+    {
+        bail!("remote command readback crossed the task target");
+    }
+    Ok(RemoteTaskReadback {
+        machine: info.device_id,
+        environment: args.target.environment.clone(),
+        project: project.into(),
+        task: task.into(),
+        receipt_page_count: commands.events.len(),
+        summary: format!(
+            "Revision {} · sequence {} · active turn {}{}",
+            commands.snapshot.task_revision,
+            commands.snapshot.task_sequence,
+            commands
+                .snapshot
+                .active_turn_id
+                .as_deref()
+                .unwrap_or("none"),
+            if commands.has_more {
+                " · more receipts available"
+            } else {
+                ""
+            }
+        ),
+    })
+}
+
+async fn probe(args: ProbeArgs, data_dir: &Path, report: bool) -> anyhow::Result<()> {
     validate_target(&args.target)?;
     let version = env!("CARGO_PKG_VERSION");
-    let sha = verify_local_artifact(&args.artifact, version).await?;
+    let sha = verify_local_artifact(&args.artifact, version)?;
     let pairing_credential = args
         .pairing_file
         .as_deref()
@@ -155,14 +424,18 @@ async fn probe(args: ProbeArgs, data_dir: &Path) -> anyhow::Result<()> {
         Some(read_private_token(&args.session_file)?)
     };
     let key = state_key(&args.target);
+    let _target_lock = lock_target(data_dir, &key)?;
     let state_path = state_path(data_dir, &key);
     let prior = read_owned(&state_path)?;
-    let had_matching_prior = prior
-        .as_ref()
-        .is_some_and(|state| owned_target_matches(state, &args.target, version, &sha));
+    if let Some(state) = &prior
+        && !owned_target_matches(state, &args.target, version, &sha)
+    {
+        bail!(
+            "existing SSH ownership record has a different scope, port, version, or artifact; resolve it before another launch"
+        );
+    }
     let owner = prior
         .as_ref()
-        .filter(|state| owned_target_matches(state, &args.target, version, &sha))
         .map(|state| state.owner.clone())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
@@ -216,6 +489,21 @@ async fn probe(args: ProbeArgs, data_dir: &Path) -> anyhow::Result<()> {
     } else if installed.trim() != "installed" {
         bail!("unexpected remote artifact status");
     }
+    let intent = OwnedLaunch {
+        host: args.target.host.clone(),
+        machine: args.target.machine.clone(),
+        environment: args.target.environment.clone(),
+        workspace_scope: args.target.workspace_scope.into(),
+        version: version.into(),
+        sha256: sha.clone(),
+        remote_port: args.target.remote_port,
+        ipc_port: args.target.ipc_port,
+        owner: owner.clone(),
+        phase: LaunchPhase::Intent,
+    };
+    if prior.is_none() {
+        write_owned(&state_path, &intent).context("persist launch intent before remote start")?;
+    }
     let started = remote_script(
         &args.target.host,
         "start",
@@ -225,8 +513,19 @@ async fn probe(args: ProbeArgs, data_dir: &Path) -> anyhow::Result<()> {
         &key,
         &owner,
     )
-    .await?;
+    .await
+    .with_context(|| {
+        format!(
+            "remote start outcome uncertain; ownership intent retained at {}",
+            state_path.display()
+        )
+    })?;
     let kind = parse_started(&started, args.target.remote_port)?;
+    if prior.is_some() && kind == "reused" {
+        bail!(
+            "recorded owned process is now reused by another launch; ownership record retained for readback"
+        );
+    }
     let launch = Launch {
         version,
         sha: &sha,
@@ -257,78 +556,83 @@ async fn probe(args: ProbeArgs, data_dir: &Path) -> anyhow::Result<()> {
         Ok::<_, anyhow::Error>(readback)
     }
     .await;
-    if result.is_err() && kind == "owned" && !had_matching_prior {
-        // The new process never passed target/auth readback. Keep failure loud
-        // and do not leave an unverified process running when cleanup works.
-        if let Err(error) = remote_script(
-            &args.target.host,
-            "stop",
-            version,
-            &sha,
-            &args.target,
-            &key,
-            &owner,
-        )
-        .await
-        {
-            eprintln!("new remote process cleanup uncertain: {error}");
-        }
-    }
-    let (readback, issued_token) = result?;
-    if let Some(token) = issued_token
-        && let Err(error) = write_private_token(&args.session_file, &token)
-    {
-        if kind == "owned" && !had_matching_prior {
-            let _ = remote_script(
-                &args.target.host,
-                "stop",
-                version,
-                &sha,
-                &args.target,
-                &key,
-                &owner,
-            )
-            .await;
-        }
-        return Err(error.context("persist newly issued session; process cleanup may be uncertain"));
-    }
-    if kind == "owned" {
-        let state = OwnedLaunch {
-            host: args.target.host.clone(),
-            machine: args.target.machine.clone(),
-            environment: args.target.environment.clone(),
-            workspace_scope: args.target.workspace_scope.into(),
-            version: version.into(),
-            sha256: sha,
-            remote_port: args.target.remote_port,
-            ipc_port: args.target.ipc_port,
-            owner,
-        };
-        if let Err(error) = write_owned(&state_path, &state) {
-            if !had_matching_prior {
-                let _ = remote_script(
+    let (readback, issued_token) = match result {
+        Ok(readback) => readback,
+        Err(error) => {
+            if kind == "owned" && prior.is_none() {
+                match remote_script(
                     &args.target.host,
                     "stop",
                     version,
-                    &state.sha256,
+                    &sha,
                     &args.target,
                     &key,
-                    &state.owner,
+                    &owner,
                 )
-                .await;
+                .await
+                {
+                    Ok(reply) if reply.trim() == "stopped" => {
+                        clear_owned(&state_path)?;
+                        return Err(
+                            error.context("new remote process stopped after failed readback")
+                        );
+                    }
+                    Ok(reply) => {
+                        return Err(error.context(format!(
+                            "cleanup unconfirmed ({reply}); ownership intent retained at {}",
+                            state_path.display()
+                        )));
+                    }
+                    Err(stop_error) => {
+                        return Err(error.context(format!(
+                            "cleanup failed ({stop_error}); ownership intent retained at {}",
+                            state_path.display()
+                        )));
+                    }
+                }
             }
-            return Err(error.context("persist owned remote process; cleanup may be uncertain"));
+            if kind == "reused" && prior.is_none() {
+                clear_owned(&state_path)?;
+            }
+            return Err(error.context(format!(
+                "remote readback failed; ownership state retained at {}",
+                state_path.display()
+            )));
         }
-    } else if prior.is_some() {
-        fs::remove_file(&state_path)
-            .with_context(|| format!("clear stale ownership at {}", state_path.display()))?;
+    };
+    if let Some(token) = issued_token
+        && let Err(error) = write_private_token(&args.session_file, &token)
+    {
+        return Err(error.context(format!(
+            "persist newly issued session failed; ownership intent retained at {}",
+            state_path.display()
+        )));
     }
-    println!(
-        "Remote RPC verified: machine={} environment={} scope={:?} process={kind}",
-        args.target.machine, args.target.environment, args.target.workspace_scope
-    );
-    if let Some((project, task)) = readback {
-        println!("Task verified: project={project} task={task}");
+    if kind == "owned" {
+        write_owned(
+            &state_path,
+            &OwnedLaunch {
+                phase: LaunchPhase::Verified,
+                ..intent
+            },
+        )
+        .with_context(|| {
+            format!(
+                "remote verified but ownership intent could not be finalized at {}",
+                state_path.display()
+            )
+        })?;
+    } else {
+        clear_owned(&state_path)?;
+    }
+    if report {
+        println!(
+            "Remote RPC verified: machine={} environment={} scope={:?} process={kind}",
+            args.target.machine, args.target.environment, args.target.workspace_scope
+        );
+        if let Some((project, task)) = readback {
+            println!("Task verified: project={project} task={task}");
+        }
     }
     Ok(())
 }
@@ -336,6 +640,7 @@ async fn probe(args: ProbeArgs, data_dir: &Path) -> anyhow::Result<()> {
 async fn stop(args: StopArgs, data_dir: &Path) -> anyhow::Result<()> {
     validate_target(&args.target)?;
     let key = state_key(&args.target);
+    let _target_lock = lock_target(data_dir, &key)?;
     let path = state_path(data_dir, &key);
     let Some(state) = read_owned(&path)? else {
         println!("No owned remote process recorded for this target");
@@ -357,7 +662,7 @@ async fn stop(args: StopArgs, data_dir: &Path) -> anyhow::Result<()> {
     if reply.trim() != "stopped" {
         bail!("remote process stop was not confirmed: {}", reply.trim());
     }
-    fs::remove_file(&path)?;
+    clear_owned(&path)?;
     println!(
         "Owned remote process stopped for machine={} environment={}",
         state.machine, state.environment
@@ -391,7 +696,7 @@ fn validate_target(target: &TargetArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn verify_local_artifact(path: &Path, version: &str) -> anyhow::Result<String> {
+fn verify_local_artifact(path: &Path, version: &str) -> anyhow::Result<String> {
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -419,16 +724,8 @@ async fn verify_local_artifact(path: &Path, version: &str) -> anyhow::Result<Str
     {
         bail!("headless artifact checksum manifest mismatch");
     }
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
-        .await
-        .context("execute headless artifact version check")?;
-    if !output.status.success()
-        || String::from_utf8_lossy(&output.stdout).trim() != format!("luna-headless {version}")
-    {
-        bail!("headless artifact version check failed");
-    }
+    // The artifact may target another OS/CPU. Never execute it on this client;
+    // the remote installer checks its version after the checksum on the host.
     Ok(actual)
 }
 
@@ -464,6 +761,23 @@ fn state_key(target: &TargetArgs) -> String {
 
 fn state_path(data_dir: &Path, key: &str) -> PathBuf {
     data_dir.join("ssh-launch").join(format!("{key}.json"))
+}
+
+fn lock_target(data_dir: &Path, key: &str) -> anyhow::Result<File> {
+    let directory = data_dir.join("ssh-launch");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join(format!("{key}.lock"));
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path)?;
+    file.lock()
+        .with_context(|| format!("lock SSH target {}", path.display()))?;
+    Ok(file)
 }
 
 fn owned_target_matches(
@@ -528,11 +842,26 @@ fn write_owned(path: &Path, value: &OwnedLaunch) -> anyhow::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&temp)?;
-    serde_json::to_writer(&mut file, value)?;
-    std::io::Write::write_all(&mut file, b"\n")?;
-    file.sync_all()?;
-    fs::rename(&temp, path)?;
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = options.open(&temp)?;
+        serde_json::to_writer(&mut file, value)?;
+        std::io::Write::write_all(&mut file, b"\n")?;
+        file.sync_all()?;
+        fs::rename(&temp, path)?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+fn clear_owned(path: &Path) -> anyhow::Result<()> {
+    fs::remove_file(path)?;
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
     Ok(())
 }
 
@@ -691,6 +1020,18 @@ async fn probe_forward(
     pairing_credential: Option<&str>,
     launch: &Launch<'_>,
 ) -> anyhow::Result<(Option<(String, String)>, Option<String>)> {
+    let (mut tunnel, authenticated) = open_forward(args, token, pairing_credential, launch).await?;
+    let _ = tunnel.start_kill();
+    let _ = tunnel.wait().await;
+    Ok((authenticated.readback, authenticated.issued_token))
+}
+
+async fn open_forward(
+    args: &ProbeArgs,
+    token: Option<&str>,
+    pairing_credential: Option<&str>,
+    launch: &Launch<'_>,
+) -> anyhow::Result<(Child, AuthenticatedForward)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let local_port = listener.local_addr()?.port();
     drop(listener);
@@ -731,9 +1072,14 @@ async fn probe_forward(
         launch,
     )
     .await;
-    let _ = tunnel.start_kill();
-    let _ = tunnel.wait().await;
-    result
+    match result {
+        Ok(authenticated) => Ok((tunnel, authenticated)),
+        Err(error) => {
+            let _ = tunnel.start_kill();
+            let _ = tunnel.wait().await;
+            Err(error)
+        }
+    }
 }
 
 async fn authenticate_forward(
@@ -743,7 +1089,7 @@ async fn authenticate_forward(
     token: Option<&str>,
     pairing_credential: Option<&str>,
     launch: &Launch<'_>,
-) -> anyhow::Result<(Option<(String, String)>, Option<String>)> {
+) -> anyhow::Result<AuthenticatedForward> {
     let url = format!("ws://127.0.0.1:{local_port}");
     let deadline = tokio::time::Instant::now() + READY_WAIT;
     let client = loop {
@@ -838,12 +1184,17 @@ async fn authenticate_forward(
         {
             bail!("remote task identity differs from exact project/task target");
         }
-        return Ok((
-            Some((project.clone(), task.clone())),
-            token.is_none().then_some(new_token),
-        ));
+        return Ok(AuthenticatedForward {
+            client,
+            readback: Some((project.clone(), task.clone())),
+            issued_token: token.is_none().then_some(new_token),
+        });
     }
-    Ok((None, token.is_none().then_some(new_token)))
+    Ok(AuthenticatedForward {
+        client,
+        readback: None,
+        issued_token: token.is_none().then_some(new_token),
+    })
 }
 
 async fn rpc_call<T: serde::de::DeserializeOwned>(

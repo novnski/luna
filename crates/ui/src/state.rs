@@ -323,6 +323,24 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
+    /// Attach an already authenticated direct transport to the same remote
+    /// backend used by daemon viewports. LUNA approvals remain local-only.
+    pub fn from_authenticated_remote(
+        client: RpcClient,
+        engine_info: EngineInfo,
+        url: String,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RemoteEngine {
+                client: Arc::new(client),
+                url,
+                lifecycle_task: tokio::sync::Mutex::new(None),
+            }),
+            engine_info,
+            deferred_state: None,
+        }
+    }
+
     /// Opt-in native QA only: bind the UI to the already seeded local core.
     /// Production bootstrap still probes IPC and remote handles still refuse
     /// LUNA approvals.
@@ -2705,8 +2723,15 @@ mod tests {
     #[tokio::test]
     async fn remote_luna_approval_never_sends_an_rpc_frame() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let handle =
-            EngineHandle::from_test_client(memory_client(Arc::new(CountRpc(calls.clone()))));
+        let handle = EngineHandle::from_authenticated_remote(
+            memory_client(Arc::new(CountRpc(calls.clone()))),
+            EngineInfo {
+                device_id: "remote-test".into(),
+                workspace_scope: WorkspaceScope::Development,
+                capabilities: zeron_proto::capabilities::current(),
+            },
+            "ssh://synthetic-host".into(),
+        );
         assert_eq!(
             handle
                 .respond_luna_local_ui_approval(
