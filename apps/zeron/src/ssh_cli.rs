@@ -260,16 +260,24 @@ async fn view_worker(
                             active = None;
                             continue;
                         }
-                        match read_task_view(client.client(), &args).await {
-                            Ok(readback) => { state.send_replace(RemoteReadState::Connected(readback)); }
-                            Err(error) => {
+                        let refresh = tokio::select! {
+                            command = commands.recv() => Err(command),
+                            result = read_task_view(client.client(), &args) => Ok(result),
+                        };
+                        match refresh {
+                            Ok(Ok(readback)) => {
+                                state.send_replace(RemoteReadState::Connected(readback));
+                                continue;
+                            }
+                            Ok(Err(error)) => {
                                 state.send_replace(RemoteReadState::Disconnected(format!("remote read failed: {error:#}")));
                                 let _ = tunnel.start_kill();
                                 let _ = tunnel.wait().await;
                                 active = None;
+                                continue;
                             }
+                            Err(command) => command,
                         }
-                        continue;
                     }
                 }
             } else {
@@ -775,8 +783,16 @@ fn lock_target(data_dir: &Path, key: &str) -> anyhow::Result<File> {
         options.mode(0o600);
     }
     let file = options.open(&path)?;
-    file.lock()
-        .with_context(|| format!("lock SSH target {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            bail!("SSH target busy: {}", path.display());
+        }
+        Err(error) => {
+            return Err(anyhow!(error))
+                .with_context(|| format!("lock SSH target {}", path.display()));
+        }
+    }
     Ok(file)
 }
 

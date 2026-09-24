@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, copy_bidirectional};
@@ -14,6 +15,25 @@ use zeron_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessId, HarnessRegistry,
 };
 use zeron_rpc::remote_auth::{CreatePairing, IssuedPairing, RemoteScope, SessionView};
+use zeron_rpc::{RpcError, RpcReply, RpcService};
+
+struct StallSnapshotRpc {
+    inner: Arc<dyn RpcService>,
+    root: PathBuf,
+}
+
+#[async_trait]
+impl RpcService for StallSnapshotRpc {
+    async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if method == zeron_rpc::methods::GET_TASK_COMMAND_SNAPSHOT
+            && self.root.join("stall-rpc").exists()
+        {
+            fs::write(self.root.join("rpc-stalled"), "1").unwrap();
+            std::future::pending::<()>().await;
+        }
+        self.inner.handle(method, params).await
+    }
+}
 
 const FAKE_SSH: &str = r#"#!/bin/sh
 set -eu
@@ -31,9 +51,11 @@ if [ "$1" = '-N' ]; then
   local_port=${forward#127.0.0.1:}
   local_port=${local_port%%:*}
   printf '%s\n' "$local_port" > "$root/forward-port"
+  printf '%s\n' "$$" > "$root/tunnel-pid"
   if [ -e "$root/fail-forward" ]; then exit 255; fi
   count=0
-  while [ ! -e "$root/drop-forward" ] && [ "$count" -lt 300 ]; do
+  while [ ! -e "$root/drop-forward" ]; do
+    if [ ! -e "$root/fixture-reused" ] && [ "$count" -ge 300 ]; then break; fi
     count=$((count + 1)); sleep 0.1
   done
   exit 0
@@ -63,7 +85,9 @@ case "$mode" in
     fi
     printf '%s\n' "$sha" > "$root/installed" ;;
   start)
-    if [ -e "$root/remote-owner" ]; then
+    if [ -e "$root/fixture-reused" ]; then
+      kind=reused
+    elif [ -e "$root/remote-owner" ]; then
       saved=$(cat "$root/remote-owner")
       if [ "$saved" = "$owner" ]; then kind=owned; else kind=reused; fi
     else
@@ -74,9 +98,13 @@ case "$mode" in
     if [ -e "$root/fail-start-reply" ]; then exit 255; fi
     printf 'port=%s\nkind=%s\n' "$port" "$kind" ;;
   status)
-    [ -e "$root/remote-owner" ] || exit 1
-    saved=$(cat "$root/remote-owner")
-    if [ "$saved" = "$owner" ]; then printf 'running-owned\n'; else printf 'running-reused\n'; fi ;;
+    if [ -e "$root/fixture-reused" ]; then
+      printf 'running-reused\n'
+    else
+      [ -e "$root/remote-owner" ] || exit 1
+      saved=$(cat "$root/remote-owner")
+      if [ "$saved" = "$owner" ]; then printf 'running-owned\n'; else printf 'running-reused\n'; fi
+    fi ;;
   pair) cat "$root/pairing.json" ;;
   stop)
     if [ -e "$root/fail-stop" ]; then exit 255; fi
@@ -299,9 +327,16 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
     .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let remote_port = listener.local_addr().unwrap().port();
+    let base_factory = core.remote_rpc_factory().unwrap();
+    let stall_root = root.to_path_buf();
     let server = tokio::spawn(zeron_rpc::serve_ws_listener_with_factory(
         listener,
-        core.remote_rpc_factory().unwrap(),
+        Arc::new(move || {
+            Arc::new(StallSnapshotRpc {
+                inner: base_factory(),
+                root: stall_root.clone(),
+            })
+        }),
     ));
 
     let session = root.join("client-profile/session.token");
@@ -471,9 +506,24 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
     let mut view_output = tokio::io::BufReader::new(view.stdout.take().unwrap()).lines();
     let connected = next_view_state(&mut view_output, "connected").await;
     assert_eq!(connected["data"]["task"], task);
+    fs::write(root.join("stall-rpc"), "1").unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !root.join("rpc-stalled").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("post-connect snapshot did not stall");
     view_input.write_all(b"disconnect\n").await.unwrap();
-    let disconnected = next_view_state(&mut view_output, "disconnected").await;
+    let disconnected = tokio::time::timeout(
+        Duration::from_secs(1),
+        next_view_state(&mut view_output, "disconnected"),
+    )
+    .await
+    .expect("Disconnect waited for stalled authenticated RPC");
     assert!(disconnected["data"].as_str().unwrap().contains("by user"));
+    fs::remove_file(root.join("stall-rpc")).unwrap();
+    fs::remove_file(root.join("rpc-stalled")).unwrap();
     view_input.write_all(b"reconnect\n").await.unwrap();
     next_view_state(&mut view_output, "connected").await;
     fs::write(root.join("drop-forward"), "1").unwrap();
@@ -487,14 +537,36 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
     fs::remove_file(root.join("drop-forward")).unwrap();
     view_input.write_all(b"reconnect\n").await.unwrap();
     next_view_state(&mut view_output, "connected").await;
+    fs::write(root.join("stall-rpc"), "1").unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !root.join("rpc-stalled").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("second post-connect snapshot did not stall");
     view_input.write_all(b"exit\n").await.unwrap();
     assert!(
-        tokio::time::timeout(Duration::from_secs(8), view.wait())
+        tokio::time::timeout(Duration::from_secs(1), view.wait())
             .await
             .unwrap()
             .unwrap()
             .success()
     );
+    let tunnel_pid: i32 = fs::read_to_string(root.join("tunnel-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while unsafe { libc::kill(tunnel_pid, 0) } == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("view Exit left SSH tunnel alive");
+    fs::remove_file(root.join("stall-rpc")).unwrap();
+    fs::remove_file(root.join("rpc-stalled")).unwrap();
     relay.abort();
 
     fs::remove_file(root.join("forward-port")).unwrap();
@@ -916,4 +988,302 @@ async fn remote_read_window_exit_cancels_a_pending_ssh_connect() {
         status.is_ok(),
         "closing the read view should cancel pending SSH"
     );
+}
+
+fn fixture_state_key(host: &str, machine: &str, environment: &str) -> String {
+    let mut digest = Sha256::new();
+    for field in [host, machine, environment] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    format!("{:x}", digest.finalize())[..24].to_owned()
+}
+
+#[tokio::test]
+async fn held_target_lock_never_blocks_read_view_exit() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let (ssh, artifact) = fixture(root);
+    let machine = "22222222-2222-4222-8222-222222222222";
+    let environment = "0".repeat(64);
+    let session = root.join("session.token");
+    fs::write(&session, "synthetic-token\n").unwrap();
+    fs::set_permissions(&session, fs::Permissions::from_mode(0o600)).unwrap();
+    let lock_dir = root.join("client-profile/ssh-launch");
+    fs::create_dir_all(&lock_dir).unwrap();
+    let lock_path = lock_dir.join(format!(
+        "{}.lock",
+        fixture_state_key("fake-host", machine, &environment)
+    ));
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .unwrap();
+    lock.lock().unwrap();
+
+    let mut args = probe_args(machine, &environment, &artifact, &session);
+    args[0] = "view".into();
+    args.extend([
+        "--project".into(),
+        "30303030-3030-4030-8030-303030303030".into(),
+        "--task".into(),
+        "31313131-3131-4131-8131-313131313131".into(),
+        "--fixture-stdio".into(),
+    ]);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna"))
+        .arg("ssh")
+        .args(&args)
+        .env("LUNA_DATA_DIR", root.join("client-profile"))
+        .env("LUNA_SSH_BIN", &ssh)
+        .env("FAKE_SSH_ROOT", root)
+        .env("ZERON_WORKOS_CLIENT_ID", "")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    next_view_state(&mut output, "connecting").await;
+    let busy = next_view_state(&mut output, "disconnected").await;
+    assert!(busy["data"].as_str().unwrap().contains("SSH target busy"));
+    input.write_all(b"exit\n").await.unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+    assert!(status.is_ok(), "held target lock blocked Exit delivery");
+    assert!(
+        !root.join("modes").exists(),
+        "busy target must fail before SSH side effects"
+    );
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Manually started by the parent for native QA. The server remains background
+/// only; it never launches the desktop or reads real provider/Keychain state.
+#[tokio::test]
+#[ignore]
+async fn l30_native_qa_fixture_server() {
+    let root = PathBuf::from(
+        std::env::var_os("LUNA_L30_QA_ROOT")
+            .expect("set an explicit LUNA_L30_QA_ROOT beneath the system temp directory"),
+    );
+    assert!(fs::symlink_metadata(&root).unwrap().file_type().is_dir());
+    let root = fs::canonicalize(root).unwrap();
+    let temporary = fs::canonicalize(std::env::temp_dir()).unwrap();
+    assert!(root.starts_with(&temporary) && root != temporary);
+    let (ssh, _) = fixture(&root);
+    fs::write(root.join("installed"), "synthetic fixture\n").unwrap();
+    fs::write(root.join("fixture-reused"), "1\n").unwrap();
+
+    let accounts = accounts(&root);
+    accounts.disable_claude_keychain_fallback().unwrap();
+    let host_data = root.join("host-profile");
+    fs::create_dir_all(&host_data).unwrap();
+    fs::write(
+        host_data.join("device-id"),
+        "32323232-3232-4232-8232-323232323232\n",
+    )
+    .unwrap();
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(&host_data, "l30-qa-org", "l30-qa-user"),
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+        accounts,
+    )
+    .unwrap();
+    let mut auth = AuthConfig::new("http://127.0.0.1:1", host_data);
+    auth.use_in_memory_credentials_for_tests();
+    core.set_auth(Auth::new(auth));
+    let local = zeron_rpc::memory_client(core.rpc_service());
+    let project = "30303030-3030-4030-8030-303030303030";
+    let task = "31313131-3131-4131-8131-313131313131";
+    let project_path = root.join("project");
+    fs::create_dir_all(&project_path).unwrap();
+    local.call(zeron_rpc::methods::MUTATE, serde_json::json!({
+        "op": "createSpace", "spaceId": project, "deviceId": core.device_id, "path": project_path,
+    })).await.unwrap();
+    local
+        .call(
+            zeron_rpc::methods::MUTATE,
+            serde_json::json!({
+                "op": "createChat", "chatId": task, "spaceId": project,
+                "config": { "harness": "mock", "model": null, "reasoning": null,
+                    "sandbox": "workspace-write" },
+            }),
+        )
+        .await
+        .unwrap();
+    let issued: IssuedPairing = local
+        .call_as(
+            zeron_rpc::methods::CREATE_REMOTE_PAIRING,
+            serde_json::to_value(CreatePairing {
+                label: "L30 native QA fixture".into(),
+                scopes: vec![RemoteScope::EnvironmentRead, RemoteScope::TasksRead],
+                pairing_ttl_secs: 300,
+                session_ttl_secs: 86_400,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let remote = zeron_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let session = remote
+        .redeem_remote_pairing(zeron_rpc::remote_auth::RedeemPairing {
+            target: issued.target.clone(),
+            credential: issued.credential,
+            client_label: "L30 native QA".into(),
+        })
+        .await
+        .unwrap();
+    let token_path = root.join("client/session.token");
+    fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+    fs::write(&token_path, format!("{}\n", session.session_token)).unwrap();
+    fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let local_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local_port = local_listener.local_addr().unwrap().port();
+    let remote_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let remote_port = remote_listener.local_addr().unwrap().port();
+    let local_server = tokio::spawn(zeron_rpc::serve_ws_listener(
+        local_listener,
+        core.rpc_service(),
+    ));
+    let base_factory = core.remote_rpc_factory().unwrap();
+    let stall_root = root.clone();
+    let remote_server = tokio::spawn(zeron_rpc::serve_ws_listener_with_factory(
+        remote_listener,
+        Arc::new(move || {
+            Arc::new(StallSnapshotRpc {
+                inner: base_factory(),
+                root: stall_root.clone(),
+            })
+        }),
+    ));
+    let relay = relay_all_forward_files(root.clone(), remote_port).await;
+    let guarded = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{remote_port}"))
+        .await
+        .unwrap();
+    assert!(
+        guarded
+            .call(zeron_rpc::methods::ENGINE_INFO, serde_json::json!({}))
+            .await
+            .is_err()
+    );
+    guarded
+        .authenticate_remote(zeron_rpc::remote_auth::AuthenticateRemote {
+            target: issued.target.clone(),
+            session_token: session.session_token,
+        })
+        .await
+        .unwrap();
+    let info: zeron_proto::EngineInfo = guarded
+        .call_as(zeron_rpc::methods::ENGINE_INFO, serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(info.device_id, core.device_id);
+    let identity: zeron_proto::TaskIdentityView = guarded
+        .call_as(
+            zeron_rpc::methods::GET_TASK_IDENTITY,
+            serde_json::json!({"taskId": task}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(identity.workspace.source_space_id.as_deref(), Some(project));
+
+    let artifact_name = format!(
+        "luna-headless-v{}-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "linux"
+        },
+        if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        }
+    );
+    let artifact = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/headless-artifacts")
+        .join(artifact_name)
+        .canonicalize()
+        .unwrap();
+    assert!(
+        artifact
+            .with_file_name(format!(
+                "{}.sha256",
+                artifact.file_name().unwrap().to_str().unwrap()
+            ))
+            .exists()
+    );
+    let client_bin = PathBuf::from(env!("CARGO_BIN_EXE_luna"))
+        .canonicalize()
+        .unwrap();
+    let app = root.join("LUNA-Remote-Read-QA.app");
+    let contents = app.join("Contents");
+    let executable = contents.join("MacOS/launch");
+    fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    fs::write(contents.join("Info.plist"), r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.iulian.luna.remote-read-qa</string>
+<key>CFBundleName</key><string>LUNA Remote Read QA</string>
+<key>CFBundleExecutable</key><string>launch</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>
+"#).unwrap();
+    let script = format!(
+        "#!/bin/sh\nset -eu\nexport LUNA_DATA_DIR={}\nexport LUNA_SSH_BIN={}\nexport FAKE_SSH_ROOT={}\nexport CODEX_HOME={}\nexport CLAUDE_CONFIG_DIR={}\nexport ZERON_WORKOS_CLIENT_ID=''\nexport ZERON_EDGE_URL='http://127.0.0.1:1'\nunset ZERON_EDGE_TOKEN\nprintf '%s\\n' \"$$\" > {}\nexec {} ssh view --host fixture-host --machine {} --environment {} --workspace-scope development --remote-port {} --ipc-port {} --artifact {} --session-file {} --project {} --task {}\n",
+        shell_quote(&root.join("client").display().to_string()),
+        shell_quote(&ssh.display().to_string()),
+        shell_quote(&root.display().to_string()),
+        shell_quote(&root.join("synthetic-codex").display().to_string()),
+        shell_quote(&root.join("synthetic-claude").display().to_string()),
+        shell_quote(&root.join("view.pid").display().to_string()),
+        shell_quote(&client_bin.display().to_string()),
+        shell_quote(&core.device_id),
+        shell_quote(&issued.target.environment_id),
+        remote_port,
+        local_port,
+        shell_quote(&artifact.display().to_string()),
+        shell_quote(&token_path.display().to_string()),
+        shell_quote(project),
+        shell_quote(task),
+    );
+    fs::write(&executable, script).unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let manifest = serde_json::json!({
+        "ready": true, "pid": std::process::id(), "root": root,
+        "machine": core.device_id, "environment": issued.target.environment_id,
+        "workspaceScope": "development", "project": project, "task": task,
+        "localOwnerPort": local_port, "guardedPort": remote_port,
+        "sessionFile": token_path, "fakeSsh": ssh, "artifact": artifact,
+        "app": app, "launcher": executable,
+        "dropForward": root.join("drop-forward"), "failForward": root.join("fail-forward"),
+        "stallRpc": root.join("stall-rpc"), "stop": root.join("stop"),
+        "viewPid": root.join("view.pid"), "tunnelPid": root.join("tunnel-pid"),
+    });
+    let manifest_path = root.join("manifest.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).unwrap();
+    println!("L30_FIXTURE_READY {}", manifest_path.display());
+    while !root.join("stop").exists() {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    relay.abort();
+    local_server.abort();
+    remote_server.abort();
 }
