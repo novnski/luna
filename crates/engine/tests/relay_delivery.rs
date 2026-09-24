@@ -199,6 +199,7 @@ fn complete_assistant_count(core: &EngineCore) -> usize {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "L29 rejects unauthenticated legacy relay command delivery and nudge; rework with accepted remote write authority"]
 async fn rows_dark_command_delivers_over_the_peer_relay_exactly_once() {
     let (relay_url, _relay) = fake_device_room().await;
     let dirs = tempfile::tempdir().expect("tempdir");

@@ -20,19 +20,30 @@ use serde::{Deserialize, Serialize};
 
 mod client;
 pub mod device_room;
+pub mod remote_auth;
 mod server;
 
 pub use client::{RpcClient, RpcSubscription, connect_ws};
 pub use device_room::{
     DeviceFrameHeader, DeviceLink, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig,
-    NudgeHandler, PeerLiveness, PeerLivenessProbe, StaticToken, TokenError, TokenSource,
+    PeerLiveness, PeerLivenessProbe, RemoteSessionSource, StaticToken, TokenError, TokenSource,
     decode_device_frame, device_room_ws_url, encode_device_frame,
 };
+pub use remote_auth::{RemoteAuthStore, RemoteEnvironment, RemoteScope};
 pub use server::{serve_connection, serve_ws_listener};
 
 /// RPC method names — single source of truth for both ends.
 /// Full surface: docs/research/feature-inventory.md §2.
 pub mod methods {
+    // L29: only the local IPC owner can administer pairings and sessions.
+    // Redeem/authenticate are handled by the guarded remote dispatch itself.
+    pub const CREATE_REMOTE_PAIRING: &str = "CreateRemotePairing";
+    pub const LIST_REMOTE_PAIRINGS: &str = "ListRemotePairings";
+    pub const REVOKE_REMOTE_PAIRING: &str = "RevokeRemotePairing";
+    pub const LIST_REMOTE_SESSIONS: &str = "ListRemoteSessions";
+    pub const REVOKE_REMOTE_SESSION: &str = "RevokeRemoteSession";
+    pub const REDEEM_REMOTE_PAIRING: &str = "RedeemRemotePairing";
+    pub const AUTHENTICATE_REMOTE: &str = "AuthenticateRemote";
     /// L17 local-only backup control. Raw recovery material is accepted only
     /// by the explicit key-configure call and never returned.
     pub const GET_BACKUP_STATUS: &str = "GetBackupStatus";
@@ -260,6 +271,151 @@ pub mod methods {
     /// Download + apply the newest release on the target device (symlink-managed
     /// installs; the service restart is scheduled after the reply flushes).
     pub const APPLY_UPDATE: &str = "ApplyUpdate";
+    /// Inventory of shipped RPC names. Remote policy treats unlisted names as unknown.
+    pub const ALL: &[&str] = &[
+        CREATE_REMOTE_PAIRING,
+        LIST_REMOTE_PAIRINGS,
+        REVOKE_REMOTE_PAIRING,
+        LIST_REMOTE_SESSIONS,
+        REVOKE_REMOTE_SESSION,
+        REDEEM_REMOTE_PAIRING,
+        AUTHENTICATE_REMOTE,
+        GET_BACKUP_STATUS,
+        CONFIGURE_BACKUP,
+        CONFIGURE_BACKUP_KEY,
+        BACKUP_NOW,
+        EXPORT_BACKUP,
+        INSPECT_BACKUP,
+        STAGE_BACKUP_RESTORE,
+        WATCH_PREVIEWS,
+        LIST_HARNESSES,
+        GET_TITLE_SETTINGS,
+        SET_TITLE_SETTINGS,
+        SET_HARNESS_ENABLED,
+        LIST_MODELS,
+        LIST_COMMANDS,
+        QUEUE_COMMAND,
+        RELAY_COMMAND,
+        RETRY_DELIVERY,
+        WATCH_DOC_MESSAGES,
+        WATCH_QUEUE,
+        QUEUE_MESSAGE,
+        UPDATE_QUEUED_MESSAGE,
+        BEGIN_QUEUED_MESSAGE_EDIT,
+        RENEW_QUEUED_MESSAGE_EDIT,
+        FINISH_QUEUED_MESSAGE_EDIT,
+        MOVE_QUEUED_MESSAGE,
+        REMOVE_QUEUED_MESSAGE,
+        SEND_QUEUED_MESSAGE_NOW,
+        STEER_QUEUED_MESSAGE_NOW,
+        PROBE_SYNC,
+        SYNC_STATUS,
+        WATCH_CONNECTIVITY,
+        WATCH_TRANSFERS,
+        WATCH_CHATS,
+        WATCH_DEVICES,
+        WATCH_SESSIONS,
+        WATCH_SPACES,
+        MUTATE,
+        LOCAL_DEVICE,
+        ENGINE_INFO,
+        ENGINE_READY,
+        GET_TASK_IDENTITY,
+        GET_RUNTIME_CONTRACT,
+        GET_INSTRUCTION_SETTINGS,
+        SET_INSTRUCTION_SETTINGS,
+        GET_INTEGRATION_INVENTORY,
+        SEARCH_SESSION_HISTORY,
+        GET_USAGE_SNAPSHOT,
+        REBUILD_SESSION_HISTORY,
+        GET_SESSION_HISTORY_POLICY,
+        SET_SESSION_HISTORY_POLICY,
+        GET_ATTENTION,
+        CLAIM_ATTENTION_TRANSITIONS,
+        MUTATE_ATTENTION,
+        GET_HISTORY_CAPABILITY,
+        LIST_HISTORY_RECOVERIES,
+        REFRESH_TASK_BINDING,
+        PREVIEW_PROVIDER_TASK_IMPORT,
+        ADOPT_PROVIDER_TASK,
+        EXECUTE_TASK_COMMAND,
+        GET_TASK_COMMAND_RECEIPT,
+        GET_TASK_CLEANUP,
+        GET_PROJECT_CLEANUP,
+        GET_DELETION_CLEANUP_SUMMARY,
+        GET_TASK_COMMAND_SNAPSHOT,
+        WATCH_TASK_COMMANDS,
+        GET_COMPOSER_DRAFT,
+        SAVE_COMPOSER_DRAFT,
+        BEGIN_DRAFT_SUBMISSION,
+        SETTLE_DRAFT_SUBMISSION,
+        STOP_ENGINE,
+        AUTH_STATUS,
+        LIST_CREDENTIAL_METADATA,
+        SIGN_IN,
+        SIGN_IN_HEADLESS,
+        COMPLETE_SIGN_IN,
+        SIGN_OUT,
+        LIST_ORGS,
+        CREATE_ORG,
+        SELECT_ORG,
+        LOCAL_IMPORT_STATUS,
+        IMPORT_LOCAL_WORKSPACE,
+        LIST_REPOS,
+        ADD_REPO,
+        CLONE_REPO,
+        CREATE_REPO,
+        LIST_BRANCHES,
+        LIST_REFS,
+        LIST_GIT_HISTORY,
+        SEARCH_GIT_HISTORY,
+        RESOLVE_GIT_AVATARS,
+        FETCH_ALL,
+        SWITCH_REF,
+        LIST_FOLDERS,
+        LIST_DRIVES,
+        SEARCH_FILES,
+        LIST_WORKSPACE_DIRECTORY,
+        SEARCH_WORKSPACE_FILES,
+        READ_WORKSPACE_IMAGE,
+        READ_WORKSPACE_FILE,
+        WRITE_WORKSPACE_FILE,
+        WATCH_WORKSPACE_FILES,
+        CREATE_WORKTREE,
+        DELETE_WORKTREE,
+        OPEN_TERMINAL,
+        SUBSCRIBE_TERMINAL,
+        WRITE_TERMINAL,
+        RESIZE_TERMINAL,
+        CLOSE_TERMINAL,
+        LIST_TERMINALS,
+        WATCH_CHECKOUT_DIFFS,
+        WATCH_CHECKOUT_CHANGE_REQUEST,
+        GET_CHECKOUT_DIFF,
+        GET_CHECKOUT_FILE_DIFF_TEXT,
+        GET_GIT_ACTION_PREVIEW,
+        EXECUTE_GIT_ACTION,
+        GENERATE_GIT_COMMIT_MESSAGE,
+        GET_GIT_PR_STATUS,
+        LIST_GIT_CHECKPOINTS,
+        DIFF_GIT_CHECKPOINT,
+        PREVIEW_GIT_CHECKPOINT_RESTORE,
+        RESTORE_GIT_CHECKPOINT,
+        LIST_AGENT_ACCOUNTS,
+        ACTIVATE_AGENT_ACCOUNT,
+        RENAME_AGENT_ACCOUNT,
+        FORGET_AGENT_ACCOUNT,
+        START_AGENT_LOGIN,
+        COMPLETE_AGENT_LOGIN,
+        POLL_AGENT_LOGIN,
+        CANCEL_AGENT_LOGIN,
+        UPLOAD_CHUNK,
+        UPLOAD_COMMIT,
+        READ_ATTACHMENT_CHUNK,
+        FETCH_TOOL_BLOB,
+        UPDATE_STATUS,
+        APPLY_UPDATE,
+    ];
 }
 
 #[derive(Debug, thiserror::Error)]
