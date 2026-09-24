@@ -137,11 +137,20 @@ async fn handle_request(
 
 /// Accept WebSocket connections forever, serving each with `service`.
 pub async fn serve_ws_listener(listener: TcpListener, service: Arc<dyn RpcService>) {
+    serve_ws_listener_with_factory(listener, Arc::new(move || service.clone())).await;
+}
+
+/// Accept sockets with a fresh service for each connection. Remote authentication
+/// belongs to the socket, so its principal must never be shared with another peer.
+pub async fn serve_ws_listener_with_factory(
+    listener: TcpListener,
+    service_for_connection: Arc<dyn Fn() -> Arc<dyn RpcService> + Send + Sync>,
+) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 tracing::debug!(%peer, "rpc: connection accepted");
-                tokio::spawn(serve_ws_socket(stream, service.clone()));
+                tokio::spawn(serve_ws_socket(stream, service_for_connection()));
             }
             Err(err) => {
                 tracing::warn!(error = %err, "rpc: accept failed");

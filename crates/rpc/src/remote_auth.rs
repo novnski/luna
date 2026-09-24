@@ -41,7 +41,7 @@ pub struct RemoteEnvironment {
     pub environment_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteTarget {
     pub device_id: String,
