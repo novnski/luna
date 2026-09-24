@@ -88,6 +88,9 @@ under it. It opens only the in-memory credential broker and mock harness,
 disables native Codex metadata and Claude Keychain fallback, and does not set
 `HOME` or `CODEX_HOME` globally. The fixture uses in-memory RPC and port 0;
 no daemon, remote listener, appshot service, or Edge supervisor starts.
+It also seeds one idle `L32 synthetic mock task` under the fixture's
+`synthetic-project` directory for task-navigation QA. That row has Mock
+metadata and no provider run or completed turn; reopening preserves it.
 
 After check-only, copy the signed app **intact** into that prepared root with
 the exact opt-in name, then verify the copy's signature and binary hash:

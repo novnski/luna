@@ -40,7 +40,7 @@ use crate::appshots::{self, CapturedAppshot};
 use crate::attachments::{self, StagedAttachment};
 use crate::motion;
 use crate::notice::{NoticeChipIcon, notice_chip};
-use crate::pickers::Pickers;
+use crate::pickers::{DraftConfig, Pickers};
 use crate::settings::{ComposerSendBehavior, platform_combo};
 use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
@@ -4208,6 +4208,9 @@ pub struct Composer {
     /// Composer actions row plus the new-session floating target tab
     /// ([`Pickers::render_new_thread_target_selectors`]).
     pickers: Entity<Pickers>,
+    /// Only changed canvas selections dirty its draft; picker catalog and
+    /// layout notifications may arrive while the saved draft is loading.
+    last_canvas_draft_config: DraftConfig,
     /// Draft text per chat key ("" = new-chat canvas), surviving navigation.
     drafts: HashMap<String, String>,
     /// Staged-but-unsent attachments per chat key (use-attachments.ts `stash`):
@@ -4485,11 +4488,15 @@ impl Composer {
         // by the composer from picker state — a pickers-side notify (refs
         // loaded, popover toggled, pick made) must repaint the composer too.
         let pickers_observe = cx.observe(&pickers, |this: &mut Self, _, cx| {
-            if this.editing_queued.is_none()
-                && this.current_key.is_empty()
-                && !this.draft_submitting.contains_key(&this.current_key)
-            {
-                this.mark_draft_dirty(cx);
+            let config = this.pickers.read(cx).draft().clone();
+            if this.last_canvas_draft_config != config {
+                this.last_canvas_draft_config = config;
+                if this.editing_queued.is_none()
+                    && this.current_key.is_empty()
+                    && !this.draft_submitting.contains_key(&this.current_key)
+                {
+                    this.mark_draft_dirty(cx);
+                }
             }
             cx.notify();
         });
@@ -4560,6 +4567,7 @@ impl Composer {
             input,
             answer_input,
             queue_edit_draft: None,
+            last_canvas_draft_config: pickers.read(cx).draft().clone(),
             pickers,
             drafts: HashMap::new(),
             attachments: HashMap::new(),
@@ -5676,6 +5684,7 @@ impl Composer {
         self.slash_cache.clear();
         self.canvas_draft_id = uuid::Uuid::new_v4().to_string();
         self.current_key = key;
+        self.last_canvas_draft_config = self.pickers.read(cx).draft().clone();
         self.input.update(cx, |input, cx| {
             input.read_only = false;
             cx.notify();
@@ -6026,6 +6035,8 @@ impl Composer {
                         composer.pickers.update(cx, |pickers, cx| {
                             pickers.restore_draft_execution(&restored.record.execution, cx)
                         });
+                        composer.last_canvas_draft_config =
+                            composer.pickers.read(cx).draft().clone();
                     }
                 }
                 if let Some(warning) = restored.warning {
@@ -10506,6 +10517,9 @@ mod tests {
                         .find(|draft| {
                             task_id.is_some_and(|task_id| draft.task_id.as_deref() == Some(task_id))
                                 || draft_id.is_some_and(|draft_id| draft.draft_id == draft_id)
+                                || (task_id.is_none()
+                                    && draft_id.is_none()
+                                    && draft.task_id.is_none())
                         })
                         .cloned();
                     let submissions = self
@@ -10667,6 +10681,93 @@ mod tests {
             saves.last().unwrap().text,
             "durable text\n\ntyped while loading"
         );
+    }
+
+    #[gpui::test]
+    fn canvas_picker_repaint_during_load_does_not_create_a_conflict(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let mut draft = test_draft("canvas-draft", 58, "L32 synthetic persistence check");
+        draft.task_id = None;
+        draft.execution = serde_json::json!({
+            "draft": crate::pickers::DraftConfig {
+                checkout: crate::pickers::CheckoutKind::NewWorktree,
+                ..Default::default()
+            },
+            "resolved": crate::pickers::ResolvedRunConfig::default(),
+        });
+        let (service, started, release) = DraftTestRpc::delayed(vec![draft]);
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zeron_rpc::memory_client(service.clone()),
+            ));
+        });
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        cx.run_until_parked();
+        runtime
+            .block_on(tokio::time::timeout(Duration::from_secs(2), started))
+            .expect("draft read started")
+            .expect("draft read signal");
+
+        composer.update(cx, |composer, cx| {
+            composer.pickers.update(cx, |_, cx| cx.notify());
+        });
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(composer.draft_revisions.get("").copied().unwrap_or(0), 0);
+        });
+        release.send(()).unwrap();
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(""))
+        });
+
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(
+                composer.input.read(cx).text(),
+                "L32 synthetic persistence check"
+            );
+            assert_eq!(composer.draft_revisions[""], 58);
+            assert_eq!(composer.draft_saved_revisions[""], 58);
+            assert!(composer.failure.is_none());
+            assert_eq!(
+                composer.pickers.read(cx).draft().checkout,
+                crate::pickers::CheckoutKind::NewWorktree
+            );
+        });
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(composer.draft_revisions[""], 58);
+            assert!(composer.failure.is_none());
+        });
+        assert!(service.saves.lock().unwrap().is_empty());
+
+        let mut changed = composer.read_with(cx, |composer, cx| {
+            composer.pickers.read(cx).persisted_draft_execution(cx)
+        });
+        changed["draft"]["checkout"] = "local".into();
+        composer.update(cx, |composer, cx| {
+            composer.pickers.update(cx, |pickers, cx| {
+                pickers.restore_draft_execution(&changed, cx)
+            });
+        });
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(composer.draft_revisions[""], 59)
+        });
+        composer.update(cx, |composer, cx| {
+            composer.schedule_draft_save(String::new(), Duration::ZERO, cx)
+        });
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| {
+                composer.draft_saved_revisions.get("").copied() == Some(59)
+            })
+        });
+        assert_eq!(service.saves.lock().unwrap().last().unwrap().revision, 59);
     }
 
     #[gpui::test]

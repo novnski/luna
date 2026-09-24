@@ -8,12 +8,15 @@ use zeron_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessId, WorkspaceScope,
     local_adoption_mock_registry,
 };
+use zeron_proto::{ChatConfig, SandboxLevel, Session, SessionStatus};
 
 const MARKER: &str = ".luna-l32-native-fixture";
 const MARKER_CONTENTS: &[u8] = b"L32 synthetic native fixture\n";
 const PREPARED: &str = ".luna-l32-prepared";
 const PREPARED_CONTENTS: &[u8] = b"L32 prepared synthetic root v1\n";
 const QA_BUNDLE: &str = "LUNA-Native-QA.app";
+const QA_PROJECT_ID: &str = "l32-synthetic-project";
+const QA_TASK_ID: &str = "l32-synthetic-mock-task";
 const MAX_ENTRIES: usize = 10_000;
 
 /// No-argument LaunchServices route for the exact copied, signed QA bundle.
@@ -143,8 +146,94 @@ fn prepare_core(root: &Path) -> Result<Arc<EngineCore>> {
         core.links().is_none() && core.updater().is_none(),
         "fixture gained an Edge path"
     );
+    seed_mock_task(root, &core)?;
     std::fs::write(root.join(PREPARED), PREPARED_CONTENTS)?;
     Ok(Arc::new(core))
+}
+
+/// Seed one navigable idle task through the normal local workspace registry.
+/// The QA fixture never starts a provider or fabricates a completed turn.
+fn seed_mock_task(root: &Path, core: &EngineCore) -> Result<()> {
+    let project_path = root.join("synthetic-project");
+    std::fs::create_dir_all(&project_path)?;
+    let project_path = project_path.to_string_lossy().into_owned();
+    let space_id = match core
+        .workspace
+        .read_spaces()?
+        .into_iter()
+        .find(|space| space.device_id == core.device_id && space.path == project_path)
+    {
+        Some(space) => space.id,
+        None => {
+            core.workspace.create_space(
+                QA_PROJECT_ID,
+                &core.device_id,
+                &project_path,
+                Some("L32 synthetic project".into()),
+                root.join("synthetic-project/.git").is_dir(),
+            )?;
+            QA_PROJECT_ID.into()
+        }
+    };
+    if core.workspace.chat(QA_TASK_ID)?.is_none() {
+        core.workspace.create_chat(
+            QA_TASK_ID,
+            Some(&space_id),
+            None,
+            Some(ChatConfig {
+                harness: HarnessId::Mock,
+                provider_account_id: None,
+                model: None,
+                reasoning: None,
+                model_options: Default::default(),
+                sandbox: SandboxLevel::WorkspaceWrite,
+                permission_mode: Default::default(),
+                effective_permission_mode: Default::default(),
+                permission_ceiling_source: None,
+                permission_degradation_reason: None,
+                permission_audit: Vec::new(),
+            }),
+            None,
+        )?;
+        core.workspace
+            .rename_chat(QA_TASK_ID, "L32 synthetic mock task")?;
+    }
+    let chat = core
+        .workspace
+        .chat(QA_TASK_ID)?
+        .context("QA task missing")?;
+    ensure!(
+        chat.space_id.as_deref() == Some(space_id.as_str())
+            && chat
+                .config
+                .as_ref()
+                .is_some_and(|config| config.harness == HarnessId::Mock),
+        "QA task is not bound to the synthetic mock project"
+    );
+    if !core
+        .workspace
+        .read_sessions()?
+        .iter()
+        .any(|session| session.chat_id == QA_TASK_ID)
+    {
+        core.workspace.record_session(&Session {
+            chat_id: QA_TASK_ID.into(),
+            device_id: core.device_id.clone(),
+            status: SessionStatus::Idle,
+            started_at: None,
+            updated_at: std::time::SystemTime::now().into(),
+            last_completed_turn: None,
+            recovery: None,
+        });
+    }
+    ensure!(
+        core.workspace
+            .read_sessions()?
+            .iter()
+            .any(|session| session.chat_id == QA_TASK_ID && session.device_id == core.device_id),
+        "QA session was not persisted"
+    );
+    Ok(())
 }
 
 /// `main` has already canonicalized and validated this root before logging.
@@ -176,6 +265,10 @@ pub fn run(root: PathBuf, check_only: bool) -> Result<()> {
                 catalog.as_array().is_some_and(|items| items.len() == 1),
                 "fixture registry is not mock-only"
             );
+            ensure!(
+                core.workspace.chat(QA_TASK_ID)?.is_some(),
+                "synthetic QA task is missing"
+            );
             Ok(())
         });
         runtime.block_on(core.shutdown());
@@ -206,6 +299,34 @@ mod tests {
         std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
         std::fs::write(&executable, b"synthetic Mach-O placeholder").unwrap();
         executable
+    }
+
+    #[test]
+    fn mock_task_seed_is_idempotent_and_stays_in_fixture_root() {
+        let fixture = tempfile::tempdir().unwrap();
+        std::fs::write(fixture.path().join(MARKER), MARKER_CONTENTS).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let core = runtime
+            .block_on(async { prepare_core(fixture.path()) })
+            .unwrap();
+        seed_mock_task(fixture.path(), &core).unwrap();
+
+        let project = core.workspace.read_spaces().unwrap();
+        let chats = core.workspace.read_chats().unwrap();
+        let sessions = core.workspace.read_sessions().unwrap();
+        assert_eq!(project.len(), 1);
+        assert_eq!(
+            project[0].path,
+            fixture.path().join("synthetic-project").to_string_lossy()
+        );
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].id, QA_TASK_ID);
+        assert_eq!(chats[0].config.as_ref().unwrap().harness, HarnessId::Mock);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].chat_id, QA_TASK_ID);
+        assert_eq!(sessions[0].status, SessionStatus::Idle);
+        assert!(sessions[0].last_completed_turn.is_none());
+        runtime.block_on(core.shutdown());
     }
 
     #[test]
