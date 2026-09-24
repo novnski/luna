@@ -123,7 +123,6 @@ fn prepare_core(root: &Path) -> Result<Arc<EngineCore>> {
         claude_config_dir: root.join("synthetic-claude"),
         claude_config_file: root.join("synthetic-claude.json"),
         codex_home: root.join("synthetic-codex"),
-        cursor_sdk_auth_file: root.join("synthetic-cursor/auth.json"),
     };
     accounts.disable_claude_keychain_fallback()?;
     let mut auth_config = AuthConfig::new(luna_engine::OFFLINE_EDGE_URL, &data);

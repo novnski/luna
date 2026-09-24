@@ -61,36 +61,6 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
                     .into(),
             ],
         },
-        HarnessId::Cursor => ProviderPermissionCapabilities {
-            supported_modes: vec![],
-            supports_workspace_sandbox: false,
-            supports_automatic_reviewer: false,
-            supports_live_mode_change: false,
-            supports_task_allowance: false,
-            approval_kinds: vec![],
-            network_control: "unverified".into(),
-            known_limitations: vec![
-                "Cursor 3.6+ documents Auto-review, but the pinned @cursor/sdk 1.0.28 integration exposes no run-mode or sandbox contract; LUNA cannot select it truthfully."
-                    .into(),
-            ],
-        },
-        HarnessId::Devin
-        | HarnessId::Grok
-        | HarnessId::Hermes
-        | HarnessId::Pi
-        | HarnessId::Antigravity => ProviderPermissionCapabilities {
-            supported_modes: vec![],
-            supports_workspace_sandbox: false,
-            supports_automatic_reviewer: false,
-            supports_live_mode_change: false,
-            supports_task_allowance: false,
-            approval_kinds: vec![],
-            network_control: "concrete ACP agent contract unverified".into(),
-            known_limitations: vec![
-                "ACP permission requests are optional user decisions, not proof that a concrete agent enforces a sandbox or native automatic reviewer."
-                    .into(),
-            ],
-        },
         HarnessId::Mock => ProviderPermissionCapabilities {
             supported_modes: vec![Ask, Auto, Full],
             supports_workspace_sandbox: true,
@@ -100,6 +70,16 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             approval_kinds: vec![Command, FileChange, Network, ExternalPath, Tool],
             network_control: "test fixture".into(),
             known_limitations: vec!["Test harness only.".into()],
+        },
+        _ => ProviderPermissionCapabilities {
+            supported_modes: vec![],
+            supports_workspace_sandbox: false,
+            supports_automatic_reviewer: false,
+            supports_live_mode_change: false,
+            supports_task_allowance: false,
+            approval_kinds: vec![],
+            network_control: "provider removed".into(),
+            known_limitations: vec!["This provider is no longer supported by LUNA.".into()],
         },
     }
 }

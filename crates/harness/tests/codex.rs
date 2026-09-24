@@ -2076,14 +2076,12 @@ async fn models_discovers_visible_catalog_with_pagination() {
     assert_eq!(tier.choices[1].id, "fast");
     assert_eq!(tier.choices.len(), 2, "priority and fast dedupe");
 
-    // A failed probe stays useful and includes the new model in the fallback.
-    let fallback = CodexHarness::new()
+    // A failed probe must not offer models the installed task CLI cannot list.
+    let unavailable = CodexHarness::new()
         .with_executable("/bin/false")
         .models()
-        .await
-        .expect("fallback models");
-    assert_eq!(fallback.len(), 9);
-    assert_eq!(fallback[0].id, "gpt-6-astra");
+        .await;
+    assert!(unavailable.is_err());
 
     let missing = CodexHarness::new().with_executable("/nonexistent/codex-nowhere");
     // models() requires a resolvable binary… but with_executable trusts the

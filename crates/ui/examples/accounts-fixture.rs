@@ -2,13 +2,27 @@
 //! store, and account snapshot is synthetic; the fixture never calls an
 //! upstream provider or the macOS Keychain.
 
-use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use luna_proto::{
     AgentAccount, AgentAccountWarning, AgentAccountsSnapshot, AgentAuthKind,
     AgentAuthenticationState, HarnessId,
 };
 use luna_ui::*;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+fn capture(
+    window: gpui::AnyWindowHandle,
+    cx: &mut AsyncApp,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    window.update(cx, |_, window, cx| {
+        window.draw(cx).clear();
+        window.render_to_image()?.save(path)?;
+        Ok(())
+    })?
+}
 
 fn unused_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -38,6 +52,12 @@ fn account(id: &str, label: &str, email: &str, active: bool) -> AgentAccount {
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
+    let visual_output = std::env::var_os("LUNA_PROVIDER_QA_OUTPUT").map(PathBuf::from);
+    if let Some(output) = &visual_output {
+        std::fs::create_dir_all(output)?;
+    }
+    let capture_failure = Arc::new(Mutex::new(None::<String>));
+    let capture_failure_for_ui = capture_failure.clone();
     let temp = tempfile::tempdir()?;
     let data = temp.path().join("ui");
     let engine_data = temp.path().join("engine");
@@ -79,7 +99,6 @@ fn main() -> anyhow::Result<()> {
                 claude_config_dir: claude_dir,
                 claude_config_file: claude_config,
                 codex_home,
-                cursor_sdk_auth_file: provider_root.join("cursor/auth.json"),
             },
         )
     })?;
@@ -90,9 +109,13 @@ fn main() -> anyhow::Result<()> {
     core.workspace
         .create_chat("fixture-chat", None, Some(&core.device_id), None, None)?;
     let ipc_port = unused_port();
-    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(
+        ipc_port,
+        core.rpc_service(),
+        &engine_data,
+    ))?;
     let boot = EngineBootConfig {
-        data_dir: data.clone(),
+        data_dir: engine_data.clone(),
         ipc_port,
         edge_url: String::new(),
         edge_token: None,
@@ -200,13 +223,49 @@ fn main() -> anyhow::Result<()> {
                     |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
                 )
                 .unwrap();
-            window
-                .update(cx, |shell, _, cx| {
-                    shell.fixture_accounts_settings(snapshot, cx);
-                })
-                .unwrap();
             state.update(cx, |_, cx| cx.notify());
-            cx.activate(true);
+            if let Some(output) = visual_output {
+                let failure = capture_failure_for_ui.clone();
+                cx.spawn(async move |cx| {
+                    let result: anyhow::Result<()> = async {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(500))
+                            .await;
+                        window.update(cx, |shell, _, cx| shell.fixture_provider_usage(cx))?;
+                        capture(window.into(), cx, &output.join("sidebar.png"))?;
+                        window.update(cx, |shell, _, cx| {
+                            shell.fixture_accounts_settings(snapshot, cx)
+                        })?;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(500))
+                            .await;
+                        capture(window.into(), cx, &output.join("providers.png"))?;
+                        window.update(cx, |shell, _, cx| {
+                            shell.fixture_appshots_settings(false, cx)
+                        })?;
+                        capture(window.into(), cx, &output.join("sidebar-with-update.png"))?;
+                        Ok(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        *failure.lock().unwrap() = Some(format!("{error:#}"));
+                    }
+                    let _ = window.update(cx, |_, window, _| window.remove_window());
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            } else {
+                window
+                    .update(cx, |shell, _, cx| {
+                        shell.fixture_accounts_settings(snapshot, cx);
+                    })
+                    .unwrap();
+                cx.activate(true);
+            }
         });
+    runtime.block_on(core.shutdown());
+    if let Some(error) = capture_failure.lock().unwrap().take() {
+        anyhow::bail!(error);
+    }
     Ok(())
 }

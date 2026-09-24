@@ -173,7 +173,6 @@ async fn main() -> anyhow::Result<()> {
             claude_config_dir: root.join("synthetic-claude"),
             claude_config_file: root.join("synthetic-claude.json"),
             codex_home: root.join("synthetic-codex"),
-            cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
         };
         return Engine::new(EngineConfig {
             data_dir: root.join("data"),
@@ -222,12 +221,7 @@ async fn main() -> anyhow::Result<()> {
         default_harness: match std::env::var("LUNA_HARNESS").as_deref() {
             Ok("mock") => HarnessId::Mock,
             Ok("codex") => HarnessId::Codex,
-            Ok("cursor") => HarnessId::Cursor,
-            Ok("devin") => HarnessId::Devin,
-            Ok("grok") => HarnessId::Grok,
-            Ok("hermes") => HarnessId::Hermes,
-            Ok("pi") => HarnessId::Pi,
-            Ok("antigravity") => HarnessId::Antigravity,
+            Ok("opencode") => HarnessId::Opencode,
             _ => HarnessId::ClaudeCode,
         },
         org_id: std::env::var("LUNA_ORG_ID").ok(),

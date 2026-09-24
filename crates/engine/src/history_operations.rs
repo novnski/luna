@@ -22,16 +22,8 @@ pub fn capability_for(provider: HarnessId) -> ProviderForkCapability {
     match provider {
         HarnessId::Codex | HarnessId::Opencode => ProviderForkCapability::Checkpoint,
         // The current Claude adapter uses the CLI streaming wire and has no
-        // non-turn session-management dependency. ACP/Pi implement new/load
-        // but do not negotiate session/fork in this pinned client yet.
-        HarnessId::ClaudeCode
-        | HarnessId::Pi
-        | HarnessId::Cursor
-        | HarnessId::Devin
-        | HarnessId::Grok
-        | HarnessId::Hermes
-        | HarnessId::Antigravity
-        | HarnessId::Mock => ProviderForkCapability::None,
+        // non-turn session-management dependency.
+        _ => ProviderForkCapability::None,
     }
 }
 
@@ -40,18 +32,9 @@ pub fn unavailable_reason(provider: HarnessId) -> Option<&'static str> {
         HarnessId::ClaudeCode => Some(
             "Claude's pinned LUNA CLI adapter has no safe idle session-fork operation; use Start new task with context.",
         ),
-        HarnessId::Pi => Some(
-            "The pinned pi-acp client does not negotiate ACP session/fork; use Start new task with context.",
-        ),
-        HarnessId::Cursor
-        | HarnessId::Devin
-        | HarnessId::Grok
-        | HarnessId::Hermes
-        | HarnessId::Antigravity => Some(
-            "This ACP adapter has no verified independent native fork in the current LUNA client; use Start new task with context.",
-        ),
         HarnessId::Mock => Some("The synthetic Mock provider has no native history store."),
         HarnessId::Codex | HarnessId::Opencode => None,
+        _ => Some("This provider is no longer supported by LUNA."),
     }
 }
 

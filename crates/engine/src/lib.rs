@@ -141,6 +141,7 @@ mod macos_keychain;
 mod model_cache;
 pub mod permissions;
 pub mod profile;
+mod provider_updates;
 pub mod recovery;
 pub mod registry;
 pub mod repos;
@@ -1280,11 +1281,6 @@ impl Engine {
             core.set_updater(updater);
         }
         tracing::info!(device_id = %core.device_id, "engine core assembled");
-        // Managed ACP adapters install in the background at boot (agents
-        // whose CLI is present but whose adapter isn't yet), so a first chat
-        // never waits on — or dies inside — an npm run.
-        luna_harness::acp::prewarm_managed_adapters();
-
         let host_relay = edge.as_ref().and_then(|edge| {
             let mut link_config =
                 luna_rpc::LinkCacheConfig::new(edge.url.clone(), Arc::new(auth.clone()));

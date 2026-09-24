@@ -17,7 +17,6 @@ fn test_accounts(root: &Path) -> AgentAccounts {
         claude_config_dir: root.join("claude"),
         claude_config_file: root.join("claude.json"),
         codex_home: root.join("codex"),
-        cursor_sdk_auth_file: root.join("cursor-sdk").join("auth.json"),
     };
     AgentAccounts::new(config)
 }

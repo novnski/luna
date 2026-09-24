@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, UNIX_EPOCH};
 
 use futures::{StreamExt, stream};
 use luna_proto::{HarnessId, Model};
@@ -18,7 +19,7 @@ use crate::agent_accounts::AgentAccounts;
 use crate::device_write::DeviceWriteHandle;
 use crate::registry::{HarnessRegistry, descriptor_enabled};
 
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 const MAX_CACHE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -26,7 +27,25 @@ const MAX_CACHE_BYTES: u64 = 1024 * 1024;
 struct CatalogFile {
     version: u32,
     checked_at_ms: i64,
+    source_signature: Option<String>,
     models: Vec<Model>,
+}
+
+/// Bind Codex's cached list to the exact executable used for task execution.
+/// Canonicalizing follows package-manager symlinks when an update replaces
+/// their target. Metadata avoids spawning the CLI on the picker hot path.
+fn codex_source_signature() -> Option<String> {
+    let path = luna_harness::codex::resolve_codex_executable()?
+        .canonicalize()
+        .ok()?;
+    let metadata = fs::metadata(&path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(format!(
+        "{}:{}:{}",
+        path.display(),
+        metadata.len(),
+        modified.as_nanos()
+    ))
 }
 
 pub(crate) struct ModelCache {
@@ -82,7 +101,12 @@ impl ModelCache {
             return None;
         }
         let catalog: CatalogFile = serde_json::from_slice(&bytes).ok()?;
-        (catalog.version == CACHE_VERSION && !catalog.models.is_empty()).then_some(catalog.models)
+        let source_matches = harness != HarnessId::Codex
+            || codex_source_signature().as_deref() == catalog.source_signature.as_deref();
+        (catalog.version == CACHE_VERSION
+            && source_matches
+            && (!catalog.models.is_empty() || harness == HarnessId::Codex))
+            .then_some(catalog.models)
     }
 
     fn save(&self, harness: HarnessId, identity: &str, models: &[Model]) -> Result<(), String> {
@@ -105,8 +129,14 @@ impl ModelCache {
         let catalog = CatalogFile {
             version: CACHE_VERSION,
             checked_at_ms: chrono::Utc::now().timestamp_millis(),
+            source_signature: (harness == HarnessId::Codex)
+                .then(codex_source_signature)
+                .flatten(),
             models: models.to_vec(),
         };
+        if harness == HarnessId::Codex && catalog.source_signature.is_none() {
+            return Err("Codex CLI executable is unavailable".into());
+        }
         let bytes = serde_json::to_vec(&catalog).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_CACHE_BYTES {
             return Err("provider model catalog exceeds the cache size limit".into());
@@ -187,6 +217,12 @@ impl ModelCache {
                 .map_err(|error| error.to_string())
         };
         match fetched {
+            Ok(models) if harness == HarnessId::Codex && models.is_empty() => {
+                // An authoritative empty `model/list` must replace an older
+                // runnable catalog for this account and CLI.
+                self.save(harness, identity, &models)?;
+                Ok(models)
+            }
             Ok(models) if !models.is_empty() => {
                 if let Err(error) = self.save(harness, identity, &models) {
                     tracing::warn!(?harness, %error, "model catalog could not be cached");
@@ -197,13 +233,6 @@ impl ModelCache {
                     }
                 }
                 Ok(models)
-            }
-            Ok(_) if !refresh && harness == HarnessId::Codex => {
-                Ok(luna_harness::codex::CodexHarness::fallback_models())
-            }
-            Err(error) if !refresh && harness == HarnessId::Codex => {
-                tracing::debug!(%error, "Codex model discovery failed; using bundled fallback");
-                Ok(luna_harness::codex::CodexHarness::fallback_models())
             }
             Ok(_) if !refresh && harness == HarnessId::ClaudeCode => {
                 Ok(luna_harness::claude::catalog::static_models())
@@ -217,6 +246,20 @@ impl ModelCache {
         }
     }
 
+    pub(crate) async fn refresh_after_provider_update(
+        &self,
+        harness: HarnessId,
+    ) -> Result<(), String> {
+        if harness == HarnessId::Codex {
+            for account_id in self.accounts.codex_account_ids() {
+                self.list(harness, Some(&account_id), true).await?;
+            }
+        } else {
+            self.list(harness, None, true).await?;
+        }
+        Ok(())
+    }
+
     /// Starts once per engine, after an RPC service exists. Two probes at most
     /// run concurrently; a slow or unavailable provider cannot block startup.
     pub(crate) fn start_background_refresh(self: &Arc<Self>) {
@@ -228,7 +271,8 @@ impl ModelCache {
         }
         let cache = self.clone();
         runtime.spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            loop {
             let mut targets = Vec::new();
             for descriptor in cache.registry.descriptors() {
                 if !descriptor.installed
@@ -259,6 +303,8 @@ impl ModelCache {
                     }
                 })
                 .await;
+                tokio::time::sleep(Duration::from_secs(2 * 60 * 60)).await;
+            }
         });
     }
 }

@@ -63,7 +63,7 @@ use wire::{ControlRequestFrame, Frame, allow_response, control_response_line};
 /// is applied by [`ClaudeHarness::resolve_executable`], so availability and
 /// launches agree on one resolution order. Resolved per call — cheap after
 /// the snapshot is cached.
-fn resolve_claude_executable() -> Option<PathBuf> {
+pub fn resolve_claude_executable() -> Option<PathBuf> {
     let mut extra = Vec::new();
     if let Some(home) = crate::executable::home_dir() {
         extra.push(home.join(".claude").join("local").join("claude"));

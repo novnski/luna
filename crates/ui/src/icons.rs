@@ -8,7 +8,7 @@
 //! - The terminal tab glyphs (`terminal`, `plus`, `close`) and the stop square
 //!   are ports of the hand-drawn inline SVGs in luna's `terminal-panel.tsx` /
 //!   `composer-actions.tsx`.
-//! - The harness brand marks (`claude-mark`, `openai-mark`, `cursor-mark`) are
+//! - The harness brand marks (`claude-mark`, `openai-mark`, `opencode-mark`) are
 //!   ports of luna's `icons.tsx`. gpui tints SVGs with the text color, so the
 //!   Claude mark's brand orange is applied at the call site ([`CLAUDE_BRAND`]).
 //!
@@ -73,6 +73,7 @@ icon_assets![
     (CALENDAR, "calendar"),
     (LIST, "list"),
     (CHART, "chart"),
+    (MORE_HORIZONTAL, "more-horizontal"),
     (FOLDER_WITH_FILES, "folder-with-files"),
     (FOLDER, "folder"),
     // Hand-drawn floppy disk in the Solar Linear style. Workspace editor save.
@@ -138,6 +139,7 @@ icon_assets![
     (TRASH_BIN_MINIMALISTIC, "trash-bin-minimalistic"),
     // Shared settings glyph: user-supplied horizontal sliders.
     (SETTINGS_MINIMALISTIC, "settings-minimalistic"),
+    (SETTINGS_GEAR, "settings-gear"),
     (LOGOUT_2, "logout-2"),
     (MAGNIFER, "magnifer"),
     // Compact magnifier with a distinct handle, matching the linear icon family.
@@ -197,13 +199,7 @@ icon_assets![
     // Harness brand marks (icons.tsx).
     (CLAUDE_MARK, "claude-mark"),
     (OPENAI_MARK, "openai-mark"),
-    (CURSOR_MARK, "cursor-mark"),
-    (DEVIN_MARK, "devin-mark"),
-    (GROK_MARK, "grok-mark"),
-    (HERMES_MARK, "hermes-mark"),
-    (PI_MARK, "pi-mark"),
     (OPENCODE_MARK, "opencode-mark"),
-    (ANTIGRAVITY_MARK, "antigravity-mark"),
 ];
 
 /// Serves both the compact control-icon set and the complete file-identity

@@ -392,7 +392,6 @@ fn fake_accounts(parent: &Path) -> AgentAccountsConfig {
         claude_config_dir: parent.join("synthetic-claude"),
         claude_config_file: parent.join("synthetic-claude.json"),
         codex_home: parent.join("synthetic-codex"),
-        cursor_sdk_auth_file: parent.join("synthetic-cursor-auth.json"),
     }
 }
 

@@ -382,7 +382,6 @@ fn assemble_at(path: &std::path::Path, harness: Arc<HeldHarness>) -> EngineCore 
         claude_config_dir: path.join("synthetic-claude"),
         claude_config_file: path.join("synthetic-claude.json"),
         codex_home: path.join("synthetic-codex"),
-        cursor_sdk_auth_file: path.join("synthetic-cursor-auth.json"),
     };
     accounts
         .disable_claude_keychain_fallback()

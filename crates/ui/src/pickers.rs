@@ -1133,9 +1133,6 @@ impl Pickers {
                 (HarnessId::Opencode, PermissionMode::Auto) => {
                     "Unavailable: OpenCode auto-approve is not a reviewer.".into()
                 }
-                (HarnessId::Cursor, PermissionMode::Auto) => {
-                    "Unavailable: the pinned Cursor SDK cannot select Auto-review.".into()
-                }
                 (_, PermissionMode::Auto) => {
                     "Unavailable: this provider has no verified automatic reviewer.".into()
                 }
@@ -5694,17 +5691,9 @@ pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gp
             Some(crate::icons::claude_brand()),
         ),
         HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
-        HarnessId::Cursor => (crate::icons::CURSOR_MARK, None),
-        // Cognition's mark (the Devin product icon), monochrome.
-        HarnessId::Devin => (crate::icons::DEVIN_MARK, None),
-        // Monochrome mark, tinted by the surface like OpenAI's.
-        HarnessId::Grok => (crate::icons::GROK_MARK, None),
-        // Nous Research's mark (the Hermes product icon), monochrome.
-        HarnessId::Hermes => (crate::icons::HERMES_MARK, None),
-        HarnessId::Pi => (crate::icons::PI_MARK, None),
         // The pixel-"o" from opencode's wordmark (their favicon), monochrome.
         HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
-        HarnessId::Antigravity => (crate::icons::ANTIGRAVITY_MARK, None),
+        _ => (crate::icons::WIDGET, None),
     }
 }
 

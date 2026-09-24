@@ -36,7 +36,6 @@ async fn codex_login_resolves_override_and_adds_its_directory_to_child_path() {
         claude_config_dir: dir.path().join("claude"),
         claude_config_file: dir.path().join("claude.json"),
         codex_home: dir.path().join("codex-home"),
-        cursor_sdk_auth_file: dir.path().join("cursor-sdk/auth.json"),
     });
     let login = accounts.start_login(HarnessId::Codex).await.unwrap();
     assert_eq!(login.url, "https://auth.openai.com/authorize?test=resolver");

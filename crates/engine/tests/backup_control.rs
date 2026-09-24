@@ -242,7 +242,6 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
         claude_config_dir: temp.path().join("synthetic-claude"),
         claude_config_file: temp.path().join("synthetic-claude.json"),
         codex_home: temp.path().join("synthetic-codex"),
-        cursor_sdk_auth_file: temp.path().join("synthetic-cursor-auth.json"),
     };
     let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
         EngineProfile::development(&owner, "fixture-org", "fixture-user"),
@@ -357,7 +356,6 @@ async fn ordinary_unmarked_fixture_root_has_no_backup_control_or_vault_probe() {
         claude_config_dir: temp.path().join("synthetic-claude"),
         claude_config_file: temp.path().join("synthetic-claude.json"),
         codex_home: temp.path().join("synthetic-codex"),
-        cursor_sdk_auth_file: temp.path().join("synthetic-cursor-auth.json"),
     };
     accounts.disable_claude_keychain_fallback().unwrap();
     let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(

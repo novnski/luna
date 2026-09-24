@@ -140,7 +140,7 @@ echo "launching LUNA Dev (data $DATA_DIR, IPC $IPC_PORT)" >&2
 # LaunchServices must own the process so macOS privacy attributes Screen
 # Recording to LUNA Dev instead of to the terminal.
 if [[ "$MODE" == refresh ]]; then
-  if open -n "${OPEN_ENV[@]}" "$APP" --args "$@"; then
+  if open -g -n "${OPEN_ENV[@]}" "$APP" --args "$@"; then
     for ((attempt = 0; attempt < 30; attempt++)); do
       [[ -n "$(dev_pids)" ]] && break
       sleep 1

@@ -55,6 +55,10 @@ pub mod methods {
     pub const STAGE_BACKUP_RESTORE: &str = "StageBackupRestore";
     pub const WATCH_PREVIEWS: &str = "WatchPreviews";
     pub const LIST_HARNESSES: &str = "ListHarnesses";
+    /// Per-device CLI versions and available updates; cached between checks.
+    pub const GET_PROVIDER_UPDATES: &str = "GetProviderUpdates";
+    /// Explicitly update one locally installed CLI through its install method.
+    pub const UPDATE_PROVIDER: &str = "UpdateProvider";
     /// Flip a harness's enablement on the target device (Settings → Agents);
     /// replies with the device's fresh `ListHarnesses` catalog.
     pub const GET_TITLE_SETTINGS: &str = "GetTitleSettings";
@@ -292,6 +296,8 @@ pub mod methods {
         STAGE_BACKUP_RESTORE,
         WATCH_PREVIEWS,
         LIST_HARNESSES,
+        GET_PROVIDER_UPDATES,
+        UPDATE_PROVIDER,
         GET_TITLE_SETTINGS,
         SET_TITLE_SETTINGS,
         SET_HARNESS_ENABLED,

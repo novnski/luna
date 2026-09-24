@@ -7,24 +7,35 @@ use serde::{Deserialize, Serialize};
 pub enum HarnessId {
     ClaudeCode,
     Codex,
+    /// Legacy wire value, retained only until old LUNA task rows are retired.
     Cursor,
-    /// Cognition's Devin agent, driven over ACP (`devin acp`).
+    /// Legacy wire value, retained only until old LUNA task rows are retired.
     Devin,
-    /// xAI's Grok Build agent, driven over ACP (`grok agent stdio`).
+    /// Legacy wire value, retained only until old LUNA task rows are retired.
     Grok,
-    /// Nous Research's Hermes Agent, driven over ACP (`hermes acp`).
+    /// Legacy wire value, retained only until old LUNA task rows are retired.
     Hermes,
-    /// The pi coding agent (pi.dev), driven over ACP via the `pi-acp` adapter.
+    /// Legacy wire value, retained only until old LUNA task rows are retired.
     Pi,
     /// SST's opencode agent, driven natively over its own HTTP/SSE server
     /// protocol (`opencode serve` — the same wire the opencode desktop app
     /// speaks).
     Opencode,
-    /// google's antigravity agent over acp (`agy_acp_server`, installed from
-    /// its pinned release archive).
+    /// Legacy wire value, retained only until old LUNA task rows are retired.
     Antigravity,
     /// Test harness; never shown in production pickers.
     Mock,
+}
+
+impl HarnessId {
+    /// Old ids remain decodable until their LUNA task rows have been retired.
+    /// They have no runnable integration in the current engine.
+    pub fn is_retired(self) -> bool {
+        !matches!(
+            self,
+            Self::ClaudeCode | Self::Codex | Self::Opencode | Self::Mock
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

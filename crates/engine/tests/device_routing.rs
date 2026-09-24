@@ -199,7 +199,6 @@ fn assemble(dir: &std::path::Path, device_id: &str) -> EngineCore {
         claude_config_dir: dir.join("synthetic-claude"),
         claude_config_file: dir.join("synthetic-claude.json"),
         codex_home: dir.join("synthetic-codex"),
-        cursor_sdk_auth_file: dir.join("synthetic-cursor-auth.json"),
     };
     accounts
         .disable_claude_keychain_fallback()

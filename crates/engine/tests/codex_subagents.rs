@@ -55,7 +55,6 @@ fn assemble(dir: &Path, replay_kind: Option<&str>) -> (EngineCore, EngineProfile
         claude_config_dir: dir.join("synthetic-claude"),
         claude_config_file: dir.join("synthetic-claude.json"),
         codex_home: dir.join("synthetic-codex"),
-        cursor_sdk_auth_file: dir.join("synthetic-cursor-auth.json"),
     };
     accounts.disable_claude_keychain_fallback().unwrap();
     let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(

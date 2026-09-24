@@ -2730,7 +2730,6 @@ mod tests {
             claude_config_dir: root.path().join("synthetic-claude"),
             claude_config_file: root.path().join("synthetic-claude.json"),
             codex_home: root.path().join("synthetic-codex"),
-            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
         };
         accounts.disable_claude_keychain_fallback().unwrap();
         let core =

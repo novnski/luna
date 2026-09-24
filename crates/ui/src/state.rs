@@ -1130,6 +1130,11 @@ impl AppState {
     // ---- reducers (pure) ----
 
     pub fn apply_chats(&mut self, mut chats: Vec<Chat>) {
+        chats.retain(|chat| {
+            chat.config
+                .as_ref()
+                .is_none_or(|config| !config.harness.is_retired())
+        });
         sort_chats(&mut chats);
         self.chats = chats;
         self.chats_synced = true;
@@ -2868,7 +2873,6 @@ mod tests {
             claude_config_dir: root.path().join("synthetic-claude"),
             claude_config_file: root.path().join("synthetic-claude.json"),
             codex_home: root.path().join("synthetic-codex"),
-            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
         };
         accounts.disable_claude_keychain_fallback().unwrap();
         let core =
@@ -4063,7 +4067,6 @@ mod tests {
             claude_config_dir: providers.join("claude"),
             claude_config_file: providers.join("claude.json"),
             codex_home: providers.join("codex"),
-            cursor_sdk_auth_file: providers.join("cursor/auth.json"),
         };
         accounts.disable_claude_keychain_fallback().unwrap();
         let registry = HarnessRegistry::new();

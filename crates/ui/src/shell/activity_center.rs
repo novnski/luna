@@ -422,7 +422,7 @@ impl Shell {
             }
             AttentionTarget::SettingsAccounts => {
                 self.close_activity(window, cx);
-                self.open_settings(SettingsSection::Agents, cx);
+                self.open_settings(SettingsSection::Providers, cx);
             }
             AttentionTarget::SettingsDevices => {
                 self.close_activity(window, cx);

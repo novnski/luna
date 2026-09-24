@@ -752,7 +752,6 @@ fn account_config(root: &Path) -> AgentAccountsConfig {
         claude_config_dir: providers.join("claude"),
         claude_config_file: providers.join("claude.json"),
         codex_home: providers.join("codex"),
-        cursor_sdk_auth_file: providers.join("cursor/auth.json"),
     }
 }
 

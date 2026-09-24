@@ -66,7 +66,7 @@ use crate::{
     Harness, HarnessError, LunaToolInvocation, LunaToolInvocationContext,
     ProviderForkProgressReporter, RunControls, SteerAcceptance,
 };
-use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
+use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, to_effort};
 use normalize::{
     ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_type,
     notification_thread_id, route_child_notification, turn_error_message, turn_id, usage_event,
@@ -98,52 +98,6 @@ pub fn resolve_codex_executable() -> Option<PathBuf> {
     extra.push(PathBuf::from("/opt/homebrew/bin/codex"));
     extra.push(PathBuf::from("/usr/local/bin/codex"));
     crate::executable::find_on_paths("codex", extra)
-}
-
-/// The desktop app can ship a newer app-server than the installed CLI. Its
-/// account-scoped model catalog is more complete during a staggered CLI
-/// rollout, while task execution still follows the user's configured CLI.
-#[cfg(target_os = "macos")]
-async fn newer_desktop_catalog_executable(current: &std::path::Path) -> Option<PathBuf> {
-    let mut candidates = vec![PathBuf::from(
-        "/Applications/ChatGPT.app/Contents/Resources/codex",
-    )];
-    if let Some(home) = crate::executable::home_dir() {
-        candidates.push(home.join("Applications/ChatGPT.app/Contents/Resources/codex"));
-    }
-    let candidate = candidates.into_iter().find(|path| path.is_file())?;
-    let current_version = codex_cli_version(current).await?;
-    let candidate_version = codex_cli_version(&candidate).await?;
-    (candidate_version > current_version).then_some(candidate)
-}
-
-#[cfg(target_os = "macos")]
-async fn codex_cli_version(path: &std::path::Path) -> Option<(u32, u32, u32, bool)> {
-    let mut command = tokio::process::Command::new(path);
-    command.arg("--version").kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(2), command.output())
-        .await
-        .ok()?
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let output = std::str::from_utf8(&output.stdout).ok()?;
-    let version = output.split_whitespace().find(|part| {
-        part.as_bytes()
-            .first()
-            .is_some_and(|first| first.is_ascii_digit())
-    })?;
-    let (core, prerelease) = version
-        .split_once('-')
-        .map_or((version, false), |(core, _)| (core, true));
-    let mut parts = core.split('.').map(str::parse::<u32>);
-    Some((
-        parts.next()?.ok()?,
-        parts.next()?.ok()?,
-        parts.next()?.ok()?,
-        !prerelease,
-    ))
 }
 
 /// A ready-to-spawn `codex login` command for the engine's account flow.
@@ -311,14 +265,7 @@ impl CodexHarness {
         codex_home: Option<&std::path::Path>,
         force_file_auth: bool,
     ) -> Result<Vec<Model>, HarnessError> {
-        let mut exe = self.resolve_executable()?;
-        #[cfg(target_os = "macos")]
-        if self.executable.is_none()
-            && std::env::var_os("CODEX_EXECUTABLE").is_none()
-            && let Some(newer) = newer_desktop_catalog_executable(&exe).await
-        {
-            exe = newer;
-        }
+        let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
         if force_file_auth {
             apply_file_auth_override(&mut cmd);
@@ -423,8 +370,7 @@ fn reasoning_level(value: &str) -> Option<ReasoningLevel> {
 }
 
 /// Codex accepts both names, but Luna has historically persisted `fast`.
-/// Normalize the app server's `priority` id so live and fallback catalogs do
-/// not produce two different settings for the same tier.
+/// Normalize the app server's `priority` id to the historical persisted value.
 fn normalized_service_tier(value: &str) -> &str {
     match value {
         "priority" => "fast",
@@ -766,23 +712,9 @@ impl Harness for CodexHarness {
         client.fork_thread_staged(request, progress).await
     }
 
-    /// The signed-in account's visible `model/list` is authoritative. A
-    /// curated snapshot keeps the picker operational when the experimental
-    /// discovery call is unavailable or temporarily fails; failed probes are
-    /// intentionally not cached so reopening the picker retries rollout state.
+    /// The installed task CLI's `model/list` is the only runnable catalog.
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
-        self.resolve_executable()?;
-        match self.discover_models(None, false).await {
-            Ok(models) if !models.is_empty() => Ok(models),
-            Ok(_) => Ok(static_models()),
-            Err(error) => {
-                tracing::debug!(
-                    target: "luna_harness::codex",
-                    "model/list discovery failed; using fallback catalog: {error}"
-                );
-                Ok(static_models())
-            }
-        }
+        self.discover_models(None, false).await
     }
 
     /// Skills from a short-lived `skills/list` probe (see
@@ -829,33 +761,8 @@ impl Harness for CodexHarness {
 }
 
 impl CodexHarness {
-    /// Account-scoped model discovery. The home is resolved by the engine from
-    /// a trusted account id; it is never accepted directly from the UI.
-    pub async fn models_for_home(
-        &self,
-        codex_home: &std::path::Path,
-        force_file_auth: bool,
-    ) -> Result<Vec<Model>, HarnessError> {
-        self.resolve_executable()?;
-        match self
-            .discover_models(Some(codex_home), force_file_auth)
-            .await
-        {
-            Ok(models) if !models.is_empty() => Ok(models),
-            Ok(_) => Ok(static_models()),
-            Err(error) => {
-                tracing::debug!(
-                    target: "luna_harness::codex",
-                    "account-scoped model/list discovery failed; using fallback catalog: {error}"
-                );
-                Ok(static_models())
-            }
-        }
-    }
-
-    /// Account-scoped, authoritative discovery for callers that persist a
-    /// last-known-good catalog. Unlike `models_for_home`, this never returns
-    /// the bundled fallback as if it were a fresh provider response.
+    /// Account-scoped discovery from the installed CLI for callers that
+    /// persist a last-known-good catalog.
     pub async fn live_models_for_home(
         &self,
         codex_home: &std::path::Path,
@@ -863,10 +770,6 @@ impl CodexHarness {
     ) -> Result<Vec<Model>, HarnessError> {
         self.discover_models(Some(codex_home), force_file_auth)
             .await
-    }
-
-    pub fn fallback_models() -> Vec<Model> {
-        static_models()
     }
 
     async fn run_with_mode(

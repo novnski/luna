@@ -510,12 +510,7 @@ fn harness_from_env() -> luna_engine::HarnessId {
     match std::env::var("LUNA_HARNESS").as_deref().map(str::trim) {
         Ok("mock") => luna_engine::HarnessId::Mock,
         Ok("codex") => luna_engine::HarnessId::Codex,
-        Ok("cursor") => luna_engine::HarnessId::Cursor,
-        Ok("devin") => luna_engine::HarnessId::Devin,
-        Ok("grok") => luna_engine::HarnessId::Grok,
-        Ok("hermes") => luna_engine::HarnessId::Hermes,
-        Ok("pi") => luna_engine::HarnessId::Pi,
-        Ok("antigravity") => luna_engine::HarnessId::Antigravity,
+        Ok("opencode") => luna_engine::HarnessId::Opencode,
         _ => luna_engine::HarnessId::ClaudeCode,
     }
 }

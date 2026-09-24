@@ -3,9 +3,8 @@
 #![cfg(all(windows, feature = "native-fixture"))]
 
 use futures::StreamExt;
-use luna_harness::{AcpHarness, CancellationToken, Harness, RunControls};
-use luna_proto::{AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel};
-use serde_json::Value;
+use luna_harness::{CancellationToken, Harness, RunControls};
+use luna_proto::{AgentEvent, HarnessId, RunRequest, SandboxLevel};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
@@ -218,179 +217,6 @@ fn request(cwd: &Path, prompt: &str, resume: Option<&str>) -> RunRequest {
     }
 }
 
-async fn exercise(prompt: &str, resume: Option<&str>) {
-    let dir = tempfile::tempdir().unwrap();
-    let cwd = dir.path().join("Workspace O'Brien 日本語 & ! %");
-    std::fs::create_dir(&cwd).unwrap();
-    let harness = AcpHarness::grok().with_executable(fixture(dir.path()));
-    let (steer_tx, steering) = mpsc::channel(4);
-    let interrupt = CancellationToken::new();
-    let controls = RunControls {
-        request_input: Box::new(|_| {
-            let (tx, rx) = oneshot::channel();
-            let _ = tx.send(Vec::new());
-            rx
-        }),
-        steering,
-        interrupt: interrupt.clone(),
-        invoke_luna_tool: None,
-    };
-    let operation = async {
-        let mut stream = harness
-            .run(request(&cwd, prompt, resume), controls)
-            .await
-            .unwrap();
-        let mut events = Vec::new();
-        let mut peer = None;
-        while let Some(event) = stream.next().await {
-            let event = event.expect("native ACP event");
-            if let AgentEvent::TextDelta { text } = &event {
-                let echoed: Value = serde_json::from_str(text).expect("fixture echo");
-                assert_eq!(echoed["prompt"], prompt);
-                assert_eq!(Path::new(echoed["cwd"].as_str().unwrap()), cwd);
-                assert_eq!(
-                    echoed["argv"],
-                    serde_json::json!(["--no-auto-update", "agent", "--no-leader", "stdio"])
-                );
-                if prompt == "wait-for-cancel" {
-                    peer = Some(ProcessHandle::open(echoed["pid"].as_u64().unwrap() as u32));
-                    interrupt.cancel();
-                }
-            }
-            events.push(event);
-        }
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::TextDelta { .. })),
-            "missing native echo: {events:?}"
-        );
-        let expected_session = resume.unwrap_or("native-session");
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::SessionStarted { session_id, .. } if session_id == expected_session)), "wrong session: {events:?}");
-        let statuses: Vec<_> = events
-            .iter()
-            .filter_map(|e| match e {
-                AgentEvent::Done { status, error, .. } => {
-                    assert!(error.is_none(), "{error:?}");
-                    Some(*status)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            statuses,
-            vec![if prompt == "wait-for-cancel" {
-                DoneStatus::Interrupted
-            } else {
-                DoneStatus::Completed
-            }]
-        );
-        if let Some(peer) = peer {
-            peer.assert_exited().await;
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(12), operation)
-        .await
-        .expect("native session deadline");
-    drop(steer_tx);
-    assert!(
-        !cwd.join("injected.txt").exists(),
-        "prompt was interpreted by a shell"
-    );
-}
-
-#[tokio::test]
-async fn native_stdio_preserves_unicode_paths_and_prompt_metacharacters() {
-    exercise("hello 日本語 & echo injected > injected.txt | %PATH% !NAME! 'quoted' \"double\"\nsecond line", None).await;
-}
-#[tokio::test]
-async fn native_session_load_round_trips_resume_identity() {
-    exercise("resume echo", Some("native-resumed-session")).await;
-}
-#[tokio::test]
-async fn native_protocol_cancel_settles_and_reaps_the_direct_child() {
-    exercise("wait-for-cancel", None).await;
-}
-
-async fn exercise_tree(prompt: &str, drop_stream: bool) {
-    let dir = tempfile::tempdir().unwrap();
-    let harness = AcpHarness::grok()
-        .with_executable(fixture(dir.path()))
-        .with_graces(Duration::from_millis(100), Duration::from_millis(100));
-    let (_steer, steering) = mpsc::channel(1);
-    let interrupt = CancellationToken::new();
-    let controls = RunControls {
-        request_input: Box::new(|_| {
-            let (_, rx) = oneshot::channel();
-            rx
-        }),
-        steering,
-        interrupt: interrupt.clone(),
-        invoke_luna_tool: None,
-    };
-    let mut stream = harness
-        .run(request(dir.path(), prompt, None), controls)
-        .await
-        .unwrap();
-    let handles = tokio::time::timeout(Duration::from_secs(5), async {
-        while let Some(event) = stream.next().await {
-            if let AgentEvent::TextDelta { text } = event.unwrap() {
-                let value: Value = serde_json::from_str(&text).unwrap();
-                let mut pids = vec![value["pid"].as_u64().unwrap() as u32];
-                pids.extend(
-                    value["descendants"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|v| v.as_u64().unwrap() as u32),
-                );
-                assert_eq!(pids.len(), 3);
-                return pids
-                    .into_iter()
-                    .map(ProcessHandle::open)
-                    .collect::<Vec<_>>();
-            }
-        }
-        panic!("missing tree metadata");
-    })
-    .await
-    .expect("tree startup deadline");
-    if drop_stream {
-        drop(stream);
-    } else {
-        interrupt.cancel();
-        let mut statuses = Vec::new();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while let Some(event) = stream.next().await {
-                if let AgentEvent::Done { status, .. } = event.unwrap() {
-                    statuses.push(status);
-                }
-            }
-        })
-        .await
-        .expect("unresponsive agent must settle before fixture watchdog");
-        assert_eq!(statuses, vec![DoneStatus::Interrupted]);
-    }
-    for handle in handles {
-        handle.assert_exited().await;
-    }
-}
-
-#[tokio::test]
-async fn unresponsive_cancel_kills_child_and_grandchild_holding_stdio() {
-    exercise_tree("ignore-cancel-tree", false).await;
-}
-
-#[tokio::test]
-async fn dropping_run_stream_kills_the_tree() {
-    exercise_tree("ignore-cancel-tree", true).await;
-}
-
-#[tokio::test]
-async fn cooperative_cancel_also_cleans_up_descendants() {
-    exercise_tree("cooperative-tree", false).await;
-}
-
 #[tokio::test]
 async fn process_exit_drains_buffered_output_despite_inherited_descendant_pipes() {
     let dir = tempfile::tempdir().unwrap();
@@ -456,18 +282,11 @@ async fn batch_overrides_launch_through_cmd() {
     )
     .unwrap();
     let harnesses: Vec<Box<dyn Harness>> = vec![
-        Box::new(AcpHarness::grok().with_executable(script.clone())),
         Box::new(luna_harness::ClaudeHarness::new().with_executable(script.clone())),
         Box::new(luna_harness::CodexHarness::new().with_executable(script)),
     ];
     for harness in harnesses {
         let expected_prefix: Vec<String> = match harness.id() {
-            HarnessId::Grok => vec![
-                "--no-auto-update".into(),
-                "agent".into(),
-                "--no-leader".into(),
-                "stdio".into(),
-            ],
             HarnessId::ClaudeCode => vec!["--print".into()],
             HarnessId::Codex => vec!["app-server".into()],
             other => panic!("unexpected harness: {other:?}"),

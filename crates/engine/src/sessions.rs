@@ -7289,7 +7289,6 @@ mod tests {
             claude_config_dir: root.join("synthetic-claude"),
             claude_config_file: root.join("synthetic-claude.json"),
             codex_home: root.join("synthetic-codex"),
-            cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
         };
         crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
             crate::EngineProfile::development(&data, "synthetic-org", "synthetic-user"),
@@ -8374,7 +8373,6 @@ mod tests {
             claude_config_dir: root.path().join("synthetic-claude"),
             claude_config_file: root.path().join("synthetic-claude.json"),
             codex_home: root.path().join("synthetic-codex"),
-            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
         };
         accounts.disable_claude_keychain_fallback().unwrap();
         let core = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
@@ -10271,7 +10269,6 @@ mod tests {
             claude_config_dir: root.path().join("synthetic-claude"),
             claude_config_file: root.path().join("synthetic-claude.json"),
             codex_home: root.path().join("synthetic-codex"),
-            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
         };
         accounts.disable_claude_keychain_fallback().unwrap();
         let restarted = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(

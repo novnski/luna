@@ -227,7 +227,11 @@ fn reset_label(state: UsageResetState, now_ms: i64) -> String {
             } else if remaining < 24 * 60 {
                 format!("Resets in {}h {}m", remaining / 60, remaining % 60)
             } else {
-                format!("Resets in {}d", remaining / (24 * 60))
+                format!(
+                    "Resets in {}d {}h",
+                    remaining / (24 * 60),
+                    (remaining % (24 * 60)) / 60
+                )
             }
         }
     }
@@ -446,10 +450,6 @@ fn compact_limit_status(limit: &UsageLimitSnapshot, now_ms: i64) -> Option<&'sta
 
 fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> AnyElement {
     let mark = provider_mark(limit.provider);
-    let heading = match limit.plan.as_deref().filter(|plan| !plan.trim().is_empty()) {
-        Some(plan) => format!("{} · {plan}", limit.provider.label()),
-        None => limit.provider.label().to_owned(),
-    };
     let mut row = div()
         .w_full()
         .min_w_0()
@@ -458,7 +458,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> 
         .bg(theme.glass_hover().opacity(0.18))
         .flex()
         .flex_col()
-        .gap(px(3.0))
+        .gap(px(5.0))
         .child(
             div()
                 .min_w_0()
@@ -479,14 +479,41 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> 
                         .text_size(crate::typography::ui_rems(11.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text)
-                        .child(heading),
-                ),
+                        .child(limit.provider.label()),
+                )
+                .when_some(limit.plan.clone(), |el, plan| {
+                    el.child(
+                        div()
+                            .flex_none()
+                            .px(px(5.0))
+                            .py(px(2.0))
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .bg(theme.glass_hover().opacity(0.4))
+                            .text_size(crate::typography::ui_rems(9.0))
+                            .text_color(theme.text_muted)
+                            .child(plan),
+                    )
+                }),
         );
+    if let Some(account) = limit
+        .account_label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+    {
+        row = row.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(crate::typography::ui_rems(10.0))
+                .text_color(theme.text_muted)
+                .child(account.to_owned()),
+        );
+    }
     if let Some(window) = limit.windows.first() {
-        let remaining = (100.0 - window.used_percent).clamp(0.0, 100.0);
-        let tone = if remaining <= 5.0 {
+        let used = window.used_percent.clamp(0.0, 100.0);
+        let tone = if used >= 95.0 {
             theme.danger
-        } else if remaining <= 20.0 {
+        } else if used >= 80.0 {
             theme.warning
         } else {
             theme.accent
@@ -512,7 +539,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> 
                             .flex_none()
                             .text_size(crate::typography::ui_rems(10.0))
                             .text_color(tone)
-                            .child(format!("{remaining:.0}% left")),
+                            .child(format!("{used:.0}%")),
                     ),
             )
             .child(
@@ -524,11 +551,22 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> 
                     .child(
                         div()
                             .h_full()
-                            .w(gpui::relative(remaining / 100.0))
+                            .w(gpui::relative(used / 100.0))
                             .rounded(px(2.0))
                             .bg(tone),
                     ),
-            );
+            )
+            .when(window.resets_at_ms.is_some(), |row| {
+                row.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(crate::typography::ui_rems(9.0))
+                        .text_color(theme.text_muted)
+                        .child(reset_label(limit.reset_state(window, now_ms), now_ms)),
+                )
+            });
     } else {
         row = row.child(
             div()
@@ -1610,7 +1648,7 @@ impl Shell {
             .into_any_element()
     }
 
-    pub(super) fn render_usage_footer(
+    pub(super) fn render_usage_card(
         &mut self,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -1722,44 +1760,45 @@ impl Shell {
                             .child("View all usage"),
                     ),
             );
+        div().when(open, |el| el.child(card)).into_any_element()
+    }
+
+    pub(super) fn render_usage_action(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = self.usage_card_open;
         div()
+            .id("usage-sidebar-action")
+            .role(gpui::Role::Button)
+            .aria_label("Toggle usage")
+            .aria_expanded(open)
+            .size(px(36.0))
+            .track_focus(&self.usage_action_focus)
+            .cursor_pointer()
+            .rounded(px(Theme::CONTROL_RADIUS))
+            .bg(if open {
+                theme.glass_hover().opacity(0.65)
+            } else {
+                theme.glass_hover().opacity(0.15)
+            })
+            .hover(|el| el.bg(theme.glass_hover()))
             .flex()
-            .flex_col()
-            .when(open, |el| el.child(card))
-            .child(
-                div()
-                    .id("usage-sidebar-action")
-                    .role(gpui::Role::Button)
-                    .aria_label("Usage disclosure")
-                    .aria_expanded(open)
-                    .mx(px(Theme::SPACE_SM))
-                    .track_focus(&self.usage_action_focus)
-                    .px(px(Theme::SPACE_SM))
-                    .py(px(5.0))
-                    .cursor_pointer()
-                    .rounded(px(Theme::CONTROL_RADIUS))
-                    .hover(|el| el.bg(theme.glass_hover()))
-                    .flex()
-                    .items_center()
-                    .gap(px(9.0))
-                    .text_color(theme.text_muted)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
-                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                        if matches!(
-                            event.keystroke.key.to_ascii_lowercase().as_str(),
-                            "enter" | "space"
-                        ) {
-                            cx.stop_propagation();
-                            this.toggle_usage_card(cx);
-                        }
-                    }))
-                    .child(icon(icons::CHART).size(px(16.0)))
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .child("Usage"),
-                    ),
-            )
+            .items_center()
+            .justify_center()
+            .text_color(if open { theme.text } else { theme.text_muted })
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(
+                    event.keystroke.key.to_ascii_lowercase().as_str(),
+                    "enter" | "space"
+                ) {
+                    cx.stop_propagation();
+                    this.toggle_usage_card(cx);
+                }
+            }))
+            .child(icon(icons::CHART).size(px(18.0)).text_color(theme.text))
             .into_any_element()
     }
 }

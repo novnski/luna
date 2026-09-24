@@ -84,7 +84,7 @@ pub fn live_codex_limit(read: CodexQuotaRead) -> UsageLimitSnapshot {
     UsageLimitSnapshot {
         provider: UsageProvider::Codex,
         verified_account_id: read.verified_account_id,
-        account_label: Some("Selected Codex account".into()),
+        account_label: read.account_label,
         plan: read.plan,
         checked_at_ms: Some(read.checked_at_ms),
         availability: LimitAvailability::Ready,
@@ -1437,6 +1437,7 @@ mod tests {
     fn live_codex_mapping_does_not_invent_a_primary_or_reset() {
         let read = CodexQuotaRead {
             verified_account_id: Some("codex:synthetic-hash".into()),
+            account_label: Some("codex@example.test".into()),
             plan: Some("pro".into()),
             checked_at_ms: 500_000,
             windows: vec![

@@ -122,7 +122,6 @@ fn accounts(root: &Path) -> AgentAccountsConfig {
         claude_config_dir: root.join("synthetic-claude"),
         claude_config_file: root.join("synthetic-claude.json"),
         codex_home: root.join("synthetic-codex"),
-        cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
     }
 }
 

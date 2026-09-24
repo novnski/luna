@@ -48,6 +48,8 @@ pub struct CodexQuotaRead {
     /// Backend `accountId` when supplied, SHA-256 hashed before leaving this adapter.
     /// Email from `account/read` is never used as a de-duplication identity.
     pub verified_account_id: Option<String>,
+    /// Display only. This is not used as the quota cache identity.
+    pub account_label: Option<String>,
     pub plan: Option<String>,
     pub checked_at_ms: i64,
     pub windows: Vec<CodexQuotaWindow>,
@@ -230,6 +232,7 @@ impl CodexNativeClient {
                 .map_or(0, |elapsed| elapsed.as_millis() as i64);
             Ok(CodexQuotaObservation::Ready(CodexQuotaRead {
                 verified_account_id: quota_account_id(&limits),
+                account_label: account.email,
                 plan: limit_plan.or(account.plan),
                 checked_at_ms,
                 windows,
@@ -915,6 +918,7 @@ fn optional_string(value: &Value, field: &str) -> Option<String> {
 struct CodexAccountMarker {
     signature: String,
     plan: Option<String>,
+    email: Option<String>,
 }
 
 fn codex_account_marker(value: &Value) -> Option<CodexAccountMarker> {
@@ -930,7 +934,17 @@ fn codex_account_marker(value: &Value) -> Option<CodexAccountMarker> {
         .and_then(Value::as_str)
         .filter(|plan| !plan.is_empty() && plan.len() <= 80)
         .map(str::to_owned);
-    Some(CodexAccountMarker { signature, plan })
+    let email = account
+        .get("email")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|email| !email.is_empty() && email.len() <= 320)
+        .map(str::to_owned);
+    Some(CodexAccountMarker {
+        signature,
+        plan,
+        email,
+    })
 }
 
 fn quota_account_id(value: &Value) -> Option<String> {

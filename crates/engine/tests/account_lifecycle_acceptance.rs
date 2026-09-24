@@ -146,7 +146,6 @@ fn account_config(root: &std::path::Path) -> AgentAccountsConfig {
         claude_config_dir: root.join("claude"),
         claude_config_file: root.join("claude.json"),
         codex_home: root.join("codex"),
-        cursor_sdk_auth_file: root.join("cursor-auth.json"),
     }
 }
 

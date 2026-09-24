@@ -143,7 +143,7 @@ const INSTALL_HINT: &str = "opencode (searched PATH, the login shell's PATH, ~/.
 /// install locations). The override is validated at launch through
 /// [`crate::executable::validate_native_override`] — including the `.cmd`
 /// shims npm installs on Windows.
-fn resolve_opencode_executable() -> Option<PathBuf> {
+pub fn resolve_opencode_executable() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("OPENCODE_EXECUTABLE")
         && !path.is_empty()
     {
@@ -152,7 +152,7 @@ fn resolve_opencode_executable() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    crate::acp::find_on_paths("opencode", opencode_install_paths())
+    crate::executable::find_on_paths("opencode", opencode_install_paths())
 }
 
 /// Effort ladder surfaced in the picker; applied per run by picking the

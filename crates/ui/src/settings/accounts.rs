@@ -1,13 +1,12 @@
-//! Settings → Agents / accounts (feature-inventory §1.9): provider cards
-//! (Claude Code, Codex, Cursor) with account rows — email, plan badge, Active, usage
+//! Settings → Providers: per-device CLI enablement and provider-owned accounts.
+//! Claude Code and Codex have account rows — email, plan badge, Active, usage
 //! meters (indigo → amber ≥80% → red ≥95%, reset time), lifecycle controls — plus
 //! the add-account dialogs (paste-code and browser-poll flows) and
 //! account-shaped loading skeletons. Luna retargets devices from the settings
 //! sidebar (`targetDeviceId` passthrough kept plumbed, unused single-device).
 //!
 //! The accounts RPC surface is being implemented engine-side in parallel —
-//! every call here surfaces failures as inline UI states rather than assuming
-//! the methods exist.
+//! every call here surfaces failures as inline UI states.
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -16,14 +15,17 @@ use gpui::{
 };
 use std::time::Duration;
 
+use luna_engine::registry::{HarnessDescriptor, descriptor_enabled};
 use luna_proto::{
     AgentAccount, AgentAccountsSnapshot, AgentAuthenticationState, AgentLoginMode, AgentLoginPoll,
-    AgentLoginStart, AgentLoginStatus, HarnessId,
+    AgentLoginStart, AgentLoginStatus, HarnessId, LimitAvailability, ProviderUpdateResult,
+    ProviderUpdateStatus, UsageProvider, UsageSnapshot,
 };
 use luna_rpc::methods;
 
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::popover::{self, Loadable};
+use crate::settings::harnesses::HarnessesPage;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -49,6 +51,7 @@ pub enum UsageLevel {
 enum AccountLifecycleAction {
     DisconnectClaude,
     ReconnectClaude,
+    DisconnectCodex,
     SelectCodexDefault,
 }
 
@@ -56,6 +59,7 @@ fn account_lifecycle_action(account: &AgentAccount) -> Option<AccountLifecycleAc
     match (account.harness, account.active, account.switchable) {
         (HarnessId::ClaudeCode, true, _) => Some(AccountLifecycleAction::DisconnectClaude),
         (HarnessId::ClaudeCode, false, true) => Some(AccountLifecycleAction::ReconnectClaude),
+        (HarnessId::Codex, true, _) => Some(AccountLifecycleAction::DisconnectCodex),
         (HarnessId::Codex, false, true) => Some(AccountLifecycleAction::SelectCodexDefault),
         _ => None,
     }
@@ -131,12 +135,11 @@ pub fn format_reset(resets_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Opt
     })
 }
 
-/// The provider cards, in display order: (harness, name, CLI command — named
-/// in the empty-state copy, luna settings.agents.tsx `PROVIDERS`).
+/// The provider cards, in display order: harness, name, and CLI command.
 pub const PROVIDERS: [(HarnessId, &str, &str); 3] = [
-    (HarnessId::ClaudeCode, "Claude Code", "claude"),
     (HarnessId::Codex, "Codex", "codex"),
-    (HarnessId::Cursor, "Cursor", "cursor-agent"),
+    (HarnessId::ClaudeCode, "Claude Code", "claude"),
+    (HarnessId::Opencode, "OpenCode", "opencode"),
 ];
 
 /// Accounts of one provider, in the engine's order (slot creation). No
@@ -197,7 +200,6 @@ impl LoginFlow {
         };
         match harness {
             HarnessId::Codex => "Sign in to Codex",
-            HarnessId::Cursor => "Connect Cursor",
             _ => "Sign in to Claude Code",
         }
     }
@@ -212,6 +214,12 @@ pub struct AccountsPage {
     target_device: Option<String>,
     device_menu: popover::Popup<()>,
     snapshot: Loadable<AgentAccountsSnapshot>,
+    harnesses: Loadable<Vec<HarnessDescriptor>>,
+    opencode_usage: Loadable<UsageSnapshot>,
+    provider_updates: Loadable<Vec<ProviderUpdateStatus>>,
+    harness_error: Option<String>,
+    update_message: Option<String>,
+    updating_provider: Option<HarnessId>,
     /// Account id with an in-flight Switch/Forget.
     busy_account: Option<String>,
     login: Option<LoginFlow>,
@@ -220,6 +228,13 @@ pub struct AccountsPage {
     code_input: Entity<ComposerInput>,
     label_input: Entity<ComposerInput>,
     load_task: Option<Task<()>>,
+    harness_task: Option<Task<()>>,
+    usage_task: Option<Task<()>>,
+    toggle_task: Option<Task<()>>,
+    provider_update_check_task: Option<Task<()>>,
+    provider_update_task: Option<Task<()>>,
+    advanced_page: Option<Entity<HarnessesPage>>,
+    advanced_open: bool,
     action_task: Option<Task<()>>,
     poll_task: Option<Task<()>>,
     _observe: Subscription,
@@ -228,6 +243,14 @@ pub struct AccountsPage {
 }
 
 impl AccountsPage {
+    pub fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
+        self.load(true, cx);
+    }
+
+    pub fn provider_update_statuses(&self) -> Option<Vec<ProviderUpdateStatus>> {
+        self.provider_updates.ready().cloned()
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let mut page = Self::build(state, Loadable::Idle, cx);
         // Force the usage probe on the visit's first list — a plain list
@@ -247,7 +270,79 @@ impl AccountsPage {
     ) -> Self {
         // Deliberately bypasses `load`: native visual QA cannot probe a real
         // provider, usage endpoint, provider home, or Keychain.
-        Self::build(state, Loadable::Ready(snapshot), cx)
+        let mut page = Self::build(state, Loadable::Ready(snapshot), cx);
+        page.harnesses = Loadable::Ready(
+            PROVIDERS
+                .into_iter()
+                .map(|(id, name, _)| HarnessDescriptor {
+                    id,
+                    name: name.into(),
+                    supports_steering: true,
+                    steering_mode: luna_proto::SteeringMode::TurnBoundary,
+                    reasoning_levels: vec![],
+                    installed: true,
+                    enabled: Some(true),
+                })
+                .collect(),
+        );
+        page.provider_updates = Loadable::Ready(vec![
+            ProviderUpdateStatus {
+                harness: HarnessId::Codex,
+                installed_version: Some("0.154.0".into()),
+                latest_version: Some("0.156.1".into()),
+                update_available: true,
+                update_command: Some("brew upgrade --cask codex".into()),
+                detail: None,
+            },
+            ProviderUpdateStatus {
+                harness: HarnessId::ClaudeCode,
+                installed_version: Some("2.1.251".into()),
+                latest_version: Some("2.1.251".into()),
+                update_available: false,
+                update_command: Some("claude update".into()),
+                detail: None,
+            },
+            ProviderUpdateStatus {
+                harness: HarnessId::Opencode,
+                installed_version: Some("2.0.14".into()),
+                latest_version: Some("2.0.14".into()),
+                update_available: false,
+                update_command: Some("opencode upgrade".into()),
+                detail: None,
+            },
+        ]);
+        page.opencode_usage = Loadable::Ready(UsageSnapshot {
+            summary: luna_proto::UsageSummary {
+                contract_version: luna_proto::USAGE_CONTRACT_VERSION,
+                read_at_ms: Utc::now().timestamp_millis(),
+                time_zone: "UTC".into(),
+                days: 7,
+                resolution: "daily".into(),
+                buckets: vec![],
+                sources: vec![],
+                scan_duration_ms: 0,
+                partial: false,
+                warnings: vec![],
+            },
+            limits: vec![luna_proto::UsageLimitSnapshot {
+                provider: UsageProvider::OpenCodeGo,
+                verified_account_id: None,
+                account_label: None,
+                plan: Some("Go".into()),
+                checked_at_ms: Some(Utc::now().timestamp_millis()),
+                availability: LimitAvailability::Ready,
+                windows: vec![luna_proto::UsageLimitWindow {
+                    id: "week".into(),
+                    label: "Week".into(),
+                    used_percent: 44.0,
+                    resets_at_ms: None,
+                    duration_minutes: Some(7 * 24 * 60),
+                }],
+                reset_credits: None,
+                detail: None,
+            }],
+        });
+        page
     }
 
     fn build(
@@ -274,6 +369,12 @@ impl AccountsPage {
             target_device: None,
             device_menu: popover::Popup::default(),
             snapshot,
+            harnesses: Loadable::Idle,
+            opencode_usage: Loadable::Idle,
+            provider_updates: Loadable::Idle,
+            harness_error: None,
+            update_message: None,
+            updating_provider: None,
             busy_account: None,
             login: None,
             rename: None,
@@ -281,6 +382,13 @@ impl AccountsPage {
             code_input,
             label_input,
             load_task: None,
+            harness_task: None,
+            usage_task: None,
+            toggle_task: None,
+            provider_update_check_task: None,
+            provider_update_task: None,
+            advanced_page: None,
+            advanced_open: false,
             action_task: None,
             poll_task: None,
             _observe: observe,
@@ -306,6 +414,10 @@ impl AccountsPage {
             return;
         }
         self.target_device = target;
+        if let Some(page) = &self.advanced_page {
+            let target = self.target_device.clone();
+            page.update(cx, |page, cx| page.set_target_device(target, cx));
+        }
         // A different device = a different accounts world: drop in-flight
         // login/action state and reload with a forced usage probe (the new
         // device's cache is cold).
@@ -313,6 +425,7 @@ impl AccountsPage {
         self.rename = None;
         self.busy_account = None;
         self.error = None;
+        self.update_message = None;
         self.load(force_usage_for(LoadTrigger::Mount), cx);
     }
 
@@ -500,6 +613,9 @@ impl AccountsPage {
             return;
         };
         self.snapshot = Loadable::Loading;
+        self.load_harnesses(cx);
+        self.load_opencode_usage(cx);
+        self.load_provider_updates(force_usage, cx);
         let params = self.params(serde_json::json!({ "forceUsage": force_usage }));
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
@@ -518,6 +634,170 @@ impl AccountsPage {
             })
             .ok();
         }));
+        cx.notify();
+    }
+
+    fn load_harnesses(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.harnesses = Loadable::Error("Engine not connected".into());
+            return;
+        };
+        self.harnesses = Loadable::Loading;
+        let params = self.params(serde_json::json!({}));
+        self.harness_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call(methods::LIST_HARNESSES, params).await;
+            this.update(cx, |page, cx| {
+                page.harnesses = match result {
+                    Ok(value) => serde_json::from_value::<Vec<HarnessDescriptor>>(value)
+                        .map(Loadable::Ready)
+                        .unwrap_or_else(|error| Loadable::Error(error.to_string())),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn load_opencode_usage(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.opencode_usage = Loadable::Error("Engine not connected".into());
+            return;
+        };
+        self.opencode_usage = Loadable::Loading;
+        let params = self.params(serde_json::json!({"days": 7, "priceOverrides": {}}));
+        self.usage_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(methods::GET_USAGE_SNAPSHOT, params)
+                .await;
+            this.update(cx, |page, cx| {
+                page.opencode_usage = match result {
+                    Ok(value) => serde_json::from_value::<UsageSnapshot>(value)
+                        .map(Loadable::Ready)
+                        .unwrap_or_else(|error| Loadable::Error(error.to_string())),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn toggle_harness(&mut self, harness: HarnessId, enabled: bool, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let params = self.params(serde_json::json!({
+            "harness": harness,
+            "enabled": enabled,
+        }));
+        self.harness_error = None;
+        self.toggle_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(methods::SET_HARNESS_ENABLED, params)
+                .await;
+            this.update(cx, |page, cx| {
+                match result {
+                    Ok(value) => match serde_json::from_value::<Vec<HarnessDescriptor>>(value) {
+                        Ok(list) => {
+                            page.harnesses = Loadable::Ready(list);
+                            crate::pickers::bump_harness_catalog(cx);
+                            page.load_opencode_usage(cx);
+                        }
+                        Err(error) => page.harness_error = Some(error.to_string()),
+                    },
+                    Err(error) => page.harness_error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn load_provider_updates(&mut self, force: bool, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.provider_updates = Loadable::Error("Engine not connected".into());
+            return;
+        };
+        self.provider_updates = Loadable::Loading;
+        let params = self.params(serde_json::json!({"force": force}));
+        self.provider_update_check_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(methods::GET_PROVIDER_UPDATES, params)
+                .await;
+            this.update(cx, |page, cx| {
+                page.provider_updates = match result {
+                    Ok(value) => serde_json::from_value::<Vec<ProviderUpdateStatus>>(value)
+                        .map(Loadable::Ready)
+                        .unwrap_or_else(|error| Loadable::Error(error.to_string())),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn update_provider(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        if self.updating_provider.is_some() {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.updating_provider = Some(harness);
+        self.update_message = None;
+        let params = self.params(serde_json::json!({"harness": harness}));
+        self.provider_update_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call(methods::UPDATE_PROVIDER, params).await;
+            this.update(cx, |page, cx| {
+                page.updating_provider = None;
+                page.update_message = Some(match result {
+                    Ok(value) => match serde_json::from_value::<ProviderUpdateResult>(value) {
+                        Ok(updated) => {
+                            crate::pickers::bump_harness_catalog(cx);
+                            page.load_harnesses(cx);
+                            page.load_provider_updates(true, cx);
+                            let runtime = updated.runtime_reload_error.map_or_else(
+                                || "Idle provider runtimes reloaded.".to_owned(),
+                                |error| format!("Runtime reload deferred: {error}"),
+                            );
+                            match updated.model_refresh_error {
+                                Some(error) => format!(
+                                    "CLI updated to {}. {runtime} Model refresh failed: {error}",
+                                    updated.installed_version
+                                ),
+                                None => format!(
+                                    "CLI updated to {}. {runtime} Models refreshed.",
+                                    updated.installed_version
+                                ),
+                            }
+                        }
+                        Err(error) => error.to_string(),
+                    },
+                    Err(error) => error.to_string(),
+                });
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn toggle_advanced(&mut self, cx: &mut Context<Self>) {
+        self.advanced_open = !self.advanced_open;
+        if self.advanced_open && self.advanced_page.is_none() {
+            let state = self.state.clone();
+            let page = cx.new(|cx| HarnessesPage::new(state, cx));
+            if self.target_device.is_some() {
+                let target = self.target_device.clone();
+                page.update(cx, |page, cx| page.set_target_device(target, cx));
+            }
+            self.advanced_page = Some(page);
+        }
         cx.notify();
     }
 
@@ -964,6 +1244,10 @@ impl AccountsPage {
                 |el| el.child(widgets::badge(theme, "Disconnected")),
             )
             .when(
+                account.harness == HarnessId::Codex && !account.active,
+                |el| el.child(widgets::badge(theme, "Not connected")),
+            )
+            .when(
                 account.authentication == AgentAuthenticationState::Expired,
                 |el| el.child(widgets::badge(theme, "Expired")),
             )
@@ -995,13 +1279,18 @@ impl AccountsPage {
                 },
                 "account-reconnect",
             )),
+            Some(AccountLifecycleAction::DisconnectCodex) => Some((
+                methods::FORGET_AGENT_ACCOUNT,
+                if is_busy {
+                    "Disconnecting…"
+                } else {
+                    "Disconnect"
+                },
+                "account-disconnect-codex",
+            )),
             Some(AccountLifecycleAction::SelectCodexDefault) => Some((
                 methods::ACTIVATE_AGENT_ACCOUNT,
-                if is_busy {
-                    "Selecting…"
-                } else {
-                    "Use by default"
-                },
+                if is_busy { "Connecting…" } else { "Connect" },
                 "account-select-default",
             )),
             None => None,
@@ -1120,6 +1409,86 @@ impl AccountsPage {
                     ),
             )
             .into_any_element()
+    }
+
+    fn render_opencode_usage(&self, theme: &Theme) -> AnyElement {
+        let mut body = div()
+            .px(px(20.0))
+            .py(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .text_size(crate::typography::ui_rems(12.0))
+            .text_color(theme.text_muted);
+        match &self.opencode_usage {
+            Loadable::Ready(snapshot) => {
+                let limits: Vec<_> = snapshot
+                    .limits
+                    .iter()
+                    .filter(|limit| limit.provider == UsageProvider::OpenCodeGo)
+                    .collect();
+                if limits.is_empty() {
+                    body = body.child(
+                        "OpenCode uses its CLI connection. No subscription usage is available.",
+                    );
+                }
+                for limit in limits {
+                    if let Some(plan) = &limit.plan {
+                        body = body.child(format!("OpenCode Go · {plan}"));
+                    }
+                    if limit.availability != LimitAvailability::Ready {
+                        body = body.child(
+                            limit
+                                .detail
+                                .clone()
+                                .unwrap_or_else(|| "Usage unavailable".into()),
+                        );
+                    }
+                    for window in &limit.windows {
+                        let fraction = (window.used_percent / 100.0).clamp(0.0, 1.0);
+                        let color = usage_color(usage_level(fraction), theme);
+                        body = body.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(5.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(window.label.clone())
+                                        .child(format!(
+                                            "{}% used",
+                                            window.used_percent.round() as u32
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .h(px(5.0))
+                                        .rounded_full()
+                                        .overflow_hidden()
+                                        .bg(crate::theme::ink(0.07))
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(gpui::relative(fraction))
+                                                .rounded_full()
+                                                .bg(color),
+                                        ),
+                                ),
+                        );
+                    }
+                }
+            }
+            Loadable::Loading | Loadable::Idle => {
+                body = body.child("Loading OpenCode usage…");
+            }
+            Loadable::Error(message) => {
+                body = body.child(format!("OpenCode usage unavailable: {message}"));
+            }
+        }
+        body.into_any_element()
     }
 
     fn render_login_dialog(
@@ -1259,24 +1628,15 @@ impl AccountsPage {
                     .into_any_element()
             }
             LoginFlow::Browser {
-                harness,
+                harness: _,
                 start,
                 message,
                 error,
             } => {
                 let has_error = error.is_some();
-                let body = match harness {
-                    HarnessId::Cursor => {
-                        "Finish signing in to Cursor in your browser. This mints a \
-                         luna-named API key you can revoke any time from Cursor's \
-                         dashboard — it is separate from `cursor-agent login`."
-                    }
-                    _ => {
-                        "Finish signing in to OpenAI in your browser. The Codex CLI saves the \
-                         login in a private auth overlay; the canonical Codex sessions and config \
-                         remain shared, and LUNA keeps no token copy."
-                    }
-                };
+                let body = "Finish signing in to OpenAI in your browser. The Codex CLI saves the \
+                    login in a private auth overlay; the canonical Codex sessions and config \
+                    remain shared, and LUNA keeps no token copy.";
                 div()
                     .flex()
                     .flex_col()
@@ -1518,21 +1878,19 @@ impl Render for AccountsPage {
             self.render_rename_dialog(window.viewport_size(), cx)
         };
         let refreshing = matches!(self.snapshot, Loadable::Loading);
-        let account_count = self
-            .snapshot
-            .ready()
-            .map(|s| s.accounts.len())
-            .filter(|&n| n > 0);
+        let account_count = None;
+        let advanced_sections = self
+            .advanced_open
+            .then(|| {
+                self.advanced_page
+                    .as_ref()
+                    .map(|page| page.clone().into_any_element())
+            })
+            .flatten();
 
         let provider_icon = |harness: HarnessId| match harness {
             HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
-            HarnessId::Cursor => (crate::icons::CURSOR_MARK, None),
-            HarnessId::Devin => (crate::icons::DEVIN_MARK, None),
-            HarnessId::Grok => (crate::icons::GROK_MARK, None),
-            HarnessId::Hermes => (crate::icons::HERMES_MARK, None),
-            HarnessId::Pi => (crate::icons::PI_MARK, None),
             HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
-            HarnessId::Antigravity => (crate::icons::ANTIGRAVITY_MARK, None),
             _ => (
                 crate::icons::CLAUDE_MARK,
                 Some(crate::icons::claude_brand()),
@@ -1555,15 +1913,15 @@ impl Render for AccountsPage {
                 )
         };
 
-        // One section per provider (luna settings.agents.tsx `ProviderSection`):
-        // brand header + Add account, then the account rows card.
+        // One section per provider: brand header, controls, then account or
+        // usage rows.
         let sections: Vec<AnyElement> = match &self.snapshot {
             Loadable::Idle | Loadable::Loading => PROVIDERS
                 .into_iter()
                 .map(|(harness, name, _cli)| {
                     let skeleton_id = match harness {
                         HarnessId::Codex => "accounts-skeleton-codex",
-                        HarnessId::Cursor => "accounts-skeleton-cursor",
+                        HarnessId::Opencode => "accounts-skeleton-opencode",
                         _ => "accounts-skeleton-claude",
                     };
                     div()
@@ -1630,9 +1988,25 @@ impl Render for AccountsPage {
             }
             Loadable::Ready(snapshot) => {
                 let snapshot = snapshot.clone();
+                let descriptors = self.harnesses.ready().cloned().unwrap_or_default();
+                let updates = self.provider_updates.ready().cloned().unwrap_or_default();
                 PROVIDERS
                     .into_iter()
                     .map(|(harness, name, cli)| {
+                        let descriptor = descriptors.iter().find(|d| d.id == harness);
+                        let update = updates.iter().find(|status| status.harness == harness);
+                        let is_updating = self.updating_provider == Some(harness);
+                        let update_available = update.is_some_and(|status| status.update_available);
+                        let update_command =
+                            update.and_then(|status| status.update_command.as_deref());
+                        let version_label = update
+                            .and_then(|status| status.installed_version.as_deref())
+                            .map_or_else(
+                                || "Version unavailable".to_owned(),
+                                |version| format!("CLI {version}"),
+                            );
+                        let installed = descriptor.is_some_and(|d| d.installed);
+                        let enabled = descriptor.is_some_and(descriptor_enabled);
                         let accounts = provider_accounts(&snapshot, harness);
                         // EVERY warning renders its own strip (luna maps them).
                         let warnings: Vec<String> = snapshot
@@ -1653,24 +2027,16 @@ impl Render for AccountsPage {
                         let sign_in_label = match (harness, replacing_existing) {
                             (HarnessId::ClaudeCode, true) => "Sign in another",
                             (HarnessId::Codex, true) => "Add account",
-                            (HarnessId::Cursor, _) => "Connect",
                             _ => "Sign in",
                         };
                         let card = widgets::section_card(&theme).mt(px(8.0));
-                        let empty_copy = match harness {
-                            // Cursor's app login is SEPARATE from `cursor-agent
-                            // login` — pointing at the CLI would send users to a
-                            // sign-in that does not light this up.
-                            HarnessId::Cursor => format!(
-                                "{name} isn't connected on this device — connect it to run \
-                                 Cursor sessions."
-                            ),
-                            _ => format!(
-                                "No {name} login detected on this device — sign in \
-                                 with \u{201C}{cli}\u{201D} or use Sign in."
-                            ),
-                        };
-                        let card = if rows.is_empty() {
+                        let empty_copy = format!(
+                            "No {name} login detected on this device — sign in with \
+                             \u{201C}{cli}\u{201D} or use Sign in."
+                        );
+                        let card = if harness == HarnessId::Opencode {
+                            card.child(self.render_opencode_usage(&theme))
+                        } else if rows.is_empty() {
                             card.child(
                                 div()
                                     .px(px(20.0))
@@ -1702,20 +2068,97 @@ impl Render for AccountsPage {
                                             .child(SharedString::from(name)),
                                     )
                                     .child(div().flex_1())
+                                    .when(update_available && update_command.is_some(), |el| {
+                                        el.child(
+                                            widgets::ghost_action(&theme)
+                                                .id(SharedString::from(format!(
+                                                    "provider-update-{name}"
+                                                )))
+                                                .hover(|s| widgets::ghost_hover(&theme, s))
+                                                .when(is_updating, |button| button.opacity(0.5))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.update_provider(harness, cx);
+                                                }))
+                                                .child(
+                                                    crate::icons::icon(crate::icons::ARROW_DOWN)
+                                                        .size(px(15.0))
+                                                        .text_color(theme.accent),
+                                                )
+                                                .child(if is_updating {
+                                                    "Updating…"
+                                                } else {
+                                                    "Update"
+                                                }),
+                                        )
+                                    })
+                                    .when(harness != HarnessId::Opencode, |el| {
+                                        el.child(
+                                            widgets::ghost_action(&theme)
+                                                .id(add_id)
+                                                .hover(|s| widgets::ghost_hover(&theme, s))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.request_login(
+                                                        harness,
+                                                        replacing_existing,
+                                                        cx,
+                                                    );
+                                                }))
+                                                .child(
+                                                    crate::icons::icon(crate::icons::ADD_CIRCLE)
+                                                        .size(px(16.0))
+                                                        .text_color(theme.text_muted),
+                                                )
+                                                .child(SharedString::from(sign_in_label)),
+                                        )
+                                    })
                                     .child(
-                                        widgets::ghost_action(&theme)
-                                            .id(add_id)
-                                            .hover(|s| widgets::ghost_hover(&theme, s))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.request_login(harness, replacing_existing, cx);
-                                            }))
-                                            .child(
-                                                crate::icons::icon(crate::icons::ADD_CIRCLE)
-                                                    .size(px(16.0))
-                                                    .text_color(theme.text_muted),
-                                            )
-                                            .child(SharedString::from(sign_in_label)),
+                                        widgets::toggle_switch(&theme, enabled)
+                                            .id(SharedString::from(format!(
+                                                "provider-toggle-{name}"
+                                            )))
+                                            .when(!installed || descriptor.is_none(), |el| {
+                                                el.opacity(0.35)
+                                            })
+                                            .when(installed, |el| {
+                                                el.cursor_pointer().on_click(cx.listener(
+                                                    move |this, _, _, cx| {
+                                                        this.toggle_harness(harness, !enabled, cx);
+                                                    },
+                                                ))
+                                            }),
                                     ),
+                            )
+                            .when(!installed, |el| {
+                                el.child(widgets::warning_strip(
+                                    &theme,
+                                    format!("Install the {cli} CLI to enable {name}"),
+                                ))
+                            })
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .ml(px(28.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(if update_available {
+                                        theme.accent
+                                    } else {
+                                        theme.text_muted
+                                    })
+                                    .child(if update_available {
+                                        format!(
+                                            "{version_label} · {} available{}",
+                                            update
+                                                .and_then(|status| status.latest_version.as_deref())
+                                                .unwrap_or("newer version"),
+                                            if update_command.is_none() {
+                                                " · update manually"
+                                            } else {
+                                                ""
+                                            }
+                                        )
+                                    } else {
+                                        version_label
+                                    }),
                             )
                             .children(
                                 warnings
@@ -1749,7 +2192,7 @@ impl Render for AccountsPage {
                                     .flex_row()
                                     .items_center()
                                     .gap(px(10.0))
-                                    .child(widgets::page_header(&theme, "Accounts", account_count))
+                                    .child(widgets::page_header(&theme, "Providers", account_count))
                                     .child(div().flex_1())
                                     .child(
                                         // `text-[12.5px]` + leading 16px Refresh icon,
@@ -1762,10 +2205,7 @@ impl Render for AccountsPage {
                                             .hover(|s| widgets::ghost_hover(&theme, s))
                                             .when(refreshing, |el| el.opacity(0.5))
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.load(
-                                                    force_usage_for(LoadTrigger::Refresh),
-                                                    cx,
-                                                )
+                                                this.load(force_usage_for(LoadTrigger::Refresh), cx)
                                             }))
                                             .child(
                                                 crate::icons::icon(crate::icons::REFRESH)
@@ -1778,9 +2218,9 @@ impl Render for AccountsPage {
                             )
                             .child(widgets::page_subtitle(
                                 &theme,
-                                "LUNA detects existing Claude Code, Codex, and Cursor logins on \
-                                 this device. Each provider manages its own credentials; LUNA \
-                                 keeps no credential copies.",
+                                "Enable the CLIs you use on this device. Claude Code and Codex \
+                                 accounts are managed by their own CLIs; OpenCode connects through \
+                                 its CLI and shows available usage here.",
                             ))
                             .when_some(self.error.clone(), |el, message| {
                                 el.child(
@@ -1793,7 +2233,28 @@ impl Render for AccountsPage {
                                         })),
                                 )
                             })
+                            .when_some(self.harness_error.clone(), |el, message| {
+                                el.child(widgets::error_strip(&theme, message))
+                            })
+                            .when_some(self.update_message.clone(), |el, message| {
+                                el.child(widgets::warning_strip(&theme, message))
+                            })
                             .children(sections)
+                            .child(
+                                widgets::ghost_action(&theme)
+                                    .id("providers-advanced-disclosure")
+                                    .mt(px(24.0))
+                                    .hover(|s| widgets::ghost_hover(&theme, s))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.toggle_advanced(cx)),
+                                    )
+                                    .child(if self.advanced_open {
+                                        "Hide provider options"
+                                    } else {
+                                        "Advanced provider options"
+                                    }),
+                            )
+                            .children(advanced_sections)
                             // Footer note (luna: `mt-6 text-[12px] leading-relaxed
                             // text-muted-foreground/60`).
                             .child(
@@ -1803,9 +2264,8 @@ impl Render for AccountsPage {
                                     .line_height(px(19.0))
                                     .text_color(theme.text_muted.opacity(0.6))
                                     .child(SharedString::from(
-                                        "Explicit provider sign-in can update that provider\u{2019}s \
-                                         native login. Existing logins remain managed by Claude \
-                                         Code, Codex, or Cursor.",
+                                        "Provider sign-in updates the CLI's native login on this \
+                                         device. Existing CLI sessions stay with their provider.",
                                     )),
                             ),
                     ),

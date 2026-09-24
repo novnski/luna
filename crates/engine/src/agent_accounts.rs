@@ -1,5 +1,5 @@
 //! AgentAccounts — metadata-only discovery and provider-owned sign-in for the
-//! Claude Code / Codex / Cursor accounts on this device.
+//! Claude Code and Codex accounts on this device.
 //!
 //! Provider-native authentication remains authoritative:
 //!
@@ -11,10 +11,6 @@
 //!   `~/.codex`). Named accounts use LUNA-owned T3-style auth overlays: only
 //!   `auth.json` and `models_cache.json` are private while the canonical
 //!   session/config home is shared through symlinks.
-//! - **Cursor** — `~/.cursor/sdk/auth.json`: the Cursor SDK's credential store
-//!   (`StoredSdkCredentials`) holding the named, expiring user API key its
-//!   browser login mints. Deliberately SEPARATE from `cursor-agent login`'s
-//!   whole-account session tokens, which luna never reads.
 //!
 //! LUNA persists only lifecycle metadata (Claude enabled/disabled, Codex named
 //! account labels and the selected default). It never puts provider tokens in
@@ -22,11 +18,8 @@
 //! deletes provider credential material. Historical plaintext slot files are
 //! only detected and reported; they are not opened.
 //!
-//! Usage probes: all three providers expose the rate-limit view their own CLIs render
-//! (`/usage` in Claude Code, `/status` in Codex; Cursor's key has no quota view,
-//! so the probe exchanges it for a dashboard session and reads the
-//! `GetCurrentPeriodUsage` call the Cursor app itself makes). Unlike luna (fetch on every
-//! list, 60s cache), native only hits the network when `force_usage` is set —
+//! Usage probes read provider-native rate limits (`/usage` in Claude Code,
+//! `/status` in Codex). Lists only hit the network when `force_usage` is set —
 //! the default list stays offline-fast and deterministic; the UI passes
 //! `forceUsage` on page mount/refresh. Cached results (60s TTL) are served to
 //! non-forced lists in between.
@@ -62,9 +55,6 @@ const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-/// The Cursor dashboard's current-period usage RPC (Connect-style POST).
-const CURSOR_CURRENT_PERIOD_USAGE: &str = "aiserver.v1.DashboardService/GetCurrentPeriodUsage";
-const CURSOR_DEFAULT_BACKEND: &str = "https://api2.cursor.sh";
 
 #[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -116,10 +106,6 @@ pub struct AgentAccountsConfig {
     pub claude_config_file: PathBuf,
     /// Codex home (`$CODEX_HOME` or `~/.codex`) — holds `auth.json`.
     pub codex_home: PathBuf,
-    /// The Cursor SDK's credential store (`~/.cursor/sdk/auth.json`): the
-    /// named, expiring API key minted by its browser login. SEPARATE from
-    /// `cursor-agent login`'s session tokens — deliberately never read.
-    pub cursor_sdk_auth_file: PathBuf,
 }
 
 impl AgentAccountsConfig {
@@ -141,7 +127,6 @@ impl AgentAccountsConfig {
             claude_config_dir: claude_dir.unwrap_or_else(|| home_dir().join(".claude")),
             claude_config_file,
             codex_home: env_dir("CODEX_HOME").unwrap_or_else(|| home_dir().join(".codex")),
-            cursor_sdk_auth_file: home_dir().join(".cursor").join("sdk").join("auth.json"),
         }
     }
 
@@ -325,30 +310,14 @@ enum LoginFlow {
         /// `Some(code)` once the child exited (`None` code = killed by signal).
         exit: Arc<Mutex<Option<Option<i32>>>>,
     },
-    /// a sign-in the engine drives itself (antigravity's acp `authenticate`);
-    /// the task reports the browser url and its outcome through `state`.
-    Task {
-        harness: HarnessId,
-        started_at: Instant,
-        state: Arc<Mutex<TaskLoginState>>,
-        /// aborting drops the sign-in future, which kills its agent child.
-        handle: tokio::task::JoinHandle<()>,
-    },
-}
-
-#[derive(Default)]
-struct TaskLoginState {
-    url: Option<String>,
-    message: Option<String>,
-    outcome: Option<Result<(), String>>,
 }
 
 impl LoginFlow {
     fn started_at(&self) -> Instant {
         match self {
-            LoginFlow::Claude { started_at, .. }
-            | LoginFlow::Spawned { started_at, .. }
-            | LoginFlow::Task { started_at, .. } => *started_at,
+            LoginFlow::Claude { started_at, .. } | LoginFlow::Spawned { started_at, .. } => {
+                *started_at
+            }
         }
     }
 }
@@ -466,6 +435,12 @@ impl AgentAccounts {
                 })
             }
             HarnessId::Codex => {
+                if state.default_codex_account_id.is_empty() {
+                    return Err(EngineError::Other(
+                        "No Codex account is connected in LUNA. Connect one in Providers first."
+                            .into(),
+                    ));
+                }
                 let account_id = requested_account_id
                     .filter(|id| !id.trim().is_empty())
                     .unwrap_or(&state.default_codex_account_id);
@@ -703,20 +678,6 @@ impl AgentAccounts {
         let codex = includes(HarnessId::Codex)
             .then(|| self.detect_codex())
             .flatten();
-        let cursor = includes(HarnessId::Cursor)
-            .then(|| self.detect_cursor())
-            .flatten();
-        if cursor.is_some() {
-            // The SDK's minted keys expire (90-day default) — an expired live
-            // key fails every run with an auth error, so say so up front.
-            if !self.cursor_live_usable() {
-                warnings.push(AgentAccountWarning {
-                    harness: HarnessId::Cursor,
-                    message: "The connected Cursor login's API key has expired — connect again."
-                        .into(),
-                });
-            }
-        }
         let mut accounts: Vec<AgentAccount> = Vec::new();
         if let Some(detected) = claude {
             let slot = slot_from_detected(CLAUDE_NATIVE_ACCOUNT_ID, &detected);
@@ -829,27 +790,7 @@ impl AgentAccounts {
             ));
         }
 
-        if let Some(detected) = cursor {
-            let slot = slot_from_detected(
-                &slot_id_for(HarnessId::Cursor, &detected.account_key),
-                &detected,
-            );
-            let usage = self
-                .usage_for(HarnessId::Cursor, &slot, true, force_usage)
-                .await;
-            accounts.push(account_from_slot(
-                HarnessId::Cursor,
-                slot,
-                usage,
-                true,
-                false,
-                (!self.cursor_live_usable()).then_some(AgentAuthenticationState::Expired),
-                None,
-                None,
-            ));
-        }
-
-        for harness in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Cursor]
+        for harness in [HarnessId::ClaudeCode, HarnessId::Codex]
             .into_iter()
             .filter(|harness| includes(*harness))
         {
@@ -974,6 +915,19 @@ impl AgentAccounts {
         harness: HarnessId,
         account_id: &str,
     ) -> Result<AgentAccountsSnapshot, EngineError> {
+        if harness == HarnessId::Codex {
+            let selected = lock(&self.inner.state).default_codex_account_id.clone();
+            if selected != account_id {
+                return Err(EngineError::Other(
+                    "This Codex account is not connected in LUNA.".into(),
+                ));
+            }
+            // Disconnect only LUNA's selection. Provider-owned credentials and
+            // standalone CLI sessions are deliberately left untouched.
+            self.update_state(|state| state.default_codex_account_id.clear())?;
+            self.invalidate_caches(HarnessId::Codex);
+            return self.list(false).await;
+        }
         if harness != HarnessId::ClaudeCode || account_id != CLAUDE_NATIVE_ACCOUNT_ID {
             return Err(EngineError::Other(
                 "LUNA will not delete provider credentials or Codex account overlays through this action."
@@ -992,8 +946,6 @@ impl AgentAccounts {
         match harness {
             HarnessId::ClaudeCode => Ok(self.start_claude_login()),
             HarnessId::Codex => self.start_codex_login().await,
-            HarnessId::Cursor => self.start_cursor_login().await,
-            HarnessId::Antigravity => Ok(self.start_antigravity_login()),
             other => Err(EngineError::Other(format!(
                 "agent logins are not supported for {other:?}"
             ))),
@@ -1034,7 +986,7 @@ impl AgentAccounts {
 
     /// Supersede — and reap — any pending spawned flow for `harness` (codex:
     /// `codex login` binds a fixed loopback OAuth port, so a lingering flow
-    /// makes every retry exit on EADDRINUSE; cursor: one flow is simply the
+    /// makes every retry exit on EADDRINUSE; one flow is simply the
     /// sane state).
     fn reap_spawned_flows(&self, harness: HarnessId) {
         let stale: Vec<String> = lock(&self.inner.flows)
@@ -1042,7 +994,7 @@ impl AgentAccounts {
             .filter(|(_, f)| {
                 matches!(
                     f,
-                    LoginFlow::Spawned { harness: h, .. } | LoginFlow::Task { harness: h, .. }
+                    LoginFlow::Spawned { harness: h, .. }
                         if *h == harness
                 )
             })
@@ -1130,108 +1082,6 @@ impl AgentAccounts {
             },
         );
         let url = await_login_url(&output, &exit, scan_openai_url).await;
-        Ok(AgentLoginStart {
-            login_id,
-            url,
-            mode: AgentLoginMode::Browser,
-        })
-    }
-
-    /// antigravity: the acp server's own google sign-in, run when the agent is
-    /// turned on rather than mid-chat. the start replies at once because a
-    /// first sign-in downloads a large server; polls carry the browser url
-    /// once the server prints it.
-    fn start_antigravity_login(&self) -> AgentLoginStart {
-        self.reap_spawned_flows(HarnessId::Antigravity);
-        let login_id = new_id();
-        let state = Arc::new(Mutex::new(TaskLoginState::default()));
-        #[cfg(unix)]
-        let browser = {
-            let root = self.inner.config.root_dir();
-            std::fs::create_dir_all(&root)
-                .ok()
-                .and_then(|()| ensure_noop_browser(&root))
-        };
-        #[cfg(not(unix))]
-        let browser = None;
-        let task_state = state.clone();
-        let handle = tokio::spawn(async move {
-            let progress_state = task_state.clone();
-            let outcome = luna_harness::AcpHarness::antigravity()
-                .sign_in(browser, move |progress| {
-                    let mut state = lock(&progress_state);
-                    match progress {
-                        luna_harness::acp::SignInProgress::Installing => {
-                            state.message = Some("Downloading Antigravity…".into());
-                        }
-                        luna_harness::acp::SignInProgress::OpenBrowser(url) => {
-                            state.message = Some("Finish signing in in your browser.".into());
-                            state.url = Some(url);
-                        }
-                    }
-                })
-                .await;
-            lock(&task_state).outcome = Some(outcome.map_err(|e| e.to_string()));
-        });
-        lock(&self.inner.flows).insert(
-            login_id.clone(),
-            LoginFlow::Task {
-                harness: HarnessId::Antigravity,
-                started_at: Instant::now(),
-                state,
-                handle,
-            },
-        );
-        AgentLoginStart {
-            login_id,
-            url: String::new(),
-            mode: AgentLoginMode::Browser,
-        }
-    }
-
-    /// Cursor: the SDK's own PKCE browser flow writes its provider-native SDK
-    /// credential file. LUNA watches completion and retains no copy.
-    async fn start_cursor_login(&self) -> Result<AgentLoginStart, EngineError> {
-        self.reap_spawned_flows(HarnessId::Cursor);
-        let login_id = new_id();
-        let home = self
-            .inner
-            .config
-            .cursor_sdk_auth_file
-            .parent()
-            .ok_or_else(|| EngineError::Other("Cursor credential path has no parent.".into()))?
-            .to_path_buf();
-        std::fs::create_dir_all(&home)?;
-        let baseline_fingerprint = file_fingerprint(&home.join("auth.json"));
-        let mut cmd = luna_harness::cursor::login_command(&home.join("auth.json"))
-            .await
-            .map_err(|e| EngineError::Other(format!("Could not start the Cursor login: {e}")))?;
-        cmd.stdin(luna_harness::process::Stdio::null())
-            .stdout(luna_harness::process::Stdio::piped())
-            .stderr(luna_harness::process::Stdio::piped());
-        let child = match cmd.spawn() {
-            Ok(child) => child,
-            Err(err) => {
-                return Err(EngineError::Other(format!(
-                    "Could not start the Cursor login: {err}"
-                )));
-            }
-        };
-        let (child, output, exit) = wire_login_child(child);
-        lock(&self.inner.flows).insert(
-            login_id.clone(),
-            LoginFlow::Spawned {
-                harness: HarnessId::Cursor,
-                account_id: None,
-                child,
-                home,
-                baseline_fingerprint,
-                started_at: Instant::now(),
-                output: output.clone(),
-                exit: exit.clone(),
-            },
-        );
-        let url = await_login_url(&output, &exit, scan_cursor_url).await;
         Ok(AgentLoginStart {
             login_id,
             url,
@@ -1401,18 +1251,13 @@ impl AgentAccounts {
     pub fn login_harness(&self, login_id: &str) -> Option<HarnessId> {
         match lock(&self.inner.flows).get(login_id) {
             Some(LoginFlow::Claude { .. }) => Some(HarnessId::ClaudeCode),
-            Some(LoginFlow::Spawned { harness, .. }) | Some(LoginFlow::Task { harness, .. }) => {
-                Some(*harness)
-            }
+            Some(LoginFlow::Spawned { harness, .. }) => Some(*harness),
             None => None,
         }
     }
 
     pub async fn poll_login(&self, login_id: &str) -> Result<AgentLoginPoll, EngineError> {
         self.sweep_flows();
-        if let Some(poll) = self.poll_task_login(login_id) {
-            return Ok(poll);
-        }
         let (harness, account_id, home, baseline_fingerprint, exit, output) =
             match lock(&self.inner.flows).get(login_id) {
                 None => {
@@ -1427,7 +1272,6 @@ impl AgentAccounts {
                         url: None,
                     });
                 }
-                Some(LoginFlow::Task { .. }) => unreachable!("task logins poll above"),
                 Some(LoginFlow::Spawned {
                     harness,
                     account_id,
@@ -1448,7 +1292,6 @@ impl AgentAccounts {
         let auth_file = home.join("auth.json");
         let detected = read_json(&auth_file).and_then(|auth| match harness {
             HarnessId::Codex => parse_codex_auth(auth),
-            HarnessId::Cursor => parse_cursor_auth(auth),
             _ => None,
         });
         if detected.is_some() && file_fingerprint(&auth_file) != baseline_fingerprint {
@@ -1503,38 +1346,6 @@ impl AgentAccounts {
         })
     }
 
-    /// poll an engine-driven sign-in; `None` when `login_id` isn't one.
-    fn poll_task_login(&self, login_id: &str) -> Option<AgentLoginPoll> {
-        let state = match lock(&self.inner.flows).get(login_id) {
-            Some(LoginFlow::Task { state, .. }) => state.clone(),
-            _ => return None,
-        };
-        let poll = {
-            let state = lock(&state);
-            match &state.outcome {
-                None => {
-                    return Some(AgentLoginPoll {
-                        status: AgentLoginStatus::Pending,
-                        message: state.message.clone(),
-                        url: state.url.clone(),
-                    });
-                }
-                Some(Ok(())) => AgentLoginPoll {
-                    status: AgentLoginStatus::Done,
-                    message: None,
-                    url: None,
-                },
-                Some(Err(message)) => AgentLoginPoll {
-                    status: AgentLoginStatus::Error,
-                    message: Some(message.clone()),
-                    url: None,
-                },
-            }
-        };
-        lock(&self.inner.flows).remove(login_id);
-        Some(poll)
-    }
-
     /// Drop a flow and kill its child. Provider-native credential homes are
     /// never removed by cancellation.
     pub fn cancel_login(&self, login_id: &str) {
@@ -1545,7 +1356,6 @@ impl AgentAccounts {
                     let _ = c.start_kill();
                 }
             }
-            Some(LoginFlow::Task { handle, .. }) => handle.abort(),
             _ => {}
         }
     }
@@ -1604,17 +1414,6 @@ impl AgentAccounts {
 
     fn detect_codex(&self) -> Option<Detected> {
         read_json(&self.inner.config.codex_auth_file()).and_then(parse_codex_auth)
-    }
-
-    fn detect_cursor(&self) -> Option<Detected> {
-        read_json(&self.inner.config.cursor_sdk_auth_file).and_then(parse_cursor_auth)
-    }
-
-    /// A live cursor login that runs can actually use: present, parseable,
-    /// and not past the minted key's expiry.
-    fn cursor_live_usable(&self) -> bool {
-        read_json(&self.inner.config.cursor_sdk_auth_file)
-            .is_some_and(|auth| cursor_key_usable(&auth))
     }
 
     /// Filename-only legacy detection. Never deserialize historical slot files:
@@ -1724,6 +1523,10 @@ impl AgentAccounts {
                     str_field(oauth, "organizationRateLimitTier").as_deref(),
                 )
             });
+        let account_label = account
+            .as_ref()
+            .and_then(|config| config.get("oauthAccount"))
+            .and_then(|oauth| str_field(oauth, "emailAddress"));
         let credentials = read_json(&self.inner.config.claude_creds_file());
         let Some(oauth) = credentials
             .as_ref()
@@ -1776,13 +1579,18 @@ impl AgentAccounts {
                 None,
             );
         }
-        crate::usage::live_claude_limit(&body, verified_id.clone(), plan).unwrap_or_else(|| {
-            unavailable(
-                LimitAvailability::Unsupported,
-                "Claude did not report subscription windows".into(),
-                verified_id,
-            )
-        })
+        crate::usage::live_claude_limit(&body, verified_id.clone(), plan)
+            .map(|mut limit| {
+                limit.account_label = account_label;
+                limit
+            })
+            .unwrap_or_else(|| {
+                unavailable(
+                    LimitAvailability::Unsupported,
+                    "Claude did not report subscription windows".into(),
+                    verified_id,
+                )
+            })
     }
 
     async fn usage_for(
@@ -1805,7 +1613,6 @@ impl AgentAccounts {
         let usage = match harness {
             HarnessId::ClaudeCode => self.claude_usage(slot).await,
             HarnessId::Codex => self.codex_usage(slot).await,
-            HarnessId::Cursor => self.cursor_usage(slot).await,
             _ => None,
         };
         lock(&self.inner.usage_cache).insert(key, (usage.clone(), Instant::now()));
@@ -1901,51 +1708,6 @@ impl AgentAccounts {
         Some(UsageSnapshot {
             windows,
             plan_label,
-        })
-    }
-
-    async fn cursor_usage(&self, slot: &Slot) -> Option<UsageSnapshot> {
-        // The SDK key tracks identity/expiry but has no quota view — the
-        // account numbers live on the dashboard API the Cursor app itself
-        // calls, reachable with a session minted from the key.
-        let api_key = str_field(&slot.credentials, "apiKey")?;
-        let backend = str_field(&slot.credentials, "backendUrl")
-            .unwrap_or_else(|| CURSOR_DEFAULT_BACKEND.to_string())
-            .trim_end_matches('/')
-            .to_string();
-        let session: serde_json::Value = self
-            .inner
-            .http
-            .post(format!("{backend}/auth/exchange_user_api_key"))
-            .bearer_auth(api_key)
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .json()
-            .await
-            .ok()?;
-        let access_token = str_field(&session, "accessToken")?;
-        let body: serde_json::Value = self
-            .inner
-            .http
-            .post(format!("{backend}/{CURSOR_CURRENT_PERIOD_USAGE}"))
-            .bearer_auth(&access_token)
-            .header("Connect-Protocol-Version", "1")
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .json()
-            .await
-            .ok()?;
-        cursor_usage_window(&body).map(|window| UsageSnapshot {
-            windows: vec![window],
-            plan_label: None,
         })
     }
 }
@@ -2094,14 +1856,9 @@ fn harness_slug(harness: HarnessId) -> &'static str {
     match harness {
         HarnessId::ClaudeCode => "claude-code",
         HarnessId::Codex => "codex",
-        HarnessId::Cursor => "cursor",
-        HarnessId::Devin => "devin",
-        HarnessId::Grok => "grok",
-        HarnessId::Hermes => "hermes",
-        HarnessId::Pi => "pi",
         HarnessId::Opencode => "opencode",
-        HarnessId::Antigravity => "antigravity",
         HarnessId::Mock => "mock",
+        _ => "retired",
     }
 }
 
@@ -2166,7 +1923,8 @@ fn load_account_state(config: &AgentAccountsConfig) -> ProviderAccountState {
             state
                 .codex_accounts
                 .retain(|record| safe_account_id(&record.id));
-            if state.default_codex_account_id != CODEX_NATIVE_ACCOUNT_ID
+            if !state.default_codex_account_id.is_empty()
+                && state.default_codex_account_id != CODEX_NATIVE_ACCOUNT_ID
                 && !state
                     .codex_accounts
                     .iter()
@@ -2494,54 +2252,6 @@ fn parse_codex_auth(auth: serde_json::Value) -> Option<Detected> {
 }
 
 /// ISO string (Claude) or unix seconds (Codex) → timestamp.
-/// The Cursor SDK's credential store (`StoredSdkCredentials`, version 1):
-/// the named user API key its browser login minted, plus identity/expiry.
-fn parse_cursor_auth(auth: serde_json::Value) -> Option<Detected> {
-    let api_key = str_field(&auth, "apiKey")?;
-    let email = str_field(&auth, "email");
-    let account_key = email.clone().unwrap_or_else(|| {
-        let digest = Sha256::digest(api_key.as_bytes());
-        format!("api-key:{}", &crate::repos::hex(&digest)[..12])
-    });
-    let expires_at = auth.get("apiKeyExpiresAtMs").and_then(|v| v.as_i64());
-    // The key's expiry doubles as the plan chip — with 90-day keys it is the
-    // one fact worth showing on the card.
-    let plan = expires_at.and_then(|ms| {
-        let when = DateTime::<Utc>::from_timestamp_millis(ms)?;
-        Some(if ms < now_ms() {
-            "Key expired".to_string()
-        } else {
-            format!("Key expires {}", when.format("%b %-d"))
-        })
-    });
-    Some(Detected {
-        account_key,
-        profile: SlotProfile {
-            email: email.unwrap_or_else(|| {
-                let tail: String = api_key
-                    .chars()
-                    .skip(api_key.len().saturating_sub(4))
-                    .collect();
-                format!("API key ·…{tail}")
-            }),
-            display_name: None,
-            organization: None,
-            plan,
-            auth_kind: AgentAuthKind::Oauth,
-        },
-        credentials: Some(auth),
-    })
-}
-
-/// Present, parseable, and unexpired — what a run can actually use.
-fn cursor_key_usable(auth: &serde_json::Value) -> bool {
-    str_field(auth, "apiKey").is_some()
-        && auth
-            .get("apiKeyExpiresAtMs")
-            .and_then(|v| v.as_i64())
-            .is_none_or(|ms| ms > now_ms())
-}
-
 fn parse_when(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
     match value? {
         serde_json::Value::Number(n) => DateTime::<Utc>::from_timestamp(n.as_i64()?, 0),
@@ -2573,40 +2283,6 @@ fn claude_usage_windows(body: &serde_json::Value) -> Option<UsageSnapshot> {
     })
 }
 
-/// The billing-cycle window from Cursor's `GetCurrentPeriodUsage`. The blended
-/// percent is derived from spend/limit in cents: the payload's own
-/// `totalPercentUsed` disagrees with the number Cursor's UI narrates ("You've
-/// used 72% of your included usage" against `totalSpend`/`limit`, not the
-/// precomputed 11.5). proto3 JSON omits zero-valued fields, so an absent
-/// `limit` means unusable, not 0% — a synthetic 0% would render a healthy bar
-/// for an account whose usage nobody knows.
-fn cursor_usage_window(body: &serde_json::Value) -> Option<AgentUsageWindow> {
-    let plan = body.get("planUsage")?;
-    let limit = plan.get("limit").and_then(|v| v.as_f64())?;
-    if limit <= 0.0 {
-        return None;
-    }
-    let used = plan
-        .get("totalSpend")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    Some(AgentUsageWindow {
-        label: "Month".to_string(),
-        used_fraction: (used / limit) as f32,
-        resets_at: json_ms(body.get("billingCycleEnd")),
-    })
-}
-
-/// Unix-millis timestamp arriving as a JSON number or proto3 int64 string.
-fn json_ms(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
-    let ms = match value? {
-        serde_json::Value::Number(n) => n.as_i64()?,
-        serde_json::Value::String(s) => s.parse::<i64>().ok()?,
-        _ => return None,
-    };
-    DateTime::<Utc>::from_timestamp_millis(ms)
-}
-
 fn scan_openai_url(output: &str) -> Option<String> {
     let start = output.find("https://auth.openai.com/")?;
     let rest = &output[start..];
@@ -2628,18 +2304,6 @@ fn ensure_noop_browser(root: &Path) -> Option<PathBuf> {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).ok()?;
     }
     Some(path)
-}
-
-/// First JSONL frame with the given `ev` in a cursor-shim output accumulator.
-fn scan_shim_event(output: &str, ev: &str) -> Option<serde_json::Value> {
-    output.lines().find_map(|line| {
-        let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-        (v.get("ev").and_then(|e| e.as_str()) == Some(ev)).then_some(v)
-    })
-}
-
-fn scan_cursor_url(output: &str) -> Option<String> {
-    str_field(&scan_shim_event(output, "auth-url")?, "url")
 }
 
 type LoginChildHandles = (
@@ -2786,7 +2450,6 @@ mod tests {
             claude_config_dir: root.join("claude"),
             claude_config_file: root.join("claude.json"),
             codex_home: root.join("codex"),
-            cursor_sdk_auth_file: root.join("cursor-auth.json"),
         }
     }
 
@@ -3294,105 +2957,6 @@ mod tests {
         // the UI then says "Usage unavailable" instead of showing nothing.
         assert!(claude_usage_windows(&serde_json::json!({ "extra_usage": {} })).is_none());
         assert!(claude_usage_windows(&serde_json::json!({ "five_hour": {} })).is_none());
-    }
-
-    #[test]
-    fn cursor_usage_window_derives_percent_from_spend_not_total_percent() {
-        // Real payload flavor (observed shape): proto3 JSON with string int64
-        // cycle bounds. `totalPercentUsed` (11.53) contradicts the derived
-        // 28846/40000 = 72.1% that Cursor's own UI narrates — derive.
-        let body = serde_json::json!({
-            "billingCycleStart": "1768399334000",
-            "billingCycleEnd": "1771077734000",
-            "planUsage": {
-                "totalSpend": 28846,
-                "includedSpend": 23222,
-                "bonusSpend": 5624,
-                "remaining": 11154,
-                "limit": 40000,
-                "totalPercentUsed": 11.5384,
-            },
-            "displayMessage": "You've used 72% of your included usage",
-        });
-        let window = cursor_usage_window(&body).expect("window");
-        assert_eq!(window.label, "Month");
-        assert!((window.used_fraction - 0.72115).abs() < 1e-5);
-        assert_eq!(
-            window.resets_at,
-            Some(chrono::DateTime::<Utc>::from_timestamp_millis(1_771_077_734_000).unwrap())
-        );
-    }
-
-    #[test]
-    fn cursor_usage_window_absent_limit_is_unusable_not_zero() {
-        // proto3 JSON omits zero-valued fields: an account with no usage-based
-        // spend simply lacks `limit` — never render a synthetic 0% bar.
-        assert!(cursor_usage_window(&serde_json::json!({ "planUsage": {} })).is_none());
-        assert!(cursor_usage_window(&serde_json::json!({ "planUsage": { "limit": 0 } })).is_none());
-    }
-
-    #[test]
-    fn cursor_usage_window_no_spend_is_zero_percent() {
-        let window = cursor_usage_window(&serde_json::json!({
-            "billingCycleEnd": 1771077734000i64,
-            "planUsage": { "limit": 40000 },
-        }))
-        .expect("window");
-        assert_eq!(window.used_fraction, 0.0);
-    }
-
-    #[test]
-    fn cursor_auth_parses_and_gates_on_expiry() {
-        // The SDK's StoredSdkCredentials shape (credential-store.d.ts, 1.0.28).
-        let live = serde_json::json!({
-            "version": 1,
-            "backendUrl": "https://api2.cursor.sh",
-            "apiKey": "key_abc123",
-            "apiKeyExpiresAtMs": now_ms() + 86_400_000,
-            "email": "dev@example.com",
-            "createdAtMs": now_ms() - 1000,
-        });
-        let detected = parse_cursor_auth(live.clone()).expect("parses");
-        assert_eq!(detected.account_key, "dev@example.com");
-        assert_eq!(detected.profile.email, "dev@example.com");
-        assert_eq!(detected.profile.auth_kind, AgentAuthKind::Oauth);
-        assert!(
-            detected
-                .profile
-                .plan
-                .as_deref()
-                .unwrap()
-                .starts_with("Key expires")
-        );
-        assert!(cursor_key_usable(&live));
-
-        let expired = serde_json::json!({
-            "version": 1,
-            "apiKey": "key_abc123",
-            "apiKeyExpiresAtMs": now_ms() - 1000,
-        });
-        let detected = parse_cursor_auth(expired.clone()).expect("expired still detects");
-        assert_eq!(detected.profile.plan.as_deref(), Some("Key expired"));
-        // No email → keyed (and labeled) off the key itself, codex-api-key style.
-        assert!(detected.account_key.starts_with("api-key:"));
-        assert!(!cursor_key_usable(&expired));
-
-        // No expiry field = never expires.
-        assert!(cursor_key_usable(&serde_json::json!({"apiKey": "k"})));
-        assert!(parse_cursor_auth(serde_json::json!({"version": 1})).is_none());
-    }
-
-    #[test]
-    fn cursor_shim_output_scan() {
-        let output = concat!(
-            "npm warn something unrelated\n",
-            "{\"ev\":\"auth-url\",\"url\":\"https://cursor.com/loginDeepControl?challenge=x\"}\n",
-        );
-        assert_eq!(
-            scan_cursor_url(output).as_deref(),
-            Some("https://cursor.com/loginDeepControl?challenge=x")
-        );
-        assert_eq!(scan_cursor_url("no frames here"), None);
     }
 
     #[test]

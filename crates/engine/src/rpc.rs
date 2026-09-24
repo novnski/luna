@@ -195,51 +195,17 @@ struct SetHarnessEnabledParams {
     enabled: bool,
 }
 
-async fn update_harness_enabled<F>(
+fn update_harness_enabled(
     registry: &HarnessRegistry,
     harness: HarnessId,
     enabled: bool,
-    sign_out: F,
-) -> Result<(), RpcError>
-where
-    F: std::future::Future<Output = Result<(), luna_harness::HarnessError>>,
-{
-    // Keep this exact ticket through provider sign-out and preference publish.
-    // A frozen device must reject before the external future is polled.
+) -> Result<(), RpcError> {
     let permit = registry
         .admit_prefs_write()
         .map_err(|error| RpcError::Failed(error.to_string()))?;
-    let enabled_harnesses = registry.enabled_set();
-    let was_enabled = enabled_harnesses.contains(&harness);
-    let mut signed_out = false;
-    if was_enabled && !enabled && harness == HarnessId::Antigravity {
-        if enabled_harnesses.len() == 1 {
-            return Err(RpcError::Failed(
-                "cannot disable the last enabled harness".into(),
-            ));
-        }
-        sign_out.await.map_err(|error| {
-            RpcError::Failed(format!(
-                "Antigravity sign-out failed; it remains enabled so you can retry: {error}"
-            ))
-        })?;
-        signed_out = true;
-    }
     registry
         .set_enabled_with_permit(harness, enabled, permit.as_ref())
-        .map_err(|error| {
-            if signed_out && error.published() {
-                RpcError::Failed(format!(
-                    "Antigravity sign-out succeeded; the enablement file was published, but its durability is uncertain. Refresh before retrying: {error}"
-                ))
-            } else if signed_out {
-                RpcError::Failed(format!(
-                    "Antigravity sign-out succeeded, but enablement was not saved and remains unchanged by this request. Refresh account state before retrying: {error}"
-                ))
-            } else {
-                RpcError::Failed(error.to_string())
-            }
-        })
+        .map_err(|error| RpcError::Failed(error.to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1710,6 +1676,9 @@ impl EngineRpc {
                     _ = cancel.cancelled() => break,
                     _ = interval.tick() => {},
                 }
+                if let Some(rpc) = weak.upgrade() {
+                    rpc.retire_unsupported_history().await;
+                }
                 let mut task_done = false;
                 let mut project_done = false;
                 loop {
@@ -1736,6 +1705,45 @@ impl EngineRpc {
                 }
             }
         })
+    }
+
+    async fn retire_unsupported_history(&self) {
+        let chats = match self.workspace.read_chats() {
+            Ok(chats) => chats,
+            Err(error) => {
+                tracing::warn!(%error, "retired provider history scan failed");
+                return;
+            }
+        };
+        for chat in chats
+            .into_iter()
+            .filter(|chat| {
+                chat.device_id == self.engine_info.device_id
+                    && (chat
+                        .config
+                        .as_ref()
+                        .is_some_and(|config| config.harness.is_retired())
+                        || self.task_identity.view(&chat.id).is_some_and(|view| {
+                            view.current_binding
+                                .as_ref()
+                                .is_some_and(|binding| binding.provider_id.is_retired())
+                        }))
+            })
+            .take(16)
+        {
+            let command = legacy_task_command(chat.id.clone(), TaskCommandIntent::Delete {});
+            match self.execute_task_command(command, true).await {
+                Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
+                    tracing::info!(task = %chat.id, "retired provider task removed from LUNA history");
+                }
+                Ok(receipt) => {
+                    tracing::warn!(task = %chat.id, status = ?receipt.status, "retired provider task cleanup deferred")
+                }
+                Err(error) => {
+                    tracing::warn!(task = %chat.id, %error, "retired provider task cleanup failed")
+                }
+            }
+        }
     }
 
     /// Migration/reopen ingestion plus metadata reconciliation. This runs
@@ -6045,9 +6053,10 @@ fn task_intent_from_mutation(mutation: MutateParams) -> Option<(String, TaskComm
 fn forward_deadline(method: &str) -> std::time::Duration {
     use std::time::Duration;
     match method {
-        methods::CLONE_REPO | methods::FETCH_ALL | methods::APPLY_UPDATE => {
-            Duration::from_secs(15 * 60)
-        }
+        methods::CLONE_REPO
+        | methods::FETCH_ALL
+        | methods::APPLY_UPDATE
+        | methods::UPDATE_PROVIDER => Duration::from_secs(15 * 60),
         methods::EXECUTE_GIT_ACTION => Duration::from_secs(150),
         methods::GENERATE_GIT_COMMIT_MESSAGE => Duration::from_secs(45),
         methods::GET_GIT_PR_STATUS => Duration::from_secs(60),
@@ -6067,6 +6076,9 @@ fn forwardable(method: &str) -> bool {
     matches!(
         method,
         methods::LIST_HARNESSES
+            | methods::GET_PROVIDER_UPDATES
+            | methods::UPDATE_PROVIDER
+            | methods::GET_USAGE_SNAPSHOT
             | methods::GET_TITLE_SETTINGS
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
@@ -8182,6 +8194,39 @@ impl RpcService for EngineRpc {
                 ))
             }
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
+            methods::GET_PROVIDER_UPDATES => RpcReply::value(
+                &crate::provider_updates::check(
+                    params
+                        .get("force")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                )
+                .await,
+            ),
+            methods::UPDATE_PROVIDER => {
+                let harness: luna_proto::HarnessId =
+                    parse_params(params.get("harness").cloned().unwrap_or_default())?;
+                let installed_version = crate::provider_updates::update(harness)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                let runtime_reload_error = self
+                    .sessions
+                    .prepare_provider_account_change(harness)
+                    .await
+                    .err()
+                    .map(|error| error.to_string());
+                let model_refresh_error = self
+                    .model_cache
+                    .refresh_after_provider_update(harness)
+                    .await
+                    .err();
+                RpcReply::value(&luna_proto::ProviderUpdateResult {
+                    harness,
+                    installed_version,
+                    runtime_reload_error,
+                    model_refresh_error,
+                })
+            }
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {
                 let p: crate::registry::TitleSettings = parse_params(params)?;
@@ -8192,13 +8237,7 @@ impl RpcService for EngineRpc {
             }
             methods::SET_HARNESS_ENABLED => {
                 let p: SetHarnessEnabledParams = parse_params(params)?;
-                update_harness_enabled(
-                    &self.registry,
-                    p.harness,
-                    p.enabled,
-                    luna_harness::AcpHarness::antigravity().sign_out(),
-                )
-                .await?;
+                update_harness_enabled(&self.registry, p.harness, p.enabled)?;
                 // Fresh catalog in the reply: the page repaints from it in one
                 // round trip, and a refused/raced toggle self-corrects.
                 RpcReply::value(&self.registry.descriptors())
@@ -8213,12 +8252,9 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&models)
             }
             methods::LIST_COMMANDS => {
-                // Same shape as ListModels: forces a lazy resolve, then the
-                // harness's own (cached) discovery — ACP agents advertise
-                // availableCommands, claude answers the initialize control
-                // request, codex lists skills; only harnesses whose wire has
-                // no listing (cursor, mock) fall through to the trait's
-                // empty default.
+                // Same shape as ListModels: resolve the installed provider,
+                // then ask its own command discovery surface. The mock uses
+                // the trait's empty default.
                 let p: ListModelsParams = parse_params(params)?;
                 let harness = self
                     .registry
@@ -9685,7 +9721,6 @@ mod tests {
                 claude_config_dir: root.path().join("synthetic-claude"),
                 claude_config_file: root.path().join("synthetic-claude.json"),
                 codex_home: root.path().join("synthetic-codex"),
-                cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
             };
             let core = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
                 crate::EngineProfile::development(&root.path().join("synthetic-engine"), "synthetic-org", "synthetic-user"),
@@ -9779,7 +9814,6 @@ mod tests {
             claude_config_dir: root.path().join("synthetic-claude"),
             claude_config_file: root.path().join("synthetic-claude.json"),
             codex_home: root.path().join("synthetic-codex"),
-            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
         };
         let core = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
             crate::EngineProfile::development(&root.path().join("synthetic-engine"), "synthetic-org", "synthetic-user"),
@@ -9891,7 +9925,6 @@ mod tests {
             claude_config_dir: root.path().join("synthetic-claude"),
             claude_config_file: root.path().join("synthetic-claude.json"),
             codex_home: root.path().join("synthetic-codex"),
-            cursor_sdk_auth_file: root.path().join("synthetic-cursor-auth.json"),
         };
         accounts.disable_claude_keychain_fallback().unwrap();
         let core = crate::EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
@@ -10216,122 +10249,6 @@ mod tests {
         missing.delete_space("destination").unwrap();
         assert!(commit_validated_project_move(&mut missing, "task", &validated).is_err());
         assert_eq!(missing.chat("task").unwrap().unwrap().space_id, None);
-    }
-
-    #[tokio::test]
-    async fn antigravity_sign_out_failure_stays_enabled_and_can_be_retried() {
-        let registry = HarnessRegistry::new();
-        let executable = std::env::current_exe().unwrap();
-        registry.register(std::sync::Arc::new(
-            luna_harness::AcpHarness::grok().with_executable(executable.clone()),
-        ));
-        registry.register(std::sync::Arc::new(
-            luna_harness::AcpHarness::antigravity().with_executable(executable),
-        ));
-        registry.set_enabled(HarnessId::Antigravity, true).unwrap();
-
-        let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async {
-            Err(luna_harness::HarnessError::Protocol(
-                "logout rejected".into(),
-            ))
-        })
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(error, RpcError::Failed(ref message) if message.contains("remains enabled")),
-            "{error}"
-        );
-        assert!(registry.enabled_set().contains(&HarnessId::Antigravity));
-
-        update_harness_enabled(&registry, HarnessId::Antigravity, false, async {
-            Ok::<(), luna_harness::HarnessError>(())
-        })
-        .await
-        .unwrap();
-        assert!(!registry.enabled_set().contains(&HarnessId::Antigravity));
-    }
-
-    #[tokio::test]
-    async fn guarded_antigravity_toggle_admits_before_fake_sign_out_and_reports_save_failure() {
-        use crate::{InstanceLock, device_write::DeviceWriteOwner, registry::HarnessDescriptor};
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::time::Duration;
-
-        let root = tempfile::tempdir().unwrap();
-        let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
-            .unwrap();
-        let registry = HarnessRegistry::new();
-        for id in [HarnessId::ClaudeCode, HarnessId::Antigravity] {
-            registry.register_lazy(
-                HarnessDescriptor {
-                    id,
-                    name: format!("synthetic-{id:?}"),
-                    supports_steering: false,
-                    steering_mode: luna_proto::SteeringMode::TurnBoundary,
-                    reasoning_levels: vec![],
-                    installed: true,
-                    enabled: None,
-                },
-                Box::new(|| true),
-                Box::new(|| Err(luna_harness::HarnessError::NotInstalled("synthetic".into()))),
-            );
-        }
-        registry
-            .load_prefs_guarded(root.path(), owner.handle())
-            .unwrap();
-        registry.set_enabled(HarnessId::Antigravity, true).unwrap();
-        let path = root.path().join("harness-prefs.json");
-        let before = std::fs::read(&path).unwrap();
-        let polled = Arc::new(AtomicUsize::new(0));
-
-        let snapshot = owner
-            .epoch_for_tests()
-            .freeze(Duration::from_secs(2))
-            .await
-            .unwrap()
-            .into_snapshot()
-            .unwrap();
-        let count = polled.clone();
-        let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
-            count.fetch_add(1, Ordering::SeqCst);
-            Ok::<(), luna_harness::HarnessError>(())
-        })
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("Busy"));
-        assert_eq!(polled.load(Ordering::SeqCst), 0);
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-        drop(snapshot);
-
-        registry.set_prefs_before_publish_for_tests(Some(Arc::new(|| {
-            Err(std::io::Error::other("synthetic save failure"))
-        })));
-        let count = polled.clone();
-        let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
-            count.fetch_add(1, Ordering::SeqCst);
-            Ok::<(), luna_harness::HarnessError>(())
-        })
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("sign-out succeeded"));
-        assert!(error.to_string().contains("enablement was not saved"));
-        assert_eq!(polled.load(Ordering::SeqCst), 1);
-        assert!(registry.enabled_set().contains(&HarnessId::Antigravity));
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-
-        registry.set_prefs_before_publish_for_tests(None);
-        let epoch = owner.epoch_for_tests();
-        update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
-            assert!(matches!(
-                epoch.freeze(Duration::from_millis(40)).await,
-                Err(luna_sync::write_epoch::EpochError::TimedOut)
-            ));
-            Ok::<(), luna_harness::HarnessError>(())
-        })
-        .await
-        .unwrap();
-        assert!(!registry.enabled_set().contains(&HarnessId::Antigravity));
     }
 
     /// The UI's Switch/Forget calls send `{id, accountId, harness}` (+ optional

@@ -27,8 +27,8 @@ use luna_engine::InstanceLock;
 use luna_proto::{
     ActivityEnvelope, ActivityOutcome, AuthState, ChatConfig, ConversationForkBoundaryKind,
     HarnessId, HistoryRecoveryView, HistorySearchFilters, HistorySearchPage, HistorySearchRequest,
-    HistorySearchScope, PermissionMode, TaskCommandSnapshot, UsageProvider, UsageSnapshot,
-    WorkspaceScope,
+    HistorySearchScope, PermissionMode, ProviderUpdateStatus, TaskCommandSnapshot, UsageProvider,
+    UsageSnapshot, WorkspaceScope,
 };
 use luna_rpc::methods;
 
@@ -47,7 +47,6 @@ use crate::settings::backup::BackupsPage;
 use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::general::{GeneralEvent, GeneralPage};
-use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{
     NotificationPreferences, NotificationTask, NotificationsEvent, NotificationsPage,
 };
@@ -428,10 +427,8 @@ pub fn apply_keymap(
 pub enum SettingsSection {
     General,
     Devices,
-    /// Which harnesses the composer offers (enable/disable toggles).
-    Harnesses,
-    /// Per-provider CLI accounts (login, usage) — labeled "Accounts".
-    Agents,
+    /// Per-device providers, CLI enablement, accounts, and usage.
+    Providers,
     Appearance,
     Files,
     Backups,
@@ -443,10 +440,9 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::General,
-        SettingsSection::Harnesses,
-        SettingsSection::Agents,
+        SettingsSection::Providers,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Shortcuts,
@@ -465,9 +461,7 @@ impl SettingsSection {
         Some(match route {
             "settings" | "settings/general" => Self::General,
             "settings/devices" => Self::Devices,
-            "settings/harnesses" => Self::Harnesses,
-            // Historically `settings/agents` opened the Accounts page.
-            "settings/agents" => Self::Agents,
+            "settings/harnesses" | "settings/agents" | "settings/providers" => Self::Providers,
             "settings/appearance" => Self::Appearance,
             "settings/notifications" => Self::Notifications,
             "settings/shortcuts" => Self::Shortcuts,
@@ -484,8 +478,7 @@ impl SettingsSection {
         match self {
             SettingsSection::General => "General",
             SettingsSection::Devices => "Devices",
-            SettingsSection::Harnesses => "Agents",
-            SettingsSection::Agents => "Accounts",
+            SettingsSection::Providers => "Providers",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
             SettingsSection::Backups => "Backups",
@@ -1737,6 +1730,8 @@ pub struct Shell {
     usage_provider_filter: Option<UsageProvider>,
     usage_request_epoch: u64,
     usage_task: Option<Task<()>>,
+    provider_updates: Vec<ProviderUpdateStatus>,
+    _provider_update_poll: Task<()>,
     usage_action_focus: FocusHandle,
     usage_price_inputs: [Entity<ComposerInput>; 5],
     usage_price_error: Option<String>,
@@ -1751,7 +1746,6 @@ pub struct Shell {
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
-    harnesses_page: Option<Entity<HarnessesPage>>,
     shortcuts_sub: Option<Subscription>,
     general_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
@@ -2035,6 +2029,37 @@ impl Shell {
                 }
             }
         });
+        let provider_update_poll = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(8)).await;
+            loop {
+                let engine = this
+                    .update(cx, |shell: &mut Shell, cx| {
+                        shell.state.read(cx).engine().cloned()
+                    })
+                    .ok()
+                    .flatten();
+                let Some(engine) = engine else {
+                    cx.background_executor().timer(Duration::from_secs(5)).await;
+                    continue;
+                };
+                let result = engine
+                    .client()
+                    .call(methods::GET_PROVIDER_UPDATES, serde_json::json!({}))
+                    .await;
+                if let Ok(value) = result
+                    && let Ok(statuses) = serde_json::from_value::<Vec<ProviderUpdateStatus>>(value)
+                {
+                    this.update(cx, |shell, cx| {
+                        shell.provider_updates = statuses;
+                        cx.notify();
+                    })
+                    .ok();
+                }
+                cx.background_executor()
+                    .timer(Duration::from_secs(2 * 60 * 60))
+                    .await;
+            }
+        });
         let data_dir = boot.data_dir.clone();
         let settings = settings::current(cx);
         state.update(cx, |state, cx| {
@@ -2141,10 +2166,12 @@ impl Shell {
             usage_environment_filter: None,
             usage_error: None,
             usage_refreshing: false,
-            usage_card_open: false,
+            usage_card_open: true,
             usage_provider_filter: None,
             usage_request_epoch: 0,
             usage_task: None,
+            provider_updates: Vec::new(),
+            _provider_update_poll: provider_update_poll,
             usage_action_focus: cx.focus_handle().tab_stop(true),
             usage_price_inputs: [
                 "Exact model name",
@@ -2165,7 +2192,6 @@ impl Shell {
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
-            harnesses_page: None,
             shortcuts_sub: None,
             general_sub: None,
             notifications_sub: None,
@@ -3498,7 +3524,7 @@ impl Shell {
                 );
             }
             TranscriptEvent::OpenAccounts => {
-                self.open_settings(SettingsSection::Agents, cx);
+                self.open_settings(SettingsSection::Providers, cx);
             }
             TranscriptEvent::ForkMessage {
                 task_id,
@@ -4121,10 +4147,10 @@ impl Shell {
 
     fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         self.dismiss_command_palette(cx);
-        // Recreate per visit: the page's ListHarnesses load re-probes which
-        // CLIs are installed, so installing one shows up on the next open.
-        if section == SettingsSection::Harnesses {
-            self.harnesses_page = None;
+        if section == SettingsSection::Providers
+            && let Some(page) = &self.accounts_page
+        {
+            page.update(cx, |page, cx| page.refresh_on_visit(cx));
         }
         if section == SettingsSection::Backups {
             self.backups_page = None;
@@ -4230,17 +4256,7 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
-            SettingsSection::Harnesses => {
-                if self.harnesses_page.is_none() {
-                    let state = self.state.clone();
-                    self.harnesses_page = Some(cx.new(|cx| HarnessesPage::new(state, cx)));
-                }
-                match &self.harnesses_page {
-                    Some(page) => page.clone().into_any_element(),
-                    None => Empty.into_any_element(),
-                }
-            }
-            SettingsSection::Agents => {
+            SettingsSection::Providers => {
                 if self.accounts_page.is_none() {
                     let state = self.state.clone();
                     self.accounts_page = Some(cx.new(|cx| AccountsPage::new(state, cx)));
@@ -6754,8 +6770,7 @@ impl Shell {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::General => icons::SETTINGS_MINIMALISTIC,
             SettingsSection::Devices => icons::MONITOR,
-            SettingsSection::Harnesses => icons::WIDGET,
-            SettingsSection::Agents => icons::KEY_MINIMALISTIC,
+            SettingsSection::Providers => icons::WIDGET,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,
             SettingsSection::Backups => icons::ARCHIVE_UP_MINIMALISTIC,
@@ -7790,10 +7805,126 @@ impl Shell {
                 el.child(notice)
             })
             .when(!self.settings.usage_sidebar_hidden, |el| {
-                el.child(self.render_usage_footer(theme, cx))
+                el.child(self.render_usage_card(theme, cx))
             })
-            .child(div().p(px(Theme::SPACE_SM)).flex_none().child(user_menu))
+            .child(
+                div()
+                    .id("sidebar-footer-actions")
+                    .mx(px(Theme::SPACE_SM))
+                    .mt(px(4.0))
+                    .mb(px(Theme::SPACE_SM))
+                    .pt(px(8.0))
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .id("sidebar-settings-action")
+                            .role(gpui::Role::Button)
+                            .aria_label("Open settings")
+                            .size(px(36.0))
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .cursor_pointer()
+                            .hover(|el| el.bg(theme.glass_hover()))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_settings(SettingsSection::DEFAULT, cx)
+                            }))
+                            .child(
+                                icon(icons::SETTINGS_GEAR)
+                                    .size(px(19.0))
+                                    .text_color(theme.text_muted),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("sidebar-devices-action")
+                            .role(gpui::Role::Button)
+                            .aria_label("Open devices")
+                            .size(px(36.0))
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .cursor_pointer()
+                            .hover(|el| el.bg(theme.glass_hover()))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_settings(SettingsSection::Devices, cx)
+                            }))
+                            .child(
+                                icon(icons::SMARTPHONE)
+                                    .size(px(18.0))
+                                    .text_color(theme.text_muted),
+                            ),
+                    )
+                    .when(!self.settings.usage_sidebar_hidden, |el| {
+                        el.child(self.render_usage_action(theme, cx))
+                    })
+                    .child(user_menu)
+                    .when_some(self.render_provider_update_badge(theme, cx), |el, badge| {
+                        el.child(badge)
+                    }),
+            )
             .into_any_element()
+    }
+
+    fn render_provider_update_badge(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let statuses = self
+            .accounts_page
+            .as_ref()
+            .and_then(|page| page.read(cx).provider_update_statuses())
+            .unwrap_or_else(|| self.provider_updates.clone());
+        let pending: Vec<_> = statuses
+            .iter()
+            .filter(|status| status.update_available)
+            .collect();
+        let first = pending.first()?;
+        let mark = match first.harness {
+            HarnessId::Codex => icons::OPENAI_MARK,
+            HarnessId::ClaudeCode => icons::CLAUDE_MARK,
+            HarnessId::Opencode => icons::OPENCODE_MARK,
+            _ => icons::ARROW_DOWN,
+        };
+        Some(
+            div()
+                .id("sidebar-provider-update")
+                .role(gpui::Role::Button)
+                .aria_label(format!(
+                    "{} provider update{} available. Open Providers.",
+                    pending.len(),
+                    if pending.len() == 1 { "" } else { "s" }
+                ))
+                .size(px(48.0))
+                .rounded(px(Theme::CONTROL_RADIUS))
+                .border_1()
+                .border_color(theme.border)
+                .cursor_pointer()
+                .hover(|el| el.bg(theme.glass_hover()))
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(4.0))
+                .on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.open_settings(SettingsSection::Providers, cx)
+                    }),
+                )
+                .child(
+                    icon(icons::ARROW_DOWN)
+                        .size(px(15.0))
+                        .text_color(theme.accent),
+                )
+                .child(icon(mark).size(px(16.0)).text_color(theme.text))
+                .into_any_element(),
+        )
     }
 
     /// Update strip: shown above the user menu whenever the engine's
@@ -7935,8 +8066,8 @@ impl Shell {
     /// their storage boundary and offer sync; synced runtimes offer sign-out.
     fn render_user_menu(
         &mut self,
-        user_line: SharedString,
-        trigger_subline: Option<SharedString>,
+        _user_line: SharedString,
+        _trigger_subline: Option<SharedString>,
         menu_identity: SharedString,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -7944,24 +8075,16 @@ impl Shell {
         let theme = &theme.for_popup();
         let open = self.user_menu.is_open();
         let action = account_menu_action(self.state.read(cx).workspace_scope, self.sync_flow);
-        // Bottom-of-sidebar identity: avatar circle + scope/account label and
-        // its secondary status line.
-        let initial: SharedString = user_line
-            .chars()
-            .next()
-            .map(|c| c.to_uppercase().to_string())
-            .unwrap_or_else(|| "?".into())
-            .into();
         let mut trigger = div()
             .id("user-menu")
+            .role(gpui::Role::Button)
+            .aria_label("More and account options")
             .flex_none()
-            .rounded(px(8.0))
-            .px(px(Theme::SPACE_SM))
-            .py(px(Theme::SPACE_SM))
+            .size(px(36.0))
+            .rounded(px(Theme::CONTROL_RADIUS))
             .flex()
-            .flex_row()
             .items_center()
-            .gap(px(10.0))
+            .justify_center()
             .cursor_pointer()
             // user-menu.tsx trigger: hover `bg-white/[0.04]`, open state
             // (`data-[state=open]`) the slightly stronger `bg-white/[0.06]`;
@@ -7991,45 +8114,9 @@ impl Shell {
                 cx.notify();
             }))
             .child(
-                // Avatar: white circle, initial in near-black (luna user-menu.tsx).
-                div()
-                    .size(px(28.0))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(theme.text)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.bg)
-                    .child(initial),
-            )
-            .child(
-                // Name with an optional status line underneath — no chip on the right.
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .line_height(px(17.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .truncate()
-                            .child(user_line.clone()),
-                    )
-                    .when_some(trigger_subline, |identity, subline| {
-                        identity.child(
-                            div()
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .line_height(px(15.0))
-                                .text_color(theme.text_muted)
-                                .child(subline),
-                        )
-                    }),
+                icon(icons::MORE_HORIZONTAL)
+                    .size(px(19.0))
+                    .text_color(theme.text_muted),
             );
         if self.user_menu.get().is_some() {
             let closing = self.user_menu.closing_since();
@@ -12477,11 +12564,11 @@ mod tests {
         );
         assert_eq!(
             SettingsSection::from_fixture_route("settings/agents"),
-            Some(SettingsSection::Agents)
+            Some(SettingsSection::Providers)
         );
         assert_eq!(
             SettingsSection::from_fixture_route("settings/harnesses"),
-            Some(SettingsSection::Harnesses)
+            Some(SettingsSection::Providers)
         );
     }
 
@@ -13688,8 +13775,8 @@ mod tests {
         nav.push(chat("a"));
         nav.push(chat("a"));
         assert_eq!(nav.len(), 1, "re-selecting the current route never stacks");
-        nav.push(NavEntry::Settings(SettingsSection::Agents));
-        nav.push(NavEntry::Settings(SettingsSection::Agents));
+        nav.push(NavEntry::Settings(SettingsSection::Providers));
+        nav.push(NavEntry::Settings(SettingsSection::Providers));
         assert_eq!(nav.len(), 2);
     }
 
@@ -17525,14 +17612,64 @@ mod shortcut_focus_regressions {
 /// Native visual QA uses the production shell with isolated fixture data.
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
+    pub fn fixture_provider_usage(&mut self, cx: &mut Context<Self>) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let snapshot = luna_proto::UsageSnapshot {
+            summary: luna_proto::UsageSummary {
+                contract_version: luna_proto::USAGE_CONTRACT_VERSION,
+                read_at_ms: now,
+                time_zone: "UTC".into(),
+                days: 7,
+                resolution: "daily".into(),
+                buckets: vec![],
+                sources: vec![luna_proto::UsageSource {
+                    provider: luna_proto::UsageProvider::Codex,
+                    environment_id: "fixture-mac".into(),
+                    fingerprint: "fixture-only".into(),
+                    status: luna_proto::UsageSourceStatus::Ready,
+                    distinct_sessions: 0,
+                    files_scanned: 0,
+                    files_cached: 0,
+                    failed_files: 0,
+                    detail: None,
+                }],
+                scan_duration_ms: 0,
+                partial: false,
+                warnings: vec![],
+            },
+            limits: vec![luna_proto::UsageLimitSnapshot {
+                provider: luna_proto::UsageProvider::Codex,
+                verified_account_id: Some("fixture-codex".into()),
+                account_label: Some("iulian@example.test".into()),
+                plan: Some("Pro".into()),
+                checked_at_ms: Some(now),
+                availability: luna_proto::LimitAvailability::Ready,
+                windows: vec![luna_proto::UsageLimitWindow {
+                    id: "weekly".into(),
+                    label: "7d".into(),
+                    used_percent: 73.0,
+                    resets_at_ms: Some(now + 4 * 24 * 60 * 60_000),
+                    duration_minutes: Some(7 * 24 * 60),
+                }],
+                reset_credits: None,
+                detail: None,
+            }],
+        };
+        self.usage_snapshot = Some(snapshot.clone());
+        self.usage_environment_snapshots = vec![snapshot];
+        self.usage_provider_filter = Some(luna_proto::UsageProvider::Codex);
+        cx.notify();
+    }
+
     pub fn fixture_accounts_settings(
         &mut self,
         snapshot: luna_proto::AgentAccountsSnapshot,
         cx: &mut Context<Self>,
     ) {
+        self.open_settings(SettingsSection::Providers, cx);
         let state = self.state.clone();
         self.accounts_page = Some(cx.new(|cx| AccountsPage::new_fixture(state, snapshot, cx)));
-        self.open_settings(SettingsSection::Agents, cx);
+        cx.notify();
     }
 
     pub fn fixture_appshots_settings(&mut self, open: bool, cx: &mut Context<Self>) {
