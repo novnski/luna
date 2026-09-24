@@ -111,8 +111,9 @@ refuses startup. A normal `LUNA.app` retains normal behavior. No Terminal,
 change is involved in the native launch.
 
 Use supported Computer readback for first render,
-local/mock identity, task/project navigation, settings, backup status, native
-close/reopen and exact data-root persistence. Read only bounded excerpts from
+local/mock identity, task/project navigation, one mock task send without a
+draft-save error, settings, backup status, native close/reopen, and exact
+single-copy persistence of a new unsent canvas draft. Read only bounded excerpts from
 `$fixture/logs/luna-native-fixture.log`. Quit the exact fixture app, verify its
 process has exited, then repeat `--check-only` on the same root to confirm the
 lock was released. Retain only chosen evidence. The L30 shell-wrapper path
