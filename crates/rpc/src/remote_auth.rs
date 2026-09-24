@@ -491,6 +491,7 @@ impl RpcService for RemoteRpcService {
 /// unlisted/new method fails closed even if the engine later implements it.
 fn method_policy(method: &str) -> Option<Option<RemoteScope>> {
     let scope = match method {
+        methods::LOCAL_OWNER_ROOT_CLAIM => None,
         methods::ENGINE_INFO
         | methods::ENGINE_READY
         | methods::LIST_HARNESSES
@@ -661,6 +662,7 @@ mod tests {
             assert!(method_policy(method).is_some(), "{method}");
         }
         assert_eq!(inventoried.len(), methods::ALL.len());
+        assert_eq!(method_policy(methods::LOCAL_OWNER_ROOT_CLAIM), Some(None));
         assert_eq!(method_policy("FutureDangerousMethod"), None);
     }
 

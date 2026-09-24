@@ -64,6 +64,7 @@ pub mod typography;
 mod workspace_links;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use futures::{FutureExt as _, StreamExt as _};
 use gpui::{App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
@@ -83,7 +84,7 @@ pub(crate) const fn click_activation_drag_enabled() -> bool {
 
 /// Everything the headed binary passes in (config/env resolution lives in
 /// `apps/zeron`, not here).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct UiConfig {
     /// Data directory — engine stores + `ui-settings.json`.
     pub data_dir: PathBuf,
@@ -102,6 +103,8 @@ pub struct UiConfig {
     pub default_harness: HarnessId,
     /// Conversation URL passed by the OS on a cold launch.
     pub initial_url: Option<String>,
+    /// Explicit in-process synthetic owner for packaged native QA only.
+    pub synthetic_core: Option<Arc<zeron_engine::EngineCore>>,
 }
 
 impl UiConfig {
@@ -189,10 +192,10 @@ pub fn run_app(config: UiConfig) {
             cx,
         );
         composer::init(cx, ui_settings.composer_send_behavior);
-        appshots::set_enabled(ui_settings.appshots_enabled);
+        appshots::set_enabled(config.synthetic_core.is_none() && ui_settings.appshots_enabled);
         terminal::panel::init(cx);
         app_menus::init(cx);
-        cx.register_url_scheme("zeron").detach();
+        cx.register_url_scheme("luna").detach();
 
         let state = cx.new(|_| state::AppState::new());
         let url_state = state.clone();
@@ -215,7 +218,11 @@ pub fn run_app(config: UiConfig) {
             }
         })
         .detach();
-        state::AppState::bootstrap(state.clone(), config.boot(), cx);
+        if let Some(core) = config.synthetic_core.clone() {
+            state::AppState::bootstrap_synthetic(state.clone(), core, config.data_dir.clone(), cx);
+        } else {
+            state::AppState::bootstrap(state.clone(), config.boot(), cx);
+        }
 
         // Graceful teardown: an in-process engine drains live runs and flushes
         // doc snapshots before the process exits (remote engines outlive us).
@@ -240,7 +247,9 @@ pub fn run_app(config: UiConfig) {
         });
         open_main_window(state, config.boot(), cx);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        start_appshot_service(config.boot().data_dir, cx);
+        if config.synthetic_core.is_none() {
+            start_appshot_service(config.boot().data_dir, cx);
+        }
         // Native menu bar — macOS gets the standard app menu (About/Services/
         // Hide/Quit ⌘Q), Edit clipboard verbs routed to the focused input, and
         // a Window menu (⌘M/⌘W). Without this, `NSApp.mainMenu` stays nil: no

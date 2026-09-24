@@ -227,6 +227,11 @@ async fn execute(args: InspectArgs) -> Result<Output, CliError> {
             "local listener is not a compatible LUNA engine",
         ));
     }
+    if args.port.is_none() {
+        crate::paths::verify_local_owner(&client, &crate::paths::data_dir())
+            .await
+            .map_err(|error| CliError::protocol(error.to_string()))?;
+    }
     match args.command {
         InspectCommand::Status { machine } => {
             require_machine(&info, machine.as_deref())?;

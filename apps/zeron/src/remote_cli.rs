@@ -72,6 +72,9 @@ pub async fn run(args: RemoteArgs, default_port: u16) -> anyhow::Result<()> {
     if !info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1) {
         anyhow::bail!("local listener is not a compatible LUNA engine");
     }
+    if args.port.is_none() {
+        crate::paths::verify_local_owner(&client, &crate::paths::data_dir()).await?;
+    }
     if !info.supports(zeron_proto::capabilities::REMOTE_AUTH_V1) {
         anyhow::bail!("connected engine does not support L29 remote authority");
     }

@@ -7,6 +7,8 @@
 mod auth_cli;
 mod daemon;
 mod inspect_cli;
+#[cfg(target_os = "macos")]
+mod native_fixture;
 mod paths;
 mod remote_cli;
 mod ssh_cli;
@@ -35,6 +37,15 @@ struct Cli {
 enum Command {
     /// Run the engine without a UI (local-only unless a saved session enables sync).
     Headless,
+    /// Explicit, temporary, mock-only native QA using this packaged executable.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    NativeFixture {
+        #[arg(long)]
+        root: std::path::PathBuf,
+        #[arg(long)]
+        check_only: bool,
+    },
     /// Sign in and enable sync on the next engine start.
     Login,
     /// Remove the saved session and return to local-only on the next start.
@@ -132,25 +143,7 @@ fn validate_owned_service_config() -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let normalized = edge.trim().to_ascii_lowercase();
-    let (scheme, rest) = normalized.split_once("://").unwrap_or(("", ""));
-    anyhow::ensure!(
-        scheme == "https" || scheme == "http",
-        "LUNA_EDGE_URL requires an HTTP(S) URL"
-    );
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority
-        .rsplit('@')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
-    anyhow::ensure!(!host.is_empty(), "LUNA_EDGE_URL has no host");
-    anyhow::ensure!(
-        host != "zeron.sh" && !host.ends_with(".zeron.sh"),
-        "LUNA cannot use Zeron's service endpoint"
-    );
+    zeron_engine::canonical_owned_edge_url(&edge)?;
     Ok(())
 }
 
@@ -184,6 +177,16 @@ fn main() -> anyhow::Result<()> {
             error.exit();
         }
     };
+    #[cfg(target_os = "macos")]
+    let native_root = match &cli.command {
+        Some(Command::NativeFixture { root, .. }) => Some(native_fixture::validate_root(root)?),
+        _ => None,
+    };
+    #[cfg(target_os = "macos")]
+    if native_root.is_none() {
+        validate_owned_service_config()?;
+    }
+    #[cfg(not(target_os = "macos"))]
     validate_owned_service_config()?;
     #[cfg(windows)]
     if let Some(pid) = cli.wait_for_exit {
@@ -195,7 +198,22 @@ fn main() -> anyhow::Result<()> {
     // journald on every snapshot export — enough to fill a disk on a
     // long-running headless host. Quiet them by default (RUST_LOG still
     // overrides the whole filter).
-    let long_running = matches!(&cli.command, None | Some(Command::Headless));
+    let long_running = matches!(&cli.command, None | Some(Command::Headless)) || {
+        #[cfg(target_os = "macos")]
+        {
+            matches!(
+                &cli.command,
+                Some(Command::NativeFixture {
+                    check_only: false,
+                    ..
+                })
+            )
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    };
     let default_filter = if long_running {
         "info,loro_internal=warn,loro=warn"
     } else {
@@ -208,13 +226,36 @@ fn main() -> anyhow::Result<()> {
     // wedge report ("stale until restart") with zero diagnostics even though
     // the engine logs the exact failure line. One file per launch, previous
     // launch kept as `.old`.
+    #[cfg(target_os = "macos")]
+    let fixture_log = native_root
+        .as_ref()
+        .filter(|_| long_running)
+        .map(|root| {
+            open_log_file_in(&root.join("logs"), "native-fixture")
+                .ok_or_else(|| anyhow::anyhow!("cannot open synthetic native fixture log"))
+        })
+        .transpose()?;
     let log_file = if long_running {
-        let mode = if cli.command.is_some() {
-            "headless"
+        #[cfg(target_os = "macos")]
+        if native_root.is_some() {
+            fixture_log
         } else {
-            "headed"
-        };
-        open_log_file(mode)
+            let mode = if cli.command.is_some() {
+                "headless"
+            } else {
+                "headed"
+            };
+            open_log_file(mode)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mode = if cli.command.is_some() {
+                "headless"
+            } else {
+                "headed"
+            };
+            open_log_file(mode)
+        }
     } else {
         None
     };
@@ -249,6 +290,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
+        #[cfg(target_os = "macos")]
+        Some(Command::NativeFixture { check_only, .. }) => {
+            native_fixture::run(native_root.expect("validated fixture root"), check_only)
+        }
         Some(Command::Headless) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
@@ -388,6 +433,7 @@ fn main() -> anyhow::Result<()> {
                 org_id: std::env::var("LUNA_ORG_ID").ok(),
                 default_harness: zeron_ui::HarnessId::ClaudeCode,
                 initial_url: cli.open_url,
+                synthetic_core: None,
             });
             Ok(())
         }
@@ -471,6 +517,7 @@ async fn sync_cli(ipc_port: u16) -> anyhow::Result<()> {
         info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1),
         "local listener is not a compatible LUNA engine"
     );
+    paths::verify_local_owner(&client, &paths::data_dir()).await?;
     let status = client
         .call(zeron_rpc::methods::SYNC_STATUS, serde_json::json!({}))
         .await

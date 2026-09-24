@@ -1,7 +1,26 @@
 //! Application storage paths. Provider credentials keep their own locations.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Bind an implicit local CLI attachment to the exact canonical data root.
+pub async fn verify_local_owner(client: &zeron_rpc::RpcClient, root: &Path) -> anyhow::Result<()> {
+    let expected = zeron_engine::local_root_claim(root)?;
+    let reply: serde_json::Value = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        client.call_as(
+            zeron_rpc::methods::LOCAL_OWNER_ROOT_CLAIM,
+            serde_json::json!({}),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("local LUNA root claim timed out"))??;
+    anyhow::ensure!(
+        reply.get("claim").and_then(|value| value.as_str()) == Some(expected.as_str()),
+        "local listener belongs to another LUNA data root"
+    );
+    Ok(())
+}
 
 pub fn data_dir() -> PathBuf {
     resolve_data_dir(|name| std::env::var_os(name))

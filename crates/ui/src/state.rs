@@ -29,11 +29,12 @@ use serde::de::DeserializeOwned;
 
 use crate::comments::ReviewComment;
 use zeron_doc::{SessionMessageEntry, TranscriptDesync, TranscriptFrame};
-use zeron_engine::{
-    Engine, EngineConfig, EngineRuntime, InstanceLock, rpc::AuthRpc, sessions::LunaApprovalOutcome,
-};
 #[cfg(feature = "appshots-fixture")]
-use zeron_engine::{EngineCore, SessionsEngine};
+use zeron_engine::SessionsEngine;
+use zeron_engine::{
+    Engine, EngineConfig, EngineCore, EngineRuntime, InstanceLock, rpc::AuthRpc,
+    sessions::LunaApprovalOutcome,
+};
 use zeron_proto::{
     ApprovalDecision, AuthState, ChangeRequestSummary, Chat, ChatIndicator,
     CheckoutChangeRequestStatus, Device, EngineInfo, HarnessId, Session, Space, WorkspaceScope,
@@ -261,6 +262,39 @@ struct FixtureLocalEngine {
     sessions: SessionsEngine,
 }
 
+/// Packaged native QA retains the exact synthetic core for the window lifetime.
+struct SyntheticLocalEngine {
+    core: Arc<EngineCore>,
+    client: RpcClient,
+}
+
+#[async_trait]
+impl EngineBackend for SyntheticLocalEngine {
+    fn client(&self) -> &RpcClient {
+        &self.client
+    }
+
+    fn mode(&self) -> EngineMode {
+        EngineMode::InProcess
+    }
+
+    async fn respond_luna_local_ui_approval(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError> {
+        Ok(self
+            .core
+            .sessions
+            .respond_luna_local_ui_approval(chat_id, request_id, decision))
+    }
+
+    async fn shutdown(&self) {
+        self.core.shutdown().await;
+    }
+}
+
 #[cfg(feature = "appshots-fixture")]
 #[async_trait]
 impl EngineBackend for FixtureLocalEngine {
@@ -323,6 +357,22 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
+    /// Attach only to an already validated, in-memory synthetic owner.
+    pub async fn synthetic_from_core(core: Arc<EngineCore>) -> anyhow::Result<Self> {
+        let client = memory_client(core.rpc_service());
+        let engine_info = query_engine_info(&client).await?;
+        anyhow::ensure!(
+            engine_info.device_id == core.device_id
+                && engine_info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1),
+            "synthetic owner identity changed"
+        );
+        Ok(Self {
+            inner: Arc::new(SyntheticLocalEngine { core, client }),
+            engine_info,
+            deferred_state: None,
+        })
+    }
+
     /// Attach an already authenticated direct transport to the same remote
     /// backend used by daemon viewports. LUNA approvals remain local-only.
     pub fn from_authenticated_remote(
@@ -437,17 +487,20 @@ impl EngineHandle {
         //
         // Best-effort — losing the bind race with another engine costs other
         // viewports, not this one.
-        let ipc_task = match zeron_engine::serve_ipc(engine_config.ipc_port, service).await {
-            Ok(task) => Some(task),
-            Err(err) => {
-                tracing::warn!(
-                    port = engine_config.ipc_port,
-                    error = %err,
-                    "IPC port unavailable; other viewports cannot attach to this window"
-                );
-                None
-            }
-        };
+        let ipc_task =
+            match zeron_engine::serve_ipc(engine_config.ipc_port, service, &engine_config.data_dir)
+                .await
+            {
+                Ok(task) => Some(task),
+                Err(err) => {
+                    tracing::warn!(
+                        port = engine_config.ipc_port,
+                        error = %err,
+                        "IPC port unavailable; other viewports cannot attach to this window"
+                    );
+                    None
+                }
+            };
         let runtime = Arc::new(tokio::sync::Mutex::new(None));
         let runtime_for_boot = runtime.clone();
         let service_for_boot = assembled_service.clone();
@@ -569,6 +622,18 @@ impl EngineHandle {
                     anyhow::ensure!(
                         !expected_device.trim().is_empty()
                             && expected_device.trim() == engine_info.device_id,
+                        "listener at {url} does not own this LUNA data root"
+                    );
+                    let expected_claim = zeron_engine::local_root_claim(data_dir)?;
+                    let reply: serde_json::Value = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        client.call_as(methods::LOCAL_OWNER_ROOT_CLAIM, serde_json::json!({})),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("LUNA root claim timed out at {url}"))??;
+                    anyhow::ensure!(
+                        reply.get("claim").and_then(|value| value.as_str())
+                            == Some(expected_claim.as_str()),
                         "listener at {url} does not own this LUNA data root"
                     );
                     let client = Arc::new(client);
@@ -1918,6 +1983,39 @@ impl AppState {
         .detach();
     }
 
+    /// The packaged fixture never probes IPC or starts production providers.
+    pub fn bootstrap_synthetic(
+        state: Entity<AppState>,
+        core: Arc<EngineCore>,
+        data_dir: PathBuf,
+        cx: &mut App,
+    ) {
+        state.update(cx, |s, cx| {
+            s.connection = ConnectionStatus::Connecting;
+            s.workspace_scope = None;
+            s.auth = None;
+            s.data_dir = Some(data_dir);
+            cx.notify();
+        });
+        let boot = Tokio::spawn(cx, EngineHandle::synthetic_from_core(core));
+        cx.spawn(async move |cx| {
+            let outcome = match boot.await {
+                Ok(Ok(handle)) => Ok(handle),
+                Ok(Err(error)) => Err(format!("{error:#}")),
+                Err(error) => Err(error.to_string()),
+            };
+            state.update(cx, |s, cx| match outcome {
+                Ok(handle) => s.attach_engine(handle, cx),
+                Err(message) => {
+                    tracing::error!(%message, "synthetic engine bootstrap failed");
+                    s.connection = ConnectionStatus::Failed(message);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Wire the connected engine: mark Ready and start the standing watches.
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
@@ -2994,11 +3092,12 @@ mod tests {
 
     #[tokio::test]
     async fn remote_viewport_observes_deferred_engine_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("device-id"), "owner-device").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (state_tx, state_rx) = tokio::sync::watch::channel(DeferredEngineState::Waiting);
-        let server = tokio::spawn(zeron_rpc::serve_ws_listener(
-            listener,
+        let service = zeron_engine::local_owner_ipc_service(
             Arc::new(DeferredIdentityRpc {
                 engine_info: EngineInfo {
                     device_id: "owner-device".into(),
@@ -3007,10 +3106,10 @@ mod tests {
                 },
                 state: state_rx,
             }),
-        ));
-
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("device-id"), "owner-device").unwrap();
+            dir.path(),
+        )
+        .unwrap();
+        let server = tokio::spawn(zeron_rpc::serve_ws_listener(listener, service));
         let handle = EngineHandle::bootstrap(EngineBootConfig {
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
@@ -3284,7 +3383,9 @@ mod tests {
         .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(zeron_rpc::serve_ws_listener(listener, core.rpc_service()));
+        let service =
+            zeron_engine::local_owner_ipc_service(core.rpc_service(), daemon_dir.path()).unwrap();
+        tokio::spawn(zeron_rpc::serve_ws_listener(listener, service));
 
         let handle = EngineHandle::bootstrap(EngineBootConfig {
             data_dir: daemon_dir.path().to_path_buf(),
@@ -3332,10 +3433,19 @@ mod tests {
             None,
         )
         .unwrap();
+        assert!(matches!(
+            core.rpc_service()
+                .handle(methods::LOCAL_OWNER_ROOT_CLAIM, serde_json::json!({}))
+                .await,
+            Err(RpcError::UnknownMethod(_))
+        ));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(zeron_rpc::serve_ws_listener(listener, core.rpc_service()));
+        let service =
+            zeron_engine::local_owner_ipc_service(core.rpc_service(), daemon_dir.path()).unwrap();
+        let server = tokio::spawn(zeron_rpc::serve_ws_listener(listener, service));
         let other_root = tempfile::tempdir().unwrap();
+        std::fs::write(other_root.path().join("device-id"), &core.device_id).unwrap();
         let result = EngineHandle::bootstrap(EngineBootConfig {
             data_dir: other_root.path().to_path_buf(),
             ipc_port: port,

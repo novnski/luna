@@ -1,6 +1,9 @@
 //! Actual CLI boundary for an unconfigured local LUNA candidate.
 
 use std::process::{Command, Output};
+use std::sync::Arc;
+
+use zeron_rpc::{RpcError, RpcReply, RpcService, methods};
 
 fn luna(root: &std::path::Path, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_luna"));
@@ -28,6 +31,63 @@ fn text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+struct SyntheticLocalOwner {
+    claim: String,
+}
+
+#[async_trait::async_trait]
+impl RpcService for SyntheticLocalOwner {
+    async fn handle(&self, method: &str, _params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        match method {
+            methods::ENGINE_INFO => RpcReply::value(&serde_json::json!({
+                "deviceId": "copied-device",
+                "workspaceScope": "local",
+                "capabilities": [zeron_proto::capabilities::LUNA_OWNER_IPC_V1]
+            })),
+            methods::LOCAL_OWNER_ROOT_CLAIM => {
+                RpcReply::value(&serde_json::json!({"claim": self.claim}))
+            }
+            _ => Err(RpcError::UnknownMethod(method.into())),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn implicit_local_cli_refuses_a_copied_device_id_at_another_root() {
+    let owner = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    for root in [owner.path(), other.path()] {
+        std::fs::write(root.join("device-id"), "copied-device").unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(zeron_rpc::serve_ws_listener(
+        listener,
+        Arc::new(SyntheticLocalOwner {
+            claim: zeron_engine::local_root_claim(owner.path()).unwrap(),
+        }),
+    ));
+    let owner_status = luna(owner.path(), &["status"])
+        .env("LUNA_IPC_PORT", port.to_string())
+        .output()
+        .unwrap();
+    assert!(owner_status.status.success(), "{}", text(&owner_status));
+    assert!(text(&owner_status).contains("IPC:      listening on"));
+    let wrong_status = luna(other.path(), &["status"])
+        .env("LUNA_IPC_PORT", port.to_string())
+        .output()
+        .unwrap();
+    assert!(wrong_status.status.success(), "{}", text(&wrong_status));
+    assert!(text(&wrong_status).contains("IPC:      incompatible listener on"));
+    let wrong_inspect = luna(other.path(), &["inspect", "--json", "status"])
+        .env("LUNA_IPC_PORT", port.to_string())
+        .output()
+        .unwrap();
+    assert!(!wrong_inspect.status.success(), "{}", text(&wrong_inspect));
+    assert!(text(&wrong_inspect).contains("another LUNA data root"));
+    server.abort();
 }
 
 #[test]
@@ -74,6 +134,25 @@ fn partial_or_zeron_service_configuration_fails_closed() {
         .unwrap();
     assert!(!foreign.status.success(), "{}", text(&foreign));
     assert!(text(&foreign).contains("cannot use Zeron's service endpoint"));
+
+    for url in [
+        "https://edge.zeron.sh.",
+        "HTTPS://EDGE.ZERON.SH./releases",
+        "https://user:password@owned.example",
+        "https://",
+    ] {
+        let rejected = luna(root.path(), &["status"])
+            .env("LUNA_EDGE_URL", url)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success(), "{url}: {}", text(&rejected));
+    }
+
+    let loopback = luna(root.path(), &["status"])
+        .env("LUNA_EDGE_URL", "http://[::1]:7777")
+        .output()
+        .unwrap();
+    assert!(loopback.status.success(), "{}", text(&loopback));
 }
 
 #[test]
@@ -141,4 +220,36 @@ fn actual_binary_previews_and_restores_only_its_synthetic_original_root() {
         b"synthetic-before"
     );
     assert!(text(&restored).contains("previous files "));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn actual_binary_prepares_mock_only_native_fixture_without_a_window() {
+    let fixture = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(
+        fixture.path().join(".luna-l32-native-fixture"),
+        b"L32 synthetic native fixture\n",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let output = luna(
+            fixture.path(),
+            &[
+                "native-fixture",
+                "--root",
+                fixture.path().to_str().unwrap(),
+                "--check-only",
+            ],
+        )
+        .env("LUNA_EDGE_URL", "https://edge.zeron.sh")
+        .output()
+        .unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(text(&output).contains("local mock, Edge disabled"));
+    }
+    assert!(fixture.path().join("data/profiles/local").is_dir());
+    assert!(fixture.path().join("synthetic-claude").is_dir());
+    assert!(!fixture.path().join("data/session.json").exists());
 }

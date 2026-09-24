@@ -203,25 +203,7 @@ async fn main() -> anyhow::Result<()> {
             "LUNA auth requires an explicit owned LUNA_EDGE_URL"
         );
     } else {
-        let normalized = edge_url.trim().to_ascii_lowercase();
-        let (scheme, rest) = normalized.split_once("://").unwrap_or(("", ""));
-        anyhow::ensure!(
-            scheme == "https" || scheme == "http",
-            "LUNA_EDGE_URL requires an HTTP(S) URL"
-        );
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-        let host = authority
-            .rsplit('@')
-            .next()
-            .unwrap_or("")
-            .split(':')
-            .next()
-            .unwrap_or("");
-        anyhow::ensure!(!host.is_empty(), "LUNA_EDGE_URL has no host");
-        anyhow::ensure!(
-            host != "zeron.sh" && !host.ends_with(".zeron.sh"),
-            "LUNA cannot use Zeron's service endpoint"
-        );
+        zeron_engine::canonical_owned_edge_url(&edge_url)?;
     }
     let configured = edge_url != zeron_engine::OFFLINE_EDGE_URL;
     let edge_token = configured
