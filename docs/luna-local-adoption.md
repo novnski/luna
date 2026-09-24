@@ -119,3 +119,5 @@ process has exited, then repeat `--check-only` on the same root to confirm the
 lock was released. Retain only chosen evidence. The L30 shell-wrapper path
 rendered but timed out in AX, so a wrapper is not a substitute for this check.
 Do not treat this synthetic smoke as sustained real-provider daily use.
+The Mock response may still have a pending or unknown delivery receipt; keep
+its submitted snapshot recoverable without automatically sending it again.

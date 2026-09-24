@@ -8205,15 +8205,21 @@ impl Composer {
         let submitted_key = key.clone();
         let err_chat_id = chat_id.clone();
         let err_message_id = message_id.clone();
+        let send_engine_generation = self.state.read(cx).engine_generation();
         self.send_task = Some(cx.spawn(async move |this, cx| {
             let mut result: Result<ComposerSendOutcome, ComposerSendFailure> = async {
-                crate::drafts::save(&engine, &draft_snapshot)
+                let saved = crate::drafts::save(&engine, &draft_snapshot)
                     .await
                     .map_err(|error| {
                         ComposerSendFailure::Rejected(format!(
                             "Draft was not saved; nothing was sent: {error}"
                         ))
                     })?;
+                if let ComposerDraftSaveOutcome::Stale { current_revision } = saved {
+                    return Err(ComposerSendFailure::Rejected(format!(
+                        "Draft changed before submission (current revision {current_revision}); nothing was sent"
+                    )));
+                }
                 crate::drafts::begin_submission(
                     &engine,
                     &message_id,
@@ -8226,6 +8232,22 @@ impl Composer {
                         "Draft submission could not be recorded; nothing was sent: {error}"
                     ))
                 })?;
+                // The snapshot and its pending submission are both durable.
+                // Provider acceptance is a separate receipt decision: a
+                // pending or unknown delivery can close safely now, while any
+                // newer typing still has its own unsaved revision to flush.
+                this.update(cx, |composer, cx| {
+                    if composer.state.read(cx).engine_generation() != send_engine_generation {
+                        return;
+                    }
+                    let saved = composer
+                        .draft_saved_revisions
+                        .entry(submitted_key.clone())
+                        .or_default();
+                    *saved = (*saved).max(submitted_revision);
+                    composer.finish_close_flush_if_ready(cx);
+                })
+                .ok();
                 // Attachments stage FIRST — before the chat row or anything
                 // else exists. Staging is chat-independent (keyed by
                 // uploadId), and ordering it first makes a new-chat send
@@ -10469,7 +10491,7 @@ impl Render for Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
@@ -10508,7 +10530,9 @@ mod tests {
         saves: Mutex<Vec<ComposerDraft>>,
         settlements: Mutex<Vec<(String, String)>>,
         fail_saves: AtomicBool,
-        reject_commands: AtomicBool,
+        command_status: Mutex<Option<CommandReceiptStatus>>,
+        command_tasks: Mutex<HashMap<String, String>>,
+        command_calls: AtomicUsize,
         read_started: Mutex<Option<oneshot::Sender<()>>>,
         read_release: Mutex<Option<oneshot::Receiver<()>>>,
     }
@@ -10526,7 +10550,9 @@ mod tests {
                 saves: Mutex::new(Vec::new()),
                 settlements: Mutex::new(Vec::new()),
                 fail_saves: AtomicBool::new(false),
-                reject_commands: AtomicBool::new(false),
+                command_status: Mutex::new(Some(CommandReceiptStatus::Applied)),
+                command_tasks: Mutex::new(HashMap::new()),
+                command_calls: AtomicUsize::new(0),
                 read_started: Mutex::new(None),
                 read_release: Mutex::new(None),
             }
@@ -10697,36 +10723,18 @@ mod tests {
                 }
                 methods::EXECUTE_TASK_COMMAND => {
                     let task_id = params["taskId"].as_str().unwrap();
-                    let rejected = self.reject_commands.load(Ordering::SeqCst);
-                    RpcReply::value(&zeron_proto::CommandReceipt {
-                        command_id: params["commandId"].as_str().unwrap().into(),
-                        task_id: task_id.into(),
-                        intent: "session".into(),
-                        payload_hash: "synthetic-mock".into(),
-                        status: if rejected {
-                            CommandReceiptStatus::Rejected
-                        } else {
-                            CommandReceiptStatus::Applied
-                        },
-                        snapshot: zeron_proto::TaskCommandSnapshot {
-                            task_id: task_id.into(),
-                            ..Default::default()
-                        },
-                        event_sequence: None,
-                        actor_id: "synthetic".into(),
-                        client_id: "synthetic".into(),
-                        client_session_id: "synthetic".into(),
-                        execution_environment: None,
-                        correlation_id: None,
-                        reason: rejected.then(|| zeron_proto::CommandReceiptReason {
-                            code: zeron_proto::CommandReasonCode::OperationRejected,
-                            message: "synthetic rejection".into(),
-                        }),
-                        recovery_action: None,
-                        accepted_at_ms: 1,
-                        committed_at_ms: (!rejected).then_some(1),
-                        observed_at_ms: 1,
-                    })
+                    let command_id = params["commandId"].as_str().unwrap();
+                    self.command_calls.fetch_add(1, Ordering::SeqCst);
+                    self.command_tasks
+                        .lock()
+                        .unwrap()
+                        .insert(command_id.into(), task_id.into());
+                    match *self.command_status.lock().unwrap() {
+                        Some(status) => {
+                            RpcReply::value(&synthetic_receipt(task_id, command_id, status))
+                        }
+                        None => Err(RpcError::Transport("synthetic lost reply".into())),
+                    }
                 }
                 methods::READ_ATTACHMENT_CHUNK => RpcReply::value(&serde_json::json!({
                     "name":"recovered.png",
@@ -10736,7 +10744,14 @@ mod tests {
                     "done":true
                 })),
                 methods::GET_TASK_COMMAND_RECEIPT => {
-                    RpcReply::value(&Option::<zeron_proto::CommandReceipt>::None)
+                    let command_id = params["commandId"].as_str().unwrap();
+                    let task_id = self.command_tasks.lock().unwrap().get(command_id).cloned();
+                    let status = *self.command_status.lock().unwrap();
+                    RpcReply::value(
+                        &task_id.zip(status).map(|(task_id, status)| {
+                            synthetic_receipt(&task_id, command_id, status)
+                        }),
+                    )
                 }
                 other => Err(RpcError::UnknownMethod(other.into())),
             }
@@ -10755,6 +10770,40 @@ mod tests {
             context: DraftContext::default(),
             execution: serde_json::Value::Null,
             updated_at_ms: revision as i64,
+        }
+    }
+
+    fn synthetic_receipt(
+        task_id: &str,
+        command_id: &str,
+        status: CommandReceiptStatus,
+    ) -> zeron_proto::CommandReceipt {
+        zeron_proto::CommandReceipt {
+            command_id: command_id.into(),
+            task_id: task_id.into(),
+            intent: "session".into(),
+            payload_hash: "synthetic-mock".into(),
+            status,
+            snapshot: zeron_proto::TaskCommandSnapshot {
+                task_id: task_id.into(),
+                ..Default::default()
+            },
+            event_sequence: None,
+            actor_id: "synthetic".into(),
+            client_id: "synthetic".into(),
+            client_session_id: "synthetic".into(),
+            execution_environment: None,
+            correlation_id: None,
+            reason: (status == CommandReceiptStatus::Rejected).then(|| {
+                zeron_proto::CommandReceiptReason {
+                    code: zeron_proto::CommandReasonCode::OperationRejected,
+                    message: "synthetic rejection".into(),
+                }
+            }),
+            recovery_action: None,
+            accepted_at_ms: 1,
+            committed_at_ms: (status == CommandReceiptStatus::Applied).then_some(1),
+            observed_at_ms: 1,
         }
     }
 
@@ -11153,7 +11202,7 @@ mod tests {
         let _guard = runtime.enter();
         let task = "rejected-mock-task";
         let service = Arc::new(DraftTestRpc::new(vec![test_draft(task, 26, "")]));
-        service.reject_commands.store(true, Ordering::SeqCst);
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Rejected);
         let (state, composer) = composer_with_draft_rpc(cx, task, service.clone());
         state.update(cx, |state, _| state.chats.push(mock_task_chat(task)));
         pump_until(cx, &runtime, |cx| {
@@ -11190,6 +11239,215 @@ mod tests {
             service.submissions.lock().unwrap()[0].state,
             DraftSubmissionState::Recoverable
         );
+    }
+
+    #[gpui::test]
+    fn pending_task_send_closes_with_durable_snapshot_and_keeps_new_canvas_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let task = "pending-mock-task";
+        let service = Arc::new(DraftTestRpc::new(vec![test_draft(task, 26, "")]));
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Pending);
+        let (state, composer) = composer_with_draft_rpc(cx, task, service.clone());
+        state.update(cx, |state, _| state.chats.push(mock_task_chat(task)));
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+        });
+
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("pending mock prompt".into(), cx);
+            composer.mark_draft_dirty(cx);
+        });
+        cx.run_until_parked();
+        let submitted_revision =
+            composer.read_with(cx, |composer, _| composer.draft_revisions[task]);
+        composer.update(cx, |composer, cx| {
+            composer.send("pending mock prompt".into(), None, cx)
+        });
+        pump_until(cx, &runtime, |_| {
+            service.command_calls.load(Ordering::SeqCst) > 0
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_secs(1));
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| !composer.sending)
+        });
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(
+                composer.draft_saved_revisions.get(task),
+                Some(&submitted_revision)
+            );
+            assert_eq!(
+                composer.draft_submitting.get(task),
+                Some(&submitted_revision)
+            );
+            assert!(
+                composer
+                    .failure
+                    .as_deref()
+                    .unwrap()
+                    .contains("pending or unknown")
+            );
+        });
+        composer.update(cx, |composer, cx| assert!(composer.prepare_close(cx)));
+        assert_eq!(
+            service.submissions.lock().unwrap()[0].state,
+            DraftSubmissionState::Pending
+        );
+        assert_eq!(
+            service.drafts.lock().unwrap()[task].text,
+            "pending mock prompt"
+        );
+
+        state.update(cx, |state, _| state.selected_chat = None);
+        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("new unsent canvas text".into(), cx);
+            composer.mark_draft_dirty(cx);
+            composer.schedule_draft_save(String::new(), Duration::ZERO, cx);
+        });
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_flush_complete())
+        });
+        composer.update(cx, |composer, cx| assert!(composer.prepare_close(cx)));
+        let calls = service.command_calls.load(Ordering::SeqCst);
+
+        let reopened_state = cx.new(|_| AppState::new());
+        reopened_state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zeron_rpc::memory_client(service.clone()),
+            ));
+        });
+        let reopened = cx.new(|cx| Composer::new(reopened_state, cx));
+        reopened.update(cx, |composer, cx| composer.on_state_changed(cx));
+        pump_until(cx, &runtime, |cx| {
+            reopened.read_with(cx, |composer, _| composer.draft_loaded.contains(""))
+        });
+        reopened.read_with(cx, |composer, cx| {
+            assert_eq!(composer.input.read(cx).text(), "new unsent canvas text");
+        });
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), calls);
+
+        let (_pending_state, pending_task) = composer_with_draft_rpc(cx, task, service.clone());
+        pump_until(cx, &runtime, |cx| {
+            pending_task.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+        });
+        pending_task.read_with(cx, |composer, cx| {
+            assert_eq!(composer.input.read(cx).text(), "");
+        });
+        assert_eq!(
+            service.submissions.lock().unwrap()[0].state,
+            DraftSubmissionState::Pending
+        );
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), calls);
+
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Applied);
+        let (_task_state, reopened_task) = composer_with_draft_rpc(cx, task, service.clone());
+        pump_until(cx, &runtime, |cx| {
+            reopened_task.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+                && service.submissions.lock().unwrap().is_empty()
+        });
+        assert!(!service.drafts.lock().unwrap().contains_key(task));
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), calls);
+    }
+
+    #[gpui::test]
+    fn unknown_task_send_closes_and_later_rejection_remains_recoverable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let task = "unknown-mock-task";
+        let service = Arc::new(DraftTestRpc::new(vec![test_draft(task, 26, "")]));
+        *service.command_status.lock().unwrap() = None;
+        let (state, composer) = composer_with_draft_rpc(cx, task, service.clone());
+        state.update(cx, |state, _| state.chats.push(mock_task_chat(task)));
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+        });
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("unknown mock prompt".into(), cx);
+            composer.mark_draft_dirty(cx);
+        });
+        cx.run_until_parked();
+        let submitted_revision =
+            composer.read_with(cx, |composer, _| composer.draft_revisions[task]);
+        composer.update(cx, |composer, cx| {
+            composer.send("unknown mock prompt".into(), None, cx)
+        });
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| !composer.sending)
+        });
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(
+                composer.draft_saved_revisions.get(task),
+                Some(&submitted_revision)
+            );
+            assert!(composer.failure.is_some());
+        });
+        composer.update(cx, |composer, cx| assert!(composer.prepare_close(cx)));
+        assert_eq!(
+            service.submissions.lock().unwrap()[0].state,
+            DraftSubmissionState::Pending
+        );
+        let calls = service.command_calls.load(Ordering::SeqCst);
+
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Rejected);
+        let (_task_state, reopened) = composer_with_draft_rpc(cx, task, service.clone());
+        pump_until(cx, &runtime, |cx| {
+            reopened.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+                && service.submissions.lock().unwrap()[0].state == DraftSubmissionState::Recoverable
+        });
+        assert_eq!(
+            service.drafts.lock().unwrap()[task].text,
+            "unknown mock prompt"
+        );
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), calls);
+    }
+
+    #[gpui::test]
+    fn failed_snapshot_save_does_not_allow_pending_send_to_close(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let task = "unsaved-mock-task";
+        let service = Arc::new(DraftTestRpc::new(vec![test_draft(task, 26, "")]));
+        service.fail_saves.store(true, Ordering::SeqCst);
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Pending);
+        let (state, composer) = composer_with_draft_rpc(cx, task, service.clone());
+        state.update(cx, |state, _| state.chats.push(mock_task_chat(task)));
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+        });
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("not durably saved".into(), cx);
+            composer.mark_draft_dirty(cx);
+        });
+        cx.run_until_parked();
+        composer.update(cx, |composer, cx| {
+            composer.send("not durably saved".into(), None, cx)
+        });
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| !composer.sending)
+        });
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(composer.input.read(cx).text(), "not durably saved");
+            assert!(composer.draft_saved_revisions[task] < composer.draft_revisions[task]);
+            assert!(composer.failure.is_some());
+        });
+        composer.update(cx, |composer, cx| assert!(!composer.prepare_close(cx)));
+        assert!(service.submissions.lock().unwrap().is_empty());
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), 0);
     }
 
     #[gpui::test]
