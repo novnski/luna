@@ -232,6 +232,111 @@ tid=$(rid "$turnline")
 
 case "$turnline" in
 
+*scenario:computer-use:response-before-start*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t1"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t1","status":"completed"}}}'
+  read -r nextturn || exit 1
+  { has "$nextturn" '"method":"turn/start"' && has "$nextturn" 'follow-up t2'; } || exit 1
+  emit "{\"id\":$(rid "$nextturn"),\"result\":{\"turn\":{\"id\":\"t2\"}}}"
+  emit '{"id":922,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"th-1","turnId":"t2","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"}]}}}}}'
+  read -r answer || exit 1
+  { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t2","error":{"message":"response-owned t2 approval was withheld"}}}}'; exit 0; }
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t2"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t2","status":"completed"}}}'
+  ;;
+
+*scenario:computer-use:late-t1-*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t1"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t1","status":"completed"}}}'
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t2"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t2","item":{"type":"mcpToolCall","id":"cu-t2","server":"computer-use","tool":"click","arguments":{"app":"Finder"},"status":"inProgress"}}}'
+  emit '{"id":920,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"th-1","turnId":"t2","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"}]}}}}}'
+  if has "$turnline" 'late-t1-start'; then
+    emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t1"}}}'
+  elif has "$turnline" 'late-t1-completed'; then
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t1","status":"completed"}}}'
+  elif has "$turnline" 'late-t1-failed'; then
+    emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t1","error":{"message":"stale failure"}}}}'
+  else
+    emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t1"}}}'
+  fi
+  emit '{"method":"item/agentMessage/delta","params":{"itemId":"stale-barrier","delta":"stale-delivered"}}'
+  read -r answer || exit 1
+  { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t2","error":{"message":"t2 approval was wrongly withheld"}}}}'; exit 0; }
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t2","item":{"type":"mcpToolCall","id":"cu-t2","server":"computer-use","tool":"click","status":"completed"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t2","status":"completed"}}}'
+  ;;
+
+*scenario:computer-use:late-answer*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t2\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t2"}}}'
+  emit '{"id":921,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"th-1","turnId":"t2","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"}]}}}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t2","status":"completed"}}}'
+  emit '{"method":"item/agentMessage/delta","params":{"itemId":"end-barrier","delta":"turn-ended"}}'
+  read -r answer || exit 1
+  has "$answer" '"action":"decline"' || { emit '{"method":"error","params":{"threadId":"th-1","message":"late approval was accepted"}}'; exit 0; }
+  emit '{"method":"item/agentMessage/delta","params":{"itemId":"withheld","delta":"late-approval-withheld"}}'
+  ;;
+
+*scenario:computer-use:disconnect*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","arguments":{"app":"Finder"},"status":"inProgress"}}}'
+  exit 0
+  ;;
+
+*scenario:computer-use:cancel*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","arguments":{"app":"Finder"},"status":"inProgress"}}}'
+  read -r intline || exit 1
+  if has "$intline" '"method":"turn/interrupt"' && has "$intline" '"turnId":"t-computer"'; then
+    emit "{\"id\":$(rid "$intline"),\"result\":{}}"
+    emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed"}}}'
+    emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  else
+    fail_turn "$tid" "expected computer-use turn interrupt"
+  fi
+  ;;
+
+*scenario:computer-use:permission-*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"id":910,"method":"item/permissions/requestApproval","params":{"threadId":"th-1","turnId":"stale","itemId":"perm-1","permissions":{"network":{"enabled":true}},"reason":"Synthetic access"}}'
+  read -r rejected || exit 1
+  has "$rejected" '"permissions":{}' || { fail_turn "$tid" "stale permission was granted"; exit 0; }
+  emit '{"id":911,"method":"item/permissions/requestApproval","params":{"threadId":"th-1","turnId":"t-computer","itemId":"perm-2","permissions":{"network":{"enabled":true}},"reason":"Synthetic access"}}'
+  read -r answer || exit 1
+  if has "$turnline" 'scenario:computer-use:permission-allow'; then
+    has "$answer" '"permissions":{"network":{"enabled":true}}' || { fail_turn "$tid" "provider permission not granted once"; exit 0; }
+  else
+    has "$answer" '"permissions":{}' || { fail_turn "$tid" "provider permission not denied"; exit 0; }
+  fi
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-computer","status":"completed"}}}'
+  ;;
+
+*scenario:computer-use:*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-computer\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+  emit '{"id":900,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"foreign","turnId":"t-computer","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"},{"const":"always"}]}}}}}'
+  read -r rejected || exit 1
+  has "$rejected" '"action":"decline"' || { fail_turn "$tid" "foreign target was accepted"; exit 0; }
+  emit '{"id":901,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"th-1","turnId":"t-computer","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"},{"const":"always"}]}}}}}'
+  read -r answer || exit 1
+  if has "$turnline" 'scenario:computer-use:allow'; then
+    { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t-computer","error":{"message":"one-request approval was not returned"}}}}'; exit 0; }
+    emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","arguments":{"app":"Finder","x":10},"status":"inProgress"}}}'
+    emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"stale-turn","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed"}}}'
+    emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed","result":{"content":[{"type":"image","data":"private pixels"}]}}}}'
+    emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed"}}}'
+  else
+    has "$answer" '"action":"decline"' || { fail_turn "$tid" "computer use was not denied"; exit 0; }
+  fi
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-computer","status":"completed"}}}'
+  ;;
+
 *scenario:l25-send-storage-fail:*)
   target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send-storage-fail:\([0-9a-f-]*\).*/\1/p')
   [ -n "$target" ] || { fail_turn "$tid" "missing storage-failure target"; exit 0; }

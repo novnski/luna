@@ -1376,6 +1376,12 @@ async fn run_session(session: Session) {
     let mut async_questions_seen: HashSet<String> = HashSet::new();
     let mut reasoning_streams: HashMap<String, ReasoningStream> = HashMap::new();
     let mut context_compactions = ContextCompactionStream::default();
+    let mut computer_use = normalize::ComputerUseStream::for_task(
+        runtime_contract
+            .as_ref()
+            .map(|contract| contract.context.thread_id.as_str()),
+    );
+    let mut computer_use_turn_cancel = CancellationToken::new();
     // Token usage is held until the turn ends, emitted just before Done.
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
@@ -1425,13 +1431,29 @@ async fn run_session(session: Session) {
                 match method.as_str() {
                     "turn/started" => {
                         let id = turn_id(&params);
+                        let previous = router.active_id().map(str::to_owned);
+                        router.note_started(id.clone());
+                        // A late start for a completed turn must not rotate
+                        // the live turn's approval token or settle its calls.
+                        if router.active_id() != Some(id.as_str()) {
+                            continue;
+                        }
+                        if previous.as_deref() != Some(id.as_str()) {
+                            done_current = false;
+                        }
+                        if computer_use_turn_cancel.is_cancelled() || previous.as_deref() != Some(id.as_str()) {
+                            computer_use_turn_cancel.cancel();
+                            computer_use_turn_cancel = CancellationToken::new();
+                        }
+                        for event in computer_use.unknown_before_turn(&thread_id, &id) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
                         if let Some(event) = context_compactions
                             .unknown_before_turn(&thread_id, &id)
                             && !send(&event_tx, event).await
                         {
                             break 'main;
                         }
-                        router.note_started(id);
                     }
 
                     "thread/name/updated"
@@ -1477,6 +1499,17 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
+                        if interrupt.is_cancelled() {
+                            // An OS action may already be running when Stop
+                            // arrives. A late item completion cannot turn its
+                            // uncertain outcome into a successful chip.
+                            for event in computer_use.unknown_for_turn(&thread_id, router.active_id().unwrap_or("")) {
+                                if !send(&event_tx, event).await { break 'main; }
+                            }
+                            if normalize::is_computer_use(item) {
+                                continue;
+                            }
+                        }
                         if matches!(item_type(item), "contextCompaction" | "context_compaction") {
                             if let Some(event) = context_compactions.map_item(
                                 phase,
@@ -1487,6 +1520,12 @@ async fn run_session(session: Session) {
                             ) && !send(&event_tx, event).await
                             {
                                 break 'main;
+                            }
+                            continue;
+                        }
+                        if let Some(events) = computer_use.map_item(phase, &thread_id, router.active_id(), &params, item) {
+                            for event in events {
+                                if !send(&event_tx, event).await { break 'main; }
                             }
                             continue;
                         }
@@ -1568,6 +1607,14 @@ async fn run_session(session: Session) {
 
                     "turn/completed" => {
                         let id = turn_id(&params);
+                        if router.active_id() != Some(id.as_str()) {
+                            router.note_completed(&id);
+                            continue;
+                        }
+                        computer_use_turn_cancel.cancel();
+                        for event in computer_use.unknown_for_turn(&thread_id, &id) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
                         if let Some(event) = context_compactions
                             .unknown_for_turn(&thread_id, &id)
                             && !send(&event_tx, event).await
@@ -1628,6 +1675,7 @@ async fn run_session(session: Session) {
                                 &event_tx,
                                 &mut assistant_message_id,
                                 &mut done_current,
+                                &mut computer_use_turn_cancel,
                             )
                             .await
                             {
@@ -1640,6 +1688,14 @@ async fn run_session(session: Session) {
 
                     "turn/failed" => {
                         let id = turn_id(&params);
+                        if router.active_id() != Some(id.as_str()) {
+                            router.note_completed(&id);
+                            continue;
+                        }
+                        computer_use_turn_cancel.cancel();
+                        for event in computer_use.unknown_for_turn(&thread_id, &id) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
                         if let Some(event) = context_compactions
                             .unknown_for_turn(&thread_id, &id)
                             && !send(&event_tx, event).await
@@ -1678,6 +1734,14 @@ async fn run_session(session: Session) {
 
                     "turn/aborted" => {
                         let id = turn_id(&params);
+                        if router.active_id() != Some(id.as_str()) {
+                            router.note_completed(&id);
+                            continue;
+                        }
+                        computer_use_turn_cancel.cancel();
+                        for event in computer_use.unknown_for_turn(&thread_id, &id) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
                         if let Some(event) = context_compactions
                             .unknown_for_turn(&thread_id, &id)
                             && !send(&event_tx, event).await
@@ -1738,6 +1802,7 @@ async fn run_session(session: Session) {
                             invoke_luna_tool: invoke_luna_tool.as_ref(),
                             call_ids: &mut luna_call_ids,
                             interrupt: &interrupt,
+                            computer_use_turn_cancel: &computer_use_turn_cancel,
                         },
                     );
                 }
@@ -1829,6 +1894,7 @@ async fn run_session(session: Session) {
                                     &event_tx,
                                     &mut assistant_message_id,
                                     &mut done_current,
+                                    &mut computer_use_turn_cancel,
                                 )
                                 .await
                                 {
@@ -1849,6 +1915,7 @@ async fn run_session(session: Session) {
                         &event_tx,
                         &mut assistant_message_id,
                         &mut done_current,
+                        &mut computer_use_turn_cancel,
                     )
                     .await
                     {
@@ -1869,7 +1936,11 @@ async fn run_session(session: Session) {
             _ = interrupt.cancelled(), if !interrupt_sent => {
                 interrupt_sent = true;
                 interrupted = true;
+                computer_use_turn_cancel.cancel();
                 if let Some(turn) = router.active.clone() {
+                    for event in computer_use.unknown_for_turn(&thread_id, &turn) {
+                        if !send(&event_tx, event).await { break 'main; }
+                    }
                     let client = client.clone();
                     let thread = thread_id.clone();
                     tokio::spawn(async move {
@@ -1906,7 +1977,11 @@ async fn run_session(session: Session) {
 
     // Terminal bookkeeping: never end the stream without a Done unless the
     // consumer already hung up.
+    computer_use_turn_cancel.cancel();
     if !event_tx.is_closed() {
+        for event in computer_use.take_unknown() {
+            let _ = event_tx.send(Ok(event)).await;
+        }
         if let Some(event) = context_compactions.take_unknown() {
             let _ = event_tx.send(Ok(event)).await;
         }
@@ -1991,10 +2066,15 @@ async fn steer_as_new_turn(
     event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
     assistant_message_id: &mut String,
     done_current: &mut bool,
+    computer_use_turn_cancel: &mut CancellationToken,
 ) -> bool {
     match start_turn(client, params).await {
         Ok(id) => {
             router.adopt_started(id.clone());
+            if router.active_id() == Some(id.as_str()) {
+                computer_use_turn_cancel.cancel();
+                *computer_use_turn_cancel = CancellationToken::new();
+            }
             *done_current = false;
             let (prev, next) = rotate(assistant_message_id);
             if !send(
@@ -2059,6 +2139,7 @@ struct ServerRequestContext<'a> {
     invoke_luna_tool: Option<&'a crate::LunaToolExecutor>,
     call_ids: &'a mut LunaCallIds,
     interrupt: &'a CancellationToken,
+    computer_use_turn_cancel: &'a CancellationToken,
 }
 
 /// Serve one server→client request. Approval requests round-trip through the
@@ -2080,7 +2161,174 @@ fn handle_server_request(
         invoke_luna_tool,
         call_ids,
         interrupt,
+        computer_use_turn_cancel,
     } = context;
+    if method == "item/permissions/requestApproval" {
+        let permission = params
+            .get("permissions")
+            .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
+        let exact_context = !interrupt.is_cancelled()
+            && !computer_use_turn_cancel.is_cancelled()
+            && active_turn_id.is_some()
+            && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+            && params.get("turnId").and_then(Value::as_str) == active_turn_id
+            && params
+                .get("itemId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty())
+            && runtime_contract.is_some_and(|contract| {
+                !contract.context.thread_id.is_empty() && !contract.context.machine_id.is_empty()
+            });
+        let Some(permission) = permission
+            .filter(|value| exact_context && value.to_string().len() <= 1024)
+            .cloned()
+        else {
+            client.respond(&id, json!({ "permissions": {} }));
+            return;
+        };
+        let task_id = runtime_contract
+            .map(|contract| contract.context.thread_id.as_str())
+            .unwrap_or("");
+        let reason = params
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("Provider permission requested");
+        let reason: String = reason.chars().take(200).collect();
+        let question = UserInputQuestion {
+            id: new_message_id(),
+            header: "Approve provider permission".into(),
+            question: format!(
+                "Codex in LUNA task {task_id} requests this permission on {}: {}. Reason: {reason}. Allow once?",
+                permission_policy.machine_name, permission
+            ),
+            options: vec!["Deny".into(), "Allow once".into()],
+            multi_select: false,
+            approval: Some(zeron_proto::ApprovalRequest {
+                provider_request_id: id.to_string(),
+                provider: HarnessId::Codex,
+                turn_id: active_turn_id.map(str::to_owned),
+                machine_name: permission_policy.machine_name.clone(),
+                action_kind: zeron_proto::ApprovalActionKind::Tool,
+                summary: "Provider permission request".into(),
+                requested_scope: permission_policy.scope,
+                expires_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64
+                    + 120_000,
+                supports_task_allowance: false,
+            }),
+        };
+        let client = client.clone();
+        let request_input = Arc::clone(request_input);
+        let interrupt = interrupt.clone();
+        let turn_cancel = computer_use_turn_cancel.clone();
+        tokio::spawn(async move {
+            let receiver = (request_input)(vec![question.clone()]);
+            let answers = tokio::select! {
+                biased;
+                _ = interrupt.cancelled() => None,
+                _ = turn_cancel.cancelled() => None,
+                result = tokio::time::timeout(Duration::from_secs(120), receiver) => result.ok().and_then(Result::ok),
+            };
+            let allowed = !interrupt.is_cancelled()
+                && !turn_cancel.is_cancelled()
+                && answers.as_ref().is_some_and(|answers| {
+                    answers.iter().any(|answer| {
+                        answer.question_id == question.id
+                            && answer.labels.as_slice() == ["Allow once"]
+                    })
+                });
+            client.respond(
+                &id,
+                if allowed {
+                    json!({ "permissions": permission })
+                } else {
+                    json!({ "permissions": {} })
+                },
+            );
+        });
+        return;
+    }
+    if method == "mcpServer/elicitation/request" {
+        let matching_context = !interrupt.is_cancelled()
+            && !computer_use_turn_cancel.is_cancelled()
+            && active_turn_id.is_some()
+            && params.get("serverName").and_then(Value::as_str) == Some("computer-use")
+            && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+            && params.get("turnId").and_then(Value::as_str) == active_turn_id
+            && runtime_contract.is_some_and(|contract| {
+                !contract.context.thread_id.is_empty() && !contract.context.machine_id.is_empty()
+            });
+        let Some((field, once)) = matching_context
+            .then(|| computer_use_once_choice(params))
+            .flatten()
+        else {
+            client.respond(&id, json!({ "action": "decline" }));
+            return;
+        };
+        let Some(app) = computer_use_approval_app(params) else {
+            client.respond(&id, json!({ "action": "decline" }));
+            return;
+        };
+        let task_id = runtime_contract
+            .map(|contract| contract.context.thread_id.as_str())
+            .unwrap_or("");
+        let question = UserInputQuestion {
+            id: new_message_id(),
+            header: "Approve computer use".into(),
+            question: format!(
+                "Allow Codex in LUNA task {task_id} to use {app} on {} for this request? The provider controls the app and LUNA cannot undo an action already running.",
+                permission_policy.machine_name
+            ),
+            options: vec!["Deny".into(), "Allow once".into()],
+            multi_select: false,
+            approval: Some(zeron_proto::ApprovalRequest {
+                provider_request_id: id.to_string(),
+                provider: HarnessId::Codex,
+                turn_id: active_turn_id.map(str::to_owned),
+                machine_name: permission_policy.machine_name.clone(),
+                action_kind: zeron_proto::ApprovalActionKind::Tool,
+                summary: format!("Computer use: {app}"),
+                requested_scope: permission_policy.scope,
+                expires_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64
+                    + 120_000,
+                supports_task_allowance: false,
+            }),
+        };
+        let client = client.clone();
+        let request_input = Arc::clone(request_input);
+        let interrupt = interrupt.clone();
+        let turn_cancel = computer_use_turn_cancel.clone();
+        tokio::spawn(async move {
+            let receiver = (request_input)(vec![question.clone()]);
+            let answers = tokio::select! {
+                biased;
+                _ = interrupt.cancelled() => None,
+                _ = turn_cancel.cancelled() => None,
+                result = tokio::time::timeout(Duration::from_secs(120), receiver) => result.ok().and_then(Result::ok),
+            };
+            let allowed = !interrupt.is_cancelled()
+                && !turn_cancel.is_cancelled()
+                && answers.as_ref().is_some_and(|answers| {
+                    answers.iter().any(|answer| {
+                        answer.question_id == question.id
+                            && answer.labels.as_slice() == ["Allow once"]
+                    })
+                });
+            if allowed {
+                let mut content = serde_json::Map::new();
+                content.insert(field, once.into());
+                client.respond(&id, json!({ "action": "accept", "content": content }));
+            } else {
+                client.respond(&id, json!({ "action": "decline" }));
+            }
+        });
+        return;
+    }
     if method == "item/tool/call" {
         let call_id = params.get("callId").and_then(Value::as_str).unwrap_or("");
         let matching_context = active_turn_id.is_some()
@@ -2213,6 +2461,116 @@ fn handle_server_request(
             }),
         );
     });
+}
+
+/// Only a form choice explicitly advertising a one-request approval can be
+/// sent back to Codex. Session/permanent approvals stay unavailable in L28.
+fn computer_use_once_choice(params: &Value) -> Option<(String, String)> {
+    if params.get("mode").and_then(Value::as_str) != Some("form") {
+        return None;
+    }
+    let properties = params.pointer("/requestedSchema/properties")?.as_object()?;
+    for (field, schema) in properties {
+        if params
+            .pointer("/requestedSchema/required")
+            .and_then(Value::as_array)
+            .is_some_and(|required| {
+                required
+                    .iter()
+                    .any(|value| value.as_str() != Some(field.as_str()))
+            })
+        {
+            continue;
+        }
+        let choices = schema
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("const").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+            })
+            .or_else(|| {
+                schema
+                    .get("enum")
+                    .and_then(Value::as_array)
+                    .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+            })
+            .unwrap_or_default();
+        if let Some(choice) = choices
+            .into_iter()
+            .find(|value| matches!(*value, "once" | "allow_once" | "accept_once"))
+        {
+            return Some((field.clone(), choice.to_owned()));
+        }
+    }
+    None
+}
+
+fn computer_use_approval_app(params: &Value) -> Option<String> {
+    let name = params
+        .pointer("/_meta/app_name")
+        .or_else(|| params.pointer("/_meta/appName"))
+        .or_else(|| params.pointer("/_meta/target/app"))
+        .or_else(|| params.pointer("/_meta/target/name"))
+        .or_else(|| params.pointer("/_meta/tool_params/app_name"))
+        .or_else(|| params.pointer("/_meta/tool_params/app"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            params
+                .get("message")
+                .and_then(Value::as_str)
+                .and_then(|message| {
+                    message
+                        .strip_prefix("Allow ChatGPT to use ")?
+                        .strip_suffix('?')
+                })
+        })?;
+    let name = name.trim();
+    (!name.is_empty() && name.len() <= 256).then(|| name.to_owned())
+}
+
+#[cfg(test)]
+mod computer_use_approval_tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_one_request_form_choice_is_supported() {
+        let form = json!({"mode":"form","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"},{"const":"session"}]}}}});
+        assert_eq!(
+            computer_use_once_choice(&form),
+            Some(("approval".into(), "once".into()))
+        );
+        assert_eq!(
+            computer_use_once_choice(
+                &json!({"mode":"url","requestedSchema":form["requestedSchema"]})
+            ),
+            None
+        );
+        assert_eq!(
+            computer_use_once_choice(
+                &json!({"mode":"form","requestedSchema":{"properties":{"approval":{"enum":["always","session"]}}}})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn app_target_requires_a_concrete_provider_name() {
+        assert_eq!(
+            computer_use_approval_app(&json!({"_meta":{"app_name":"Finder"}})),
+            Some("Finder".into())
+        );
+        assert_eq!(
+            computer_use_approval_app(&json!({"message":"Allow ChatGPT to use Safari?"})),
+            Some("Safari".into())
+        );
+        assert_eq!(
+            computer_use_approval_app(&json!({"message":"Allow this tool?"})),
+            None
+        );
+    }
 }
 
 /// Parse `item/tool/requestUserInput` questions into (wire id, question)

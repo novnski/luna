@@ -1439,6 +1439,489 @@ async fn approval_no_answer_becomes_decline() {
 }
 
 #[tokio::test]
+async fn computer_use_approval_and_provider_evidence_stay_on_exact_turn() {
+    let (controls, _steer, _token) = controls("Allow once");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        computer_use_request("scenario:computer-use:allow", home.path()),
+        controls,
+    )
+    .await;
+    let calls: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ToolCall {
+                call:
+                    ToolCall::ComputerUse {
+                        status,
+                        app,
+                        screenshot_observed,
+                        ..
+                    },
+                ..
+            } => Some((*status, app.as_deref(), *screenshot_observed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            (
+                zeron_proto::ComputerUseStatus::Running,
+                Some("Finder"),
+                false
+            ),
+            (
+                zeron_proto::ComputerUseStatus::ProviderCompleted,
+                Some("Finder"),
+                true
+            ),
+        ],
+        "{events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+            .count(),
+        1
+    );
+    assert!(!format!("{events:?}").contains("private pixels"));
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn computer_use_denial_has_no_computer_action() {
+    let (controls, _steer, _token) = controls("Deny");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        computer_use_request("scenario:computer-use:deny", home.path()),
+        controls,
+    )
+    .await;
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse { .. },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn computer_use_without_luna_task_binding_remains_unavailable() {
+    let (controls, _steer, _token) = controls("Allow once");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        isolated_computer_request("scenario:computer-use:allow", home.path()),
+        controls,
+    )
+    .await;
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse { .. },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn provider_permission_event_uses_exact_turn_and_one_request_grant() {
+    let home = tempfile::tempdir().unwrap();
+    for (scenario, choice) in [
+        ("scenario:computer-use:permission-allow", "Allow once"),
+        ("scenario:computer-use:permission-deny", "Deny"),
+    ] {
+        let (controls, _steer, _token) = controls(choice);
+        let events = run_to_end(
+            &harness(),
+            computer_use_request(scenario, home.path()),
+            controls,
+        )
+        .await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                })
+            ),
+            "{scenario}: {events:?}"
+        );
+    }
+}
+
+fn isolated_computer_request(prompt: &str, home: &std::path::Path) -> RunRequest {
+    let mut request = request(prompt);
+    request.model_options.insert(
+        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        home.to_string_lossy().to_string().into(),
+    );
+    request
+}
+
+fn computer_use_request(prompt: &str, home: &std::path::Path) -> RunRequest {
+    let mut request = isolated_computer_request(prompt, home);
+    let mut contract = synthetic_runtime_contract();
+    contract.tools.clear();
+    request.model_options.insert(
+        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        serde_json::to_value(contract).unwrap(),
+    );
+    request
+}
+
+type ParkedApproval = (
+    Vec<UserInputQuestion>,
+    oneshot::Sender<Vec<UserInputAnswer>>,
+);
+
+fn parked_computer_controls() -> (
+    RunControls,
+    mpsc::UnboundedReceiver<ParkedApproval>,
+    mpsc::Sender<SteerMessage>,
+) {
+    let (approval_tx, approval_rx) = mpsc::unbounded_channel();
+    let (steer_tx, steer_rx) = mpsc::channel(8);
+    let controls = RunControls {
+        request_input: Box::new(move |questions| {
+            let (tx, rx) = oneshot::channel();
+            let _ = approval_tx.send((questions, tx));
+            rx
+        }),
+        steering: steer_rx,
+        interrupt: CancellationToken::new(),
+        invoke_luna_tool: None,
+    };
+    (controls, approval_rx, steer_tx)
+}
+
+async fn computer_use_answer_after_barrier(scenario: &str, barrier: &str) -> Vec<AgentEvent> {
+    let home = tempfile::tempdir().unwrap();
+    let (controls, mut approvals, _steer) = parked_computer_controls();
+    let mut stream = harness()
+        .run(computer_use_request(scenario, home.path()), controls)
+        .await
+        .unwrap();
+    let (questions, response) = tokio::time::timeout(Duration::from_secs(5), approvals.recv())
+        .await
+        .expect("provider approval requested")
+        .expect("approval channel open");
+    assert_eq!(questions.len(), 1);
+    assert_eq!(
+        questions[0].approval.as_ref().unwrap().turn_id.as_deref(),
+        Some("t2")
+    );
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("barrier event arrives")
+            .expect("stream stays open through barrier")
+            .expect("event succeeds");
+        let reached = matches!(&event, AgentEvent::TextDelta { text } if text == barrier);
+        events.push(event);
+        if reached {
+            break;
+        }
+    }
+    // The provider's old-turn notifications have already passed through the
+    // adapter before this answer; a fast callback cannot mask the race.
+    let _ = response.send(vec![UserInputAnswer {
+        question_id: questions[0].id.clone(),
+        labels: vec!["Allow once".into()],
+    }]);
+    let tail = tokio::time::timeout(
+        Duration::from_secs(10),
+        stream
+            .map(|event| event.expect("event succeeds"))
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .expect("synthetic stream settles");
+    events.extend(tail);
+    events
+}
+
+#[tokio::test]
+async fn stale_t1_lifecycle_cannot_cancel_t2_approval_or_computer_call() {
+    for scenario in ["start", "completed", "failed", "aborted"] {
+        let prompt = format!("scenario:computer-use:late-t1-{scenario}");
+        let events = computer_use_answer_after_barrier(&prompt, "stale-delivered").await;
+        let statuses: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::ToolCall {
+                    call:
+                        ToolCall::ComputerUse {
+                            status, turn_id, ..
+                        },
+                    ..
+                } if turn_id == "t2" => Some(*status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![
+                zeron_proto::ComputerUseStatus::Running,
+                zeron_proto::ComputerUseStatus::ProviderCompleted
+            ],
+            "{scenario}: {events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    AgentEvent::Done {
+                        status: DoneStatus::Completed,
+                        ..
+                    }
+                ))
+                .count(),
+            2,
+            "{scenario}: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Errored | DoneStatus::Interrupted,
+                    ..
+                }
+            )),
+            "{scenario}: {events:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn next_turn_response_owns_approval_before_started_notification() {
+    let home = tempfile::tempdir().unwrap();
+    let (controls, steer, _token) = controls("Allow once");
+    let mut stream = harness()
+        .run(
+            computer_use_request("scenario:computer-use:response-before-start", home.path()),
+            controls,
+        )
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let first_done = matches!(
+            &event,
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            }
+        );
+        events.push(event);
+        if first_done {
+            break;
+        }
+    }
+    steer
+        .send(SteerMessage {
+            prompt: "follow-up t2".into(),
+            message_id: None,
+            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
+        })
+        .await
+        .unwrap();
+    events.extend(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            stream.map(|event| event.unwrap()).collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            ))
+            .count(),
+        2,
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Errored,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn ended_t2_withholds_a_delayed_allow_once_answer() {
+    let events =
+        computer_use_answer_after_barrier("scenario:computer-use:late-answer", "turn-ended").await;
+    assert!(
+        events.contains(&AgentEvent::TextDelta {
+            text: "late-approval-withheld".into()
+        }),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse { .. },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn computer_use_disconnect_reports_unknown_without_replay() {
+    let (controls, _steer, _token) = controls("Deny");
+    let home = tempfile::tempdir().unwrap();
+    let events = run_to_end(
+        &harness(),
+        computer_use_request("scenario:computer-use:disconnect", home.path()),
+        controls,
+    )
+    .await;
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    ..
+                },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn computer_use_interrupt_reports_unknown_without_provider_success() {
+    let (controls, _steer, token) = controls("Deny");
+    let home = tempfile::tempdir().unwrap();
+    let mut stream = harness()
+        .run(
+            computer_use_request("scenario:computer-use:cancel", home.path()),
+            controls,
+        )
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = tokio::time::timeout(Duration::from_secs(10), stream.next())
+        .await
+        .unwrap()
+    {
+        let event = event.unwrap();
+        let started = matches!(
+            &event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::Running,
+                    ..
+                },
+                ..
+            }
+        );
+        events.push(event);
+        if started {
+            token.cancel();
+        }
+    }
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    ..
+                },
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall {
+                call: ToolCall::ComputerUse {
+                    status: zeron_proto::ComputerUseStatus::ProviderCompleted,
+                    ..
+                },
+                ..
+            }
+        )),
+        "a completion after interrupt must not claim provider completion: {events:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Interrupted,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
 async fn interrupt_sends_turn_interrupt_and_maps_aborted() {
     let (controls, _steer, token) = controls("Yes");
     let mut stream = harness()

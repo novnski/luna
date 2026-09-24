@@ -431,7 +431,14 @@ fn tool_event(
     Option<String>,
     Option<String>,
 ) {
-    let outcome = if !resolved {
+    let outcome = if let ToolCall::ComputerUse { status, .. } = call {
+        match status {
+            zeron_proto::ComputerUseStatus::Running => ActivityOutcome::Pending,
+            zeron_proto::ComputerUseStatus::ProviderFailed => ActivityOutcome::Failed,
+            zeron_proto::ComputerUseStatus::ProviderCompleted
+            | zeron_proto::ComputerUseStatus::Unknown => ActivityOutcome::Unknown,
+        }
+    } else if !resolved {
         ActivityOutcome::Pending
     } else if is_error {
         ActivityOutcome::Failed
@@ -516,6 +523,29 @@ fn tool_event(
             None,
             None,
             format!("{server} · {tool}"),
+        ),
+        ToolCall::ComputerUse {
+            action,
+            app,
+            status,
+            screenshot_observed,
+            ..
+        } => (
+            ActivityKind::App,
+            action.clone(),
+            app.clone(),
+            None,
+            None,
+            format!(
+                "Provider computer use · {action} · {} · screenshot observed: {screenshot_observed}",
+                match status {
+                    zeron_proto::ComputerUseStatus::Running => "running",
+                    zeron_proto::ComputerUseStatus::ProviderCompleted =>
+                        "provider completed; target outcome unverified",
+                    zeron_proto::ComputerUseStatus::ProviderFailed => "provider failed",
+                    zeron_proto::ComputerUseStatus::Unknown => "outcome unknown; do not replay",
+                }
+            ),
         ),
         ToolCall::Unknown { name, .. } => (
             ActivityKind::Tool,
@@ -866,6 +896,24 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use zeron_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
+
+    #[test]
+    fn computer_use_provider_completion_never_becomes_semantic_success() {
+        let call = ToolCall::ComputerUse {
+            action: "click".into(),
+            app: Some("Finder".into()),
+            task_id: Some("task".into()),
+            thread_id: "provider".into(),
+            turn_id: "turn".into(),
+            status: zeron_proto::ComputerUseStatus::ProviderCompleted,
+            screenshot_observed: true,
+        };
+        let (kind, summary, _, outcome, _, app, _, _) = tool_event(&call, true, false, None);
+        assert_eq!(kind, ActivityKind::App);
+        assert_eq!(app.as_deref(), Some("Finder"));
+        assert_eq!(outcome, ActivityOutcome::Unknown);
+        assert!(summary.contains("screenshot observed: true"));
+    }
 
     #[test]
     fn luna_status_is_tool_activity_without_indexing_its_input_or_output() {
