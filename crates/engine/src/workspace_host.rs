@@ -34,7 +34,9 @@ use zeron_proto::{
     Space,
 };
 use zeron_sync::registry::{RegistryAdmission, RegistryWritePermit};
-use zeron_sync::{DocsStore, RegistryClient, RegistryTuning, TaskRecoveryTransition};
+use zeron_sync::{
+    DocsStore, LocalExecutableChange, RegistryClient, RegistryTuning, TaskRecoveryTransition,
+};
 
 use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 use crate::doc_host::EdgeConfig;
@@ -1134,6 +1136,7 @@ impl WorkspaceHost {
         chat_snapshots: &[(&str, &[u8])],
         chat_updates: &[(&str, &str, &[u8])],
         recovery: Option<&TaskRecoveryTransition>,
+        authority: &[LocalExecutableChange],
         mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
     ) -> Result<(R, CommandReceipt), TaskProjectionError> {
         let _persist = lock(&self.inner.snapshot_persist);
@@ -1180,7 +1183,7 @@ impl WorkspaceHost {
         let receipt = match self
             .inner
             .store
-            .complete_task_command_with_snapshot_changes_updates_and_recovery(
+            .complete_task_command_with_snapshot_changes_updates_recovery_and_authority(
                 command_id,
                 CommandReceiptStatus::Applied,
                 true,
@@ -1193,6 +1196,7 @@ impl WorkspaceHost {
                 &[],
                 chat_updates,
                 recovery,
+                authority,
             ) {
             Ok(Some(receipt)) => receipt,
             Ok(None) => {

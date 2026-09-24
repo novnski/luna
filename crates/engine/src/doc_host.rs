@@ -534,9 +534,10 @@ struct PreparedQueueProjection<T> {
     update: Vec<u8>,
     batch_id: Option<String>,
     authority_changes: Vec<LocalExecutableChange>,
+    unreceipted_new_commands: Vec<(String, String)>,
 }
 
-fn executable_row_hash<T: Serialize>(row: &T) -> Result<String, EngineError> {
+pub(crate) fn executable_row_hash<T: Serialize>(row: &T) -> Result<String, EngineError> {
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(row)?)))
 }
 
@@ -1096,7 +1097,7 @@ impl DocHost {
         let receipt = self
             .inner
             .store
-            .complete_task_command_with_snapshot_changes_and_updates(
+            .complete_task_command_with_snapshot_changes_updates_and_authority(
                 command_id,
                 status,
                 applied,
@@ -1108,6 +1109,7 @@ impl DocHost {
                 &snapshots,
                 &[],
                 &updates,
+                &prepared.authority_changes,
             )?
             .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
         self.install_queue_projection(&handle, prepared)?;
@@ -1127,6 +1129,7 @@ impl DocHost {
         identity_snapshot: Option<(&str, &[u8])>,
         recovery: Option<&TaskRecoveryTransition>,
         extra_snapshots: &[(&str, &[u8])],
+        locally_issued_command_ids: &[&str],
         doc_mutation: impl FnOnce(&SessionDoc) -> Result<R, EngineError>,
         registry_mutation: impl FnOnce(&mut RegistryDoc) -> Result<(), EngineError>,
     ) -> Result<(R, CommandReceipt), crate::workspace_host::TaskProjectionError> {
@@ -1134,9 +1137,28 @@ impl DocHost {
             .open(chat_id)
             .map_err(crate::workspace_host::TaskProjectionError::Mutation)?;
         let _projection = lock(&handle.queue_projection_lock);
-        let prepared = self
+        let mut prepared = self
             .prepare_queue_projection(&handle, command_id, doc_mutation)
             .map_err(crate::workspace_host::TaskProjectionError::Mutation)?;
+        for command_id in locally_issued_command_ids {
+            let position = prepared
+                .unreceipted_new_commands
+                .iter()
+                .position(|(id, _)| id == command_id)
+                .ok_or_else(|| {
+                    crate::workspace_host::TaskProjectionError::Mutation(EngineError::Other(
+                        format!("local context command {command_id} was not newly issued"),
+                    ))
+                })?;
+            let (row_id, hash) = prepared.unreceipted_new_commands.remove(position);
+            prepared.authority_changes.push(LocalExecutableChange {
+                doc_id: handle.chat_id.clone(),
+                kind: LocalExecutableKind::Command,
+                row_id,
+                expected_hash: None,
+                replacement_hash: Some(hash),
+            });
+        }
         let mut snapshots = vec![(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
         snapshots.extend_from_slice(extra_snapshots);
         let updates = Self::queue_projection_updates(&handle, &prepared);
@@ -1155,6 +1177,7 @@ impl DocHost {
                 &snapshots,
                 &updates,
                 recovery,
+                &prepared.authority_changes,
                 registry_mutation,
             )?;
         let outcome = self
@@ -1369,10 +1392,14 @@ impl DocHost {
             .zip(handle.as_ref())
             .map(|(prepared, handle)| Self::queue_projection_updates(handle, prepared))
             .unwrap_or_default();
+        let authority = prepared
+            .as_ref()
+            .map(|prepared| prepared.authority_changes.as_slice())
+            .unwrap_or(&[]);
         let receipts = self
             .inner
             .store
-            .confirm_task_command_correlation_with_snapshot_changes(
+            .confirm_task_command_correlation_with_snapshot_changes_and_authority(
                 task_id,
                 correlation_id,
                 active_turn_id,
@@ -1380,6 +1407,7 @@ impl DocHost {
                 binding_generation,
                 &snapshots,
                 &updates,
+                authority,
             )?;
         if !receipts.is_empty()
             && let (Some(handle), Some(prepared)) = (handle.as_ref(), prepared)
@@ -3355,6 +3383,7 @@ impl DocHost {
         let after_queue = candidate.read_queue()?;
         let after_commands = candidate.read_commands()?;
         let mut authority_changes = Vec::new();
+        let mut unreceipted_new_commands = Vec::new();
         let prior_queue = before_queue
             .iter()
             .map(|row| (row.id.as_str(), row))
@@ -3431,6 +3460,7 @@ impl DocHost {
             {
                 continue;
             }
+            let hash = executable_row_hash(after)?;
             let receipt = self.inner.store.task_command_receipt(&after.id)?;
             if receipt.as_ref().is_some_and(|receipt| {
                 receipt.task_id == handle.chat_id
@@ -3444,8 +3474,10 @@ impl DocHost {
                     kind: LocalExecutableKind::Command,
                     row_id: after.id.clone(),
                     expected_hash: None,
-                    replacement_hash: Some(executable_row_hash(after)?),
+                    replacement_hash: Some(hash),
                 });
+            } else {
+                unreceipted_new_commands.push((after.id.clone(), hash));
             }
         }
         let snapshot = candidate.export_snapshot()?;
@@ -3465,6 +3497,7 @@ impl DocHost {
             update,
             batch_id,
             authority_changes,
+            unreceipted_new_commands,
         })
     }
 
@@ -3546,6 +3579,7 @@ impl DocHost {
             update: prepared.update,
             batch_id: prepared.batch_id,
             authority_changes: prepared.authority_changes,
+            unreceipted_new_commands: prepared.unreceipted_new_commands,
         };
         let update = prepared
             .batch_id
@@ -3579,6 +3613,7 @@ impl DocHost {
             update: prepared.update,
             batch_id: prepared.batch_id,
             authority_changes: prepared.authority_changes,
+            unreceipted_new_commands: prepared.unreceipted_new_commands,
         };
         let pending = self
             .inner
@@ -3642,6 +3677,7 @@ impl DocHost {
             update: prepared.update,
             batch_id: prepared.batch_id,
             authority_changes: prepared.authority_changes,
+            unreceipted_new_commands: prepared.unreceipted_new_commands,
         };
         let pending = self
             .inner
@@ -3771,6 +3807,7 @@ impl DocHost {
             update: prepared.update,
             batch_id: prepared.batch_id,
             authority_changes: prepared.authority_changes,
+            unreceipted_new_commands: prepared.unreceipted_new_commands,
         };
         let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
         let updates = Self::queue_projection_updates(handle, &prepared);

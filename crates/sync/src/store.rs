@@ -2852,6 +2852,40 @@ impl DocsStore {
         updates: &[(&str, &str, &[u8])],
         recovery: Option<&TaskRecoveryTransition>,
     ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.complete_task_command_with_snapshot_changes_updates_recovery_and_authority(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            snapshots,
+            deleted_snapshots,
+            updates,
+            recovery,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_task_command_with_snapshot_changes_updates_recovery_and_authority(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        snapshots: &[(&str, &[u8])],
+        deleted_snapshots: &[&str],
+        updates: &[(&str, &str, &[u8])],
+        recovery: Option<&TaskRecoveryTransition>,
+        authority: &[LocalExecutableChange],
+    ) -> Result<Option<CommandReceipt>, StoreError> {
         self.complete_task_command_inner(
             command_id,
             status,
@@ -2863,7 +2897,7 @@ impl DocsStore {
             recovery_action,
             Some((snapshots, deleted_snapshots, updates)),
             recovery,
-            &[],
+            authority,
         )
     }
 
@@ -3209,6 +3243,30 @@ impl DocsStore {
         snapshots: &[(&str, &[u8])],
         updates: &[(&str, &str, &[u8])],
     ) -> Result<Vec<CommandReceipt>, StoreError> {
+        self.confirm_task_command_correlation_with_snapshot_changes_and_authority(
+            task_id,
+            correlation_id,
+            active_turn_id,
+            binding_id,
+            binding_generation,
+            snapshots,
+            updates,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn confirm_task_command_correlation_with_snapshot_changes_and_authority(
+        &self,
+        task_id: &str,
+        correlation_id: &str,
+        active_turn_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        snapshots: &[(&str, &[u8])],
+        updates: &[(&str, &str, &[u8])],
+        authority: &[LocalExecutableChange],
+    ) -> Result<Vec<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let rows = {
@@ -3238,6 +3296,7 @@ impl DocsStore {
         }
         if !confirmed.is_empty() {
             self.persist_snapshot_changes_tx(&tx, snapshots, &[], updates)?;
+            Self::apply_local_executable_changes_tx(&tx, authority)?;
         }
         tx.commit()?;
         Ok(confirmed)

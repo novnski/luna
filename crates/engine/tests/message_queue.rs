@@ -2236,6 +2236,11 @@ async fn only_one_editor_wins_and_an_expired_edit_requires_review() {
         "opening turn",
     )
     .await;
+    wait_for(
+        || core.sessions.turn_in_flight(CHAT),
+        "opening turn to become active",
+    )
+    .await;
     let id = core
         .doc_host
         .queue_message(CHAT, "review me", Vec::new())

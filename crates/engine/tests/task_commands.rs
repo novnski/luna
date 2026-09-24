@@ -4842,6 +4842,111 @@ async fn staged_history_fork_persists_acknowledged_id_and_replay_never_mutates_t
 }
 
 #[tokio::test]
+async fn fork_initial_prompt_grant_commits_with_its_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let forks = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble_history(dir.path(), forks, HarnessId::Opencode);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let source_id = uuid::Uuid::new_v4().to_string();
+    create_materialized_history_task(&core, &client, &source_id, HarnessId::Opencode).await;
+    core.doc_host.flush_all();
+
+    let failed_target = uuid::Uuid::new_v4().to_string();
+    let db_path = dir.path().join("data/orgs/l13-org/l13-user/docs.sqlite3");
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_fork_prompt_snapshot BEFORE INSERT ON snapshots
+             WHEN NEW.doc_id='{failed_target}'
+             BEGIN SELECT RAISE(ABORT, 'forced fork prompt snapshot failure'); END;"
+        ))
+        .unwrap();
+    }
+    let before = snapshot(&client, &source_id).await;
+    let failed_command_id = "fork-prompt-failed";
+    let failed = execute(
+        &client,
+        envelope(
+            failed_command_id,
+            &source_id,
+            Some(&before),
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": failed_target,
+                "boundary": "tip",
+                "initialPrompt": "must not dispatch",
+                "sourceLink": format!("luna://open/chat/{source_id}?workspace=fixture"),
+                "review": history_review(&core, &before, &source_id, None, None),
+            }),
+        ),
+    )
+    .await;
+    assert_ne!(failed.status, CommandReceiptStatus::Applied);
+    assert!(
+        core.store
+            .local_executable_hash(
+                &failed_target,
+                zeron_sync::LocalExecutableKind::Command,
+                &format!("fork-run:{failed_command_id}"),
+            )
+            .unwrap()
+            .is_none()
+    );
+    {
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        db.execute_batch("DROP TRIGGER fail_fork_prompt_snapshot")
+            .unwrap();
+    }
+
+    let target_id = uuid::Uuid::new_v4().to_string();
+    let before = snapshot(&client, &source_id).await;
+    let command_id = "fork-prompt-applied";
+    let applied = execute(
+        &client,
+        envelope(
+            command_id,
+            &source_id,
+            Some(&before),
+            serde_json::json!({
+                "kind": "forkTask",
+                "newTaskId": target_id,
+                "boundary": "tip",
+                "initialPrompt": "locally reviewed fork prompt",
+                "sourceLink": format!("luna://open/chat/{source_id}?workspace=fixture"),
+                "review": history_review(&core, &before, &source_id, None, None),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(applied.status, CommandReceiptStatus::Applied);
+    let run_id = format!("fork-run:{command_id}");
+    assert!(
+        core.store
+            .local_executable_hash(
+                &target_id,
+                zeron_sync::LocalExecutableKind::Command,
+                &run_id
+            )
+            .unwrap()
+            .is_some()
+    );
+    let handle = core.doc_host.open(&target_id).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if handle.doc().read_commands().unwrap().iter().any(|row| {
+                row.id == run_id && row.status == zeron_doc::SessionCommandStatus::Applied
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    core.shutdown().await;
+}
+
+#[tokio::test]
 async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     let dir = tempfile::tempdir().unwrap();
     let forks = Arc::new(Mutex::new(Vec::new()));
@@ -5274,6 +5379,17 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     )
     .await;
     assert_eq!(edited.status, CommandReceiptStatus::Applied);
+    let internal_run_id = "history-edit-run:history-edit-command";
+    assert!(
+        core.store
+            .local_executable_hash(
+                &task_id,
+                zeron_sync::LocalExecutableKind::Command,
+                internal_run_id,
+            )
+            .unwrap()
+            .is_some()
+    );
 
     let after = core.task_identity.view(&task_id).unwrap();
     let after_binding = after.current_binding.unwrap();
@@ -5341,6 +5457,19 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     })
     .await
     .unwrap();
+    assert!(
+        core.doc_host
+            .open(&task_id)
+            .unwrap()
+            .doc()
+            .read_commands()
+            .unwrap()
+            .iter()
+            .any(|command| {
+                command.id == internal_run_id
+                    && command.status == zeron_doc::SessionCommandStatus::Applied
+            })
+    );
     let restore_snapshot = snapshot(&client, &task_id).await;
     let mut restore_review = history_review(&core, &restore_snapshot, &task_id, None, None);
     restore_review["messageText"] = recoveries[0].source_provider_session_id.clone().into();

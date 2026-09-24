@@ -22,7 +22,7 @@ The existing relay client cache needs an explicit target-bound `remote_session` 
 
 ## Synced task documents
 
-The task owner also checks executable chat2 rows at its command and queued-message drains. A local-only durable record must match the exact pending command or queued-message row before provider work starts; the row's `issued_by` field, relay origin, and a replayed checkpoint cannot grant that record. Local composer commands and L25 approved queue changes create it through their local admission path. A changed row must be admitted again locally.
+The task owner also checks executable chat2 rows at its command and queued-message drains. A local-only durable record must match the exact pending command or queued-message row before provider work starts; the row's `issued_by` field, relay origin, and a replayed checkpoint cannot grant that record. Local composer commands and L25 approved queue changes create it through their local admission path. A history fork or edit grants only its newly issued internal prompt command in the same transaction as the context boundary. A changed row must be admitted again locally.
 
 Rows restored from an older profile without this record are treated as untrusted. Commands without a local receipt are rejected in the task document; a row that collides with a local receipt remains pending for reconciliation. Untrusted queued messages are held with “Remote message needs local review.” A user can inspect a held message and explicitly use Send Now or Steer Now to admit its exact content when the task has an available run configuration, or remove it. The hold can also stop later queued messages until the user resolves the head row.
 

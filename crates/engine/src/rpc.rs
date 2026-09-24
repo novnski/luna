@@ -80,7 +80,7 @@ use zeron_proto::{
     TaskCommandSnapshot, TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
-use zeron_sync::DocsStore;
+use zeron_sync::{DocsStore, LocalExecutableChange, LocalExecutableKind};
 
 use crate::agent_accounts::AgentAccounts;
 use crate::auth::Auth;
@@ -4103,6 +4103,7 @@ impl EngineRpc {
                     identity_snapshot,
                     transition.as_ref(),
                     &[],
+                    &[],
                     move |doc| {
                         doc.clear_context_usage()?;
                         doc.set_context_control(&state)?;
@@ -4222,6 +4223,7 @@ impl EngineRpc {
             binding_generation,
             None,
             transition.as_ref(),
+            &[],
             &[],
             move |doc| {
                 doc.set_context_control(&state_for_doc)?;
@@ -4475,7 +4477,9 @@ impl EngineRpc {
                 let prompt = initial_prompt
                     .map(|prompt| prompt.trim().to_string())
                     .filter(|prompt| !prompt.is_empty());
+                let mut authority = Vec::new();
                 if let Some(prompt) = prompt.as_deref() {
+                    let local_command_id = format!("fork-run:{command_id}");
                     let request = self
                         .inherited_run_request(
                             task_id,
@@ -4486,11 +4490,32 @@ impl EngineRpc {
                         .map_err(TaskProjectionError::ProviderUnknown)?;
                     self.queue_initial_history_prompt(
                         &target_doc,
-                        &format!("fork-run:{command_id}"),
+                        &local_command_id,
                         &uuid::Uuid::new_v4().to_string(),
                         request,
                     )
                     .map_err(TaskProjectionError::ProviderUnknown)?;
+                    let command = target_doc
+                        .read_commands()
+                        .map_err(crate::EngineError::from)
+                        .map_err(TaskProjectionError::ProviderUnknown)?
+                        .into_iter()
+                        .find(|row| row.id == local_command_id)
+                        .ok_or_else(|| {
+                            TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                                "local fork run command vanished before commit".into(),
+                            ))
+                        })?;
+                    authority.push(LocalExecutableChange {
+                        doc_id: new_task_id.clone(),
+                        kind: LocalExecutableKind::Command,
+                        row_id: local_command_id,
+                        expected_hash: None,
+                        replacement_hash: Some(
+                            crate::doc_host::executable_row_hash(&command)
+                                .map_err(TaskProjectionError::ProviderUnknown)?,
+                        ),
+                    });
                 }
                 let target_snapshot = target_doc
                     .export_snapshot()
@@ -4521,6 +4546,7 @@ impl EngineRpc {
                                 &[(new_task_id.as_str(), target_snapshot.as_slice())],
                                 &[],
                                 None,
+                                &authority,
                                 move |registry| {
                                     registry.upsert_chat(&Chat {
                                         id: new_task_for_registry,
@@ -4703,6 +4729,7 @@ impl EngineRpc {
                                 (recovery.index_id.as_str(), recovery.index_bytes.as_slice()),
                                 (recovery.snapshot_id.as_str(), source_snapshot.as_slice()),
                             ];
+                            let admission_id = run_command_id.clone();
                             let (_, receipt) = self.doc_host.commit_context_boundary(
                                 task_id,
                                 command_id,
@@ -4711,6 +4738,7 @@ impl EngineRpc {
                                 identity_snapshot,
                                 None,
                                 &extra,
+                                &[admission_id.as_str()],
                                 move |doc| {
                                     doc.replace_conversation_entries(
                                         &plan_entries,
@@ -4938,6 +4966,7 @@ impl EngineRpc {
                                 identity_snapshot,
                                 None,
                                 &extra,
+                                &[],
                                 move |doc| {
                                     doc.replace_conversation_entries(
                                         &plan_entries,
