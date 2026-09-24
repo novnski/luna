@@ -48,6 +48,8 @@ pub enum StoreError {
     AdmissionMismatch,
     #[error("database is already open in a conflicting admission mode")]
     DatabaseOpenConflict,
+    #[error("local executable authority changed before projection commit")]
+    LocalExecutableAuthorityConflict,
 }
 
 /// Ordered, append-only migrations. Each entry runs once inside a transaction;
@@ -270,7 +272,41 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE project_cleanup ADD COLUMN owner_boot_id TEXT NOT NULL DEFAULT '';
      CREATE INDEX task_cleanup_pending ON task_cleanup(state,task_id);
      CREATE INDEX project_cleanup_pending ON project_cleanup(state,project_id);",
+    // v12 — only locally accepted executable CRDT rows may reach the host
+    // drains. Foreign chat2 imports cannot create or edit these records.
+    "CREATE TABLE local_executable_authority (
+        doc_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        row_id TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        PRIMARY KEY(doc_id,kind,row_id)
+     ) STRICT;",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalExecutableKind {
+    Command,
+    Queue,
+}
+
+/// One exact local grant transition committed with its document projection.
+#[derive(Debug, Clone)]
+pub struct LocalExecutableChange {
+    pub doc_id: String,
+    pub kind: LocalExecutableKind,
+    pub row_id: String,
+    pub expected_hash: Option<String>,
+    pub replacement_hash: Option<String>,
+}
+
+impl LocalExecutableKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Queue => "queue",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskCommandBeginKind {
@@ -1379,6 +1415,27 @@ impl DocsStore {
         bytes: &[u8],
         updates: &[(&str, &[u8])],
     ) -> Result<(), StoreError> {
+        self.save_snapshot_with_updates_and_authority_inner(doc_id, bytes, updates, &[])
+    }
+
+    pub fn save_snapshot_with_updates_and_authority(
+        &self,
+        doc_id: &str,
+        bytes: &[u8],
+        updates: &[(&str, &[u8])],
+        authority: &[LocalExecutableChange],
+    ) -> Result<(), StoreError> {
+        self.require_uncoordinated_snapshot_save()?;
+        self.save_snapshot_with_updates_and_authority_inner(doc_id, bytes, updates, authority)
+    }
+
+    fn save_snapshot_with_updates_and_authority_inner(
+        &self,
+        doc_id: &str,
+        bytes: &[u8],
+        updates: &[(&str, &[u8])],
+        authority: &[LocalExecutableChange],
+    ) -> Result<(), StoreError> {
         let mut conn = self.snapshot_write_conn();
         let tx = conn.transaction()?;
         let updates = updates
@@ -1386,8 +1443,77 @@ impl DocsStore {
             .map(|(batch_id, bytes)| (doc_id, *batch_id, *bytes))
             .collect::<Vec<_>>();
         self.persist_snapshot_changes_tx(&tx, &[(doc_id, bytes)], &[], &updates)?;
+        Self::apply_local_executable_changes_tx(&tx, authority)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Durable, local-only correlation for an executable row in a CRDT doc.
+    /// `expected` is a compare-and-set fence for an explicitly local edit;
+    /// `None` inserts a new grant without replacing a conflicting old one.
+    /// Remote row imports never call this method.
+    pub fn record_local_executable(
+        &self,
+        doc_id: &str,
+        kind: LocalExecutableKind,
+        row_id: &str,
+        payload_hash: &str,
+        expected: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        let changed = match expected {
+            Some(prior) => conn.execute(
+                "UPDATE local_executable_authority SET payload_hash=?4
+                 WHERE doc_id=?1 AND kind=?2 AND row_id=?3 AND payload_hash=?5",
+                params![doc_id, kind.as_str(), row_id, payload_hash, prior],
+            )?,
+            None => conn.execute(
+                "INSERT OR IGNORE INTO local_executable_authority(doc_id,kind,row_id,payload_hash)
+                 VALUES (?1,?2,?3,?4)",
+                params![doc_id, kind.as_str(), row_id, payload_hash],
+            )?,
+        };
+        if changed > 0 {
+            return Ok(true);
+        }
+        Ok(conn
+            .query_row(
+                "SELECT payload_hash FROM local_executable_authority
+             WHERE doc_id=?1 AND kind=?2 AND row_id=?3",
+                params![doc_id, kind.as_str(), row_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .is_some_and(|current| current == payload_hash))
+    }
+
+    pub fn local_executable_hash(
+        &self,
+        doc_id: &str,
+        kind: LocalExecutableKind,
+        row_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT payload_hash FROM local_executable_authority
+             WHERE doc_id=?1 AND kind=?2 AND row_id=?3",
+                params![doc_id, kind.as_str(), row_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn local_executable_matches(
+        &self,
+        doc_id: &str,
+        kind: LocalExecutableKind,
+        row_id: &str,
+        payload_hash: &str,
+    ) -> Result<bool, StoreError> {
+        Ok(self
+            .local_executable_hash(doc_id, kind, row_id)?
+            .is_some_and(|expected| expected == payload_hash))
     }
 
     /// Save the snapshot together with its chat2 room cursor and doc epoch —
@@ -2545,6 +2671,7 @@ impl DocsStore {
             recovery_action,
             None,
             None,
+            &[],
         )
     }
 
@@ -2575,6 +2702,7 @@ impl DocsStore {
             recovery_action,
             None,
             Some(recovery),
+            &[],
         )
     }
 
@@ -2639,6 +2767,38 @@ impl DocsStore {
             recovery_action,
             Some((snapshots, deleted_snapshots, updates)),
             None,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn complete_task_command_with_snapshot_changes_updates_and_authority(
+        &self,
+        command_id: &str,
+        status: CommandReceiptStatus,
+        applied: bool,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        active_turn_id: Option<&str>,
+        reason: Option<CommandReceiptReason>,
+        recovery_action: Option<&str>,
+        snapshots: &[(&str, &[u8])],
+        deleted_snapshots: &[&str],
+        updates: &[(&str, &str, &[u8])],
+        authority: &[LocalExecutableChange],
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.complete_task_command_inner(
+            command_id,
+            status,
+            applied,
+            binding_id,
+            binding_generation,
+            active_turn_id,
+            reason,
+            recovery_action,
+            Some((snapshots, deleted_snapshots, updates)),
+            None,
+            authority,
         )
     }
 
@@ -2670,6 +2830,7 @@ impl DocsStore {
             recovery_action,
             Some((snapshots, deleted_snapshots, &[])),
             Some(recovery),
+            &[],
         )
     }
 
@@ -2702,6 +2863,7 @@ impl DocsStore {
             recovery_action,
             Some((snapshots, deleted_snapshots, updates)),
             recovery,
+            &[],
         )
     }
 
@@ -2719,6 +2881,7 @@ impl DocsStore {
         recovery_action: Option<&str>,
         snapshot_changes: Option<(&[(&str, &[u8])], &[&str], &[(&str, &str, &[u8])])>,
         recovery: Option<&TaskRecoveryTransition>,
+        authority: &[LocalExecutableChange],
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -2735,6 +2898,9 @@ impl DocsStore {
         };
         let mut receipt: CommandReceipt = serde_json::from_slice(&bytes)?;
         if receipt.status.is_terminal() {
+            if !authority.is_empty() {
+                return Err(StoreError::LocalExecutableAuthorityConflict);
+            }
             tx.commit()?;
             return Ok(Some(receipt));
         }
@@ -2753,6 +2919,7 @@ impl DocsStore {
         if let Some(recovery) = recovery {
             apply_task_recovery_transition_tx(&tx, recovery)?;
         }
+        Self::apply_local_executable_changes_tx(&tx, authority)?;
         tx.commit()?;
         Ok(Some(receipt))
     }
@@ -2789,6 +2956,43 @@ impl DocsStore {
         Ok(())
     }
 
+    fn apply_local_executable_changes_tx(
+        tx: &rusqlite::Transaction<'_>,
+        changes: &[LocalExecutableChange],
+    ) -> Result<(), StoreError> {
+        for change in changes {
+            let current: Option<String> = tx
+                .query_row(
+                    "SELECT payload_hash FROM local_executable_authority
+                     WHERE doc_id=?1 AND kind=?2 AND row_id=?3",
+                    params![change.doc_id, change.kind.as_str(), change.row_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if current != change.expected_hash {
+                return Err(StoreError::LocalExecutableAuthorityConflict);
+            }
+            match &change.replacement_hash {
+                Some(hash) => {
+                    tx.execute(
+                        "INSERT INTO local_executable_authority(doc_id,kind,row_id,payload_hash)
+                         VALUES (?1,?2,?3,?4)
+                         ON CONFLICT(doc_id,kind,row_id) DO UPDATE SET payload_hash=excluded.payload_hash",
+                        params![change.doc_id, change.kind.as_str(), change.row_id, hash],
+                    )?;
+                }
+                None => {
+                    tx.execute(
+                        "DELETE FROM local_executable_authority
+                         WHERE doc_id=?1 AND kind=?2 AND row_id=?3",
+                        params![change.doc_id, change.kind.as_str(), change.row_id],
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Preserve an ambiguous provider outcome as pending. A retry with the same
     /// id reads this receipt and never invokes the provider again.
     pub fn mark_task_command_unknown(
@@ -2806,6 +3010,23 @@ impl DocsStore {
         snapshots: &[(&str, &[u8])],
         updates: &[(&str, &str, &[u8])],
     ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.mark_task_command_unknown_with_snapshot_changes_and_authority(
+            command_id,
+            message,
+            snapshots,
+            updates,
+            &[],
+        )
+    }
+
+    pub fn mark_task_command_unknown_with_snapshot_changes_and_authority(
+        &self,
+        command_id: &str,
+        message: &str,
+        snapshots: &[(&str, &[u8])],
+        updates: &[(&str, &str, &[u8])],
+        authority: &[LocalExecutableChange],
+    ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let Some(bytes) = tx
@@ -2820,6 +3041,9 @@ impl DocsStore {
             return Ok(None);
         };
         let mut receipt: CommandReceipt = serde_json::from_slice(&bytes)?;
+        if receipt.status.is_terminal() && !authority.is_empty() {
+            return Err(StoreError::LocalExecutableAuthorityConflict);
+        }
         if !receipt.status.is_terminal() {
             receipt.reason = Some(CommandReceiptReason {
                 code: CommandReasonCode::ProviderAcceptanceUnknown,
@@ -2837,6 +3061,7 @@ impl DocsStore {
             )?;
         }
         self.persist_snapshot_changes_tx(&tx, snapshots, &[], updates)?;
+        Self::apply_local_executable_changes_tx(&tx, authority)?;
         tx.commit()?;
         Ok(Some(receipt))
     }
@@ -2846,7 +3071,7 @@ impl DocsStore {
         command_id: &str,
         correlation_id: &str,
     ) -> Result<Option<CommandReceipt>, StoreError> {
-        self.set_task_command_correlation_inner(command_id, correlation_id, &[], &[], None)
+        self.set_task_command_correlation_inner(command_id, correlation_id, &[], &[], None, &[])
     }
 
     pub fn set_task_command_correlation_with_snapshot_changes(
@@ -2862,6 +3087,25 @@ impl DocsStore {
             snapshots,
             updates,
             None,
+            &[],
+        )
+    }
+
+    pub fn set_task_command_correlation_with_snapshot_changes_and_authority(
+        &self,
+        command_id: &str,
+        correlation_id: &str,
+        snapshots: &[(&str, &[u8])],
+        updates: &[(&str, &str, &[u8])],
+        authority: &[LocalExecutableChange],
+    ) -> Result<Option<CommandReceipt>, StoreError> {
+        self.set_task_command_correlation_inner(
+            command_id,
+            correlation_id,
+            snapshots,
+            updates,
+            None,
+            authority,
         )
     }
 
@@ -2877,6 +3121,7 @@ impl DocsStore {
             &[],
             &[],
             Some(recovery),
+            &[],
         )
     }
 
@@ -2887,6 +3132,7 @@ impl DocsStore {
         snapshots: &[(&str, &[u8])],
         updates: &[(&str, &str, &[u8])],
         recovery: Option<&TaskRecoveryTransition>,
+        authority: &[LocalExecutableChange],
     ) -> Result<Option<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -2902,6 +3148,9 @@ impl DocsStore {
             return Ok(None);
         };
         let mut receipt: CommandReceipt = serde_json::from_slice(&bytes)?;
+        if receipt.status.is_terminal() && !authority.is_empty() {
+            return Err(StoreError::LocalExecutableAuthorityConflict);
+        }
         if !receipt.status.is_terminal() {
             receipt.correlation_id = Some(correlation_id.into());
             receipt.reason = Some(CommandReceiptReason {
@@ -2922,6 +3171,7 @@ impl DocsStore {
         if let Some(recovery) = recovery {
             apply_task_recovery_transition_tx(&tx, recovery)?;
         }
+        Self::apply_local_executable_changes_tx(&tx, authority)?;
         tx.commit()?;
         Ok(Some(receipt))
     }

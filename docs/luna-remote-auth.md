@@ -20,4 +20,10 @@ The CLI accepts `environment-read`, `tasks-read`, `files-read`, and `terminal-op
 
 The existing relay client cache needs an explicit target-bound `remote_session` source before it will dial a peer. L29 provides the typed `RpcClient::redeem_remote_pairing` and `RpcClient::authenticate_remote` calls but does not persist outbound client tokens or provide the L30 SSH route or L31 VPS relay. The legacy relay nudge is ignored because it carries no device-session proof. Pairing, revocation, and CLI management are available locally; remote transport setup and deployment remain later steps.
 
+## Synced task documents
+
+The task owner also checks executable chat2 rows at its command and queued-message drains. A local-only durable record must match the exact pending command or queued-message row before provider work starts; the row's `issued_by` field, relay origin, and a replayed checkpoint cannot grant that record. Local composer commands and L25 approved queue changes create it through their local admission path. A changed row must be admitted again locally.
+
+Rows restored from an older profile without this record are treated as untrusted. Commands without a local receipt are rejected in the task document; a row that collides with a local receipt remains pending for reconciliation. Untrusted queued messages are held with “Remote message needs local review.” A user can inspect a held message and explicitly use Send Now or Steer Now to admit its exact content when the task has an available run configuration, or remove it. The hold can also stop later queued messages until the user resolves the head row.
+
 If the authority file is damaged or has unsafe permissions, remote hosting and pairing are disabled for that profile; local in-process and IPC work remains available. The current offline backup excludes the authority file, so restoring task data does not restore device sessions. Historical unscoped relay task/file writes and command nudges are unavailable under this policy.

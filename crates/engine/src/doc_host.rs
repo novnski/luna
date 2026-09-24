@@ -40,7 +40,9 @@ use zeron_proto::{
     ContextControlState, ConversationSourceContext, HarnessId, TaskCommandRead, UserInputAnswer,
     UserInputQuestion,
 };
-use zeron_sync::{DocsStore, TaskCommandBegin, TaskRecoveryTransition};
+use zeron_sync::{
+    DocsStore, LocalExecutableChange, LocalExecutableKind, TaskCommandBegin, TaskRecoveryTransition,
+};
 
 use crate::http_error::describe_http_error;
 use crate::sessions::{SessionsEngine, SteerOutcome};
@@ -531,6 +533,11 @@ struct PreparedQueueProjection<T> {
     snapshot: Vec<u8>,
     update: Vec<u8>,
     batch_id: Option<String>,
+    authority_changes: Vec<LocalExecutableChange>,
+}
+
+fn executable_row_hash<T: Serialize>(row: &T) -> Result<String, EngineError> {
+    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(row)?)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3165,6 +3172,17 @@ impl DocHost {
             status: SessionCommandStatus::Pending,
             resolution: None,
         };
+        if !self.inner.store.record_local_executable(
+            chat_id,
+            LocalExecutableKind::Command,
+            command_id,
+            &executable_row_hash(&entry)?,
+            None,
+        )? {
+            return Err(EngineError::Other(
+                "command id already has different local authority".into(),
+            ));
+        }
         handle.doc.queue_command(&entry)?;
         // Sending a message revives an archived chat: the user is acting in it
         // again, so the LWW row flips back to active on every device. Best-
@@ -3262,10 +3280,11 @@ impl DocHost {
         handle
             .durable_projection_uninstalled
             .store(true, Ordering::Release);
-        self.inner.store.save_snapshot_with_updates(
+        self.inner.store.save_snapshot_with_updates_and_authority(
             &handle.chat_id,
             &prepared.snapshot,
             &updates,
+            &prepared.authority_changes,
         )?;
         after_commit()?;
         let result = self.install_queue_projection(&handle, prepared);
@@ -3330,7 +3349,105 @@ impl DocHost {
         }
         let candidate = SessionDoc::from_doc(raw);
         let frontier = candidate.doc().oplog_vv();
+        let before_queue = candidate.read_queue()?;
+        let before_commands = candidate.read_commands()?;
         let outcome = mutation(&candidate)?;
+        let after_queue = candidate.read_queue()?;
+        let after_commands = candidate.read_commands()?;
+        let mut authority_changes = Vec::new();
+        let prior_queue = before_queue
+            .iter()
+            .map(|row| (row.id.as_str(), row))
+            .collect::<HashMap<_, _>>();
+        let next_queue = after_queue
+            .iter()
+            .map(|row| (row.id.as_str(), row))
+            .collect::<HashMap<_, _>>();
+        for before in &before_queue {
+            let after = next_queue.get(before.id.as_str()).copied();
+            if after == Some(before) {
+                continue;
+            }
+            let previous = self.inner.store.local_executable_hash(
+                &handle.chat_id,
+                LocalExecutableKind::Queue,
+                &before.id,
+            )?;
+            if let Some(previous) = previous {
+                let replacement = if previous == executable_row_hash(before)? {
+                    after.map(executable_row_hash).transpose()?
+                } else {
+                    None
+                };
+                authority_changes.push(LocalExecutableChange {
+                    doc_id: handle.chat_id.clone(),
+                    kind: LocalExecutableKind::Queue,
+                    row_id: before.id.clone(),
+                    expected_hash: Some(previous),
+                    replacement_hash: replacement,
+                });
+            }
+        }
+        for after in &after_queue {
+            if !prior_queue.contains_key(after.id.as_str()) {
+                authority_changes.push(LocalExecutableChange {
+                    doc_id: handle.chat_id.clone(),
+                    kind: LocalExecutableKind::Queue,
+                    row_id: after.id.clone(),
+                    expected_hash: None,
+                    replacement_hash: Some(executable_row_hash(after)?),
+                });
+            }
+        }
+        let next_commands = after_commands
+            .iter()
+            .map(|row| (row.id.as_str(), row))
+            .collect::<HashMap<_, _>>();
+        for before in &before_commands {
+            if next_commands.contains_key(before.id.as_str()) {
+                continue;
+            }
+            if let Some(previous) = self.inner.store.local_executable_hash(
+                &handle.chat_id,
+                LocalExecutableKind::Command,
+                &before.id,
+            )? {
+                authority_changes.push(LocalExecutableChange {
+                    doc_id: handle.chat_id.clone(),
+                    kind: LocalExecutableKind::Command,
+                    row_id: before.id.clone(),
+                    expected_hash: Some(previous),
+                    replacement_hash: None,
+                });
+            }
+        }
+        let prior_command_ids = before_commands
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<HashSet<_>>();
+        for after in &after_commands {
+            if prior_command_ids.contains(after.id.as_str())
+                || after.status != SessionCommandStatus::Pending
+            {
+                continue;
+            }
+            let receipt = self.inner.store.task_command_receipt(&after.id)?;
+            if receipt.as_ref().is_some_and(|receipt| {
+                receipt.task_id == handle.chat_id
+                    && matches!(
+                        receipt.status,
+                        CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+                    )
+            }) {
+                authority_changes.push(LocalExecutableChange {
+                    doc_id: handle.chat_id.clone(),
+                    kind: LocalExecutableKind::Command,
+                    row_id: after.id.clone(),
+                    expected_hash: None,
+                    replacement_hash: Some(executable_row_hash(after)?),
+                });
+            }
+        }
         let snapshot = candidate.export_snapshot()?;
         let update = candidate
             .doc()
@@ -3347,6 +3464,7 @@ impl DocHost {
             snapshot,
             update,
             batch_id,
+            authority_changes,
         })
     }
 
@@ -3427,16 +3545,18 @@ impl DocHost {
             snapshot: prepared.snapshot,
             update: prepared.update,
             batch_id: prepared.batch_id,
+            authority_changes: prepared.authority_changes,
         };
         let update = prepared
             .batch_id
             .as_deref()
             .map(|batch_id| vec![(batch_id, prepared.update.as_slice())])
             .unwrap_or_default();
-        self.inner.store.save_snapshot_with_updates(
+        self.inner.store.save_snapshot_with_updates_and_authority(
             &handle.chat_id,
             &prepared.snapshot,
             &update,
+            &prepared.authority_changes,
         )?;
         self.install_queue_projection(handle, prepared)
     }
@@ -3458,6 +3578,7 @@ impl DocHost {
             snapshot: prepared.snapshot,
             update: prepared.update,
             batch_id: prepared.batch_id,
+            authority_changes: prepared.authority_changes,
         };
         let pending = self
             .inner
@@ -3469,7 +3590,7 @@ impl DocHost {
         let receipt = self
             .inner
             .store
-            .complete_task_command_with_snapshot_changes_and_updates(
+            .complete_task_command_with_snapshot_changes_updates_and_authority(
                 command_id,
                 CommandReceiptStatus::Applied,
                 true,
@@ -3481,6 +3602,7 @@ impl DocHost {
                 &snapshots,
                 &[],
                 &updates,
+                &prepared.authority_changes,
             )?
             .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
         let outcome = self.install_queue_projection(handle, prepared)?;
@@ -3519,6 +3641,7 @@ impl DocHost {
             snapshot: prepared.snapshot,
             update: prepared.update,
             batch_id: prepared.batch_id,
+            authority_changes: prepared.authority_changes,
         };
         let pending = self
             .inner
@@ -3546,7 +3669,7 @@ impl DocHost {
         let committed = self
             .inner
             .store
-            .complete_task_command_with_snapshot_changes_and_updates(
+            .complete_task_command_with_snapshot_changes_updates_and_authority(
                 command_id,
                 CommandReceiptStatus::Applied,
                 true,
@@ -3558,6 +3681,7 @@ impl DocHost {
                 &snapshots,
                 &[],
                 &updates,
+                &prepared.authority_changes,
             );
         let receipt = match committed {
             Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => receipt,
@@ -3603,30 +3727,62 @@ impl DocHost {
         handle: &ChatDocHandle,
         command_id: &str,
         correlation_id: &str,
+        admit_hash: Option<&str>,
         mutation: impl FnOnce(&SessionDoc) -> Result<(T, bool), EngineError>,
     ) -> Result<(T, Option<CommandReceipt>), EngineError> {
         let _projection = lock(&handle.queue_projection_lock);
-        let prepared = self.prepare_queue_projection(handle, command_id, mutation)?;
+        let mut prepared = self.prepare_queue_projection(handle, command_id, mutation)?;
         let (outcome, commit) = prepared.outcome;
         if !commit {
             return Ok((outcome, None));
+        }
+        if admit_hash.is_some() {
+            let raw = loro::LoroDoc::new();
+            raw.import(&prepared.snapshot).map_err(|error| {
+                EngineError::Other(format!("reviewed queue projection import failed: {error}"))
+            })?;
+            let claimed = SessionDoc::from_doc(raw)
+                .read_queue()?
+                .into_iter()
+                .find(|row| row.id == correlation_id)
+                .ok_or_else(|| EngineError::Other("reviewed queued row vanished".into()))?;
+            let new_hash = executable_row_hash(&claimed)?;
+            if let Some(change) = prepared.authority_changes.iter_mut().find(|change| {
+                change.kind == LocalExecutableKind::Queue && change.row_id == correlation_id
+            }) {
+                change.replacement_hash = Some(new_hash);
+            } else {
+                prepared.authority_changes.push(LocalExecutableChange {
+                    doc_id: handle.chat_id.clone(),
+                    kind: LocalExecutableKind::Queue,
+                    row_id: correlation_id.to_owned(),
+                    expected_hash: self.inner.store.local_executable_hash(
+                        &handle.chat_id,
+                        LocalExecutableKind::Queue,
+                        correlation_id,
+                    )?,
+                    replacement_hash: Some(new_hash),
+                });
+            }
         }
         let prepared = PreparedQueueProjection {
             outcome,
             snapshot: prepared.snapshot,
             update: prepared.update,
             batch_id: prepared.batch_id,
+            authority_changes: prepared.authority_changes,
         };
         let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
         let updates = Self::queue_projection_updates(handle, &prepared);
         let receipt = self
             .inner
             .store
-            .set_task_command_correlation_with_snapshot_changes(
+            .set_task_command_correlation_with_snapshot_changes_and_authority(
                 command_id,
                 correlation_id,
                 &snapshots,
                 &updates,
+                &prepared.authority_changes,
             )?
             .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
         let outcome = self.install_queue_projection(handle, prepared)?;
@@ -3648,8 +3804,12 @@ impl DocHost {
         let receipt = self
             .inner
             .store
-            .mark_task_command_unknown_with_snapshot_changes(
-                command_id, message, &snapshots, &updates,
+            .mark_task_command_unknown_with_snapshot_changes_and_authority(
+                command_id,
+                message,
+                &snapshots,
+                &updates,
+                &prepared.authority_changes,
             )?
             .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
         let outcome = self.install_queue_projection(handle, prepared)?;
@@ -3693,7 +3853,7 @@ impl DocHost {
         let receipt = self
             .inner
             .store
-            .complete_task_command_with_snapshot_changes_and_updates(
+            .complete_task_command_with_snapshot_changes_updates_and_authority(
                 command_id,
                 CommandReceiptStatus::Rejected,
                 false,
@@ -3708,6 +3868,7 @@ impl DocHost {
                 &snapshots,
                 &[],
                 &updates,
+                &prepared.authority_changes,
             )?
             .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
         let row = self.install_queue_projection(handle, prepared)?;
@@ -4548,7 +4709,7 @@ impl DocHost {
             client_id: "legacy-queue-rpc".into(),
             client_session_id: "engine".into(),
             execution_environment: Some(self.inner.config.device_id.clone()),
-            correlation_id: None,
+            correlation_id: Some(item.id.clone()),
             reason: None,
             recovery_action: None,
             accepted_at_ms: now,
@@ -4720,13 +4881,73 @@ impl DocHost {
                 "no live run and no prior run config".into(),
             ));
         }
-        let (claim, committed) =
-            self.correlate_queue_task_projection(&handle, command_id, id, |doc| {
+        // An explicit local Send/Steer action may adopt a visible legacy or
+        // quarantined row. The durable pending receipt is the local consent;
+        // never infer it from the row's `issued_by` or relay route. Keep the
+        // drain lock through the claim so automatic delivery cannot race this
+        // one-use review decision.
+        let mut admit_hash = None;
+        if let Some(candidate) = handle
+            .doc
+            .read_queue()?
+            .into_iter()
+            .find(|item| item.id == id && item.revision == expected_revision)
+            && matches!(candidate.status, QueueMessageStatus::Held)
+            && candidate.delivery_gate.is_none()
+        {
+            let hash = executable_row_hash(&candidate)?;
+            if !self.inner.store.local_executable_matches(
+                chat_id,
+                LocalExecutableKind::Queue,
+                id,
+                &hash,
+            )? {
+                let receipt = self.task_command_receipt(command_id)?.ok_or_else(|| {
+                    EngineError::Other("explicit queue action has no local receipt".into())
+                })?;
+                let expected_intent = if send == QueueSend::Steer {
+                    "steerQueuedNow"
+                } else {
+                    "sendQueuedNow"
+                };
+                if receipt.task_id != chat_id
+                    || receipt.status != CommandReceiptStatus::Pending
+                    || receipt.intent != expected_intent
+                    || receipt.correlation_id.as_deref() != Some(id)
+                {
+                    return Err(EngineError::Other(
+                        "explicit queue action lacks pending local authority".into(),
+                    ));
+                }
+                admit_hash = Some(hash);
+            }
+        }
+        let (claim, committed) = self.correlate_queue_task_projection(
+            &handle,
+            command_id,
+            id,
+            admit_hash.as_deref(),
+            |doc| {
+                if let Some(expected_hash) = admit_hash.as_deref() {
+                    let current = doc.read_queue()?.into_iter().find(|row| row.id == id);
+                    if current
+                        .as_ref()
+                        .map(executable_row_hash)
+                        .transpose()?
+                        .as_deref()
+                        != Some(expected_hash)
+                    {
+                        return Err(EngineError::Other(
+                            "queued row changed after local review".into(),
+                        ));
+                    }
+                }
                 let outcome =
                     doc.claim_queued(id, expected_revision, command_id, mode, now_ms())?;
                 let commit = matches!(outcome, QueueClaimOutcome::Claimed(_));
                 Ok((outcome, commit))
-            })?;
+            },
+        )?;
         let item = match claim {
             QueueClaimOutcome::Claimed(item) => {
                 debug_assert!(committed.is_some());
@@ -4912,6 +5133,50 @@ impl DocHost {
         let Ok(Some(head)) = handle.doc.read_queue().map(|q| q.into_iter().next()) else {
             return;
         };
+        let hash = match executable_row_hash(&head) {
+            Ok(hash) => hash,
+            Err(error) => {
+                tracing::warn!(chat = %handle.chat_id, row = %head.id, %error,
+                    "queued-row authority hash unavailable; stopping drain");
+                return;
+            }
+        };
+        let authorized = match self.inner.store.local_executable_matches(
+            &handle.chat_id,
+            LocalExecutableKind::Queue,
+            &head.id,
+            &hash,
+        ) {
+            Ok(authorized) => authorized,
+            Err(error) => {
+                tracing::warn!(chat = %handle.chat_id, row = %head.id, %error,
+                    "queued-row authority unavailable; stopping drain");
+                return;
+            }
+        };
+        if !authorized {
+            tracing::warn!(chat = %handle.chat_id, row = %head.id,
+                "untrusted synced queued row quarantined before provider dispatch");
+            if matches!(head.status, QueueMessageStatus::Held)
+                && head.delivery_gate.is_none()
+                && head.hold_reason != Some(QueueHoldReason::RemoteAuthorityRequired)
+            {
+                let _ = self.persist_queue_projection_if(
+                    handle,
+                    &format!("remote-review:{}", head.id),
+                    |doc| {
+                        let changed = doc
+                            .set_queued_hold_reason(
+                                &head.id,
+                                QueueHoldReason::RemoteAuthorityRequired,
+                            )?
+                            .is_some();
+                        Ok((changed, changed))
+                    },
+                );
+            }
+            return;
+        }
         match &head.delivery_gate {
             Some(QueueDeliveryGate::Editing {
                 lease_id,
@@ -5053,7 +5318,7 @@ impl DocHost {
         }
         self.publish_task_receipt(begin.receipt);
         let (claim, _) =
-            match self.correlate_queue_task_projection(handle, &command_id, &head.id, |doc| {
+            match self.correlate_queue_task_projection(handle, &command_id, &head.id, None, |doc| {
                 let outcome = doc.claim_queued(
                     &head.id,
                     head.revision,
@@ -5141,6 +5406,17 @@ impl DocHost {
         item: &QueuedMessage,
         send: QueueSend,
     ) -> Result<QueueProviderOutcome, EngineError> {
+        let hash = executable_row_hash(item)?;
+        if !self.inner.store.local_executable_matches(
+            &handle.chat_id,
+            LocalExecutableKind::Queue,
+            &item.id,
+            &hash,
+        )? {
+            return Err(EngineError::Other(
+                "queued row lacks exact local authority for provider dispatch".into(),
+            ));
+        }
         let Some(sessions) = self.sessions() else {
             return Err(EngineError::Other("sessions engine not wired".into()));
         };
@@ -5591,6 +5867,17 @@ impl DocHost {
             };
             tracing::info!(chat = %chat_id, old = %old.id, new = %reissue.id,
                 "retry re-issues a dead send attempt");
+            if !self.inner.store.record_local_executable(
+                chat_id,
+                LocalExecutableKind::Command,
+                &reissue.id,
+                &executable_row_hash(&reissue)?,
+                None,
+            )? {
+                return Err(EngineError::Other(
+                    "retry command id already has different local authority".into(),
+                ));
+            }
             handle.doc.queue_command(&reissue)?;
             let transfers = command_transfers(&reissue);
             self.spawn_command_delivery(chat_id, reissue, transfers);
@@ -5615,6 +5902,16 @@ impl DocHost {
         chat_id: &str,
         entry: SessionCommandEntry,
     ) -> Result<&'static str, EngineError> {
+        if !self.inner.store.local_executable_matches(
+            chat_id,
+            LocalExecutableKind::Command,
+            &entry.id,
+            &executable_row_hash(&entry)?,
+        )? {
+            return Err(EngineError::Other(
+                "relayed command lacks exact local authority".into(),
+            ));
+        }
         let handle = self.open(chat_id)?;
         // The sender sequences attachment transfers BEFORE the relay; refuse
         // (retryably) rather than run without the images.
@@ -5921,6 +6218,61 @@ impl DocHost {
                     return;
                 }
             };
+            // A chat2 row (including replay/checkpoint data) can set any
+            // `issued_by` string. Only a locally persisted exact entry grants
+            // dispatch. Reject an uncorrelated row before processed-ledger or
+            // provider work; a collision with a local receipt stays pending
+            // for manual reconciliation rather than rejecting that receipt.
+            for entry in &commands {
+                if entry.status != SessionCommandStatus::Pending || skipped.contains(&entry.id) {
+                    continue;
+                }
+                let hash = match executable_row_hash(entry) {
+                    Ok(hash) => hash,
+                    Err(error) => {
+                        tracing::warn!(chat = %handle.chat_id, command = %entry.id, %error,
+                            "command authority hash unavailable; stopping drain");
+                        return;
+                    }
+                };
+                let authorized = match self.inner.store.local_executable_matches(
+                    &handle.chat_id,
+                    LocalExecutableKind::Command,
+                    &entry.id,
+                    &hash,
+                ) {
+                    Ok(authorized) => authorized,
+                    Err(error) => {
+                        tracing::warn!(chat = %handle.chat_id, command = %entry.id, %error,
+                            "command authority unavailable; stopping drain");
+                        return;
+                    }
+                };
+                if authorized {
+                    continue;
+                }
+                tracing::warn!(chat = %handle.chat_id, command = %entry.id,
+                    "untrusted synced command quarantined before execution");
+                let receipt = match self.task_command_receipt(&entry.id) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        tracing::warn!(chat = %handle.chat_id, command = %entry.id, %error,
+                            "command receipt unavailable; stopping drain");
+                        return;
+                    }
+                };
+                if receipt.is_none() {
+                    if let Err(error) = handle.doc.set_command_status(
+                        &entry.id,
+                        SessionCommandStatus::Rejected,
+                        Some("local command authority unavailable"),
+                    ) {
+                        tracing::warn!(chat = %handle.chat_id, command = %entry.id, %error,
+                            "untrusted command rejection could not be published");
+                    }
+                }
+                skipped.insert(entry.id.clone());
+            }
             let is_processed = |id: &str| self.inner.store.is_processed(id).unwrap_or(false);
             // Dead-command sweep: Pending in the doc, consumed by the ledger,
             // and NOT mid-execution in this process — the crash window

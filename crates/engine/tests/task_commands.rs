@@ -370,13 +370,17 @@ impl Harness for CountingHarness {
 }
 
 fn account_config(root: &std::path::Path) -> AgentAccountsConfig {
-    AgentAccountsConfig {
+    let accounts = AgentAccountsConfig {
         data_dir: root.join("provider-state"),
         claude_config_dir: root.join("synthetic-claude"),
         claude_config_file: root.join("synthetic-claude.json"),
         codex_home: root.join("synthetic-codex"),
         cursor_sdk_auth_file: root.join("synthetic-cursor-auth.json"),
-    }
+    };
+    accounts
+        .disable_claude_keychain_fallback()
+        .expect("synthetic accounts");
+    accounts
 }
 
 fn assemble(root: &std::path::Path, runs: Arc<AtomicUsize>, hold: bool) -> EngineCore {
@@ -2527,6 +2531,14 @@ async fn failed_edit_and_remove_projections_stay_absent_after_abrupt_reopen() {
         .await
         .unwrap();
     let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
+    let original_authority: String = rusqlite::Connection::open(&db_path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_hash FROM local_executable_authority WHERE doc_id=?1 AND kind='queue' AND row_id='projection-failure-row'",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .unwrap();
     {
         let db = rusqlite::Connection::open(&db_path).unwrap();
         db.execute_batch(&format!(
@@ -2580,6 +2592,15 @@ async fn failed_edit_and_remove_projections_stay_absent_after_abrupt_reopen() {
         .unwrap();
     assert_eq!(row.text, "original");
     assert_eq!(row.revision, 1);
+    let after_failed_edit: String = rusqlite::Connection::open(&db_path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_hash FROM local_executable_authority WHERE doc_id=?1 AND kind='queue' AND row_id='projection-failure-row'",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(after_failed_edit, original_authority);
     {
         let db = rusqlite::Connection::open(&db_path).unwrap();
         db.execute_batch(&format!(
@@ -2627,6 +2648,15 @@ async fn failed_edit_and_remove_projections_stay_absent_after_abrupt_reopen() {
         .unwrap();
     assert_eq!(row.text, "original");
     assert_eq!(row.revision, 1);
+    let after_failed_remove: String = rusqlite::Connection::open(&db_path)
+        .unwrap()
+        .query_row(
+            "SELECT payload_hash FROM local_executable_authority WHERE doc_id=?1 AND kind='queue' AND row_id='projection-failure-row'",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(after_failed_remove, original_authority);
     after_restart.shutdown().await;
 }
 
@@ -2722,6 +2752,8 @@ async fn failed_durable_claim_never_reaches_the_provider_and_reopens_held() {
         db.execute_batch("DROP TRIGGER fail_queue_claim_snapshot")
             .unwrap();
     }
+    core.doc_host.pause_all_queues();
+    core.shutdown().await;
     drop(client);
     drop(core);
     let reopened = assemble(root.path(), runs.clone(), false);
@@ -4207,6 +4239,7 @@ async fn compact_is_idempotent_and_restart_unknown_is_never_replayed() {
     let client = zeron_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, &task_id, &core.device_id).await;
     run_once(&client, &task_id, "compact-run", "fill provider context").await;
+    wait_for_no_live_run(&core, &task_id).await;
 
     let compact = envelope(
         "compact-once",

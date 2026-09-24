@@ -5590,6 +5590,9 @@ impl EngineRpc {
                 message_id,
                 expected_queue_revision,
             } => {
+                self.doc_host
+                    .set_task_command_correlation(command_id, &message_id)
+                    .map_err(TaskProjectionError::Mutation)?;
                 let revision = match expected_queue_revision {
                     Some(revision) => revision,
                     None => self
@@ -5666,6 +5669,9 @@ impl EngineRpc {
                 message_id,
                 expected_queue_revision,
             } => {
+                self.doc_host
+                    .set_task_command_correlation(command_id, &message_id)
+                    .map_err(TaskProjectionError::Mutation)?;
                 let revision = match expected_queue_revision {
                     Some(revision) => revision,
                     None => self

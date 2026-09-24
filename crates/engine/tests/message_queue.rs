@@ -13,6 +13,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use sha2::{Digest, Sha256};
+use zeron_sync::LocalExecutableKind;
 
 use zeron_doc::{
     MessagePart, MessageRole, QueueClaimMode, QueueDeliveryGate, QueueMessageStatus, QueuedMessage,
@@ -21,7 +23,7 @@ use zeron_doc::{
 use zeron_engine::doc_host::{
     BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome,
 };
-use zeron_engine::{EngineCore, HarnessRegistry};
+use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode, ToolCall,
@@ -377,8 +379,24 @@ async fn setup_with(
 fn assemble_at(path: &std::path::Path, harness: Arc<HeldHarness>) -> EngineCore {
     let registry = HarnessRegistry::new();
     registry.register(harness);
-    EngineCore::assemble(path, Arc::new(registry), HarnessId::Mock, None)
-        .expect("engine core assembles")
+    let accounts = AgentAccountsConfig {
+        data_dir: path.join("provider-state"),
+        claude_config_dir: path.join("synthetic-claude"),
+        claude_config_file: path.join("synthetic-claude.json"),
+        codex_home: path.join("synthetic-codex"),
+        cursor_sdk_auth_file: path.join("synthetic-cursor-auth.json"),
+    };
+    accounts
+        .disable_claude_keychain_fallback()
+        .expect("synthetic accounts");
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(path, "dev-org", "dev-user"),
+        Arc::new(registry),
+        HarnessId::Mock,
+        None,
+        accounts,
+    )
+    .expect("engine core assembles")
 }
 
 async fn create_chat(core: &EngineCore) {
@@ -875,6 +893,11 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
     wait_for(
         || user_messages(&core).iter().any(|m| m == "first queued"),
         "first queued turn",
+    )
+    .await;
+    wait_for(
+        || queue_texts(&core) == vec!["second queued"],
+        "the first queued claim to correlate",
     )
     .await;
     assert_eq!(queue_texts(&core), vec!["second queued"]);
@@ -2250,6 +2273,7 @@ async fn only_one_editor_wins_and_an_expired_edit_requires_review() {
         .read_queue()
         .unwrap()[0]
         .clone();
+    let prior_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&row).unwrap()));
     let QueueDeliveryGate::Editing {
         lease_id,
         owner_device_id,
@@ -2275,6 +2299,31 @@ async fn only_one_editor_wins_and_an_expired_edit_requires_review() {
             }),
         )
         .unwrap();
+    // This test deliberately edits the CRDT directly to force the clock.
+    // Product edits use DocHost's projection, which updates local authority.
+    let changed = core
+        .doc_host
+        .open(CHAT)
+        .unwrap()
+        .doc()
+        .read_queue()
+        .unwrap()[0]
+        .clone();
+    let changed_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&changed).unwrap())
+    );
+    assert!(
+        core.store
+            .record_local_executable(
+                CHAT,
+                LocalExecutableKind::Queue,
+                &id,
+                &changed_hash,
+                Some(&prior_hash),
+            )
+            .unwrap()
+    );
     let _ = harness.finish.send(());
     wait_for(
         || {
