@@ -30,7 +30,7 @@ pub use device_room::{
     decode_device_frame, device_room_ws_url, encode_device_frame,
 };
 pub use remote_auth::{RemoteAuthStore, RemoteEnvironment, RemoteScope};
-pub use server::{serve_connection, serve_ws_listener};
+pub use server::{serve_connection, serve_ws_listener, serve_ws_listener_with_factory};
 
 /// RPC method names — single source of truth for both ends.
 /// Full surface: docs/research/feature-inventory.md §2.

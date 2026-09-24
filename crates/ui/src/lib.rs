@@ -48,6 +48,7 @@ pub mod popover;
 mod power;
 pub mod queue;
 pub mod rail;
+pub mod remote_read;
 pub mod settings;
 pub mod shell;
 pub mod sound;
@@ -67,7 +68,7 @@ use std::path::PathBuf;
 use futures::{FutureExt as _, StreamExt as _};
 use gpui::{App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
-pub use state::EngineBootConfig;
+pub use state::{EngineBootConfig, EngineHandle};
 pub use zeron_proto::HarnessId;
 
 /// Whether a control whose primary action is click activation may also start

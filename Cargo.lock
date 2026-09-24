@@ -4918,6 +4918,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "luna-headless"
+version = "0.2.73"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zeron-engine",
+ "zeron-proto",
+ "zeron-rpc",
+]
+
+[[package]]
 name = "lyon"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11778,10 +11792,12 @@ dependencies = [
  "mimalloc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows-sys 0.61.2",
  "zeron-engine",
  "zeron-proto",

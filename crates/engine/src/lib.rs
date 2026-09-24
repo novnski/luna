@@ -705,6 +705,19 @@ impl EngineCore {
         )))
     }
 
+    /// The direct listener constructs one authorization guard per socket. The
+    /// underlying engine service is shared, but no connection's session is.
+    pub fn remote_rpc_factory(&self) -> Option<Arc<dyn Fn() -> Arc<dyn RpcService> + Send + Sync>> {
+        let inner: Arc<dyn RpcService> = self.rpc_service_without_backup();
+        let auth = self.remote_auth.clone()?;
+        Some(Arc::new(move || {
+            Arc::new(zeron_rpc::remote_auth::RemoteRpcService::new(
+                inner.clone(),
+                auth.clone(),
+            ))
+        }))
+    }
+
     /// Relay RPCs never expose backup configuration, key ingress, or archive
     /// paths. Only the in-process/localhost service receives the control.
     fn rpc_service_without_backup(&self) -> Arc<EngineRpc> {
@@ -1191,12 +1204,18 @@ impl Engine {
     /// executor, IPC server, and — when edge+auth are ready — the device-room host
     /// relay + peer link cache (targetDeviceId routing).
     pub async fn run(self) -> anyhow::Result<()> {
+        self.run_with_remote_port(None).await
+    }
+
+    /// Headless direct access is opt-in and binds only to remote loopback.
+    /// SSH forwards this socket; local IPC keeps its separate owner authority.
+    pub async fn run_with_remote_port(self, remote_port: Option<u16>) -> anyhow::Result<()> {
         let config = self.config;
         tracing::info!(data_dir = %config.data_dir.display(), "engine starting");
 
         std::fs::create_dir_all(&config.data_dir)?;
         let auth = Self::build_auth(&config).await;
-        let mut auth_state = auth.watch_state();
+        let auth_state = auth.watch_state();
         let workspace_scope = Self::initial_workspace_scope(&auth);
         let mut profile = Self::resolve_profile(&config, &auth, workspace_scope)?;
         let _refresh_loop = auth.spawn_refresh_loop();
@@ -1213,6 +1232,69 @@ impl Engine {
 
         let runtime = Self::assemble_runtime(&config, auth, profile).await?;
 
+        Self::serve_headless_runtime(
+            config,
+            runtime,
+            auth_state,
+            workspace_scope,
+            remote_port,
+            true,
+        )
+        .await
+    }
+
+    /// Explicit hermetic binary fixture. The caller supplies isolated account
+    /// paths; native provider metadata, Keychain fallback, Edge and preview
+    /// supervisors are absent while the real headless listeners still run.
+    #[doc(hidden)]
+    pub async fn run_synthetic_with_remote_port(
+        self,
+        remote_port: u16,
+        accounts: AgentAccountsConfig,
+    ) -> anyhow::Result<()> {
+        accounts.disable_claude_keychain_fallback()?;
+        let config = self.config;
+        if config.workos_client_id.is_some() || config.edge_token.is_some() {
+            anyhow::bail!("synthetic headless startup requires offline auth");
+        }
+        let mut auth_config = AuthConfig::new(config.edge_url.clone(), config.data_dir.clone());
+        auth_config.use_in_memory_credentials_for_tests();
+        let auth = Auth::new(auth_config);
+        let auth_state = auth.watch_state();
+        let profile =
+            EngineProfile::development(&config.data_dir, "l30-synthetic-org", "l30-synthetic-user");
+        let core =
+            EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+                profile,
+                Arc::new(HarnessRegistry::new()),
+                HarnessId::Mock,
+                None,
+                accounts,
+            )?;
+        core.set_auth(auth);
+        let runtime = EngineRuntime {
+            core,
+            host_relay: std::sync::Mutex::new(None),
+        };
+        Self::serve_headless_runtime(
+            config,
+            runtime,
+            auth_state,
+            WorkspaceScope::Development,
+            Some(remote_port),
+            false,
+        )
+        .await
+    }
+
+    async fn serve_headless_runtime(
+        config: EngineConfig,
+        runtime: EngineRuntime,
+        mut auth_state: tokio::sync::watch::Receiver<AuthState>,
+        workspace_scope: WorkspaceScope,
+        remote_port: Option<u16>,
+        managed_backup: bool,
+    ) -> anyhow::Result<()> {
         // A daemon exists to serve this port, so a bind failure is fatal here —
         // unlike the headed app, which can still work over its in-process
         // transport (see `serve_ipc`).
@@ -1222,6 +1304,23 @@ impl Engine {
             stop_tx,
         });
         let server = serve_ipc(config.ipc_port, service).await?;
+
+        let remote_server = if let Some(port) = remote_port {
+            if port == config.ipc_port {
+                anyhow::bail!("remote port must differ from local IPC port");
+            }
+            let factory = runtime
+                .core()
+                .remote_rpc_factory()
+                .ok_or_else(|| anyhow::anyhow!("remote authority unavailable"))?;
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+            tracing::info!(port, "authenticated remote RPC listening on loopback");
+            Some(tokio::spawn(zeron_rpc::serve_ws_listener_with_factory(
+                listener, factory,
+            )))
+        } else {
+            None
+        };
 
         tokio::select! {
             result = shutdown_signal() => result?,
@@ -1242,9 +1341,13 @@ impl Engine {
         tracing::info!("shutting down");
         server.abort();
         let _ = server.await;
+        if let Some(remote_server) = remote_server {
+            remote_server.abort();
+            let _ = remote_server.await;
+        }
         let clean = runtime.shutdown().await;
         drop(runtime);
-        if clean {
+        if clean && managed_backup {
             match backup::BackupService::run_managed_offline_if_due(&config.data_dir, now_ms()) {
                 Ok(Some(receipt)) => tracing::info!(
                     archive = %receipt.archive.display(),
