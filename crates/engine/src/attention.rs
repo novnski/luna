@@ -226,7 +226,11 @@ pub(crate) fn project_task(
             )
             || matches!(
                 queued.hold_reason,
-                Some(QueueHoldReason::ProviderRejected | QueueHoldReason::ContextChanged)
+                Some(
+                    QueueHoldReason::ProviderRejected
+                        | QueueHoldReason::ContextChanged
+                        | QueueHoldReason::RemoteAuthorityRequired
+                )
             );
         if !failed {
             continue;

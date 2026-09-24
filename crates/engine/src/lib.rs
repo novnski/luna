@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 pub use zeron_proto::{EngineInfo, HarnessId, WorkspaceScope};
 use zeron_rpc::{RpcError, RpcReply, RpcService, methods};
 
@@ -198,6 +199,7 @@ pub struct EngineCore {
     pub agent_accounts: AgentAccounts,
     pub task_identity: TaskIdentityService,
     pub device_id: String,
+    remote_auth: Option<Arc<zeron_rpc::RemoteAuthStore>>,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
     workspace_scope: WorkspaceScope,
@@ -377,6 +379,29 @@ impl EngineCore {
         let device_write = device_write::DeviceWriteOwner::new(data_dir, lock)?;
         let legacy_uploads_root = profile.claim_legacy_uploads_root()?;
         let device_id = load_or_create_device_id(data_dir)?;
+        let environment_id = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                &device_id,
+                profile.scope(),
+                profile.org_id(),
+                profile.user_id(),
+            ))?)
+        );
+        let remote_auth = match zeron_rpc::RemoteAuthStore::open(
+            profile.store_root(),
+            zeron_rpc::RemoteEnvironment {
+                device_id: device_id.clone(),
+                workspace_scope: profile.scope(),
+                environment_id,
+            },
+        ) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                tracing::error!(%error, "remote authority disabled; local engine remains available");
+                None
+            }
+        };
         // This device's harness enablement (Settings → Agents) rides the
         // engine data dir — per-device, like the CLI installs it gates.
         registry
@@ -529,6 +554,7 @@ impl EngineCore {
             agent_accounts,
             task_identity,
             device_id,
+            remote_auth,
             local_import,
             workspace_scope: profile.scope(),
             auth: std::sync::Mutex::new(None),
@@ -650,29 +676,33 @@ impl EngineCore {
             .map_err(|e| EngineError::Other(e.to_string()))
     }
 
-    /// Start hosting our device room: serve the full RPC surface to relay clients and
-    /// warm-open chat docs on nudges (§7 cold-chat command delivery). The token source
-    /// re-reads auth on every (re)dial, so token refreshes take effect at reconnect.
-    pub fn start_host_relay(&self, edge_url: &str) -> zeron_rpc::HostRelay {
+    /// Start hosting our device room with per-client authenticated RPC dispatch.
+    /// Legacy unauthenticated relay nudges are ignored by the transport.
+    /// The token source re-reads edge auth on every (re)dial.
+    pub fn start_host_relay(&self, edge_url: &str) -> Option<zeron_rpc::HostRelay> {
+        let remote_auth = self.remote_auth.clone()?;
         let auth = self.auth();
         let config =
             zeron_rpc::HostRelayConfig::new(edge_url, self.device_id.clone(), Arc::new(auth));
-        let doc_host = self.doc_host.clone();
-        let on_nudge: zeron_rpc::NudgeHandler = Arc::new(move |chat_id: String| {
-            // Opening the doc joins its room + syncs; drain fires on the change
-            // subscription — the command executes with no standing per-chat socket.
-            match doc_host.open(&chat_id) {
-                Ok(_) => tracing::info!(chat = %chat_id, "nudge: chat doc opened"),
-                Err(err) => {
-                    tracing::warn!(chat = %chat_id, error = %err, "nudge: open failed")
-                }
-            }
-        });
-        zeron_rpc::HostRelay::spawn(config, self.rpc_service_without_backup(), on_nudge)
+        Some(zeron_rpc::HostRelay::spawn(
+            config,
+            self.rpc_service_without_backup(),
+            remote_auth,
+        ))
     }
 
     pub fn rpc_service(&self) -> Arc<EngineRpc> {
         self.rpc_service_with_local_backup(true)
+    }
+
+    /// One authenticated remote connection, using the same guard installed
+    /// for each device-room virtual connection. Never share this instance
+    /// between callers: authentication belongs to a connection.
+    pub fn remote_rpc_service(&self) -> Option<Arc<zeron_rpc::remote_auth::RemoteRpcService>> {
+        Some(Arc::new(zeron_rpc::remote_auth::RemoteRpcService::new(
+            self.rpc_service_without_backup(),
+            self.remote_auth.clone()?,
+        )))
     }
 
     /// Relay RPCs never expose backup configuration, key ingress, or archive
@@ -701,6 +731,9 @@ impl EngineCore {
         )
         .with_auth(self.auth())
         .with_previews(self.previews.clone());
+        if let Some(remote_auth) = &self.remote_auth {
+            rpc = rpc.with_remote_auth(remote_auth.clone());
+        }
         if let Some(control) = self.backup_control.clone().filter(|_| include_backup) {
             rpc = rpc.with_backup_control(control);
         } else if include_backup {
@@ -1128,7 +1161,7 @@ impl Engine {
         // never waits on — or dies inside — an npm run.
         zeron_harness::acp::prewarm_managed_adapters();
 
-        let host_relay = edge.as_ref().map(|edge| {
+        let host_relay = edge.as_ref().and_then(|edge| {
             let mut link_config =
                 zeron_rpc::LinkCacheConfig::new(edge.url.clone(), Arc::new(auth.clone()));
             // Registry-dark dial gate: devices with no recent presence fail

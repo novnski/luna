@@ -108,6 +108,7 @@ pub enum QueueHoldReason {
     StaleTurn,
     ProviderRejected,
     ContextChanged,
+    RemoteAuthorityRequired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -509,6 +510,7 @@ impl SessionDoc {
             mode,
             claimed_at_ms,
         };
+        item.hold_reason = None;
         map.insert(
             "status",
             crate::schema::loro_value_from_json(&serde_json::to_value(&item.status)?),

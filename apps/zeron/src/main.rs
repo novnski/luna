@@ -8,6 +8,7 @@ mod auth_cli;
 mod daemon;
 mod inspect_cli;
 mod paths;
+mod remote_cli;
 mod update_cli;
 
 use clap::{Parser, Subcommand};
@@ -41,6 +42,8 @@ enum Command {
     Status,
     /// Inspect the running local engine through its typed RPC (read only).
     Inspect(inspect_cli::InspectArgs),
+    /// Manage one-time remote pairing grants and device sessions on this engine.
+    Remote(remote_cli::RemoteArgs),
     /// Live sync introspection from the running engine: per-room connection
     /// state, last pushed-frame/ack ages, rejoin/probe/resync counters.
     Sync,
@@ -239,6 +242,10 @@ fn main() -> anyhow::Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             let code = runtime.block_on(inspect_cli::run(args));
             std::process::exit(code);
+        }
+        Some(Command::Remote(args)) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(remote_cli::run(args, engine_config_from_env().ipc_port))
         }
         Some(Command::Sync) => {
             let runtime = tokio::runtime::Runtime::new()?;

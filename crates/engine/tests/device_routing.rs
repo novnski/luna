@@ -24,13 +24,18 @@ use tokio_tungstenite::tungstenite::handshake::server::{
 
 use zeron_doc::SessionCommandPayload;
 use zeron_engine::{
-    BranchHeadContext, ChangeRequestError, CheckoutChangeRequestLookup, CheckoutChangeRequests,
-    CheckoutSourceContext, EngineCore, HarnessRegistry,
+    AgentAccountsConfig, BranchHeadContext, ChangeRequestError, CheckoutChangeRequestLookup,
+    CheckoutChangeRequests, CheckoutSourceContext, EngineCore, EngineProfile, HarnessRegistry,
 };
 use zeron_harness::{Harness, HarnessError, RunControls};
+use zeron_proto::WorkspaceScope;
 use zeron_proto::{
     AgentEvent, ChangeRequestState, ChangeRequestSummary, DoneStatus, HarnessId, Model,
     ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
+};
+use zeron_rpc::remote_auth::{
+    AuthenticateRemote, CreatePairing, IssuedPairing, RedeemPairing, RemoteAuthStore,
+    RemoteEnvironment, RemoteScope,
 };
 use zeron_rpc::{
     DeviceFrameHeader, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig, RpcError, RpcReply,
@@ -189,7 +194,73 @@ fn registry() -> Arc<HarnessRegistry> {
 fn assemble(dir: &std::path::Path, device_id: &str) -> EngineCore {
     std::fs::create_dir_all(dir).expect("create data dir");
     std::fs::write(dir.join("device-id"), device_id).expect("write device id");
-    EngineCore::assemble(dir, registry(), HarnessId::Mock, None).expect("engine assembles")
+    let accounts = AgentAccountsConfig {
+        data_dir: dir.join("provider-state"),
+        claude_config_dir: dir.join("synthetic-claude"),
+        claude_config_file: dir.join("synthetic-claude.json"),
+        codex_home: dir.join("synthetic-codex"),
+        cursor_sdk_auth_file: dir.join("synthetic-cursor-auth.json"),
+    };
+    accounts
+        .disable_claude_keychain_fallback()
+        .expect("synthetic accounts");
+    EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(dir, "dev-org", "dev-user"),
+        registry(),
+        HarnessId::Mock,
+        None,
+        accounts,
+    )
+    .expect("engine assembles")
+}
+
+async fn paired_remote_session(core: &EngineCore) -> AuthenticateRemote {
+    let local = zeron_rpc::memory_client(core.rpc_service());
+    let pairing: IssuedPairing = local.call_as(methods::CREATE_REMOTE_PAIRING, serde_json::json!({
+        "label": "synthetic routed client", "scopes": ["environment-read", "tasks-read", "files-read", "terminal-operate"],
+        "pairingTtlSecs": 300, "sessionTtlSecs": 3600,
+    })).await.unwrap();
+    let remote = zeron_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let session = remote
+        .redeem_remote_pairing(RedeemPairing {
+            target: pairing.target,
+            credential: pairing.credential,
+            client_label: "synthetic routed client".into(),
+        })
+        .await
+        .unwrap();
+    AuthenticateRemote {
+        target: session.target,
+        session_token: session.session_token,
+    }
+}
+
+fn session_from_store(store: &Arc<RemoteAuthStore>) -> AuthenticateRemote {
+    let pairing = store
+        .create_pairing(CreatePairing {
+            label: "synthetic legacy reader".into(),
+            scopes: vec![RemoteScope::EnvironmentRead, RemoteScope::FilesRead],
+            pairing_ttl_secs: 300,
+            session_ttl_secs: 3600,
+        })
+        .unwrap();
+    let session = store
+        .redeem(RedeemPairing {
+            target: pairing.target,
+            credential: pairing.credential,
+            client_label: "synthetic legacy reader".into(),
+        })
+        .unwrap();
+    AuthenticateRemote {
+        target: session.target,
+        session_token: session.session_token,
+    }
+}
+
+fn attach_remote_session(config: &mut LinkCacheConfig, session: AuthenticateRemote) {
+    config.remote_session = Some(Arc::new(move |device_id| {
+        (device_id == session.target.device_id).then(|| session.clone())
+    }));
 }
 
 async fn init_workspace_repo(path: &std::path::Path) {
@@ -304,18 +375,55 @@ async fn simulated_ios_change_request(
     relay_url: &str,
     conn_id: &str,
     cwd: &std::path::Path,
+    session: &AuthenticateRemote,
 ) -> serde_json::Value {
     let ws_url = relay_url.replacen("http://", "ws://", 1);
     let url = format!("{ws_url}/device/device-b/ws?role=client&connId={conn_id}&token=ios-token");
     let (mut socket, _) = tokio_tungstenite::connect_async(&url)
         .await
         .expect("iOS relay client connects");
+    let auth = serde_json::json!({
+        "id": 6,
+        "method": methods::AUTHENTICATE_REMOTE,
+        "params": session,
+    });
+    let header = DeviceFrameHeader::new("rpc", "rpc");
+    socket
+        .send(WsMessage::Binary(
+            encode_device_frame(&header, auth.to_string().as_bytes()).unwrap(),
+        ))
+        .await
+        .expect("send iOS authentication");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let message = tokio::time::timeout_at(deadline, socket.next())
+            .await
+            .expect("iOS auth before timeout")
+            .expect("iOS relay remains connected")
+            .expect("valid iOS auth frame");
+        let WsMessage::Binary(bytes) = message else {
+            continue;
+        };
+        let (header, payload) = decode_device_frame(&bytes).expect("decode iOS auth frame");
+        if header.k != "rpc" {
+            continue;
+        }
+        let response: serde_json::Value =
+            serde_json::from_slice(&payload).expect("decode iOS auth response");
+        if response["id"] != 6 {
+            continue;
+        }
+        assert!(
+            response.get("ok").is_some(),
+            "iOS authentication failed: {response}"
+        );
+        break;
+    }
     let request = serde_json::json!({
         "id": 7,
         "method": methods::WATCH_CHECKOUT_CHANGE_REQUEST,
         "params": { "cwd": cwd },
     });
-    let header = DeviceFrameHeader::new("rpc", "rpc");
     let frame = encode_device_frame(&header, request.to_string().as_bytes()).expect("encode RPC");
     socket
         .send(WsMessage::Binary(frame))
@@ -430,10 +538,12 @@ async fn checkout_change_request_stream_matches_locally_and_through_device_routi
     let local_frame = local.recv().await.expect("local initial frame");
 
     let _host = core_b.start_host_relay(&relay_url);
+    let remote_session = paired_remote_session(&core_b).await;
     let core_a = assemble(&dirs.path().join("a"), "device-a");
     let mut link_config =
         LinkCacheConfig::new(relay_url.clone(), Arc::new(StaticToken("test-user".into())));
     link_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
     let client = zeron_rpc::memory_client(core_a.rpc_service());
 
@@ -483,13 +593,15 @@ async fn checkout_change_request_stream_matches_locally_and_through_device_routi
         .expect("second desktop initial frame");
     assert_eq!(second_desktop_frame, local_frame);
 
-    let ios_frame = simulated_ios_change_request(&relay_url, "ios-1", &checkout).await;
+    let ios_frame =
+        simulated_ios_change_request(&relay_url, "ios-1", &checkout, &remote_session).await;
     assert_eq!(ios_frame, local_frame);
     assert_public_change_request_payload(&ios_frame);
 
     // Reconnecting creates a new relay peer and receives a fresh initial
     // snapshot from the still-warm host cache.
-    let reconnected_ios_frame = simulated_ios_change_request(&relay_url, "ios-2", &checkout).await;
+    let reconnected_ios_frame =
+        simulated_ios_change_request(&relay_url, "ios-2", &checkout, &remote_session).await;
     assert_eq!(reconnected_ios_frame, local_frame);
     assert_eq!(
         lookup.resolves.load(Ordering::Acquire),
@@ -516,6 +628,16 @@ async fn unsupported_remote_change_request_watch_keeps_the_shared_device_link() 
     let legacy = Arc::new(LegacyChangeRequestService {
         list_harnesses_calls: AtomicUsize::new(0),
     });
+    let legacy_auth = RemoteAuthStore::open(
+        &dirs.path().join("legacy-auth"),
+        RemoteEnvironment {
+            device_id: "legacy-device".into(),
+            workspace_scope: WorkspaceScope::Development,
+            environment_id: "synthetic-legacy-environment".into(),
+        },
+    )
+    .unwrap();
+    let legacy_session = session_from_store(&legacy_auth);
     let _legacy_host = HostRelay::spawn(
         HostRelayConfig::new(
             &relay_url,
@@ -523,13 +645,14 @@ async fn unsupported_remote_change_request_watch_keeps_the_shared_device_link() 
             Arc::new(StaticToken("test-user".into())),
         ),
         legacy.clone(),
-        Arc::new(|_| {}),
+        legacy_auth,
     );
 
     let core = assemble(&dirs.path().join("new"), "new-device");
     let mut link_config =
         LinkCacheConfig::new(relay_url, Arc::new(StaticToken("test-user".into())));
     link_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut link_config, legacy_session.clone());
     core.set_links(LinkCache::new(link_config));
     let client = zeron_rpc::memory_client(core.rpc_service());
 
@@ -580,6 +703,7 @@ async fn unsupported_remote_change_request_watch_keeps_the_shared_device_link() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "L29 denies legacy unscoped task mutations; remote control needs an accepted authority route"]
 async fn target_device_id_routes_over_the_relay() {
     let (relay_url, _relay) = fake_device_room().await;
     let dirs = tempfile::tempdir().expect("tempdir");
@@ -587,12 +711,14 @@ async fn target_device_id_routes_over_the_relay() {
     // Engine B hosts its device room on the fake relay.
     let core_b = assemble(&dirs.path().join("b"), "device-b");
     let _host = core_b.start_host_relay(&relay_url);
+    let remote_session = paired_remote_session(&core_b).await;
 
     // Engine A dials peers through the same relay.
     let core_a = assemble(&dirs.path().join("a"), "device-a");
     let mut link_config =
         LinkCacheConfig::new(relay_url.clone(), Arc::new(StaticToken("test-user".into())));
     link_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
 
     // Seed a transcript on B only — proves reads come from B, not A's (empty) doc.
@@ -798,11 +924,13 @@ async fn terminal_stream_proxies_over_the_relay() {
         .create_chat("chat-term", Some("space-term"), None, None, None)
         .expect("chat row on B");
     let _host = core_b.start_host_relay(&relay_url);
+    let remote_session = paired_remote_session(&core_b).await;
 
     let core_a = assemble(&dirs.path().join("a"), "device-a");
     let mut link_config =
         LinkCacheConfig::new(relay_url.clone(), Arc::new(StaticToken("test-user".into())));
     link_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
     let client = zeron_rpc::memory_client(core_a.rpc_service());
 
@@ -888,6 +1016,7 @@ async fn terminal_stream_proxies_over_the_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "L29 exposes file reads only; remote file writes need a separate scoped contract"]
 async fn workspace_file_surface_proxies_over_the_relay() {
     let (relay_url, _relay) = fake_device_room().await;
     let dirs = tempfile::tempdir().expect("tempdir");
@@ -910,11 +1039,13 @@ async fn workspace_file_surface_proxies_over_the_relay() {
         .create_chat("chat-files", Some("space-files"), None, None, None)
         .expect("chat on B");
     let _host = core_b.start_host_relay(&relay_url);
+    let remote_session = paired_remote_session(&core_b).await;
 
     let core_a = assemble(&dirs.path().join("a-files"), "device-a");
     let mut link_config =
         LinkCacheConfig::new(relay_url, Arc::new(StaticToken("test-user".into())));
     link_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
     let client = zeron_rpc::memory_client(core_a.rpc_service());
 
@@ -1160,6 +1291,7 @@ async fn remote_target_without_links_fails_clearly() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "L29 denies remote queue mutation and L25 approval is local"]
 async fn queue_watch_and_single_consumption_route_to_the_remote_chat_host() {
     let (relay_url, _relay) = fake_device_room().await;
     let dirs = tempfile::tempdir().expect("tempdir");
@@ -1186,11 +1318,13 @@ async fn queue_watch_and_single_consumption_route_to_the_remote_chat_host() {
         )
         .expect("seed held queue row");
     let _host = core_b.start_host_relay(&relay_url);
+    let remote_session = paired_remote_session(&core_b).await;
 
     let core_a = assemble(&dirs.path().join("a"), "device-a");
     let mut link_config =
         LinkCacheConfig::new(relay_url, Arc::new(StaticToken("test-user".into())));
     link_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
     let remote_client = zeron_rpc::memory_client(core_a.rpc_service());
     let local_client = zeron_rpc::memory_client(core_b.rpc_service());

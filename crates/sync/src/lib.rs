@@ -27,7 +27,7 @@ pub use registry::{
     ReconnectState, RegistryClient, RegistryEvent, RegistryTransport, RegistryTuning,
 };
 pub use store::{
-    DocsStore, StoreError, StoredTaskRecovery, TaskCommandBegin, TaskCommandBeginKind,
-    TaskRecoveryExpectation, TaskRecoveryTransition,
+    DocsStore, LocalExecutableChange, LocalExecutableKind, StoreError, StoredTaskRecovery,
+    TaskCommandBegin, TaskCommandBeginKind, TaskRecoveryExpectation, TaskRecoveryTransition,
 };
 pub use types::{RoomStatsSnapshot, StaticUrl, SyncError, UrlProvider};

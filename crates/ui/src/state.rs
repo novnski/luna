@@ -191,6 +191,11 @@ struct DeferredEngineRpc {
 impl RpcService for DeferredEngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
         if method == methods::ENGINE_INFO {
+            if matches!(&*self.state.borrow(), DeferredEngineState::Ready)
+                && let Some(service) = self.service.get()
+            {
+                return service.handle(method, params).await;
+            }
             return RpcReply::value(&self.engine_info);
         }
         if method == methods::ENGINE_READY {
@@ -476,7 +481,7 @@ impl EngineHandle {
                 }
             }
         });
-        let handle = EngineHandle {
+        let mut handle = EngineHandle {
             inner: Arc::new(InProcessEngine {
                 runtime,
                 data_dir: data_dir_for_backup,
@@ -495,6 +500,15 @@ impl EngineHandle {
         if profile_is_resolved && let Err(message) = wait_for_deferred_engine(&mut state_rx).await {
             handle.shutdown().await;
             return Err(anyhow::anyhow!(message));
+        }
+        if profile_is_resolved {
+            match query_engine_info(handle.client()).await {
+                Ok(info) => handle.engine_info = info,
+                Err(error) => {
+                    handle.shutdown().await;
+                    return Err(error.into());
+                }
+            }
         }
         Ok(handle)
     }

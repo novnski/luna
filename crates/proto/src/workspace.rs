@@ -14,6 +14,7 @@ pub mod capabilities {
     pub const MESSAGE_QUEUE_EDIT_LEASE_V1: &str = "message-queue-edit-lease-v1";
     pub const TASK_IDENTITY_V1: &str = "task-identity-v1";
     pub const SESSION_HISTORY_SEARCH_V1: &str = "session-history-search-v1";
+    pub const REMOTE_AUTH_V1: &str = "remote-auth-v1";
 
     pub const CURRENT: &[&str] = &[
         MESSAGE_QUEUE_V1,

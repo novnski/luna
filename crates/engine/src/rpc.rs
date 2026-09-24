@@ -41,13 +41,14 @@
 //!
 //! ## Device-addressed routing (`targetDeviceId`, feature-inventory §2.1)
 //!
-//! ControlRpc methods are relay-forwardable: params may carry `targetDeviceId`. When it
+//! Selected ControlRpc methods are device-addressable: params may carry `targetDeviceId`. When it
 //! names another device, the call is forwarded verbatim over that device's relay DO via
 //! the [`LinkCache`] — the remote engine sees its own id and handles locally, so the
 //! forward can never loop. Streaming methods are proxied by re-subscribing remotely and
 //! piping items. To make another method device-addressable, nothing per-method is needed
 //! beyond listing it in [`forwardable`] (and [`is_stream_method`] if it streams);
-//! handlers stay transport-agnostic. This includes the workspace file surface,
+//! handlers stay transport-agnostic, while L29's remote dispatch still requires
+//! a paired session and an explicit method scope. This includes the workspace file surface,
 //! whose checkout always lives on the routed target device.
 
 use async_trait::async_trait;
@@ -79,7 +80,7 @@ use zeron_proto::{
     TaskCommandSnapshot, TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
-use zeron_sync::DocsStore;
+use zeron_sync::{DocsStore, LocalExecutableChange, LocalExecutableKind};
 
 use crate::agent_accounts::AgentAccounts;
 use crate::auth::Auth;
@@ -1086,6 +1087,7 @@ pub struct EngineRpc {
     claude_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
     task_identity: crate::TaskIdentityService,
     auth: Option<Auth>,
+    remote_auth: Option<std::sync::Arc<zeron_rpc::RemoteAuthStore>>,
     links: Option<std::sync::Arc<LinkCache>>,
     updater: Option<zeron_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
@@ -1320,6 +1322,7 @@ impl EngineRpc {
             claude_usage_last_good: std::sync::Mutex::new(None),
             task_identity,
             auth: None,
+            remote_auth: None,
             links: None,
             updater: None,
             local_import: None,
@@ -1823,6 +1826,14 @@ impl EngineRpc {
     /// Attach the auth service (AuthStatus + AuthRpc mutations).
     pub fn with_auth(mut self, auth: Auth) -> Self {
         self.auth = Some(auth);
+        self
+    }
+
+    pub fn with_remote_auth(mut self, auth: std::sync::Arc<zeron_rpc::RemoteAuthStore>) -> Self {
+        self.remote_auth = Some(auth);
+        self.engine_info
+            .capabilities
+            .push(zeron_proto::capabilities::REMOTE_AUTH_V1.into());
         self
     }
 
@@ -4092,6 +4103,7 @@ impl EngineRpc {
                     identity_snapshot,
                     transition.as_ref(),
                     &[],
+                    &[],
                     move |doc| {
                         doc.clear_context_usage()?;
                         doc.set_context_control(&state)?;
@@ -4211,6 +4223,7 @@ impl EngineRpc {
             binding_generation,
             None,
             transition.as_ref(),
+            &[],
             &[],
             move |doc| {
                 doc.set_context_control(&state_for_doc)?;
@@ -4464,7 +4477,9 @@ impl EngineRpc {
                 let prompt = initial_prompt
                     .map(|prompt| prompt.trim().to_string())
                     .filter(|prompt| !prompt.is_empty());
+                let mut authority = Vec::new();
                 if let Some(prompt) = prompt.as_deref() {
+                    let local_command_id = format!("fork-run:{command_id}");
                     let request = self
                         .inherited_run_request(
                             task_id,
@@ -4475,11 +4490,32 @@ impl EngineRpc {
                         .map_err(TaskProjectionError::ProviderUnknown)?;
                     self.queue_initial_history_prompt(
                         &target_doc,
-                        &format!("fork-run:{command_id}"),
+                        &local_command_id,
                         &uuid::Uuid::new_v4().to_string(),
                         request,
                     )
                     .map_err(TaskProjectionError::ProviderUnknown)?;
+                    let command = target_doc
+                        .read_commands()
+                        .map_err(crate::EngineError::from)
+                        .map_err(TaskProjectionError::ProviderUnknown)?
+                        .into_iter()
+                        .find(|row| row.id == local_command_id)
+                        .ok_or_else(|| {
+                            TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                                "local fork run command vanished before commit".into(),
+                            ))
+                        })?;
+                    authority.push(LocalExecutableChange {
+                        doc_id: new_task_id.clone(),
+                        kind: LocalExecutableKind::Command,
+                        row_id: local_command_id,
+                        expected_hash: None,
+                        replacement_hash: Some(
+                            crate::doc_host::executable_row_hash(&command)
+                                .map_err(TaskProjectionError::ProviderUnknown)?,
+                        ),
+                    });
                 }
                 let target_snapshot = target_doc
                     .export_snapshot()
@@ -4510,6 +4546,7 @@ impl EngineRpc {
                                 &[(new_task_id.as_str(), target_snapshot.as_slice())],
                                 &[],
                                 None,
+                                &authority,
                                 move |registry| {
                                     registry.upsert_chat(&Chat {
                                         id: new_task_for_registry,
@@ -4692,6 +4729,7 @@ impl EngineRpc {
                                 (recovery.index_id.as_str(), recovery.index_bytes.as_slice()),
                                 (recovery.snapshot_id.as_str(), source_snapshot.as_slice()),
                             ];
+                            let admission_id = run_command_id.clone();
                             let (_, receipt) = self.doc_host.commit_context_boundary(
                                 task_id,
                                 command_id,
@@ -4700,6 +4738,7 @@ impl EngineRpc {
                                 identity_snapshot,
                                 None,
                                 &extra,
+                                &[admission_id.as_str()],
                                 move |doc| {
                                     doc.replace_conversation_entries(
                                         &plan_entries,
@@ -4927,6 +4966,7 @@ impl EngineRpc {
                                 identity_snapshot,
                                 None,
                                 &extra,
+                                &[],
                                 move |doc| {
                                     doc.replace_conversation_entries(
                                         &plan_entries,
@@ -5579,6 +5619,9 @@ impl EngineRpc {
                 message_id,
                 expected_queue_revision,
             } => {
+                self.doc_host
+                    .set_task_command_correlation(command_id, &message_id)
+                    .map_err(TaskProjectionError::Mutation)?;
                 let revision = match expected_queue_revision {
                     Some(revision) => revision,
                     None => self
@@ -5655,6 +5698,9 @@ impl EngineRpc {
                 message_id,
                 expected_queue_revision,
             } => {
+                self.doc_host
+                    .set_task_command_correlation(command_id, &message_id)
+                    .map_err(TaskProjectionError::Mutation)?;
                 let revision = match expected_queue_revision {
                     Some(revision) => revision,
                     None => self
@@ -5892,10 +5938,11 @@ fn canonical_payload_hash(intent: &TaskCommandIntent) -> Result<String, serde_js
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-/// An RPC rejection is scoped to the requested capability. Only a broken
-/// transport means the shared device link itself cannot carry other calls.
+/// Most RPC rejections are scoped to the requested capability. A broken
+/// transport or a revoked/expired device session invalidates the shared link.
 fn should_invalidate_link(error: &RpcError) -> bool {
     matches!(error, RpcError::Closed | RpcError::Transport(_))
+        || matches!(error, RpcError::Failed(message) if message.starts_with("remote authorization denied:"))
 }
 
 fn legacy_task_command(task_id: String, intent: TaskCommandIntent) -> TaskCommandParams {
@@ -7228,6 +7275,56 @@ impl RpcService for EngineRpc {
         match method {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
+            methods::CREATE_REMOTE_PAIRING => {
+                let request: zeron_rpc::remote_auth::CreatePairing = parse_params(params)?;
+                let store = self
+                    .remote_auth
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                RpcReply::value(&store.create_pairing(request)?)
+            }
+            methods::LIST_REMOTE_PAIRINGS => {
+                let store = self
+                    .remote_auth
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                RpcReply::value(&store.list_pairings())
+            }
+            methods::REVOKE_REMOTE_PAIRING => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: String,
+                }
+                let request: P = parse_params(params)?;
+                let store = self
+                    .remote_auth
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                RpcReply::value(
+                    &serde_json::json!({ "revoked": store.revoke_pairing(&request.id)? }),
+                )
+            }
+            methods::LIST_REMOTE_SESSIONS => {
+                let store = self
+                    .remote_auth
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                RpcReply::value(&store.list_sessions())
+            }
+            methods::REVOKE_REMOTE_SESSION => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: String,
+                }
+                let request: P = parse_params(params)?;
+                let store = self
+                    .remote_auth
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("remote authority unavailable".into()))?;
+                RpcReply::value(
+                    &serde_json::json!({ "revoked": store.revoke_session(&request.id)? }),
+                )
+            }
             methods::GET_BACKUP_STATUS => {
                 let Some(control) = self.backup_control.clone() else {
                     let root = self.managed_backup_root.clone();

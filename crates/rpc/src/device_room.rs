@@ -1,6 +1,6 @@
 //! Device-room relay transport (ARCHITECTURE §1, feature-inventory §3.7): the byte-frame
-//! codec spoken by the edge `DeviceRoom` DO, the **host relay** (this device serving its
-//! full RPC surface through the relay), and the **client link** (dialing another device's
+//! codec spoken by the edge `DeviceRoom` DO, the **host relay** (this device serving
+//! authenticated, scoped RPC through the relay), and the **client link** (dialing another device's
 //! relay and speaking ordinary [`RpcClient`] RPC over it).
 //!
 //! Frame encoding (must stay byte-identical to `edge/src/device-room.ts`):
@@ -26,12 +26,14 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
+use crate::remote_auth::{AuthenticateRemote, RemoteAuthStore, RemoteRpcService};
 use crate::{RpcClient, RpcError, RpcService, serve_connection};
 
 /// Relay-emitted control frames. MUST byte-match the DO's `RELAY_KIND` (yes, it has a
 /// leading space — clients compare with equality; a mismatch makes host_offline invisible).
 pub const RELAY_KIND: &str = " relay";
-/// Durable command nudge frames (§7 cold-chat delivery): payload `{chatId}`.
+/// Legacy command nudge frames: payload `{chatId}`. They are ignored because
+/// they carry no device-session proof.
 pub const NUDGE_KIND: &str = "nudge";
 /// The RPC stream over the relay: both `s` (stream id) and `k` (kind) are `"rpc"`.
 pub const RPC_KIND: &str = "rpc";
@@ -277,10 +279,6 @@ impl TokenSource for StaticToken {
 // Host relay
 // ---------------------------------------------------------------------------
 
-/// Called with the chat id of every nudge frame ("this chat's doc has pending commands —
-/// open it and drain"); the engine warms/opens the chat doc.
-pub type NudgeHandler = Arc<dyn Fn(String) + Send + Sync>;
-
 pub struct HostRelayConfig {
     /// Edge base URL (`http(s)://…`; rewritten to `ws(s)` for the socket).
     pub edge_url: String,
@@ -318,7 +316,7 @@ impl HostRelay {
     pub fn spawn(
         config: HostRelayConfig,
         service: Arc<dyn RpcService>,
-        on_nudge: NudgeHandler,
+        remote_auth: Arc<RemoteAuthStore>,
     ) -> Self {
         let task = tokio::spawn(async move {
             let mut wake = zeron_sync::wake::subscribe();
@@ -343,7 +341,7 @@ impl HostRelay {
                         );
                         let started = tokio::time::Instant::now();
                         let outcome = {
-                            let session = host_session(&url, &service, &on_nudge);
+                            let session = host_session(&url, &service, &remote_auth);
                             tokio::pin!(session);
                             loop {
                                 tokio::select! {
@@ -443,12 +441,14 @@ struct VirtualConn {
 
 fn make_virtual_conn(
     service: Arc<dyn RpcService>,
+    remote_auth: Arc<RemoteAuthStore>,
     conn_id: String,
     host_out: mpsc::Sender<Vec<u8>>,
 ) -> VirtualConn {
     let (in_tx, in_rx) = mpsc::channel::<String>(256);
     let (srv_out_tx, mut srv_out_rx) = mpsc::channel::<String>(256);
-    tokio::spawn(serve_connection(service, srv_out_tx, in_rx));
+    let guarded: Arc<dyn RpcService> = Arc::new(RemoteRpcService::new(service, remote_auth));
+    tokio::spawn(serve_connection(guarded, srv_out_tx, in_rx));
     tokio::spawn(async move {
         while let Some(text) = srv_out_rx.recv().await {
             let header = DeviceFrameHeader::new(RPC_KIND, RPC_KIND).with_to(conn_id.clone());
@@ -469,7 +469,7 @@ fn make_virtual_conn(
 async fn host_session(
     url: &str,
     service: &Arc<dyn RpcService>,
-    on_nudge: &NudgeHandler,
+    remote_auth: &Arc<RemoteAuthStore>,
 ) -> Result<(), RpcError> {
     let ws = zeron_sync::dial::connect_ws(url)
         .await
@@ -497,7 +497,7 @@ async fn host_session(
             message = stream.next() => match message {
                 Some(Ok(WsMessage::Binary(bytes))) => {
                     last_rx = tokio::time::Instant::now();
-                    handle_host_frame(&bytes, &mut conns, service, &out_tx, on_nudge).await;
+                    handle_host_frame(&bytes, &mut conns, service, remote_auth, &out_tx).await;
                 }
                 Some(Ok(WsMessage::Close(frame))) => {
                     if let Some(frame) = frame {
@@ -533,8 +533,8 @@ async fn handle_host_frame(
     bytes: &[u8],
     conns: &mut HashMap<String, VirtualConn>,
     service: &Arc<dyn RpcService>,
+    remote_auth: &Arc<RemoteAuthStore>,
     out_tx: &mpsc::Sender<Vec<u8>>,
-    on_nudge: &NudgeHandler,
 ) {
     let (header, payload) = match decode_device_frame(bytes) {
         Ok(frame) => frame,
@@ -569,18 +569,9 @@ async fn handle_host_frame(
         return;
     }
     if header.k == NUDGE_KIND {
-        // Durable command nudge (§7): open the chat doc so drain fires.
-        #[derive(Deserialize)]
-        struct Nudge {
-            #[serde(rename = "chatId")]
-            chat_id: Option<String>,
-        }
-        match serde_json::from_slice::<Nudge>(&payload) {
-            Ok(Nudge {
-                chat_id: Some(chat_id),
-            }) => on_nudge(chat_id),
-            _ => tracing::warn!("device-room: malformed nudge — ignoring"),
-        }
+        // Old relay nudges carry no device-session proof and can wake command
+        // execution. A route through the relay is not authority to do that.
+        tracing::warn!("device-room: unauthenticated nudge denied");
         return;
     }
     if header.k != RPC_KIND {
@@ -589,9 +580,9 @@ async fn handle_host_frame(
     let Some(from) = header.from else {
         return;
     };
-    let conn = conns
-        .entry(from.clone())
-        .or_insert_with(|| make_virtual_conn(service.clone(), from, out_tx.clone()));
+    let conn = conns.entry(from.clone()).or_insert_with(|| {
+        make_virtual_conn(service.clone(), remote_auth.clone(), from, out_tx.clone())
+    });
     let text = String::from_utf8_lossy(&payload).into_owned();
     if conn.in_tx.send(text).await.is_err() {
         tracing::warn!("device-room: virtual conn dispatch loop gone");
@@ -763,6 +754,7 @@ pub enum PeerLiveness {
 }
 
 pub type PeerLivenessProbe = Arc<dyn Fn(&str) -> PeerLiveness + Send + Sync>;
+pub type RemoteSessionSource = Arc<dyn Fn(&str) -> Option<AuthenticateRemote> + Send + Sync>;
 
 pub struct LinkCacheConfig {
     pub edge_url: String,
@@ -780,6 +772,9 @@ pub struct LinkCacheConfig {
     /// is presence-driven: the workspace's peer-alive hook fires the moment
     /// heartbeats return, and the next call passes the gate.
     pub liveness: Option<PeerLivenessProbe>,
+    /// Explicit paired session for the requested target. An edge token only
+    /// routes the link; it never authorizes an RPC.
+    pub remote_session: Option<RemoteSessionSource>,
 }
 
 impl LinkCacheConfig {
@@ -797,6 +792,7 @@ impl LinkCacheConfig {
             cooldown_max: Duration::from_secs(60),
             probe_timeout: Duration::from_secs(10),
             liveness: None,
+            remote_session: None,
         }
     }
 }
@@ -1035,6 +1031,15 @@ impl LinkCache {
     }
 
     async fn dial(&self, device_id: &str) -> Result<Arc<DeviceLink>, RpcError> {
+        let remote_session = self
+            .config
+            .remote_session
+            .as_ref()
+            .and_then(|source| source(device_id))
+            .filter(|session| session.target.device_id == device_id)
+            .ok_or_else(|| {
+                RpcError::Transport(format!("peer {device_id}: paired device session required"))
+            })?;
         // Fresh token on every attempt — an expired one is never reused.
         let token = self
             .config
@@ -1062,6 +1067,14 @@ impl LinkCache {
         // Readiness probe: prove the host answers before caching (an offline host bounces
         // host_offline, which closes the link and fails this call fast).
         let client = link.client();
+        client
+            .authenticate_remote(remote_session)
+            .await
+            .map_err(|error| {
+                RpcError::Transport(format!(
+                    "peer {device_id}: device session rejected: {error}"
+                ))
+            })?;
         let probe = client.call(crate::methods::LIST_HARNESSES, serde_json::json!({}));
         tokio::time::timeout(self.config.probe_timeout, probe)
             .await

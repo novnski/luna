@@ -18,6 +18,9 @@ thiserror.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
 
 [dev-dependencies]
 zeron-doc.workspace = true
+tempfile.workspace = true

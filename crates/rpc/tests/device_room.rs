@@ -25,8 +25,13 @@ use tokio_tungstenite::tungstenite::handshake::server::{
     Request as WsRequest, Response as WsResponse,
 };
 
+use zeron_proto::WorkspaceScope;
 use zeron_rpc::device_room::{
     CLIENT_CLOSED, CLIENT_GONE, HOST_CLOSED, HOST_OFFLINE, NUDGE_KIND, RELAY_KIND,
+};
+use zeron_rpc::remote_auth::{
+    AuthenticateRemote, CreatePairing, RedeemPairing, RemoteAuthStore, RemoteEnvironment,
+    RemoteScope,
 };
 use zeron_rpc::{
     DeviceFrameHeader, DeviceLink, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig,
@@ -284,16 +289,16 @@ impl RpcService for TestService {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
         match method {
             methods::LIST_HARNESSES => Ok(RpcReply::Value(serde_json::json!([]))),
-            "Echo" => Ok(RpcReply::Value(
+            methods::ENGINE_INFO => Ok(RpcReply::Value(
                 serde_json::json!({ "host": self.label, "params": params }),
             )),
-            "Count" => {
+            methods::WATCH_TASK_COMMANDS => {
                 let n = params.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
                 Ok(RpcReply::Stream(
                     futures::stream::iter((0..n).map(|i| serde_json::json!(i))).boxed(),
                 ))
             }
-            "Never" => {
+            methods::WATCH_DOC_MESSAGES => {
                 self.active_streams.fetch_add(1, Ordering::SeqCst);
                 let guard = StreamGuard(self.active_streams.clone());
                 Ok(RpcReply::Stream(
@@ -331,11 +336,76 @@ fn cache(edge_url: &str) -> Arc<LinkCache> {
     config.cooldown_base = Duration::from_millis(100);
     config.cooldown_max = Duration::from_millis(400);
     config.probe_timeout = Duration::from_millis(1_500);
+    attach_remote_session(&mut config, test_auth().request.clone());
     LinkCache::new(config)
 }
 
-fn noop_nudge() -> zeron_rpc::NudgeHandler {
-    Arc::new(|_| {})
+struct TestAuth {
+    _root: tempfile::TempDir,
+    store: Arc<RemoteAuthStore>,
+    request: AuthenticateRemote,
+}
+
+impl TestAuth {
+    fn new(device_id: &str) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let store = RemoteAuthStore::open(
+            root.path(),
+            RemoteEnvironment {
+                device_id: device_id.into(),
+                workspace_scope: WorkspaceScope::Development,
+                environment_id: "synthetic-relay-environment".into(),
+            },
+        )
+        .unwrap();
+        let pairing = store
+            .create_pairing(CreatePairing {
+                label: "synthetic relay client".into(),
+                scopes: vec![RemoteScope::EnvironmentRead, RemoteScope::TasksRead],
+                pairing_ttl_secs: 300,
+                session_ttl_secs: 3600,
+            })
+            .unwrap();
+        let session = store
+            .redeem(RedeemPairing {
+                target: pairing.target,
+                credential: pairing.credential,
+                client_label: "synthetic relay client".into(),
+            })
+            .unwrap();
+        let request = AuthenticateRemote {
+            target: session.target,
+            session_token: session.session_token,
+        };
+        Self {
+            _root: root,
+            store,
+            request,
+        }
+    }
+}
+
+fn test_auth() -> &'static TestAuth {
+    static AUTH: std::sync::OnceLock<TestAuth> = std::sync::OnceLock::new();
+    AUTH.get_or_init(|| TestAuth::new("dev-a"))
+}
+
+fn attach_remote_session(config: &mut LinkCacheConfig, request: AuthenticateRemote) {
+    config.remote_session = Some(Arc::new(move |device_id| {
+        (device_id == request.target.device_id).then(|| request.clone())
+    }));
+}
+
+#[tokio::test]
+async fn relay_route_without_paired_device_session_fails_before_dial() {
+    let links = LinkCache::new(LinkCacheConfig::new(
+        "http://127.0.0.1:1",
+        Arc::new(StaticToken("synthetic-edge-token".into())),
+    ));
+    let Err(error) = links.client("dev-a").await else {
+        panic!("pairing required");
+    };
+    assert!(error.to_string().contains("paired device session required"));
 }
 
 struct RecoveringToken {
@@ -406,7 +476,11 @@ async fn token_recovery_wakes_a_signed_out_host_relay_immediately() {
     let mut config = HostRelayConfig::new(relay.edge_url(), "dev-a", token.clone());
     // Without the token signal this test would remain asleep for two minutes.
     config.retry = Duration::from_secs(120);
-    let _host = HostRelay::spawn(config, TestService::new("host-a"), noop_nudge());
+    let _host = HostRelay::spawn(
+        config,
+        TestService::new("host-a"),
+        test_auth().store.clone(),
+    );
     tokio::task::yield_now().await;
     assert!(!relay.host_connected());
 
@@ -422,7 +496,11 @@ async fn sign_out_closes_a_live_host_relay_immediately() {
     let mut config = HostRelayConfig::new(relay.edge_url(), "dev-a", token.clone());
     // A sign-out signal must close the authenticated socket, not wait for retry.
     config.retry = Duration::from_secs(120);
-    let _host = HostRelay::spawn(config, TestService::new("host-a"), noop_nudge());
+    let _host = HostRelay::spawn(
+        config,
+        TestService::new("host-a"),
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
 
     token.clear();
@@ -437,10 +515,12 @@ async fn temporary_token_failure_keeps_live_host_and_peer_connections() {
     let _host = HostRelay::spawn(
         HostRelayConfig::new(relay.edge_url(), "dev-a", token.clone()),
         TestService::new("host-a"),
-        noop_nudge(),
+        test_auth().store.clone(),
     );
     relay.wait_host_connected().await;
-    let links = LinkCache::new(LinkCacheConfig::new(relay.edge_url(), token.clone()));
+    let mut link_config = LinkCacheConfig::new(relay.edge_url(), token.clone());
+    attach_remote_session(&mut link_config, test_auth().request.clone());
+    let links = LinkCache::new(link_config);
     let client = links
         .client("dev-a")
         .await
@@ -453,7 +533,7 @@ async fn temporary_token_failure_keeps_live_host_and_peer_connections() {
         "a refresh failure is not a sign-out"
     );
     client
-        .call("Echo", serde_json::json!({}))
+        .call(methods::ENGINE_INFO, serde_json::json!({}))
         .await
         .expect("live peer survives");
     links
@@ -463,7 +543,7 @@ async fn temporary_token_failure_keeps_live_host_and_peer_connections() {
 
     token.replace("fresh-token");
     client
-        .call("Echo", serde_json::json!({}))
+        .call(methods::ENGINE_INFO, serde_json::json!({}))
         .await
         .expect("peer survives recovery");
 }
@@ -474,18 +554,23 @@ async fn token_rotation_does_not_interrupt_a_live_peer_link() {
     let _host = HostRelay::spawn(
         relay_config(&relay.edge_url(), 100),
         TestService::new("host-a"),
-        noop_nudge(),
+        test_auth().store.clone(),
     );
     relay.wait_host_connected().await;
 
     let token = Arc::new(RecoveringToken::new(Some("old-token")));
-    let links = LinkCache::new(LinkCacheConfig::new(relay.edge_url(), token.clone()));
+    let mut link_config = LinkCacheConfig::new(relay.edge_url(), token.clone());
+    attach_remote_session(&mut link_config, test_auth().request.clone());
+    let links = LinkCache::new(link_config);
     let client = links.client("dev-a").await.expect("client dials");
     token.replace("new-token");
     tokio::time::sleep(Duration::from_millis(20)).await;
 
     let echoed = client
-        .call("Echo", serde_json::json!({ "after": "refresh" }))
+        .call(
+            methods::ENGINE_INFO,
+            serde_json::json!({ "after": "refresh" }),
+        )
         .await
         .expect("live link survives token rotation");
     assert_eq!(echoed["params"]["after"], "refresh");
@@ -497,15 +582,20 @@ async fn sign_out_closes_cached_peer_links() {
     let _host = HostRelay::spawn(
         relay_config(&relay.edge_url(), 100),
         TestService::new("host-a"),
-        noop_nudge(),
+        test_auth().store.clone(),
     );
     relay.wait_host_connected().await;
 
     let token = Arc::new(RecoveringToken::new(Some("test-user")));
-    let links = LinkCache::new(LinkCacheConfig::new(relay.edge_url(), token.clone()));
+    let mut link_config = LinkCacheConfig::new(relay.edge_url(), token.clone());
+    attach_remote_session(&mut link_config, test_auth().request.clone());
+    let links = LinkCache::new(link_config);
     let client = links.client("dev-a").await.expect("client dials");
     client
-        .call("Echo", serde_json::json!({ "before": "sign-out" }))
+        .call(
+            methods::ENGINE_INFO,
+            serde_json::json!({ "before": "sign-out" }),
+        )
         .await
         .expect("link is live before sign-out");
 
@@ -514,7 +604,10 @@ async fn sign_out_closes_cached_peer_links() {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if client
-                .call("Echo", serde_json::json!({ "after": "sign-out" }))
+                .call(
+                    methods::ENGINE_INFO,
+                    serde_json::json!({ "after": "sign-out" }),
+                )
                 .await
                 .is_err()
             {
@@ -535,7 +628,11 @@ async fn sign_out_closes_cached_peer_links() {
 async fn relay_serves_multiple_clients_end_to_end() {
     let relay = FakeRelay::start().await;
     let service = TestService::new("host-a");
-    let _host = HostRelay::spawn(relay_config(&relay.edge_url(), 100), service, noop_nudge());
+    let _host = HostRelay::spawn(
+        relay_config(&relay.edge_url(), 100),
+        service,
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
 
     let links = cache(&relay.edge_url());
@@ -543,7 +640,7 @@ async fn relay_serves_multiple_clients_end_to_end() {
     let b = links.client("dev-a").await.expect("client b reuses/dials");
 
     let echoed = a
-        .call("Echo", serde_json::json!({ "who": "a" }))
+        .call(methods::ENGINE_INFO, serde_json::json!({ "who": "a" }))
         .await
         .expect("echo a");
     assert_eq!(echoed["host"], "host-a");
@@ -551,7 +648,7 @@ async fn relay_serves_multiple_clients_end_to_end() {
 
     // Streaming through the relay: items arrive in order, stream terminates.
     let mut items = b
-        .subscribe("Count", serde_json::json!({ "n": 3 }))
+        .subscribe(methods::WATCH_TASK_COMMANDS, serde_json::json!({ "n": 3 }))
         .await
         .expect("count");
     let mut seen = Vec::new();
@@ -569,8 +666,8 @@ async fn relay_serves_multiple_clients_end_to_end() {
 
     // Concurrent calls from the same cached link multiplex fine.
     let (x, y) = tokio::join!(
-        a.call("Echo", serde_json::json!(1)),
-        a.call("Echo", serde_json::json!(2))
+        a.call(methods::ENGINE_INFO, serde_json::json!(1)),
+        a.call(methods::ENGINE_INFO, serde_json::json!(2))
     );
     assert_eq!(x.expect("x")["params"], serde_json::json!(1));
     assert_eq!(y.expect("y")["params"], serde_json::json!(2));
@@ -581,14 +678,22 @@ async fn client_disconnect_tears_down_virtual_conn() {
     let relay = FakeRelay::start().await;
     let service = TestService::new("host-a");
     let active = service.active_streams.clone();
-    let _host = HostRelay::spawn(relay_config(&relay.edge_url(), 100), service, noop_nudge());
+    let _host = HostRelay::spawn(
+        relay_config(&relay.edge_url(), 100),
+        service,
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
 
     let url = device_room_ws_url(&relay.edge_url(), "dev-a", "client", Some("conn-x"), "t");
     let link = DeviceLink::connect(&url).await.expect("link connects");
     let client = link.client();
+    client
+        .authenticate_remote(test_auth().request.clone())
+        .await
+        .unwrap();
     let _items = client
-        .subscribe("Never", serde_json::Value::Null)
+        .subscribe(methods::WATCH_DOC_MESSAGES, serde_json::Value::Null)
         .await
         .expect("subscribe");
     wait_until(|| active.load(Ordering::SeqCst) == 1).await;
@@ -604,15 +709,15 @@ async fn host_offline_fails_fast_and_cools_down() {
     let relay = FakeRelay::start().await;
     let links = cache(&relay.edge_url());
 
-    // No host connected: the readiness probe is bounced with host_offline → link-down →
-    // the dial fails quickly instead of hanging.
+    // No host connected: authenticated admission is bounced with host_offline
+    // before the readiness probe, and the dial fails quickly.
     let Err(err) = links.client("dev-a").await else {
         panic!("dial must fail with no host")
     };
     let message = err.to_string();
     assert!(
-        message.contains("readiness check"),
-        "expected readiness failure, got: {message}"
+        message.contains("device session rejected"),
+        "expected authenticated admission failure, got: {message}"
     );
 
     // Immediately after, the cooldown makes callers fail fast without redialing.
@@ -623,13 +728,17 @@ async fn host_offline_fails_fast_and_cools_down() {
 
     // After the cooldown a host is up — dial succeeds and clears the slate.
     let service = TestService::new("host-a");
-    let _host = HostRelay::spawn(relay_config(&relay.edge_url(), 100), service, noop_nudge());
+    let _host = HostRelay::spawn(
+        relay_config(&relay.edge_url(), 100),
+        service,
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
     tokio::time::sleep(Duration::from_millis(150)).await;
     let client = links.client("dev-a").await.expect("dials after cooldown");
     assert_eq!(
         client
-            .call("Echo", serde_json::json!({}))
+            .call(methods::ENGINE_INFO, serde_json::json!({}))
             .await
             .expect("echo")["host"],
         "host-a"
@@ -644,6 +753,7 @@ async fn presence_reset_clears_cooldown_immediately() {
     let relay = FakeRelay::start().await;
     let mut config =
         LinkCacheConfig::new(relay.edge_url(), Arc::new(StaticToken("test-user".into())));
+    attach_remote_session(&mut config, test_auth().request.clone());
     // Long enough that only a reset (never elapsed time) can explain success.
     config.cooldown_base = Duration::from_secs(120);
     config.cooldown_max = Duration::from_secs(120);
@@ -660,13 +770,17 @@ async fn presence_reset_clears_cooldown_immediately() {
     // Host comes up and its presence heartbeat clears the backoff — the next
     // call dials immediately.
     let service = TestService::new("host-a");
-    let _host = HostRelay::spawn(relay_config(&relay.edge_url(), 100), service, noop_nudge());
+    let _host = HostRelay::spawn(
+        relay_config(&relay.edge_url(), 100),
+        service,
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
     links.reset_cooldown("dev-a");
     let client = links.client("dev-a").await.expect("dials after reset");
     assert_eq!(
         client
-            .call("Echo", serde_json::json!({}))
+            .call(methods::ENGINE_INFO, serde_json::json!({}))
             .await
             .expect("echo")["host"],
         "host-a"
@@ -677,12 +791,21 @@ async fn presence_reset_clears_cooldown_immediately() {
 async fn host_supersede_drops_old_links_and_recovers() {
     let relay = FakeRelay::start().await;
     let service = TestService::new("host-a");
-    let _host = HostRelay::spawn(relay_config(&relay.edge_url(), 100), service, noop_nudge());
+    let _host = HostRelay::spawn(
+        relay_config(&relay.edge_url(), 100),
+        service,
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
 
     let links = cache(&relay.edge_url());
     let client = links.client("dev-a").await.expect("dials");
-    assert!(client.call("Echo", serde_json::json!({})).await.is_ok());
+    assert!(
+        client
+            .call(methods::ENGINE_INFO, serde_json::json!({}))
+            .await
+            .is_ok()
+    );
 
     // A rogue host joins: the relay closes the HostRelay's socket (supersede) and, when
     // the rogue's socket later closes, clients see host_closed. The HostRelay backs off
@@ -704,7 +827,7 @@ async fn host_supersede_drops_old_links_and_recovers() {
 
     // The pre-supersede link died; in-flight/new calls on it fail rather than hang.
     let err = client
-        .call("Echo", serde_json::json!({}))
+        .call(methods::ENGINE_INFO, serde_json::json!({}))
         .await
         .expect_err("old link dead");
     assert!(
@@ -721,29 +844,38 @@ async fn host_supersede_drops_old_links_and_recovers() {
         }
     };
     let echoed = recovered
-        .call("Echo", serde_json::json!({}))
+        .call(methods::ENGINE_INFO, serde_json::json!({}))
         .await
         .expect("echo");
     assert_eq!(echoed["host"], "host-a");
 }
 
 #[tokio::test]
-async fn nudges_reach_the_host_callback() {
+async fn legacy_nudges_do_not_grant_rpc_access() {
     let relay = FakeRelay::start().await;
     let service = TestService::new("host-a");
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let on_nudge: zeron_rpc::NudgeHandler = Arc::new(move |chat_id| {
-        let _ = tx.send(chat_id);
-    });
-    let _host = HostRelay::spawn(relay_config(&relay.edge_url(), 100), service, on_nudge);
+    let _host = HostRelay::spawn(
+        relay_config(&relay.edge_url(), 100),
+        service,
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
 
     relay.nudge("chat-42");
-    let got = tokio::time::timeout(Duration::from_secs(5), rx.recv())
-        .await
-        .expect("nudge delivered")
-        .expect("channel open");
-    assert_eq!(got, "chat-42");
+    let url = device_room_ws_url(
+        &relay.edge_url(),
+        "dev-a",
+        "client",
+        Some("nudge-client"),
+        "t",
+    );
+    let link = DeviceLink::connect(&url).await.unwrap();
+    assert!(
+        link.client()
+            .call(methods::ENGINE_INFO, serde_json::json!({}))
+            .await
+            .is_err()
+    );
 }
 
 /// Live-edge variant: run the same host+client path through a real DeviceRoom DO.
@@ -765,10 +897,12 @@ async fn live_edge_relay_round_trip() {
         Arc::new(StaticToken(token.clone())),
     );
     config.retry = Duration::from_millis(500);
-    let _host = HostRelay::spawn(config, service, noop_nudge());
+    let live_auth = TestAuth::new(&device_id);
+    let _host = HostRelay::spawn(config, service, live_auth.store.clone());
 
     let mut cache_config = LinkCacheConfig::new(edge_url, Arc::new(StaticToken(token)));
     cache_config.probe_timeout = Duration::from_secs(5);
+    attach_remote_session(&mut cache_config, live_auth.request.clone());
     let links = LinkCache::new(cache_config);
 
     // The host claims the room asynchronously; retry the dial until it answers.
@@ -782,7 +916,7 @@ async fn live_edge_relay_round_trip() {
         }
     };
     let echoed = client
-        .call("Echo", serde_json::json!({ "live": true }))
+        .call(methods::ENGINE_INFO, serde_json::json!({ "live": true }))
         .await
         .expect("echo");
     assert_eq!(echoed["host"], "live-host");
@@ -802,7 +936,11 @@ async fn zombie_relay_path_trips_the_echo_deadline() {
     );
     let relay = FakeRelay::start().await;
     let service = TestService::new("host-a");
-    let _host = HostRelay::spawn(relay_config(&relay.edge_url(), 100), service, noop_nudge());
+    let _host = HostRelay::spawn(
+        relay_config(&relay.edge_url(), 100),
+        service,
+        test_auth().store.clone(),
+    );
     relay.wait_host_connected().await;
 
     let url = device_room_ws_url(&relay.edge_url(), "dev-a", "client", Some("c-echo"), "tok");
