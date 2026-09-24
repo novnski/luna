@@ -1375,17 +1375,79 @@ int main(void) {
             .success()
     );
 
+    // Native AX registration must keep the executable identity from launch.
+    // A shell/exec launcher rendered but timed out in native accessibility QA.
+    // Build this opt-in example before starting the ignored fixture server.
+    let direct_binary = repository.join("target/debug/examples/remote-read-native-fixture");
+    assert!(
+        direct_binary.is_file(),
+        "build -p zeron --example remote-read-native-fixture first"
+    );
+    let direct_app = root.join("LUNA-Direct-QA.app");
+    let direct_contents = direct_app.join("Contents");
+    fs::create_dir_all(direct_contents.join("MacOS")).unwrap();
+    fs::create_dir_all(direct_contents.join("Resources")).unwrap();
+    fs::copy(
+        &direct_binary,
+        direct_contents.join("MacOS/remote-read-native-fixture"),
+    )
+    .unwrap();
+    fs::copy(
+        resources.join("luna.icns"),
+        direct_contents.join("Resources/luna.icns"),
+    )
+    .unwrap();
+    let direct_plist = direct_contents.join("Info.plist");
+    fs::copy(&plist, &direct_plist).unwrap();
+    for (key, value) in [
+        ("CFBundleExecutable", "remote-read-native-fixture"),
+        ("CFBundleIdentifier", "com.iulian.luna.direct-read-qa"),
+        ("CFBundleDisplayName", "LUNA Direct QA"),
+        ("CFBundleName", "LUNA Direct QA"),
+    ] {
+        assert!(
+            Command::new("/usr/bin/plutil")
+                .args(["-replace", key, "-string", value])
+                .arg(&direct_plist)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    assert!(
+        Command::new("/usr/bin/codesign")
+            .args([
+                "--force",
+                "--sign",
+                "-",
+                "--identifier",
+                "com.iulian.luna.direct-read-qa"
+            ])
+            .arg(&direct_app)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(&direct_app)
+            .status()
+            .unwrap()
+            .success()
+    );
+
     let manifest = serde_json::json!({
         "ready": true, "pid": std::process::id(), "root": root,
         "machine": core.device_id, "environment": issued.target.environment_id,
         "workspaceScope": "development", "project": project, "task": task,
         "localOwnerPort": local_port, "guardedPort": remote_port,
         "sessionFile": token_path, "fakeSsh": ssh, "artifact": artifact,
-        "app": app, "launcher": executable, "stagedLuna": staged_luna,
+        "app": direct_app, "legacyDiagnosticApp": app, "launcher": executable, "stagedLuna": staged_luna,
         "viewLog": root.join("view.log"),
         "dropForward": root.join("drop-forward"), "failForward": root.join("fail-forward"),
         "stallRpc": root.join("stall-rpc"), "stop": root.join("stop"),
-        "viewPid": root.join("view.pid"), "tunnelPid": root.join("tunnel-pid"),
+        "viewPid": root.join("direct-view.pid"), "tunnelPid": root.join("tunnel-pid"),
     });
     let manifest_path = root.join("manifest.json");
     fs::write(
