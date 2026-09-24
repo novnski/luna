@@ -12,7 +12,7 @@ pub fn builtin_registry() -> &'static ThemeRegistry {
     static REGISTRY: OnceLock<ThemeRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| ThemeRegistry {
         families: vec![
-            family("zeron", "Zeron", vec![zeron_light(), zeron_dark()]),
+            family("luna", "Luna", vec![luna_light(), luna_dark()]),
             family(
                 "vscode-default",
                 "VS Code Default",
@@ -236,11 +236,11 @@ const ANSI_LIGHT: [&str; 16] = [
     "#71717a", "#b91c1c", "#15803d", "#92400e", "#1d4ed8", "#7e22ce", "#155e75", "#18181b",
 ];
 
-fn zeron_dark() -> ThemeVariant {
+fn luna_dark() -> ThemeVariant {
     variant(Seeds {
-        id: "zeron-dark",
-        family_id: "zeron",
-        name: "Zeron Dark",
+        id: "luna-dark",
+        family_id: "luna",
+        name: "Luna Dark",
         appearance: Appearance::Dark,
         treatment: SurfaceTreatment::Frosted,
         background: "#060606",
@@ -261,20 +261,20 @@ fn zeron_dark() -> ThemeVariant {
             "#a1a1aa", "#f472b6", "#22d3ee", "#f87171",
         ],
         source: source(
-            "zeron-dark",
+            "luna-dark",
             "native",
-            "https://github.com/zeronsh/comet",
+            "https://github.com/novnski/luna",
             "d138049",
             "MIT",
         ),
     })
 }
 
-fn zeron_light() -> ThemeVariant {
+fn luna_light() -> ThemeVariant {
     variant(Seeds {
-        id: "zeron-light",
-        family_id: "zeron",
-        name: "Zeron Light",
+        id: "luna-light",
+        family_id: "luna",
+        name: "Luna Light",
         appearance: Appearance::Light,
         treatment: SurfaceTreatment::Frosted,
         background: "#ffffff",
@@ -295,9 +295,9 @@ fn zeron_light() -> ThemeVariant {
             "#52525b", "#be185d", "#0e7490", "#b91c1c",
         ],
         source: source(
-            "zeron-light",
+            "luna-light",
             "native",
-            "https://github.com/zeronsh/comet",
+            "https://github.com/novnski/luna",
             "d138049",
             "MIT",
         ),

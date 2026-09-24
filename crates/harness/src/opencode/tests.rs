@@ -366,7 +366,7 @@ fn compact_routes_stay_provider_native_on_both_supported_protocols() {
 
 #[test]
 fn permission_modes_compile_to_session_scoped_rules() {
-    let ask = opencode_permission_rules(zeron_proto::PermissionMode::Ask);
+    let ask = opencode_permission_rules(luna_proto::PermissionMode::Ask);
     assert!(
         ask.as_array()
             .unwrap()
@@ -394,7 +394,7 @@ fn permission_modes_compile_to_session_scoped_rules() {
             json!({ "permission": "write", "pattern": "*.env.example", "action": "allow" }),
         ]
     );
-    let full = opencode_permission_rules(zeron_proto::PermissionMode::Full);
+    let full = opencode_permission_rules(luna_proto::PermissionMode::Full);
     assert_eq!(
         full,
         json!([{ "permission": "*", "pattern": "*", "action": "allow" }])

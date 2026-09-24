@@ -726,14 +726,14 @@ where
 mod tests {
     use super::*;
     use crate::protocol::{ClientKey, RouteConfig};
+    use luna_proto::WorkspaceScope;
+    use luna_rpc::remote_auth::RemoteTarget;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::{Context as TaskContext, Poll};
     use tokio::io::AsyncWriteExt;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use tokio_tungstenite::tungstenite::protocol::Role as WsRole;
-    use zeron_proto::WorkspaceScope;
-    use zeron_rpc::remote_auth::RemoteTarget;
 
     struct FailWrite<S> {
         inner: S,

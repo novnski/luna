@@ -11,8 +11,8 @@ use gpui::{
     KeyDownEvent, ObjectFit, Render, SharedString, StyledImage as _, Subscription, Window, div,
     img, prelude::*, px,
 };
-use zeron_theme::vscode::{ImportReport, SourceCompilation};
-use zeron_theme::{
+use luna_theme::vscode::{ImportReport, SourceCompilation};
+use luna_theme::{
     AccentPreset, AccentSelection, CustomThemeEntry, CustomThemeStatus, InstallMode,
     SurfacePreference, SurfaceTreatment, ThemeRegistry, ThemeSelection,
 };
@@ -1435,10 +1435,10 @@ fn preview(
     }
 }
 
-fn model_appearance(appearance: Appearance) -> zeron_theme::Appearance {
+fn model_appearance(appearance: Appearance) -> luna_theme::Appearance {
     match appearance {
-        Appearance::Dark => zeron_theme::Appearance::Dark,
-        Appearance::Light => zeron_theme::Appearance::Light,
+        Appearance::Dark => luna_theme::Appearance::Dark,
+        Appearance::Light => luna_theme::Appearance::Light,
     }
 }
 
@@ -1477,7 +1477,7 @@ fn compact_action(
         .text_size(crate::typography::ui_rems(11.5))
 }
 
-fn import_scene_preview(variant: &zeron_theme::ThemeVariant) -> AnyElement {
+fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
     let theme = Theme::from_variant(
         variant,
         AccentSelection::ThemeDefault,
@@ -1607,7 +1607,7 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> gpui::Stateful<gpui::Di
         .children(report.adjustments.iter().map(|adjustment| {
             div().mt(px(4.0)).child(SharedString::from(format!(
                 "Adjusted · {} {} → {} · {}",
-                adjustment.zeron_role, adjustment.original, adjustment.resolved, adjustment.reason
+                adjustment.luna_role, adjustment.original, adjustment.resolved, adjustment.reason
             )))
         }))
         .children(report.fallbacks.iter().map(|message| {
@@ -1634,7 +1634,7 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> gpui::Stateful<gpui::Di
         .children(report.mappings.iter().map(|mapping| {
             div().mt(px(4.0)).child(SharedString::from(format!(
                 "{} ← {}",
-                mapping.zeron_role, mapping.vscode_key
+                mapping.luna_role, mapping.vscode_key
             )))
         }))
 }
@@ -3441,13 +3441,11 @@ mod tests {
     fn registry_offers_both_appearances_and_keeps_single_dark_families_valid() {
         let registry = ThemeRegistry::builtin();
         assert_eq!(
-            registry
-                .variants_for(zeron_theme::Appearance::Light)
-                .count(),
+            registry.variants_for(luna_theme::Appearance::Light).count(),
             10
         );
         assert_eq!(
-            registry.variants_for(zeron_theme::Appearance::Dark).count(),
+            registry.variants_for(luna_theme::Appearance::Dark).count(),
             20
         );
     }

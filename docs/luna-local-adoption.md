@@ -9,7 +9,7 @@ public distribution readiness. The parent task owns native QA and acceptance.
 | Area | Accepted or available locally | Still unsupported or unverified |
 | --- | --- | --- |
 | Core L01–L28 | Parent-reviewed local implementation evidence in `luna-progress.md` and its linked acceptance records. | Deferred X features and unexercised real-provider variants are not included in the core count. |
-| L17 backup and recovery | Private, unencrypted offline LUNA archive; SHA-256 verification, staging, allowlisted same-root restore, rollback directory and interrupted-restore recovery. | Cross-root/device restore, provider credentials, remote grants, arbitrary workspace data, and a general Zeron import. See [backup boundary](luna-backups.md). |
+| L17 backup and recovery | Private, unencrypted offline LUNA archive; SHA-256 verification, staging, allowlisted same-root restore, rollback directory and interrupted-restore recovery. | Cross-root/device restore, provider credentials, remote grants, arbitrary workspace data, and a general Luna import. See [backup boundary](luna-backups.md). |
 | L29–L31 remote | Local synthetic pairing/protocol, SSH ownership, and owner-relay tests accepted by the parent. Protocol v1 and `remote-auth-v1` are required; the L30 artifact is versioned and checksummed. | Real second host, VPS, external TLS, provider accounts and public relay deployment were not tested. An old or incompatible engine must be disconnected or upgraded, not treated as equivalent. |
 | L32 package | `scripts/package-luna-local.sh` builds a versioned `LUNA.app` and ZIP under `target/package/l32-local/`, signs ad hoc and writes a SHA-256 manifest. The bundle identifier is `com.novnski.luna`; default data is `~/.luna`, owner IPC is `59778`, and updates remain disabled. | Developer ID signing, notarization, public feed/channels, upload and installation are outside this candidate. |
 | Daily use | The packaged Mach-O has an explicit `native-fixture` path with mock-only registration, in-memory auth, disabled native metadata/Keychain fallback, no Edge link, and no local IPC listener. `--check-only` verifies it without a window. | Parent Computer readback is still required. A synthetic session is not sustained daily use with a real provider or live data. |
@@ -25,8 +25,8 @@ credentials and refuses to overwrite a candidate at the same revision.
 1. On an isolated test root, run the packaged binary's `status` and `inspect`
    commands with `LUNA_DATA_DIR` and `LUNA_IPC_PORT` set to that root and a
    test port. Bare startup must report local-only mode and no configured edge.
-   Legacy `ZERON_EDGE_URL`, `ZERON_WORKOS_CLIENT_ID` and `ZERON_EDGE_TOKEN`
-   must not opt LUNA into Zeron's service. An owned service requires explicit
+   Legacy `LUNA_EDGE_URL`, `LUNA_WORKOS_CLIENT_ID` and `LUNA_EDGE_TOKEN`
+   must not opt LUNA into Luna's service. An owned service requires explicit
    `LUNA_EDGE_URL` and, for WorkOS, `LUNA_WORKOS_CLIENT_ID`.
 2. Confirm bundle ID, plist revision, ad hoc signature, binary hash and ZIP
    hash against `manifest.json`. A different product or a LUNA engine for a
@@ -61,9 +61,9 @@ reports unsupported reasons without activating anything. A copied root must
 show the original-root limitation even when its device ID matches.
 
 `local_import.rs` imports LUNA local-profile records into a synced LUNA profile;
-it is **not** a Zeron-to-LUNA converter. A copied Zeron store or unknown archive
+it is **not** a Luna-to-LUNA converter. A copied Luna store or unknown archive
 has no proven cross-product schema mapping here and must be reported as
-unsupported. Never point this rehearsal at installed Zeron, the real LUNA
+unsupported. Never point this rehearsal at installed Luna, the real LUNA
 profile, `CODEX_HOME`, provider auth homes, Keychain, or a live workspace.
 
 ## Parent native QA setup

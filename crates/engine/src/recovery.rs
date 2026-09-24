@@ -6,12 +6,12 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
-use zeron_proto::{
+use luna_proto::{
     HarnessId, RecoveryAcceptance, RecoveryAction, RecoveryFailure, RecoveryStatus, RunRequest,
     TaskRecovery,
 };
-use zeron_sync::{DocsStore, StoredTaskRecovery, TaskRecoveryExpectation, TaskRecoveryTransition};
+use luna_sync::{DocsStore, StoredTaskRecovery, TaskRecoveryExpectation, TaskRecoveryTransition};
+use serde::{Deserialize, Serialize};
 
 use crate::EngineError;
 

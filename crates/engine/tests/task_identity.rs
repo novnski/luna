@@ -6,18 +6,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use zeron_doc::SessionCommandPayload;
-use zeron_engine::{
+use luna_doc::SessionCommandPayload;
+use luna_engine::{
     EngineCore, HarnessRegistry, TaskIdentityService, WorkspaceHost, WorkspaceHostConfig,
 };
-use zeron_harness::codex::native::CodexNativeClient;
-use zeron_harness::mock::MockHarness;
-use zeron_proto::{
+use luna_harness::codex::native::CodexNativeClient;
+use luna_harness::mock::MockHarness;
+use luna_proto::{
     AgentEvent, BindingOrigin, DoneStatus, HarnessId, ImportOwnership, ReconciliationState,
     RunRequest, SandboxLevel, TaskLineage,
 };
-use zeron_rpc::{RpcService, methods};
-use zeron_sync::DocsStore;
+use luna_rpc::{RpcService, methods};
+use luna_sync::DocsStore;
 
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -112,7 +112,7 @@ fn mock_request(prompt: &str, resume: Option<&str>) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: false,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -122,9 +122,7 @@ fn mock_request(prompt: &str, resume: Option<&str>) -> RunRequest {
     }
 }
 
-async fn wait_for_done(
-    events: &mut tokio::sync::broadcast::Receiver<zeron_engine::JournaledEvent>,
-) {
+async fn wait_for_done(events: &mut tokio::sync::broadcast::Receiver<luna_engine::JournaledEvent>) {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if matches!(events.recv().await.unwrap().event, AgentEvent::Done { .. }) {
@@ -654,7 +652,7 @@ async fn adoption_transitions_ownership_normalizes_lifecycle_and_recovers_materi
     let task_id = provider_owned.task.task_id.clone();
     assert_eq!(
         provider_owned.task.origin,
-        zeron_proto::TaskOrigin::ProviderImported
+        luna_proto::TaskOrigin::ProviderImported
     );
     assert_eq!(
         provider_owned.current_binding.unwrap().origin,
@@ -690,10 +688,7 @@ async fn adoption_transitions_ownership_normalizes_lifecycle_and_recovers_materi
         .adopt_preview(&adoption_preview.preview_id, None)
         .await
         .unwrap();
-    assert_eq!(
-        adopted.task.origin,
-        zeron_proto::TaskOrigin::ProviderAdopted
-    );
+    assert_eq!(adopted.task.origin, luna_proto::TaskOrigin::ProviderAdopted);
     let binding = adopted.current_binding.unwrap();
     assert_eq!(binding.origin, BindingOrigin::ProviderAdopted);
     assert_eq!(binding.generation, 2);

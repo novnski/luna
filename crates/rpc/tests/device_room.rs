@@ -25,15 +25,15 @@ use tokio_tungstenite::tungstenite::handshake::server::{
     Request as WsRequest, Response as WsResponse,
 };
 
-use zeron_proto::WorkspaceScope;
-use zeron_rpc::device_room::{
+use luna_proto::WorkspaceScope;
+use luna_rpc::device_room::{
     CLIENT_CLOSED, CLIENT_GONE, HOST_CLOSED, HOST_OFFLINE, NUDGE_KIND, RELAY_KIND,
 };
-use zeron_rpc::remote_auth::{
+use luna_rpc::remote_auth::{
     AuthenticateRemote, CreatePairing, RedeemPairing, RemoteAuthStore, RemoteEnvironment,
     RemoteScope,
 };
-use zeron_rpc::{
+use luna_rpc::{
     DeviceFrameHeader, DeviceLink, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig,
     RpcError, RpcReply, RpcService, StaticToken, TokenError, TokenSource, decode_device_frame,
     device_room_ws_url, encode_device_frame, methods,
@@ -879,15 +879,15 @@ async fn legacy_nudges_do_not_grant_rpc_access() {
 }
 
 /// Live-edge variant: run the same host+client path through a real DeviceRoom DO.
-/// `ZERON_EDGE_WS=http://127.0.0.1:26640 cargo test -p zeron-rpc -- --ignored live_edge`
-/// (dev-mode edge; ZERON_EDGE_TOKEN defaults to a fixed dev user id).
+/// `LUNA_EDGE_WS=http://127.0.0.1:26640 cargo test -p luna-rpc -- --ignored live_edge`
+/// (dev-mode edge; LUNA_EDGE_TOKEN defaults to a fixed dev user id).
 #[tokio::test]
-#[ignore = "needs a running edge (set ZERON_EDGE_WS)"]
+#[ignore = "needs a running edge (set LUNA_EDGE_WS)"]
 async fn live_edge_relay_round_trip() {
-    let Ok(edge_url) = std::env::var("ZERON_EDGE_WS") else {
-        panic!("set ZERON_EDGE_WS to the edge base URL (e.g. http://127.0.0.1:26640)");
+    let Ok(edge_url) = std::env::var("LUNA_EDGE_WS") else {
+        panic!("set LUNA_EDGE_WS to the edge base URL (e.g. http://127.0.0.1:26640)");
     };
-    let token = std::env::var("ZERON_EDGE_TOKEN").unwrap_or_else(|_| "relay-live-test".into());
+    let token = std::env::var("LUNA_EDGE_TOKEN").unwrap_or_else(|_| "relay-live-test".into());
     let device_id = format!("relay-live-{}", uuid::Uuid::new_v4());
 
     let service = TestService::new("live-host");
@@ -930,7 +930,7 @@ async fn zombie_relay_path_trips_the_echo_deadline() {
     // minutes, retrying frames into the void, until an unrelated host-session
     // cycle exposed it. The app-level echo must rule the link dead within its
     // deadline instead.
-    zeron_rpc::device_room::set_client_liveness_for_tests(
+    luna_rpc::device_room::set_client_liveness_for_tests(
         Duration::from_millis(100),
         Duration::from_millis(600),
     );
@@ -957,5 +957,5 @@ async fn zombie_relay_path_trips_the_echo_deadline() {
         "the zombie path must be ruled dead by the echo deadline"
     );
     // Restore the production clocks for the rest of the process's tests.
-    zeron_rpc::device_room::set_client_liveness_for_tests(Duration::ZERO, Duration::ZERO);
+    luna_rpc::device_room::set_client_liveness_for_tests(Duration::ZERO, Duration::ZERO);
 }

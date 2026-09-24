@@ -15,10 +15,10 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use zeron_doc::{MessageRole, MessageStatus, SessionCommandPayload, SessionMessageEntry};
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_doc::{MessageRole, MessageStatus, SessionCommandPayload, SessionMessageEntry};
+use luna_engine::{EngineCore, HarnessRegistry};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode,
 };
@@ -130,10 +130,10 @@ async fn transcript_survives_open_racing_create_chat() {
         let live_writer_ref = handle.doc_arc();
 
         // The mint lands a beat later, exactly as the composer sends it.
-        let client = zeron_rpc::memory_client(core.rpc_service());
+        let client = luna_rpc::memory_client(core.rpc_service());
         client
             .call(
-                zeron_rpc::methods::MUTATE,
+                luna_rpc::methods::MUTATE,
                 serde_json::json!({
                     "op": "createChat",
                     "chatId": CHAT,
@@ -161,7 +161,7 @@ async fn transcript_survives_open_racing_create_chat() {
                         cwd: "~".into(),
                         sandbox: SandboxLevel::WorkspaceWrite,
                         auto_approve: true,
-                        permission_mode: zeron_proto::PermissionMode::Ask,
+                        permission_mode: luna_proto::PermissionMode::Ask,
                         parent_permission_ceiling: None,
                         environment_permission_ceiling: None,
                         permission_policy: None,

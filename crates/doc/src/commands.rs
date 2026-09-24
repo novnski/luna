@@ -1,6 +1,6 @@
 //! Durable command ledger — port of `packages/session-doc/src/commands.ts`.
 //!
-//! Rules (verbatim from zeron's design):
+//! Rules (verbatim from luna's design):
 //! 1. Each device inserts only its own entries; entries are append-only and immutable.
 //! 2. The chat's HOST is the sole writer of command outcomes; a composer may only set
 //!    `cancelled` on its own still-pending entries.
@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{ApprovalDecision, RunRequest, UserInputAnswer};
+use luna_proto::{ApprovalDecision, RunRequest, UserInputAnswer};
 
 use crate::constants::COMMAND_DEFAULT_TTL_MS;
 
@@ -343,9 +343,9 @@ mod tests {
             reasoning: None,
             model_options: Default::default(),
             cwd: "/tmp".into(),
-            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
             auto_approve: false,
-            permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_mode: luna_proto::PermissionMode::Ask,
             parent_permission_ceiling: None,
             environment_permission_ceiling: None,
             permission_policy: None,

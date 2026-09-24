@@ -10,12 +10,12 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
-use zeron_harness::codex::native::CodexNativeClient;
-use zeron_harness::{
+use luna_harness::codex::native::CodexNativeClient;
+use luna_harness::{
     CancellationToken, CodexHarness, Harness, HarnessError, ProviderForkProgress, RunControls,
     SteerAcceptance, SteerMessage,
 };
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, ContextOperationStatus, DoneStatus, HarnessId, ProviderForkBoundary,
     ProviderForkRequest, ReasoningLevel, RunRequest, SandboxLevel, TodoItem, ToolCall,
     UserInputAnswer, UserInputQuestion,
@@ -54,7 +54,7 @@ fn request(prompt: &str) -> RunRequest {
         cwd: String::new(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -104,8 +104,8 @@ async fn run_to_end(
     .expect("run finished in time")
 }
 
-fn synthetic_runtime_contract() -> zeron_proto::LunaAgentRuntimeContract {
-    use zeron_proto::{
+fn synthetic_runtime_contract() -> luna_proto::LunaAgentRuntimeContract {
+    use luna_proto::{
         LunaAgentRuntimeContract, RuntimeContext, RuntimeDelivery, RuntimeInstructionSection,
         RuntimeInstructionSource, RuntimeToolDefinition,
     };
@@ -168,11 +168,11 @@ async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
     let home = tempfile::tempdir().unwrap();
     let mut req = request("scenario:runtime-contract");
     req.model_options.insert(
-        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
         home.path().to_str().unwrap().into(),
     );
     req.model_options.insert(
-        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
         serde_json::to_value(synthetic_runtime_contract()).unwrap(),
     );
     let (mut run_controls, _steer, _token) = controls("Yes");
@@ -224,11 +224,11 @@ async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
     let mut resume = request("scenario:runtime-contract-resume");
     resume.resume = Some("synthetic-resume".into());
     resume.model_options.insert(
-        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
         home.path().to_str().unwrap().into(),
     );
     resume.model_options.insert(
-        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
         serde_json::to_value(synthetic_runtime_contract()).unwrap(),
     );
     let (mut resume_controls, _steer, _token) = controls("Yes");
@@ -252,11 +252,11 @@ async fn cancelled_luna_turn_rejects_late_tool_request_before_executor() {
     let home = tempfile::tempdir().unwrap();
     let mut req = request("scenario:runtime-contract-cancelled");
     req.model_options.insert(
-        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
         home.path().to_str().unwrap().into(),
     );
     req.model_options.insert(
-        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
         serde_json::to_value(synthetic_runtime_contract()).unwrap(),
     );
     let (mut run_controls, _steer, token) = controls("Yes");
@@ -309,11 +309,11 @@ async fn declared_luna_tools_without_engine_handler_fail_before_provider_start()
     let home = tempfile::tempdir().unwrap();
     let mut req = request("synthetic-no-handler");
     req.model_options.insert(
-        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
         home.path().to_str().unwrap().into(),
     );
     req.model_options.insert(
-        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
         serde_json::to_value(synthetic_runtime_contract()).unwrap(),
     );
     let (controls, _steer, _token) = controls("Yes");
@@ -328,7 +328,7 @@ async fn ordinary_threads_are_native_visible_and_strict_resume_never_rebinds() {
     let (run_controls, _steer, _token) = controls("Yes");
     let mut req = request("scenario:native-title");
     req.model_options.insert(
-        zeron_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
+        luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
         "[LUNA] Native fixture".into(),
     );
     let events = run_to_end(&harness(), req, run_controls).await;
@@ -348,7 +348,7 @@ async fn ordinary_threads_are_native_visible_and_strict_resume_never_rebinds() {
     let mut req = request("strict resume must fail");
     req.resume = Some("resume-fail".into());
     req.model_options.insert(
-        zeron_harness::codex::LUNA_STRICT_RESUME_OPTION.into(),
+        luna_harness::codex::LUNA_STRICT_RESUME_OPTION.into(),
         true.into(),
     );
     let events = run_to_end(&harness(), req, run_controls).await;
@@ -554,12 +554,12 @@ async fn ordinary_start_and_resume_inherit_the_selected_codex_home_config() {
         req.cwd = cwd.path().to_string_lossy().into_owned();
         req.resume = resume.map(str::to_owned);
         req.model_options.insert(
-            zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+            luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
             home.path().to_string_lossy().into_owned().into(),
         );
         if force_file_auth {
             req.model_options.insert(
-                zeron_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
+                luna_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
                 true.into(),
             );
         }
@@ -781,7 +781,7 @@ async fn live_l06_native_visibility_rename_archive_and_reopen() {
     req.cwd = std::env::temp_dir().to_string_lossy().into_owned();
     req.sandbox = SandboxLevel::ReadOnly;
     req.model_options.insert(
-        zeron_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
+        luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
         name.clone().into(),
     );
     let stream = CodexHarness::new()
@@ -1083,7 +1083,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: None,
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await
@@ -1129,7 +1129,7 @@ async fn explicit_steer_ack_does_not_claim_incorporation_from_a_text_echo() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
-            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
         })
         .await
@@ -1161,7 +1161,7 @@ async fn explicit_steers_are_single_flight_across_stale_and_duplicate_echoes() {
             .send(SteerMessage {
                 prompt: "same prompt".into(),
                 message_id: Some(message_id.into()),
-                delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+                delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(acceptance),
             })
             .await
@@ -1207,7 +1207,7 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
-            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
         })
         .await
@@ -1240,7 +1240,7 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
-            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
         })
         .await
@@ -1280,7 +1280,7 @@ async fn explicit_steer_ack_without_provider_echo_is_not_incorporated() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
-            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
         })
         .await
@@ -1312,7 +1312,7 @@ async fn rejected_steer_falls_back_to_a_follow_up_turn() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: None,
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await
@@ -1468,12 +1468,12 @@ async fn computer_use_approval_and_provider_evidence_stay_on_exact_turn() {
         calls,
         vec![
             (
-                zeron_proto::ComputerUseStatus::Running,
+                luna_proto::ComputerUseStatus::Running,
                 Some("Finder"),
                 false
             ),
             (
-                zeron_proto::ComputerUseStatus::ProviderCompleted,
+                luna_proto::ComputerUseStatus::ProviderCompleted,
                 Some("Finder"),
                 true
             ),
@@ -1585,7 +1585,7 @@ async fn provider_permission_event_uses_exact_turn_and_one_request_grant() {
 fn isolated_computer_request(prompt: &str, home: &std::path::Path) -> RunRequest {
     let mut request = request(prompt);
     request.model_options.insert(
-        zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+        luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
         home.to_string_lossy().to_string().into(),
     );
     request
@@ -1596,7 +1596,7 @@ fn computer_use_request(prompt: &str, home: &std::path::Path) -> RunRequest {
     let mut contract = synthetic_runtime_contract();
     contract.tools.clear();
     request.model_options.insert(
-        zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+        luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
         serde_json::to_value(contract).unwrap(),
     );
     request
@@ -1695,8 +1695,8 @@ async fn stale_t1_lifecycle_cannot_cancel_t2_approval_or_computer_call() {
         assert_eq!(
             statuses,
             vec![
-                zeron_proto::ComputerUseStatus::Running,
-                zeron_proto::ComputerUseStatus::ProviderCompleted
+                luna_proto::ComputerUseStatus::Running,
+                luna_proto::ComputerUseStatus::ProviderCompleted
             ],
             "{scenario}: {events:?}"
         );
@@ -1761,7 +1761,7 @@ async fn next_turn_response_owns_approval_before_started_notification() {
         .send(SteerMessage {
             prompt: "follow-up t2".into(),
             message_id: None,
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await
@@ -1837,7 +1837,7 @@ async fn computer_use_disconnect_reports_unknown_without_replay() {
             event,
             AgentEvent::ToolCall {
                 call: ToolCall::ComputerUse {
-                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    status: luna_proto::ComputerUseStatus::Unknown,
                     ..
                 },
                 ..
@@ -1875,7 +1875,7 @@ async fn computer_use_interrupt_reports_unknown_without_provider_success() {
             &event,
             AgentEvent::ToolCall {
                 call: ToolCall::ComputerUse {
-                    status: zeron_proto::ComputerUseStatus::Running,
+                    status: luna_proto::ComputerUseStatus::Running,
                     ..
                 },
                 ..
@@ -1891,7 +1891,7 @@ async fn computer_use_interrupt_reports_unknown_without_provider_success() {
             event,
             AgentEvent::ToolCall {
                 call: ToolCall::ComputerUse {
-                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    status: luna_proto::ComputerUseStatus::Unknown,
                     ..
                 },
                 ..
@@ -1904,7 +1904,7 @@ async fn computer_use_interrupt_reports_unknown_without_provider_success() {
             event,
             AgentEvent::ToolCall {
                 call: ToolCall::ComputerUse {
-                    status: zeron_proto::ComputerUseStatus::ProviderCompleted,
+                    status: luna_proto::ComputerUseStatus::ProviderCompleted,
                     ..
                 },
                 ..
@@ -2439,7 +2439,7 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
             steer.send(SteerMessage {
                 prompt: "Reuse the SAME existing subagent for one more task: reply exactly child-second. Use followup_task if available, otherwise send_input. Do not spawn a new agent. Wait for it to finish, then reply exactly parent-second. Do not inspect or change files.".into(),
                 message_id: None,
-                delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                 acceptance: None,
             }).await.unwrap();
         }
@@ -2547,7 +2547,7 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
 
 /// Live smoke against the REAL codex app-server (installed + authed):
 /// one trivial turn, ending on turn/completed.
-/// `cargo test -p zeron-harness --test codex -- --ignored`.
+/// `cargo test -p luna-harness --test codex -- --ignored`.
 #[tokio::test]
 #[ignore = "spawns the real codex app-server; needs install + auth + network"]
 async fn live_real_app_server_single_turn() {
@@ -2717,7 +2717,7 @@ async fn native_mcp_config_uses_each_selected_project_cwd() {
 
 #[test]
 fn skill_observation_parser_ignores_unknown_and_malformed_payloads() {
-    use zeron_harness::codex::observe_skill_discovery;
+    use luna_harness::codex::observe_skill_discovery;
 
     let missing = observe_skill_discovery(&serde_json::json!({}));
     assert!(missing.omitted);
@@ -2756,7 +2756,7 @@ fn skill_observation_parser_ignores_unknown_and_malformed_payloads() {
 
 #[test]
 fn skill_observation_parser_bounds_groups_names_and_total_retention() {
-    use zeron_harness::codex::observe_skill_discovery;
+    use luna_harness::codex::observe_skill_discovery;
 
     let too_many_groups = (0..65)
         .map(|index| serde_json::json!({"cwd": format!("/root-{index}"), "skills": []}))
@@ -2801,7 +2801,7 @@ fn skill_observation_parser_bounds_groups_names_and_total_retention() {
     assert_eq!(observed.entries.len(), 512);
 }
 
-/// Live smoke against the real CLI: `cargo test -p zeron-harness --test
+/// Live smoke against the real CLI: `cargo test -p luna-harness --test
 /// codex -- --ignored live_commands`.
 #[tokio::test]
 #[ignore]

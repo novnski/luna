@@ -1,5 +1,5 @@
 [package]
-name = "zeron-update"
+name = "luna-update"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

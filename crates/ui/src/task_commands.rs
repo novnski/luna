@@ -2,8 +2,8 @@
 
 use std::sync::OnceLock;
 
-use zeron_proto::{CommandReceipt, CommandReceiptStatus, TaskCommandRead};
-use zeron_rpc::{RpcError, methods};
+use luna_proto::{CommandReceipt, CommandReceiptStatus, TaskCommandRead};
+use luna_rpc::{RpcError, methods};
 
 use crate::state::EngineHandle;
 
@@ -87,7 +87,7 @@ pub async fn execute(
 pub async fn execute_reviewed(
     engine: &EngineHandle,
     task_id: &str,
-    snapshot: zeron_proto::TaskCommandSnapshot,
+    snapshot: luna_proto::TaskCommandSnapshot,
     intent: serde_json::Value,
 ) -> Result<CommandReceipt, RpcError> {
     let receipt = execute_receipt_on_with_snapshot(
@@ -159,7 +159,7 @@ async fn execute_receipt_on_with_snapshot(
     target_device_id: Option<&str>,
     command_id: String,
     intent: serde_json::Value,
-    reviewed_snapshot: Option<zeron_proto::TaskCommandSnapshot>,
+    reviewed_snapshot: Option<luna_proto::TaskCommandSnapshot>,
 ) -> Result<CommandReceipt, RpcError> {
     let mut snapshot_params = serde_json::json!({ "taskId": task_id });
     if let Some(target) = target_device_id {

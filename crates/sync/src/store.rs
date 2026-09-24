@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
-use zeron_proto::{
+use luna_proto::{
     ActivityEnvelope, AppshotActivityKind, AppshotActivityRecord, AttentionItem, AttentionKind,
     AttentionLifecycle, AttentionMutation, AttentionTransition, AttentionTransitionKind,
     CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, ComposerDraft,
@@ -16,6 +15,7 @@ use zeron_proto::{
     HistoryCursor, HistoryProjectPolicy, HistorySearchPage, HistorySearchRequest,
     HistorySearchScope, TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
 };
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::write_epoch::{FlushPermit, WriteEpoch, WritePermit};
 
@@ -1673,7 +1673,7 @@ impl DocsStore {
         let saved_ids: HashSet<&str> = draft
             .attachments
             .iter()
-            .filter(|blob| blob.state == zeron_proto::DraftBlobState::Saved)
+            .filter(|blob| blob.state == luna_proto::DraftBlobState::Saved)
             .map(|blob| blob.attachment_id.as_str())
             .collect();
         for shot in &draft.appshots {
@@ -4128,14 +4128,14 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use crate::write_epoch::Phase;
-    use std::sync::{Arc, Barrier, mpsc};
-    use std::thread;
-    use std::time::Duration;
-    use zeron_proto::{
+    use luna_proto::{
         ACTIVITY_ENVELOPE_VERSION, ATTENTION_CONTRACT_VERSION, ActivityKind, ActivityRedaction,
         ActivitySourceRef, AttentionItem, AttentionKind, AttentionLifecycle, AttentionMutation,
         AttentionSeverity, AttentionSourcePointer, AttentionTarget, HistorySearchFilters,
     };
+    use std::sync::{Arc, Barrier, mpsc};
+    use std::thread;
+    use std::time::Duration;
 
     fn is_sqlite_read_only<T>(result: Result<T, StoreError>) -> bool {
         matches!(
@@ -4161,7 +4161,7 @@ mod tests {
             sequence: 1,
             timestamp_ms,
             kind: ActivityKind::Prompt,
-            outcome: zeron_proto::ActivityOutcome::Succeeded,
+            outcome: luna_proto::ActivityOutcome::Succeeded,
             harness: None,
             provider: None,
             model: Some("fixture-model".into()),
@@ -5194,7 +5194,7 @@ mod draft_tests {
         let dir = tempfile::tempdir().unwrap();
         let store = DocsStore::open(dir.path()).unwrap();
         let mut waiting = draft(1, "draft", "/synthetic/fixture.png");
-        waiting.attachments[0].state = zeron_proto::DraftBlobState::WaitingForUpload;
+        waiting.attachments[0].state = luna_proto::DraftBlobState::WaitingForUpload;
         waiting.attachments[0].path = None;
         store.save_composer_draft("viewer-a", &waiting).unwrap();
         assert_eq!(
@@ -5240,21 +5240,21 @@ mod draft_tests {
 
     pub(super) fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
         ComposerDraft {
-            version: zeron_proto::COMPOSER_DRAFT_VERSION,
+            version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: "task-a".into(),
             task_id: Some("task-a".into()),
             revision,
             text: text.into(),
-            attachments: vec![zeron_proto::DraftBlob {
+            attachments: vec![luna_proto::DraftBlob {
                 attachment_id: "image-a".into(),
                 name: "fixture.png".into(),
                 path: Some(path.into()),
                 sha256: Some("synthetic".into()),
                 size: Some(7),
-                state: zeron_proto::DraftBlobState::Saved,
+                state: luna_proto::DraftBlobState::Saved,
                 error: None,
             }],
-            appshots: vec![zeron_proto::DraftAppshot {
+            appshots: vec![luna_proto::DraftAppshot {
                 id: "shot-a".into(),
                 screenshot_attachment_id: "image-a".into(),
                 app_name: "Fixture".into(),
@@ -5266,7 +5266,7 @@ mod draft_tests {
                 screenshot_dimensions: Some((2, 2)),
                 captured_at_ms: 1,
             }],
-            context: zeron_proto::DraftContext {
+            context: luna_proto::DraftContext {
                 review_comments: vec![serde_json::json!({"path":"src/lib.rs","line":7})],
                 quoted: Some(serde_json::json!({"messageId":"quoted"})),
                 terminal: Some(serde_json::json!({"terminalId":"terminal"})),

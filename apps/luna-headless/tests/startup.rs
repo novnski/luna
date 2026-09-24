@@ -4,11 +4,11 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use luna_proto::EngineInfo;
+use luna_rpc::remote_auth::{CreatePairing, IssuedPairing, RedeemPairing, RemoteScope};
+use luna_rpc::{RpcClient, methods};
 use tempfile::TempDir;
 use tokio::process::{Child, Command};
-use zeron_proto::EngineInfo;
-use zeron_rpc::remote_auth::{CreatePairing, IssuedPairing, RedeemPairing, RemoteScope};
-use zeron_rpc::{RpcClient, methods};
 
 async fn free_port() -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -31,7 +31,7 @@ fn start(root: &Path, ipc: u16, remote: u16) -> Child {
         .env("LUNA_DATA_DIR", root.join("data"))
         .env("LUNA_WORKOS_CLIENT_ID", "")
         .env("LUNA_EDGE_URL", "http://127.0.0.1:1")
-        .env("ZERON_HARNESS", "mock")
+        .env("LUNA_HARNESS", "mock")
         .env("CODEX_HOME", root.join("synthetic-codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))
         .stdin(Stdio::null())
@@ -48,7 +48,7 @@ async fn wait_client(child: &mut Child, port: u16) -> RpcClient {
         if let Some(status) = child.try_wait().unwrap() {
             panic!("synthetic headless exited before readiness: {status}");
         }
-        if let Ok(client) = zeron_rpc::connect_ws(&url).await {
+        if let Ok(client) = luna_rpc::connect_ws(&url).await {
             return client;
         }
         assert!(
@@ -100,7 +100,7 @@ async fn packaged_headless_startup_guards_remote_socket_and_shutdown() {
         .await
         .unwrap();
     remote_client
-        .authenticate_remote(zeron_rpc::remote_auth::AuthenticateRemote {
+        .authenticate_remote(luna_rpc::remote_auth::AuthenticateRemote {
             target: issued.target,
             session_token: session.session_token,
         })
@@ -111,7 +111,7 @@ async fn packaged_headless_startup_guards_remote_socket_and_shutdown() {
         .await
         .unwrap();
     assert_eq!(remote_info.device_id, info.device_id);
-    let stranger = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{remote}"))
+    let stranger = luna_rpc::connect_ws(&format!("ws://127.0.0.1:{remote}"))
         .await
         .unwrap();
     assert!(

@@ -5,10 +5,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
-use zeron_doc::MessagePart;
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_doc::MessagePart;
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, ChatConfig, DoneStatus, HarnessId, Model, PermissionMode, ReasoningLevel,
     RunRequest, SandboxLevel, SessionStatus, SteeringMode, ToolCall,
 };
@@ -317,7 +317,7 @@ async fn synthetic_account_switch_retires_runtime_without_rebinding_or_tool_repl
     assert_eq!(
         seen[1]
             .model_options
-            .get(zeron_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION)
+            .get(luna_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION)
             .and_then(serde_json::Value::as_bool),
         Some(true)
     );
@@ -351,7 +351,7 @@ async fn synthetic_account_switch_retires_runtime_without_rebinding_or_tool_repl
             None,
             Some(&core.device_id),
             Some(cwd.to_str().unwrap()),
-            zeron_proto::TaskLineage::default(),
+            luna_proto::TaskLineage::default(),
         )
         .unwrap();
     core.task_identity

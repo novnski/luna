@@ -6,7 +6,7 @@ if (-not $ReleasesUrl.StartsWith('https://')) { throw 'Release feed must use HTT
 $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 try {
-    cargo build --release --locked -p zeron
+    cargo build --release --locked -p luna
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
     # Explicit pipes also work for the GUI-subsystem executable in CI. A
     # PowerShell collection match does not populate the scalar $Matches map.

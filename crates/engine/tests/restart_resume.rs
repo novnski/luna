@@ -3,9 +3,9 @@
 //! is run twice over one data dir, asserting
 //! - chats + transcripts survive a graceful shutdown → relaunch;
 //! - the next run in an existing chat carries the chat's stored harness-native
-//!   session id as `RunRequest.resume` (engine-owned, zeron sessions.ts:736);
+//!   session id as `RunRequest.resume` (engine-owned, luna sessions.ts:736);
 //! - a kill -9 style crash recovers the session id from the run journal
-//!   (zeron recoverDraft, sessions.ts:538-552) and stamps streaming entries
+//!   (luna recoverDraft, sessions.ts:538-552) and stamps streaming entries
 //!   `aborted`;
 //! - resume is cwd-scoped (harness session stores are keyed by cwd);
 //! - an uncertain startup crash is surfaced for delivery reconciliation with
@@ -20,17 +20,17 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, SessionCommandEntry, SessionCommandPayload,
     SessionCommandStatus, SessionDoc, SessionMessageEntry,
 };
-use zeron_engine::{EngineCore, HarnessRegistry, RunJournal};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_engine::{EngineCore, HarnessRegistry, RunJournal};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RecoveryAcceptance, RecoveryAction,
     RecoveryStatus, RunRequest, SandboxLevel, SteeringMode,
 };
-use zeron_sync::DocsStore;
+use luna_sync::DocsStore;
 
 const CHAT: &str = "chat-restart";
 
@@ -47,7 +47,7 @@ fn run_request(prompt: &str, cwd: &str) -> RunRequest {
         cwd: cwd.into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -544,7 +544,7 @@ async fn persistent_session_serves_multiple_turns_on_one_child() {
     )
     .await;
 
-    // The session PARKS (zeron runsBySession): the second message routes into
+    // The session PARKS (luna runsBySession): the second message routes into
     // the live child instead of spawning a new one.
     queue_run(&core, "second", "/tmp", "msg-user-2");
     wait_for(
@@ -874,7 +874,7 @@ async fn persistent_startup_crash_keeps_stored_session_id() {
 /// the codeword back — the reply can only contain it if the second run resumed
 /// the first run's harness session. Ignored by default: needs an installed,
 /// authenticated `claude` CLI and spends real tokens (haiku, two tiny turns).
-/// Run with: `cargo test -p zeron-engine --test restart_resume -- --ignored`
+/// Run with: `cargo test -p luna-engine --test restart_resume -- --ignored`
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires installed+authenticated claude CLI; spends tokens"]
 async fn real_claude_remembers_codeword_across_engine_restart() {
@@ -894,7 +894,7 @@ async fn real_claude_remembers_codeword_across_engine_restart() {
         cwd: cwd.clone(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: false,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -905,7 +905,7 @@ async fn real_claude_remembers_codeword_across_engine_restart() {
     let assemble_real = || {
         EngineCore::assemble(
             &dir,
-            Arc::new(zeron_engine::default_registry()),
+            Arc::new(luna_engine::default_registry()),
             HarnessId::ClaudeCode,
             None,
         )

@@ -9,11 +9,11 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
-use zeron_harness::acp::SignInProgress;
-use zeron_harness::{
+use luna_harness::acp::SignInProgress;
+use luna_harness::{
     AcpHarness, CancellationToken, Harness, RunControls, SteerAcceptance, SteerMessage,
 };
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
     TodoItem, ToolCall, UserInputAnswer,
 };
@@ -46,7 +46,7 @@ fn request(prompt: &str) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -151,7 +151,7 @@ async fn happy_path_maps_chunks_tools_diffs_plans_and_commands() {
     assert!(events.contains(&AgentEvent::ToolCall {
         id: "t1".into(),
         call: ToolCall::Exec {
-            command: "cargo test -p zeron-harness".into()
+            command: "cargo test -p luna-harness".into()
         },
     }));
     let exec_output = events
@@ -166,7 +166,7 @@ async fn happy_path_maps_chunks_tools_diffs_plans_and_commands() {
             _ => None,
         })
         .expect("exec output present");
-    assert!(exec_output.starts_with("   Compiling zeron-harness"));
+    assert!(exec_output.starts_with("   Compiling luna-harness"));
     assert_eq!(exec_output.lines().count(), 6, "{exec_output:?}");
 
     // Edit tool: single-shot completed call carries the inline diff.
@@ -229,7 +229,7 @@ async fn happy_path_maps_chunks_tools_diffs_plans_and_commands() {
 async fn config_options_apply_requested_model_and_effort() {
     let (controls, _steer, _token) = controls();
     let mut req = request("scenario:config");
-    req.reasoning = Some(zeron_proto::ReasoningLevel::Medium);
+    req.reasoning = Some(luna_proto::ReasoningLevel::Medium);
     let events = run_to_end(&harness(), req, controls).await;
     // The fixture answers refusal unless BOTH set_config_option calls
     // (model grok-4.5, effort medium) arrived before the prompt.
@@ -305,7 +305,7 @@ async fn steering_extension_injects_mid_turn() {
                     .send(SteerMessage {
                         prompt: "redirect please".into(),
                         message_id: None,
-                        delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                        delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                         acceptance: None,
                     })
                     .await
@@ -351,7 +351,7 @@ async fn run_explicit_steer_scenario(scenario: &str) -> (Vec<AgentEvent>, SteerA
                     .send(SteerMessage {
                         prompt: "redirect please".into(),
                         message_id: Some("queued-steer".into()),
-                        delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+                        delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                         acceptance: accepted_tx.take(),
                     })
                     .await
@@ -416,7 +416,7 @@ async fn steer_racing_the_turn_end_never_emits_steered_after_done() {
                     .send(SteerMessage {
                         prompt: "redirect please".into(),
                         message_id: None,
-                        delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                        delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                         acceptance: None,
                     })
                     .await
@@ -469,7 +469,7 @@ async fn rejected_steer_queues_and_delivers_at_the_turn_boundary() {
                     .send(SteerMessage {
                         prompt: "redirect please".into(),
                         message_id: None,
-                        delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                        delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                         acceptance: None,
                     })
                     .await
@@ -599,9 +599,9 @@ fn descriptor_surface_matches_registry_expectations() {
     assert_eq!(
         harness.reasoning_levels(),
         &[
-            zeron_proto::ReasoningLevel::Low,
-            zeron_proto::ReasoningLevel::Medium,
-            zeron_proto::ReasoningLevel::High,
+            luna_proto::ReasoningLevel::Low,
+            luna_proto::ReasoningLevel::Medium,
+            luna_proto::ReasoningLevel::High,
         ]
     );
 }
@@ -618,9 +618,9 @@ async fn models_are_discovered_from_the_acp_session() {
     assert_eq!(
         models[0].reasoning_levels,
         vec![
-            zeron_proto::ReasoningLevel::Low,
-            zeron_proto::ReasoningLevel::Medium,
-            zeron_proto::ReasoningLevel::High,
+            luna_proto::ReasoningLevel::Low,
+            luna_proto::ReasoningLevel::Medium,
+            luna_proto::ReasoningLevel::High,
         ],
         "{models:?}"
     );
@@ -672,7 +672,7 @@ async fn missing_override_is_not_installed_and_fails_discovery() {
     assert!(!harness.installed());
     let err = harness.models().await.expect_err("missing override");
     assert!(
-        matches!(err, zeron_harness::HarnessError::NotInstalled(_)),
+        matches!(err, luna_harness::HarnessError::NotInstalled(_)),
         "{err:?}"
     );
 }
@@ -730,12 +730,12 @@ fn hermes_and_pi_descriptor_surfaces_match_registry_expectations() {
     assert_eq!(
         pi.reasoning_levels(),
         &[
-            zeron_proto::ReasoningLevel::Minimal,
-            zeron_proto::ReasoningLevel::Low,
-            zeron_proto::ReasoningLevel::Medium,
-            zeron_proto::ReasoningLevel::High,
-            zeron_proto::ReasoningLevel::XHigh,
-            zeron_proto::ReasoningLevel::Max,
+            luna_proto::ReasoningLevel::Minimal,
+            luna_proto::ReasoningLevel::Low,
+            luna_proto::ReasoningLevel::Medium,
+            luna_proto::ReasoningLevel::High,
+            luna_proto::ReasoningLevel::XHigh,
+            luna_proto::ReasoningLevel::Max,
         ]
     );
 }
@@ -1094,7 +1094,7 @@ async fn grok_subagent_lifecycle_tails_the_disk_transcript_into_tagged_events() 
     let tool = pos(&|e| {
         matches!(
             e,
-            AgentEvent::ToolCall { id, call: zeron_proto::ToolCall::Exec { command } }
+            AgentEvent::ToolCall { id, call: luna_proto::ToolCall::Exec { command } }
                 if id == "call-1-0" && command == "ls"
         )
     })
@@ -1349,7 +1349,7 @@ fn antigravity_sign_in_preserves_relative_home_auth_in_a_separate_process() {
         .current_dir(parent_cwd.path())
         .env("HOME", child_home.path())
         .env("GEMINI_HOME", "relative-gemini-home")
-        .env("ZERON_TEST_EXPECTED_GEMINI_HOME", &gemini_home)
+        .env("LUNA_TEST_EXPECTED_GEMINI_HOME", &gemini_home)
         .output()
         .unwrap();
     assert!(
@@ -1362,7 +1362,7 @@ fn antigravity_sign_in_preserves_relative_home_auth_in_a_separate_process() {
 
 #[tokio::test]
 async fn antigravity_auth_path_subprocess() {
-    if std::env::var_os("ZERON_TEST_EXPECTED_GEMINI_HOME").is_none() {
+    if std::env::var_os("LUNA_TEST_EXPECTED_GEMINI_HOME").is_none() {
         return;
     }
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

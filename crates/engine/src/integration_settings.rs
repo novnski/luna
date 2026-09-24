@@ -7,14 +7,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use zeron_harness::codex::native::{CodexMcpConfigEntry, CodexSkillCatalogEntry};
-use zeron_proto::{
+use luna_harness::codex::native::{CodexMcpConfigEntry, CodexSkillCatalogEntry};
+use luna_proto::{
     HarnessId, InstructionSettingsView, IntegrationActionAvailability, IntegrationActionFacts,
     IntegrationHelpRoute, IntegrationInventoryItem, IntegrationInventoryView, IntegrationKind,
     IntegrationOwner, IntegrationSkillScope,
 };
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::EngineError;
 use crate::runtime_contract::InstructionContribution;
@@ -797,7 +797,7 @@ mod tests {
             .save(Some("project-1"), "private project text", 1)
             .unwrap();
         let (user_instructions, workspace_instructions) = store.contributions(Some("project-1"));
-        let context = zeron_proto::RuntimeContext {
+        let context = luna_proto::RuntimeContext {
             app_version: "test".into(),
             protocol_version: 1,
             thread_id: "task-1".into(),
@@ -821,7 +821,7 @@ mod tests {
         };
         let compiled = crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
             context,
-            provider_delivery: zeron_proto::RuntimeDelivery::CodexInstructionsOnly,
+            provider_delivery: luna_proto::RuntimeDelivery::CodexInstructionsOnly,
             user_instructions,
             workspace_instructions,
             resume: false,

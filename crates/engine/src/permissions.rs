@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use zeron_proto::{
+use luna_proto::{
     ApprovalActionKind, ApprovalReviewer, HarnessId, PermissionCeilingSource,
     PermissionDegradationReason, PermissionEscalation, PermissionMode, PermissionNetworkPolicy,
     PermissionPolicy, PermissionScope, ProviderPermissionCapabilities, RunRequest, SandboxLevel,

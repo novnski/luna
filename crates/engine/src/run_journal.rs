@@ -1,4 +1,4 @@
-//! Per-session on-disk event journal (port of zeron's `run-journal.ts`, JSONL-shaped).
+//! Per-session on-disk event journal (port of luna's `run-journal.ts`, JSONL-shaped).
 //!
 //! One append-only JSONL file per chat under `{data_dir}/journals/{chat_id}.jsonl`; each
 //! line is `{"seq": n, "event": AgentEvent}` with a monotonically increasing `seq`. The
@@ -19,10 +19,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use luna_proto::AgentEvent;
+use luna_proto::RuntimeContractDiagnostics;
+use luna_sync::write_epoch::EpochError;
 use sha2::{Digest, Sha256};
-use zeron_proto::AgentEvent;
-use zeron_proto::RuntimeContractDiagnostics;
-use zeron_sync::write_epoch::EpochError;
 
 use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 
@@ -227,7 +227,7 @@ impl RunJournal {
         Ok(Some(receipt))
     }
 
-    /// Auto-resume revival budget (zeron `resumeAttempt`/`MAX_AUTO_RESUME`):
+    /// Auto-resume revival budget (luna `resumeAttempt`/`MAX_AUTO_RESUME`):
     /// persisted beside the journal so a run that CRASHES THE ENGINE cannot
     /// revive itself in an infinite boot loop.
     pub fn resume_attempts(&self, chat_id: &str) -> u32 {
@@ -356,7 +356,7 @@ impl RunJournal {
     }
 
     /// Events with `seq > after_seq`, in order. A cursor ahead of the last issued seq is
-    /// from a previous era (file replaced) — falls back to a full replay, mirroring zeron.
+    /// from a previous era (file replaced) — falls back to a full replay, mirroring luna.
     pub fn replay(
         &self,
         chat_id: &str,
@@ -525,8 +525,8 @@ fn sanitize_id(chat_id: &str) -> String {
 mod tests {
     use super::*;
     use crate::{InstanceLock, device_write::DeviceWriteOwner};
-    use zeron_proto::DoneStatus;
-    use zeron_sync::write_epoch::Phase;
+    use luna_proto::DoneStatus;
+    use luna_sync::write_epoch::Phase;
 
     fn text(s: &str) -> AgentEvent {
         AgentEvent::TextDelta { text: s.into() }
@@ -657,14 +657,14 @@ mod tests {
             accepted_at_ms: Some(1),
             contract_version: 1,
             contract_hash: "hash-a".into(),
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
-            instructions: vec![zeron_proto::RuntimeInstructionSummary {
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
+            instructions: vec![luna_proto::RuntimeInstructionSummary {
                 name: "LUNA core".into(),
-                source: zeron_proto::RuntimeInstructionSource::LunaCore,
+                source: luna_proto::RuntimeInstructionSource::LunaCore,
                 provenance: "LUNA runtime v1".into(),
                 character_count: 100,
             }],
-            attached_tools: vec![zeron_proto::RuntimeToolSummary {
+            attached_tools: vec![luna_proto::RuntimeToolSummary {
                 name: "luna_status".into(),
                 version: 1,
                 required_scopes: Vec::new(),

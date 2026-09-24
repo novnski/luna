@@ -5,10 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::CodexHarness;
-use zeron_proto::{HarnessId, RunRequest, SandboxLevel, SessionStatus};
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_harness::CodexHarness;
+use luna_proto::{HarnessId, RunRequest, SandboxLevel, SessionStatus};
 
 const CHAT: &str = "codex-subagents";
 
@@ -113,7 +113,7 @@ async fn check_persistence(
         cwd: dir.path().display().to_string(),
         sandbox: SandboxLevel::ReadOnly,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -189,7 +189,7 @@ async fn check_persistence(
                 .any(|part| matches!(part,
                     MessagePart::Tool {
                         id,
-                        subagent_activity: Some(zeron_doc::SubagentActivity {
+                        subagent_activity: Some(luna_doc::SubagentActivity {
                             input_tokens: Some(34), output_tokens: Some(5), error: Some(error), ..
                         }),
                         ..
@@ -317,7 +317,7 @@ async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
         cwd: dir.path().display().to_string(),
         sandbox: SandboxLevel::ReadOnly,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,

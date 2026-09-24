@@ -10,14 +10,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use zeron_engine::{
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, GitCheckpoints,
     HarnessRegistry, Repos,
 };
-use zeron_harness::CodexHarness;
-use zeron_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
-use zeron_rpc::{RpcClient, methods};
-use zeron_ui::*;
+use luna_harness::CodexHarness;
+use luna_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
+use luna_rpc::{RpcClient, methods};
+use luna_ui::*;
 
 const TASK_PINNED_A: &str = "12121212-1212-4121-8121-121212121212";
 const TASK_PINNED_B: &str = "23232323-2323-4232-8232-232323232323";
@@ -344,7 +344,7 @@ async fn seed_l20(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     let seeded = seed_l20_with_services(core, root, &core.repos, &checkpoints).await?;
     // The UI uses the engine's RPC-owned checkpoint service, which reads these
     // same hidden refs. Prove both tasks resolve through that product path.
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     for (task_id, cwd, restore_available) in [
         (TASK_L20_SHARED, seeded.shared.as_path(), false),
         (TASK_L20_ISOLATED, seeded.isolated.as_path(), true),
@@ -352,7 +352,7 @@ async fn seed_l20(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
         let cwd = cwd
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("non-UTF-8 synthetic cwd"))?;
-        let list: zeron_proto::GitCheckpointList = client
+        let list: luna_proto::GitCheckpointList = client
             .call_as(
                 methods::LIST_GIT_CHECKPOINTS,
                 serde_json::json!({ "chatId": task_id, "cwd": cwd }),
@@ -363,10 +363,10 @@ async fn seed_l20(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
             "L20 RPC checkpoint list/gate readback failed for {task_id}: {:?}",
             list.restore_unavailable_reason
         );
-        let _: zeron_proto::GitCheckpointDiff = client.call_as(methods::DIFF_GIT_CHECKPOINT,
+        let _: luna_proto::GitCheckpointDiff = client.call_as(methods::DIFF_GIT_CHECKPOINT,
             serde_json::json!({ "chatId": task_id, "cwd": cwd, "turnId": list.checkpoints[0].turn_id })).await?;
         if restore_available && seeded.newly_seeded {
-            let _: zeron_proto::GitCheckpointRestorePreview = client.call_as(methods::PREVIEW_GIT_CHECKPOINT_RESTORE,
+            let _: luna_proto::GitCheckpointRestorePreview = client.call_as(methods::PREVIEW_GIT_CHECKPOINT_RESTORE,
                 serde_json::json!({ "chatId": task_id, "cwd": cwd, "turnId": list.checkpoints[0].turn_id, "point": "before" })).await?;
         }
     }
@@ -376,7 +376,7 @@ async fn seed_l20(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
 async fn snapshot(
     client: &RpcClient,
     task_id: &str,
-) -> anyhow::Result<zeron_proto::TaskCommandRead> {
+) -> anyhow::Result<luna_proto::TaskCommandRead> {
     Ok(client
         .call_as(
             methods::GET_TASK_COMMAND_SNAPSHOT,
@@ -404,11 +404,11 @@ async fn command(
     if let Some(generation) = read.snapshot.binding_generation {
         envelope["expectedBindingGeneration"] = generation.into();
     }
-    let receipt: zeron_proto::CommandReceipt = client
+    let receipt: luna_proto::CommandReceipt = client
         .call_as(methods::EXECUTE_TASK_COMMAND, envelope)
         .await?;
     anyhow::ensure!(
-        receipt.status == zeron_proto::CommandReceiptStatus::Applied,
+        receipt.status == luna_proto::CommandReceiptStatus::Applied,
         "fixture command {command_id} ended {:?}: {:?}",
         receipt.status,
         receipt.reason
@@ -526,7 +526,7 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
         "fixture-provider-session-a",
         app.to_str().unwrap(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     command(
         &client,
         "fixture-pin-a",
@@ -603,8 +603,8 @@ async fn seed_l24(core: &EngineCore, root: &Path) -> anyhow::Result<bool> {
         files.iter().all(|(path, _)| !path.exists()),
         "partial L24 file seed found; use a fresh synthetic root"
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
-    let empty: zeron_proto::InstructionSettingsView = client
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let empty: luna_proto::InstructionSettingsView = client
         .call_as(methods::GET_INSTRUCTION_SETTINGS, serde_json::json!({}))
         .await?;
     anyhow::ensure!(
@@ -624,19 +624,19 @@ async fn seed_l24(core: &EngineCore, root: &Path) -> anyhow::Result<bool> {
     )?;
     core.workspace
         .rename_chat(TASK_L24_OTHER, "L24 Other project task")?;
-    let global: zeron_proto::InstructionSettingsView = client
+    let global: luna_proto::InstructionSettingsView = client
         .call_as(
             methods::SET_INSTRUCTION_SETTINGS,
             serde_json::json!({"text": L24_GLOBAL_INSTRUCTIONS, "expectedRevision": empty.revision}),
         )
         .await?;
-    let app_view: zeron_proto::InstructionSettingsView = client
+    let app_view: luna_proto::InstructionSettingsView = client
         .call_as(
             methods::SET_INSTRUCTION_SETTINGS,
             serde_json::json!({"projectId": "fixture-app", "text": L24_APP_INSTRUCTIONS, "expectedRevision": global.revision}),
         )
         .await?;
-    let _: zeron_proto::InstructionSettingsView = client
+    let _: luna_proto::InstructionSettingsView = client
         .call_as(
             methods::SET_INSTRUCTION_SETTINGS,
             serde_json::json!({"projectId": "fixture-other", "text": L24_OTHER_INSTRUCTIONS, "expectedRevision": app_view.revision}),
@@ -652,7 +652,7 @@ async fn seed_l24(core: &EngineCore, root: &Path) -> anyhow::Result<bool> {
 }
 
 async fn preflight_l24(core: &EngineCore, newly_seeded: bool) -> anyhow::Result<()> {
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     for (project_id, task_id, mcp_name, expected_project_text) in [
         (
             "fixture-app",
@@ -667,7 +667,7 @@ async fn preflight_l24(core: &EngineCore, newly_seeded: bool) -> anyhow::Result<
             L24_OTHER_INSTRUCTIONS,
         ),
     ] {
-        let instructions: zeron_proto::InstructionSettingsView = client
+        let instructions: luna_proto::InstructionSettingsView = client
             .call_as(
                 methods::GET_INSTRUCTION_SETTINGS,
                 serde_json::json!({"projectId": project_id}),
@@ -684,7 +684,7 @@ async fn preflight_l24(core: &EngineCore, newly_seeded: bool) -> anyhow::Result<
                 "L24 instruction seed did not persist through the product RPC"
             );
         }
-        let inventory: zeron_proto::IntegrationInventoryView = client
+        let inventory: luna_proto::IntegrationInventoryView = client
             .call_as(
                 methods::GET_INTEGRATION_INVENTORY,
                 serde_json::json!({"provider": "codex", "projectId": project_id, "probeProvider": true}),
@@ -714,7 +714,7 @@ async fn preflight_l24(core: &EngineCore, newly_seeded: bool) -> anyhow::Result<
             "L24 fake provider inventory failed for {project_id}: {:?}",
             inventory.unavailable_reason
         );
-        let diagnostics: zeron_proto::RuntimeContractView = client
+        let diagnostics: luna_proto::RuntimeContractView = client
             .call_as(
                 methods::GET_RUNTIME_CONTRACT,
                 serde_json::json!({"taskId": task_id}),
@@ -778,7 +778,7 @@ fn seed_l25(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
                 Some(project),
                 None,
                 cwd.to_str(),
-                zeron_proto::TaskLineage::default(),
+                luna_proto::TaskLineage::default(),
             )?;
             core.workspace.rename_chat(id, title)?;
         }
@@ -936,10 +936,10 @@ fn main() -> anyhow::Result<()> {
             let outcome = runtime.block_on(local.respond_luna_local_ui_approval(
                 TASK_L25_SOURCE,
                 "missing-synthetic-approval",
-                zeron_proto::ApprovalDecision::Deny,
+                luna_proto::ApprovalDecision::Deny,
             ))?;
             anyhow::ensure!(
-                outcome == zeron_engine::sessions::LunaApprovalOutcome::Stale,
+                outcome == luna_engine::sessions::LunaApprovalOutcome::Stale,
                 "L25 local approval route did not reach the seeded SessionsEngine"
             );
             println!("l25_local_approval_route=ok source={TASK_L25_SOURCE}");
@@ -951,7 +951,7 @@ fn main() -> anyhow::Result<()> {
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
         .port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,
@@ -1164,7 +1164,7 @@ mod tests {
         );
         let receipt = checkpoints
             .restore(
-                zeron_proto::GitCheckpointRestoreRequest {
+                luna_proto::GitCheckpointRestoreRequest {
                     chat_id: TASK_L20_ISOLATED.into(),
                     cwd: seeded.isolated.to_string_lossy().into_owned(),
                     turn_id: isolated.checkpoints[0].turn_id.clone(),

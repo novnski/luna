@@ -3,12 +3,12 @@
 #![cfg(all(windows, feature = "native-fixture"))]
 
 use futures::StreamExt;
+use luna_harness::{AcpHarness, CancellationToken, Harness, RunControls};
+use luna_proto::{AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
-use zeron_harness::{AcpHarness, CancellationToken, Harness, RunControls};
-use zeron_proto::{AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel};
 
 #[test]
 fn managed_process_protocol_progresses_with_one_blocking_worker() {
@@ -18,10 +18,10 @@ fn managed_process_protocol_progresses_with_one_blocking_worker() {
         .build()
         .unwrap();
     runtime.block_on(async {
+        use luna_harness::process::Stdio;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-        use zeron_harness::process::Stdio;
         let mut command =
-            zeron_harness::process::Command::new(env!("CARGO_BIN_EXE_harness-native-fixture"));
+            luna_harness::process::Command::new(env!("CARGO_BIN_EXE_harness-native-fixture"));
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -50,12 +50,12 @@ fn managed_process_protocol_progresses_with_one_blocking_worker() {
 async fn output_captures_both_streams_with_default_or_null_stdio() {
     for null_streams in [false, true] {
         let mut command =
-            zeron_harness::process::Command::new(env!("CARGO_BIN_EXE_harness-native-fixture"));
+            luna_harness::process::Command::new(env!("CARGO_BIN_EXE_harness-native-fixture"));
         command.arg("--capture-output");
         if null_streams {
             command
-                .stdout(zeron_harness::process::Stdio::null())
-                .stderr(zeron_harness::process::Stdio::null());
+                .stdout(luna_harness::process::Stdio::null())
+                .stderr(luna_harness::process::Stdio::null());
         }
         let output = tokio::time::timeout(Duration::from_secs(5), command.output())
             .await
@@ -71,7 +71,7 @@ struct ProcessHandle(*mut std::ffi::c_void);
 
 #[tokio::test]
 async fn native_launch_matches_tokio_argv_environment_cwd_and_path() {
-    use zeron_harness::process::{Command, Stdio};
+    use luna_harness::process::{Command, Stdio};
     let dir = tempfile::tempdir().unwrap();
     let exe = fixture(dir.path());
     let arguments = [
@@ -101,22 +101,22 @@ async fn native_launch_matches_tokio_argv_environment_cwd_and_path() {
             .args(arguments)
             .current_dir(dir.path())
             .env("PATH", dir.path())
-            .env("zeron_launch_marker", "old")
-            .env("ZERON_LAUNCH_MARKER", "new 日本語")
-            .env("ZERON_LAUNCH_REMOVED", "old")
-            .env_remove("zeron_launch_removed")
-            .env("ZERON_ä_KEY", "unicode value")
+            .env("luna_launch_marker", "old")
+            .env("LUNA_LAUNCH_MARKER", "new 日本語")
+            .env("LUNA_LAUNCH_REMOVED", "old")
+            .env_remove("luna_launch_removed")
+            .env("LUNA_ä_KEY", "unicode value")
             .stdin(Stdio::null());
         baseline
             .arg("--launch-report")
             .args(arguments)
             .current_dir(dir.path())
             .env("PATH", dir.path())
-            .env("zeron_launch_marker", "old")
-            .env("ZERON_LAUNCH_MARKER", "new 日本語")
-            .env("ZERON_LAUNCH_REMOVED", "old")
-            .env_remove("zeron_launch_removed")
-            .env("ZERON_ä_KEY", "unicode value")
+            .env("luna_launch_marker", "old")
+            .env("LUNA_LAUNCH_MARKER", "new 日本語")
+            .env("LUNA_LAUNCH_REMOVED", "old")
+            .env_remove("luna_launch_removed")
+            .env("LUNA_ä_KEY", "unicode value")
             .stdin(std::process::Stdio::null())
             .creation_flags(0x08000000)
             .kill_on_drop(true);
@@ -138,7 +138,7 @@ async fn native_launch_matches_tokio_argv_environment_cwd_and_path() {
 
 #[tokio::test]
 async fn invalid_launch_inputs_fail_without_starting_a_child() {
-    use zeron_harness::process::Command;
+    use luna_harness::process::Command;
     let exe = env!("CARGO_BIN_EXE_harness-native-fixture");
     for command in [
         Command::new(exe).arg("NUL\0argument"),
@@ -394,13 +394,13 @@ async fn cooperative_cancel_also_cleans_up_descendants() {
 #[tokio::test]
 async fn process_exit_drains_buffered_output_despite_inherited_descendant_pipes() {
     let dir = tempfile::tempdir().unwrap();
-    let mut command = zeron_harness::process::Command::new(fixture(dir.path()));
+    let mut command = luna_harness::process::Command::new(fixture(dir.path()));
     command
         .arg("--output-tree")
         .current_dir(dir.path())
-        .stdin(zeron_harness::process::Stdio::null())
-        .stdout(zeron_harness::process::Stdio::piped())
-        .stderr(zeron_harness::process::Stdio::piped());
+        .stdin(luna_harness::process::Stdio::null())
+        .stdout(luna_harness::process::Stdio::piped())
+        .stderr(luna_harness::process::Stdio::piped());
     let mut child = command.spawn().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
@@ -430,7 +430,7 @@ async fn process_exit_drains_buffered_output_despite_inherited_descendant_pipes(
 /// the `--` separator, so agent-shaped flags stay literal filters).
 #[test]
 fn batch_override_helper() {
-    let Some(file) = std::env::var_os("ZERON_TEST_BATCH_ARGS_FILE") else {
+    let Some(file) = std::env::var_os("LUNA_TEST_BATCH_ARGS_FILE") else {
         return;
     };
     let argv: Vec<String> = std::env::args().collect();
@@ -457,8 +457,8 @@ async fn batch_overrides_launch_through_cmd() {
     .unwrap();
     let harnesses: Vec<Box<dyn Harness>> = vec![
         Box::new(AcpHarness::grok().with_executable(script.clone())),
-        Box::new(zeron_harness::ClaudeHarness::new().with_executable(script.clone())),
-        Box::new(zeron_harness::CodexHarness::new().with_executable(script)),
+        Box::new(luna_harness::ClaudeHarness::new().with_executable(script.clone())),
+        Box::new(luna_harness::CodexHarness::new().with_executable(script)),
     ];
     for harness in harnesses {
         let expected_prefix: Vec<String> = match harness.id() {
@@ -476,7 +476,7 @@ async fn batch_overrides_launch_through_cmd() {
         // The harness owns its child's environment; reach the helper through
         // the inherited process env. No other test in this binary reads it.
         // SAFETY: written before any child exists in this iteration.
-        unsafe { std::env::set_var("ZERON_TEST_BATCH_ARGS_FILE", &received) };
+        unsafe { std::env::set_var("LUNA_TEST_BATCH_ARGS_FILE", &received) };
         let (_steer, steering) = mpsc::channel(1);
         let controls = RunControls {
             request_input: Box::new(|_| {
@@ -539,7 +539,7 @@ async fn batch_overrides_launch_through_cmd() {
             harness.display_name()
         );
         // SAFETY: no other test in this binary reads this variable.
-        unsafe { std::env::remove_var("ZERON_TEST_BATCH_ARGS_FILE") };
+        unsafe { std::env::remove_var("LUNA_TEST_BATCH_ARGS_FILE") };
     }
 }
 
@@ -587,7 +587,7 @@ async fn application_exit_without_destructors_kills_owned_processes() {
 
 #[tokio::test]
 async fn batch_arguments_resist_shell_interpretation() {
-    use zeron_harness::process::Command;
+    use luna_harness::process::Command;
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("shim 日本語 Ħ &!.cmd");
     std::fs::write(
@@ -606,8 +606,8 @@ async fn batch_arguments_resist_shell_interpretation() {
         "quote\"here",
         "trailing \\",
         "slashes\\\\\"quote",
-        "%ZERON_BATCH_ATTACK%",
-        "!ZERON_BATCH_ATTACK!",
+        "%LUNA_BATCH_ATTACK%",
+        "!LUNA_BATCH_ATTACK!",
         "a\"&echo injected>injected.txt&rem \"b",
         "& | < > ^ ( )",
         "{\"model\":\"a&b\"}",
@@ -618,7 +618,7 @@ async fn batch_arguments_resist_shell_interpretation() {
             Command::new(&script)
                 .arg(arg)
                 .current_dir(dir.path())
-                .env("ZERON_BATCH_ATTACK", "EXPANDED&echo injected>injected.txt")
+                .env("LUNA_BATCH_ATTACK", "EXPANDED&echo injected>injected.txt")
                 .output(),
         )
         .await
@@ -656,10 +656,10 @@ async fn batch_arguments_resist_shell_interpretation() {
 #[tokio::test]
 async fn batch_executable_path_rejects_percent_expansion() {
     let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("shim%ZERON_BATCH_NAME%.cmd");
+    let script = dir.path().join("shim%LUNA_BATCH_NAME%.cmd");
     std::fs::write(&script, "@exit /b 0\r\n").unwrap();
     assert_eq!(
-        zeron_harness::process::Command::new(&script)
+        luna_harness::process::Command::new(&script)
             .spawn()
             .unwrap_err()
             .kind(),

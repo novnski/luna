@@ -106,7 +106,7 @@ impl InstanceLock {
 
     /// Best-effort liveness probe: the pid stamped by the engine currently holding
     /// this data dir's lock, `None` when no engine is running (or the platform
-    /// cannot test a lock without taking it). Used by `zeron status` and the
+    /// cannot test a lock without taking it). Used by `luna status` and the
     /// login/logout guards; a single non-blocking try — no retry budget — so a
     /// starting engine's transient fork-window artifacts read as "running", which
     /// is the safe direction for those callers.
@@ -223,7 +223,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn subprocess_lock_holder() {
-        let Some(dir) = std::env::var_os("ZERON_INSTANCE_LOCK_TEST_DIR") else {
+        let Some(dir) = std::env::var_os("LUNA_INSTANCE_LOCK_TEST_DIR") else {
             return;
         };
         let dir = std::path::PathBuf::from(dir);
@@ -249,7 +249,7 @@ mod tests {
         let mut child = Command::new(std::env::current_exe().expect("current test executable"))
             .arg("subprocess_lock_holder")
             .arg("--nocapture")
-            .env("ZERON_INSTANCE_LOCK_TEST_DIR", dir.path())
+            .env("LUNA_INSTANCE_LOCK_TEST_DIR", dir.path())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

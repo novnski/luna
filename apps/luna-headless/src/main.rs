@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use zeron_engine::{Engine, EngineConfig, HarnessId, WorkspaceScope};
-use zeron_rpc::methods;
-use zeron_rpc::remote_auth::{CreatePairing, RemoteScope};
+use luna_engine::{Engine, EngineConfig, HarnessId, WorkspaceScope};
+use luna_rpc::methods;
+use luna_rpc::remote_auth::{CreatePairing, RemoteScope};
 
 #[derive(Parser)]
 #[command(
@@ -103,18 +103,18 @@ async fn main() -> anyhow::Result<()> {
                 "expected machine, environment, and workspace scope must be given together"
             ),
         };
-        let client = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{ipc_port}")).await?;
-        let info: zeron_proto::EngineInfo = client
+        let client = luna_rpc::connect_ws(&format!("ws://127.0.0.1:{ipc_port}")).await?;
+        let info: luna_proto::EngineInfo = client
             .call_as(methods::ENGINE_INFO, serde_json::json!({}))
             .await?;
         anyhow::ensure!(
-            info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1),
+            info.supports(luna_proto::capabilities::LUNA_OWNER_IPC_V1),
             "local listener is not a compatible LUNA engine"
         );
         let _: serde_json::Value = client
             .call_as(methods::ENGINE_READY, serde_json::json!({}))
             .await?;
-        let issued: zeron_rpc::remote_auth::IssuedPairing = client
+        let issued: luna_rpc::remote_auth::IssuedPairing = client
             .call_as(
                 methods::CREATE_REMOTE_PAIRING,
                 serde_json::to_value(CreatePairing {
@@ -168,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
                 "synthetic fixture root must be a child of the system temporary directory"
             );
         }
-        let accounts = zeron_engine::AgentAccountsConfig {
+        let accounts = luna_engine::AgentAccountsConfig {
             data_dir: root.join("provider-state"),
             claude_config_dir: root.join("synthetic-claude"),
             claude_config_file: root.join("synthetic-claude.json"),
@@ -195,17 +195,17 @@ async fn main() -> anyhow::Result<()> {
     let edge_url = std::env::var("LUNA_EDGE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| zeron_engine::OFFLINE_EDGE_URL.into());
-    if edge_url == zeron_engine::OFFLINE_EDGE_URL {
+        .unwrap_or_else(|| luna_engine::OFFLINE_EDGE_URL.into());
+    if edge_url == luna_engine::OFFLINE_EDGE_URL {
         anyhow::ensure!(
             std::env::var_os("LUNA_WORKOS_CLIENT_ID").is_none()
                 && std::env::var_os("LUNA_EDGE_TOKEN").is_none(),
             "LUNA auth requires an explicit owned LUNA_EDGE_URL"
         );
     } else {
-        zeron_engine::canonical_owned_edge_url(&edge_url)?;
+        luna_engine::canonical_owned_edge_url(&edge_url)?;
     }
-    let configured = edge_url != zeron_engine::OFFLINE_EDGE_URL;
+    let configured = edge_url != luna_engine::OFFLINE_EDGE_URL;
     let edge_token = configured
         .then(|| std::env::var("LUNA_EDGE_TOKEN").ok())
         .flatten()
@@ -219,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
         edge_url,
         edge_token,
         ipc_port,
-        default_harness: match std::env::var("ZERON_HARNESS").as_deref() {
+        default_harness: match std::env::var("LUNA_HARNESS").as_deref() {
             Ok("mock") => HarnessId::Mock,
             Ok("codex") => HarnessId::Codex,
             Ok("cursor") => HarnessId::Cursor,

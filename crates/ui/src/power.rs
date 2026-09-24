@@ -2,7 +2,7 @@
 //! Closing a lid, quitting the engine, or losing the network is never treated
 //! as continued execution. The assertion is process-local and RAII released.
 
-use zeron_proto::{Session, view::Indicator};
+use luna_proto::{Session, view::Indicator};
 
 pub(crate) trait PowerAdapter {
     type Handle;
@@ -61,7 +61,7 @@ pub(crate) fn selected_active_task<'a>(
     let id = selected.filter(|id| enabled.contains(*id))?;
     let session = sessions.iter().find(|session| session.chat_id == id)?;
     (Some(session.device_id.as_str()) == local_device_id
-        && zeron_proto::view::effective_indicator(Some(session), now) == Indicator::Working)
+        && luna_proto::view::effective_indicator(Some(session), now) == Indicator::Working)
         .then_some(id)
 }
 
@@ -209,7 +209,7 @@ mod tests {
         let mut session = Session {
             chat_id: "task".into(),
             device_id: "local".into(),
-            status: zeron_proto::SessionStatus::Working,
+            status: luna_proto::SessionStatus::Working,
             started_at: Some(now),
             updated_at: now,
             last_completed_turn: None,
@@ -246,7 +246,7 @@ mod tests {
             ),
             None
         );
-        session.status = zeron_proto::SessionStatus::Idle;
+        session.status = luna_proto::SessionStatus::Idle;
         assert_eq!(
             selected_active_task(
                 Some("task"),
@@ -257,7 +257,7 @@ mod tests {
             ),
             None
         );
-        session.status = zeron_proto::SessionStatus::Working;
+        session.status = luna_proto::SessionStatus::Working;
         session.updated_at = now - chrono::Duration::seconds(60);
         assert_eq!(
             selected_active_task(Some("task"), &enabled, Some("local"), &[session], now),

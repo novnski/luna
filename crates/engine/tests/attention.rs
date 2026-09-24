@@ -3,16 +3,16 @@
 
 use std::sync::Arc;
 
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, QueueDeliveryGate, QueuedMessage, SessionMessageEntry,
 };
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_proto::{
+use luna_engine::{EngineCore, HarnessRegistry};
+use luna_proto::{
     AttentionItem, AttentionKind, AttentionLifecycle, AttentionMutation, AttentionMutationRequest,
     AttentionMutationResult, AttentionSnapshot, AttentionTarget, AttentionTransitionBatch,
     ChatConfig, HarnessId, PermissionMode, SandboxLevel, UserInputQuestion,
 };
-use zeron_rpc::{RpcClient, methods};
+use luna_rpc::{RpcClient, methods};
 
 const TASK: &str = "l15-synthetic-task";
 
@@ -55,14 +55,14 @@ fn input(id: &str, request: &str, approval: bool, device_id: &str) -> SessionMes
                 question: "Private question and secret must stay in the transcript".into(),
                 options: vec!["private option".into()],
                 multi_select: false,
-                approval: approval.then(|| zeron_proto::ApprovalRequest {
+                approval: approval.then(|| luna_proto::ApprovalRequest {
                     provider_request_id: request.into(),
                     provider: HarnessId::Mock,
                     turn_id: Some(id.into()),
                     machine_name: "synthetic".into(),
-                    action_kind: zeron_proto::ApprovalActionKind::Tool,
+                    action_kind: luna_proto::ApprovalActionKind::Tool,
                     summary: "Private approval details".into(),
-                    requested_scope: zeron_proto::PermissionScope::Workspace,
+                    requested_scope: luna_proto::PermissionScope::Workspace,
                     expires_at_ms: 1_900_000_000_000,
                     supports_task_allowance: false,
                 }),
@@ -141,7 +141,7 @@ async fn request_lifecycle_dedup_persistence_and_exact_routing() {
         .push_message(&input("turn-1", "request-1", false, &device))
         .unwrap();
     assert_eq!(doc.doc().read_entries().unwrap().len(), 1);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     let first = snapshot(&client, &device).await;
     let initial = only_needs(&first);
@@ -238,7 +238,7 @@ async fn request_lifecycle_dedup_persistence_and_exact_routing() {
         ),
         "reopened entries={reopened_entries:?}"
     );
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let persisted = snapshot(&client, &device).await;
     assert_eq!(
         only_needs(&persisted).lifecycle,
@@ -309,16 +309,16 @@ async fn approval_queue_completion_and_concurrent_claims_use_real_rpc_sources() 
         .doc()
         .push_queued(&queue)
         .unwrap();
-    core.workspace.record_session(&zeron_proto::Session {
+    core.workspace.record_session(&luna_proto::Session {
         chat_id: "completed-task".into(),
         device_id: device.clone(),
-        status: zeron_proto::SessionStatus::Idle,
+        status: luna_proto::SessionStatus::Idle,
         started_at: None,
         updated_at: chrono::Utc::now(),
         last_completed_turn: Some("completed-turn".into()),
         recovery: None,
     });
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let initial = snapshot(&client, &device).await;
     assert_eq!(initial.unresolved_count, 2);
     assert_eq!(initial.recent.len(), 1);
@@ -374,7 +374,7 @@ async fn approval_queue_completion_and_concurrent_claims_use_real_rpc_sources() 
     drop(client);
     drop(core);
     let reopened = assemble(dir.path());
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let persisted = snapshot(&client, &device).await;
     assert_eq!(persisted.unresolved_count, 0);
     assert!(persisted.recent.is_empty());
@@ -390,17 +390,17 @@ async fn failed_session_survives_restart_and_resolves_only_on_settled_status() {
         .create_chat("recovery-task", None, Some(&device), Some(config()), None)
         .unwrap();
     let now = chrono::Utc::now();
-    let mut session = zeron_proto::Session {
+    let mut session = luna_proto::Session {
         chat_id: "recovery-task".into(),
         device_id: device.clone(),
-        status: zeron_proto::SessionStatus::Errored,
+        status: luna_proto::SessionStatus::Errored,
         started_at: None,
         updated_at: now,
         last_completed_turn: None,
         recovery: None,
     };
     core.workspace.record_session(&session);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     assert_eq!(
         only_needs(&snapshot(&client, &device).await).kind,
         AttentionKind::TaskFailed
@@ -410,19 +410,19 @@ async fn failed_session_survives_restart_and_resolves_only_on_settled_status() {
     drop(core);
 
     let reopened = assemble(dir.path());
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     assert_eq!(
         only_needs(&snapshot(&client, &device).await).kind,
         AttentionKind::TaskFailed
     );
-    session.status = zeron_proto::SessionStatus::Idle;
+    session.status = luna_proto::SessionStatus::Idle;
     session.updated_at = now + chrono::Duration::milliseconds(1);
     reopened.workspace.record_session(&session);
     let settled = snapshot(&client, &device).await;
     assert_eq!(settled.unresolved_count, 0);
     assert_eq!(settled.recent.len(), 1);
     assert_eq!(settled.recent[0].kind, AttentionKind::TaskFailed);
-    session.status = zeron_proto::SessionStatus::Errored;
+    session.status = luna_proto::SessionStatus::Errored;
     session.updated_at = now + chrono::Duration::milliseconds(2);
     reopened.workspace.record_session(&session);
     let later_failure = snapshot(&client, &device).await;

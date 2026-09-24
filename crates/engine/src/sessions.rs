@@ -1,7 +1,7 @@
 //! SessionsEngine — per-chat agent runs: dispatch, steering, interrupts, input bridging,
 //! journal + broadcast fan-out, and 120ms coalesced doc streaming.
 //!
-//! Pragmatic port of zeron's `sessions.ts` (spec: feature-inventory §3.2):
+//! Pragmatic port of luna's `sessions.ts` (spec: feature-inventory §3.2):
 //! - every `AgentEvent` is (a) appended to the on-disk run journal, (b) broadcast to
 //!   in-process subscribers, (c) folded via `fold_event_into_parts` and diffed into the
 //!   chat's `SessionDoc` through `SegmentWriter` on a coalesced `STREAM_COMMIT_MS` timer;
@@ -10,7 +10,7 @@
 //! - a `Steered` event splits the assistant entry at the exact boundary;
 //! - recovery (interrupt or a stale journal at boot) stamps the streaming entry `aborted`.
 //!
-//! Scope notes: sessions are keyed by chat id (one live run per chat). Zeron's pulse
+//! Scope notes: sessions are keyed by chat id (one live run per chat). Luna's pulse
 //! loop is ported as the 15s liveness heartbeat in `drive_run`; its stall watchdog is
 //! deliberately NOT ported (rejected in review — agents may legitimately wait on
 //! something for far longer than any timeout, and a live child IS the working signal).
@@ -25,15 +25,15 @@ use chrono::Utc;
 use futures::StreamExt;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast, mpsc, oneshot, watch};
 
-use zeron_doc::{
+use luna_doc::{
     DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter,
     SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry,
     fold_event_into_parts, sanitize_tool_call,
 };
-use zeron_harness::{
+use luna_harness::{
     CancellationToken, Harness, HarnessError, RunControls, SteerAcceptance, SteerMessage,
 };
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, ChatConfig, CommandReceiptStatus, CompactMechanism, CompactOperation,
     ContextControlState, ContextOperationStatus, DoneStatus, HarnessId, PermissionAuditEntry,
     PermissionMode, PermissionPolicy, RecoveryAcceptance, RecoveryFailure, RecoveryStatus,
@@ -41,7 +41,7 @@ use zeron_proto::{
 };
 
 use crate::device_write::DeviceWritePermit;
-use zeron_sync::DocsStore;
+use luna_sync::DocsStore;
 
 use crate::doc_host::{ChatDocHandle, DocHost};
 use crate::recovery::{
@@ -138,14 +138,14 @@ impl LunaSendProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
-            approval: Some(zeron_proto::ApprovalRequest {
+            approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.claim.provider_call_id.clone(),
                 provider: HarnessId::Codex,
                 turn_id: Some(self.claim.provider_turn_id.clone()),
                 machine_name: self.environment_id.clone(),
-                action_kind: zeron_proto::ApprovalActionKind::LunaCrossTask,
+                action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
                 summary: format!("Queue a follow-up to task {}", self.fence.request.task_id),
-                requested_scope: zeron_proto::PermissionScope::Workspace,
+                requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.fence.expires_at_ms,
                 supports_task_allowance: false,
             }),
@@ -169,14 +169,14 @@ struct LunaSyntheticArchiveProposal {
     target_task_id: String,
     target_project_id: String,
     target_environment_id: String,
-    target_snapshot: zeron_proto::TaskCommandSnapshot,
-    request: zeron_proto::CrossTaskControlRequest,
+    target_snapshot: luna_proto::TaskCommandSnapshot,
+    request: luna_proto::CrossTaskControlRequest,
     request_digest: [u8; 32],
     expires_at_ms: i64,
 }
 
 impl LunaSyntheticArchiveProposal {
-    fn request_digest(request: &zeron_proto::CrossTaskControlRequest) -> Option<[u8; 32]> {
+    fn request_digest(request: &luna_proto::CrossTaskControlRequest) -> Option<[u8; 32]> {
         use sha2::Digest as _;
         let bytes = serde_json::to_vec(request).ok()?;
         Some(sha2::Sha256::digest(bytes).into())
@@ -196,14 +196,14 @@ impl LunaSyntheticArchiveProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
-            approval: Some(zeron_proto::ApprovalRequest {
+            approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.source_call_id.clone(),
                 provider: HarnessId::Codex,
                 turn_id: Some(self.source_turn_id.clone()),
                 machine_name: "synthetic".into(),
-                action_kind: zeron_proto::ApprovalActionKind::LunaCrossTask,
+                action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
                 summary: "Synthetic archive".into(),
-                requested_scope: zeron_proto::PermissionScope::Workspace,
+                requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.expires_at_ms,
                 supports_task_allowance: false,
             }),
@@ -229,7 +229,7 @@ impl LunaSyntheticArchiveProposal {
             && self.source_task_id != self.target_task_id
             && self.source_project_id == self.target_project_id
             && self.source_environment_id == self.target_environment_id
-            && self.request.action == zeron_proto::CrossTaskControlAction::Archive
+            && self.request.action == luna_proto::CrossTaskControlAction::Archive
             && self.request.task_id == self.target_task_id
             && self.request.project_id == self.target_project_id
             && self.request.environment_id == self.target_environment_id
@@ -297,7 +297,7 @@ enum LunaInterruptDispatchStatus {
 struct LunaInterruptDispatchResult {
     command_id: String,
     status: LunaInterruptDispatchStatus,
-    receipt: Option<zeron_proto::CommandReceipt>,
+    receipt: Option<luna_proto::CommandReceipt>,
     settled: bool,
 }
 
@@ -451,7 +451,7 @@ fn apply_permission_policy(config: &mut ChatConfig, policy: &PermissionPolicy, a
 
 /// A harness-native session id plus the cwd it was created under. Harness
 /// session stores are cwd-scoped (claude keys conversations by project
-/// directory — zeron sessions.ts:563 "harness session stores are keyed by
+/// directory — luna sessions.ts:563 "harness session stores are keyed by
 /// cwd"), so resume is only injected for runs launched from the same cwd.
 #[derive(Debug, Clone)]
 struct HarnessSessionRef {
@@ -468,13 +468,13 @@ struct RuntimeConfig {
     harness_id: HarnessId,
     provider_account_id: Option<String>,
     model: Option<String>,
-    reasoning: Option<zeron_proto::ReasoningLevel>,
+    reasoning: Option<luna_proto::ReasoningLevel>,
     model_options: serde_json::Map<String, serde_json::Value>,
     cwd: String,
-    sandbox: zeron_proto::SandboxLevel,
+    sandbox: luna_proto::SandboxLevel,
     auto_approve: bool,
-    permission_policy: Option<zeron_proto::PermissionPolicy>,
-    worktree: Option<zeron_proto::WorktreeSpec>,
+    permission_policy: Option<luna_proto::PermissionPolicy>,
+    worktree: Option<luna_proto::WorktreeSpec>,
 }
 
 impl RuntimeConfig {
@@ -575,7 +575,7 @@ struct PreparedControlEvidence {
     source_project_id: String,
     source_environment_id: String,
     target_task_id: String,
-    target_snapshot: zeron_proto::TaskCommandSnapshot,
+    target_snapshot: luna_proto::TaskCommandSnapshot,
 }
 
 impl PreparedControlEvidence {
@@ -587,7 +587,7 @@ impl PreparedControlEvidence {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into()]),
             explicit_user_request: false,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
         }
     }
 }
@@ -598,7 +598,7 @@ impl PreparedControlEvidence {
 #[allow(dead_code)]
 struct LunaProspectiveInterruptProposal {
     request_id: String,
-    action: zeron_proto::CrossTaskControlAction,
+    action: luna_proto::CrossTaskControlAction,
     evidence: PreparedControlEvidence,
     expires_at_ms: i64,
 }
@@ -619,17 +619,17 @@ impl LunaProspectiveInterruptProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
-            approval: Some(zeron_proto::ApprovalRequest {
+            approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: evidence.claim.provider_call_id.clone(),
                 provider: HarnessId::Codex,
                 turn_id: Some(evidence.claim.provider_turn_id.clone()),
                 machine_name: evidence.source_environment_id.clone(),
-                action_kind: zeron_proto::ApprovalActionKind::LunaCrossTask,
+                action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
                 summary: format!(
                     "Prospective Interrupt of the active turn in task {} (preview only)",
                     evidence.target_task_id
                 ),
-                requested_scope: zeron_proto::PermissionScope::Workspace,
+                requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.expires_at_ms,
                 supports_task_allowance: false,
             }),
@@ -644,7 +644,7 @@ impl LunaProspectiveInterruptProposal {
         question: &UserInputQuestion,
     ) -> bool {
         let evidence = &self.evidence;
-        self.action == zeron_proto::CrossTaskControlAction::Interrupt
+        self.action == luna_proto::CrossTaskControlAction::Interrupt
             && self.request_id == request_id
             && evidence.claim.source_task_id == source_task_id
             && evidence.claim.source_run_id == run_id
@@ -858,7 +858,7 @@ impl RunHandle {
 struct RoutedSteer {
     prompt: String,
     message_id: String,
-    delivery: zeron_harness::SteerDelivery,
+    delivery: luna_harness::SteerDelivery,
 }
 
 struct Inner {
@@ -889,7 +889,7 @@ struct Inner {
     last_requests: Mutex<HashMap<String, RunRequest>>,
     /// Harness-native session ids per chat (resume continuity across turns) —
     /// the live-process cache over the durable copy on the workspace chat row
-    /// (zeron kept the same pair on `chats.harness_session_id`). An empty
+    /// (luna kept the same pair on `chats.harness_session_id`). An empty
     /// session id is the "do not resume" tombstone after a rejected resume.
     harness_sessions: Mutex<HashMap<String, HarnessSessionRef>>,
     /// Auto-titler for untitled chats (wired at engine assembly; absent in bare tests).
@@ -1020,11 +1020,11 @@ impl SessionsEngine {
 
     pub(crate) fn cross_task_catalog(
         &self,
-        context: &zeron_proto::RuntimeContext,
-        delivery: zeron_proto::RuntimeDelivery,
+        context: &luna_proto::RuntimeContext,
+        delivery: luna_proto::RuntimeDelivery,
     ) -> (
-        Vec<zeron_proto::RuntimeToolDefinition>,
-        Vec<zeron_proto::OmittedRuntimeTool>,
+        Vec<luna_proto::RuntimeToolDefinition>,
+        Vec<luna_proto::OmittedRuntimeTool>,
     ) {
         let Some(backend) = self.cross_task_backend() else {
             return (Vec::new(), Vec::new());
@@ -1108,7 +1108,7 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         run_id: &str,
-        context: &zeron_harness::LunaToolInvocationContext,
+        context: &luna_harness::LunaToolInvocationContext,
         deadline: tokio::time::Instant,
     ) -> Option<ClaimedProviderCall> {
         self.wait_and_claim_luna_provider_call_evidence(
@@ -1273,15 +1273,15 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         run_id: &str,
-        contract: &zeron_proto::LunaAgentRuntimeContract,
-        invocation: zeron_harness::LunaToolInvocation,
+        contract: &luna_proto::LunaAgentRuntimeContract,
+        invocation: luna_harness::LunaToolInvocation,
         cancel: &CancellationToken,
         backend: Option<Arc<dyn crate::cross_task_tools::CrossTaskBackend>>,
     ) -> Result<serde_json::Value, EngineError> {
         use crate::cross_task_tools::{
             ApprovedSendFence, CrossTaskAuthority, CrossTaskError, CrossTaskTools,
         };
-        use zeron_proto::{CrossTaskSendMode, CrossTaskSendRequest, RuntimeDelivery};
+        use luna_proto::{CrossTaskSendMode, CrossTaskSendRequest, RuntimeDelivery};
         let fail = |error: CrossTaskError| EngineError::Other(error.to_string());
         let Some(tool) = contract
             .tools
@@ -1496,7 +1496,7 @@ impl SessionsEngine {
         use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
         if authority.caller_task_id != claim.source_task_id
             || authority.local_environment_id != self.inner.device_id
-            || authority.delivery != zeron_proto::RuntimeDelivery::CodexDynamicTools
+            || authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools
             || authority.explicit_user_request
             || authority.allow_projectless
             || authority.granted_scopes.len() != 1
@@ -1636,7 +1636,7 @@ impl SessionsEngine {
         let request_id = new_id();
         let proposal = LunaProspectiveInterruptProposal {
             request_id: request_id.clone(),
-            action: zeron_proto::CrossTaskControlAction::Interrupt,
+            action: luna_proto::CrossTaskControlAction::Interrupt,
             evidence,
             expires_at_ms: now_ms().saturating_add(30_000),
         };
@@ -1718,7 +1718,7 @@ impl SessionsEngine {
         &self,
         source_task_id: &str,
         request_id: &str,
-        decision: zeron_proto::ApprovalDecision,
+        decision: luna_proto::ApprovalDecision,
     ) -> LunaApprovalOutcome {
         let runs = lock(&self.inner.runs);
         let Some(run) = runs.get(source_task_id) else {
@@ -1750,7 +1750,7 @@ impl SessionsEngine {
         } else {
             vec![UserInputAnswer {
                 question_id: pending.questions[0].id.clone(),
-                labels: vec![if decision == zeron_proto::ApprovalDecision::Cancel {
+                labels: vec![if decision == luna_proto::ApprovalDecision::Cancel {
                     "Cancel".into()
                 } else {
                     "Deny".into()
@@ -1774,10 +1774,10 @@ impl SessionsEngine {
         &self,
         source_task_id: &str,
         request_id: &str,
-        decision: zeron_proto::ApprovalDecision,
+        decision: luna_proto::ApprovalDecision,
     ) -> LunaApprovalOutcome {
         use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
-        if decision != zeron_proto::ApprovalDecision::AllowOnce {
+        if decision != luna_proto::ApprovalDecision::AllowOnce {
             return self.deny_luna_prospective_interrupt_local_ui(
                 source_task_id,
                 request_id,
@@ -1972,7 +1972,7 @@ impl SessionsEngine {
         grant: LunaProspectiveInterruptGrant,
     ) -> Result<LunaInterruptDispatchResult, crate::cross_task_tools::CrossTaskError> {
         use crate::cross_task_tools::{CrossTaskControlGrant, CrossTaskError, CrossTaskTools};
-        use zeron_proto::{CommandReceiptStatus, CrossTaskControlAction, CrossTaskControlRequest};
+        use luna_proto::{CommandReceiptStatus, CrossTaskControlAction, CrossTaskControlRequest};
 
         let proposal = grant.proposal;
         let evidence = &proposal.evidence;
@@ -2122,7 +2122,7 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         provider_session_id: &str,
-    ) -> Result<Option<zeron_proto::RuntimeContractDiagnostics>, EngineError> {
+    ) -> Result<Option<luna_proto::RuntimeContractDiagnostics>, EngineError> {
         Ok(self
             .inner
             .journal
@@ -2134,7 +2134,7 @@ impl SessionsEngine {
         chat_id: &str,
         harness: HarnessId,
         request: &RunRequest,
-    ) -> Result<zeron_proto::RuntimeContext, EngineError> {
+    ) -> Result<luna_proto::RuntimeContext, EngineError> {
         let workspace = self.inner.workspace().ok_or_else(|| {
             EngineError::Other("LUNA runtime requires an authoritative workspace host".into())
         })?;
@@ -2166,7 +2166,7 @@ impl SessionsEngine {
             .as_ref()
             .is_some_and(|chat| chat.device_id == machine_id);
         let read_granted = local_managed_task && self.cross_task_backend().is_some();
-        Ok(zeron_proto::RuntimeContext {
+        Ok(luna_proto::RuntimeContext {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: 1,
             thread_id: chat_id.into(),
@@ -2546,7 +2546,7 @@ impl SessionsEngine {
     ///
     /// - The user message entry is written to the doc immediately (id = `message_id`).
     /// - A live steerable run receives the prompt as its next turn via the mailbox
-    ///   (zeron's persistent-session routing); otherwise any live run is interrupted
+    ///   (luna's persistent-session routing); otherwise any live run is interrupted
     ///   first — never two runtimes driving one chat.
     pub async fn dispatch(
         &self,
@@ -2596,7 +2596,7 @@ impl SessionsEngine {
         // request snapshot, recovery record, or provider dispatch.
         request
             .model_options
-            .remove(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION);
+            .remove(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION);
         let context_control = self.doc_handle(chat_id)?.doc().context_control();
         if context_control.compact.blocks_new_turn() {
             return Err(EngineError::Other(
@@ -2680,7 +2680,7 @@ impl SessionsEngine {
                 accounts.resolve_execution(harness_id, request.provider_account_id.as_deref())?;
             request.provider_account_id = Some(execution.account_id);
             request.model_options.insert(
-                zeron_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
+                luna_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
                 execution.auth_instance_id.into(),
             );
             if let Some(home) = execution.codex_home {
@@ -2688,13 +2688,13 @@ impl SessionsEngine {
                     EngineError::Other("Codex account home is not valid UTF-8".into())
                 })?;
                 request.model_options.insert(
-                    zeron_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+                    luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
                     home.into(),
                 );
             }
             if execution.codex_file_auth {
                 request.model_options.insert(
-                    zeron_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
+                    luna_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
                     true.into(),
                 );
             }
@@ -2776,7 +2776,7 @@ impl SessionsEngine {
                 ));
             }
             request.model_options.insert(
-                zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
+                luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(),
                 serde_json::to_value(&compiled.contract)?,
             );
         }
@@ -2792,7 +2792,7 @@ impl SessionsEngine {
         if routed.as_ref().is_some_and(|(_, _, _, _, ledger)| {
             lock(ledger)
                 .iter()
-                .any(|steer| steer.delivery == zeron_harness::SteerDelivery::RequireActiveTurn)
+                .any(|steer| steer.delivery == luna_harness::SteerDelivery::RequireActiveTurn)
         }) {
             return Err(EngineError::Other(
                 "native steer incorporation is still unconfirmed; wait for the current turn boundary"
@@ -2812,14 +2812,14 @@ impl SessionsEngine {
                 let message = SteerMessage {
                     prompt: request.prompt.clone(),
                     message_id: Some(user_id.clone()),
-                    delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                    delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                     acceptance: None,
                 };
                 if steer_tx.try_send(message).is_ok() {
                     pending.push_back(RoutedSteer {
                         prompt: request.prompt.clone(),
                         message_id: user_id.clone(),
-                        delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                        delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                     });
                     true
                 } else {
@@ -2880,7 +2880,7 @@ impl SessionsEngine {
         let user_id = message_id.unwrap_or_else(new_id);
         handle.write_user_message(&user_id, &request.prompt, now_ms())?;
 
-        // Engine-owned resume (zeron sessions.ts:736 — every dispatch read the
+        // Engine-owned resume (luna sessions.ts:736 — every dispatch read the
         // chat's stored harness session): callers always send `resume: None`;
         // the engine threads the chat's prior harness session back in so a new
         // process (app restart) continues the same harness conversation. The
@@ -2908,7 +2908,7 @@ impl SessionsEngine {
             }
             if harness_id == HarnessId::Codex {
                 request.model_options.insert(
-                    zeron_harness::codex::LUNA_STRICT_RESUME_OPTION.into(),
+                    luna_harness::codex::LUNA_STRICT_RESUME_OPTION.into(),
                     true.into(),
                 );
             }
@@ -2919,11 +2919,11 @@ impl SessionsEngine {
         // the exact provider session inspected before warm routing.
         if let Some(contract) = request
             .model_options
-            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
             .and_then(|value| {
-                serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+                serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
             })
-            && contract.delivery == zeron_proto::RuntimeDelivery::CodexDynamicTools
+            && contract.delivery == luna_proto::RuntimeDelivery::CodexDynamicTools
             && request.resume.is_some()
             && self
                 .inner
@@ -2947,7 +2947,7 @@ impl SessionsEngine {
                 .filter(|title| !title.is_empty())
                 .unwrap_or("New task");
             request.model_options.insert(
-                zeron_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
+                luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
                 format!("[LUNA] {title}").into(),
             );
         }
@@ -2999,9 +2999,9 @@ impl SessionsEngine {
             interrupt: interrupt_token.clone(),
             invoke_luna_tool: request
                 .model_options
-                .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+                .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
                 .and_then(|value| {
-                    serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone())
+                    serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone())
                         .ok()
                 })
                 .filter(|contract| !contract.tools.is_empty())
@@ -3015,7 +3015,7 @@ impl SessionsEngine {
                         .rev()
                         .find(|backend| backend.strong_count() > 0)
                         .cloned();
-                    std::sync::Arc::new(move |invocation: zeron_harness::LunaToolInvocation| {
+                    std::sync::Arc::new(move |invocation: luna_harness::LunaToolInvocation| {
                         let contract = contract.clone();
                         let cancel = cancel.clone();
                         let backend = backend.as_ref().and_then(Weak::upgrade);
@@ -3040,14 +3040,14 @@ impl SessionsEngine {
                                 .await
                             };
                             result.map_err(|error| {
-                                zeron_harness::HarnessError::Protocol(error.to_string())
+                                luna_harness::HarnessError::Protocol(error.to_string())
                             })
                         })
                             as futures::future::BoxFuture<
                                 'static,
-                                Result<serde_json::Value, zeron_harness::HarnessError>,
+                                Result<serde_json::Value, luna_harness::HarnessError>,
                             >
-                    }) as zeron_harness::LunaToolExecutor
+                    }) as luna_harness::LunaToolExecutor
                 }),
         };
 
@@ -3122,7 +3122,7 @@ impl SessionsEngine {
     ) -> Result<(), EngineError> {
         let harness = self.inner.registry.resolve(harness_id)?;
         harness
-            .compact_context(zeron_harness::ContextCompactRequest {
+            .compact_context(luna_harness::ContextCompactRequest {
                 session_id,
                 cwd,
                 model,
@@ -3170,7 +3170,7 @@ impl SessionsEngine {
         let message = SteerMessage {
             prompt: prompt.to_string(),
             message_id: Some(user_id.clone()),
-            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(acceptance_tx),
         };
         {
@@ -3190,7 +3190,7 @@ impl SessionsEngine {
             pending.push_back(RoutedSteer {
                 prompt: prompt.to_string(),
                 message_id: user_id.clone(),
-                delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+                delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             });
         }
         let acceptance =
@@ -3242,7 +3242,7 @@ impl SessionsEngine {
             return Ok(false);
         };
         hold_on_interrupt.store(hold_recovery, Ordering::Release);
-        // Unpark any blocked question FIRST (mirrors zeron: harness teardown can await a
+        // Unpark any blocked question FIRST (mirrors luna: harness teardown can await a
         // parked question callback — a run stuck on a question would deadlock the stop).
         let parked: Vec<_> = lock(&pending)
             .drain()
@@ -3315,7 +3315,7 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         request_id: &str,
-        decision: zeron_proto::ApprovalDecision,
+        decision: luna_proto::ApprovalDecision,
     ) -> LunaApprovalOutcome {
         let is_send = lock(&self.inner.runs).get(chat_id).is_some_and(|run| {
             lock(&run.pending_inputs)
@@ -3358,7 +3358,7 @@ impl SessionsEngine {
             if !proposal.matches_pending(chat_id, &handle.run_id, request_id, &pending.questions[0])
                 || approval.provider_request_id != proposal.source_call_id
                 || approval.turn_id.as_deref() != Some(proposal.source_turn_id.as_str())
-                || decision == zeron_proto::ApprovalDecision::AllowOnce
+                || decision == luna_proto::ApprovalDecision::AllowOnce
                     && approval.expires_at_ms > now
                     && !cancelling
                     && !handle.interrupt_token.is_cancelled()
@@ -3387,11 +3387,11 @@ impl SessionsEngine {
             };
         }
         let (label, outcome) = match decision {
-            zeron_proto::ApprovalDecision::AllowOnce => {
+            luna_proto::ApprovalDecision::AllowOnce => {
                 ("Allow once", LunaApprovalOutcome::AllowedOnce)
             }
-            zeron_proto::ApprovalDecision::Cancel => ("Cancel", LunaApprovalOutcome::Denied),
-            zeron_proto::ApprovalDecision::Deny | zeron_proto::ApprovalDecision::AllowTask => {
+            luna_proto::ApprovalDecision::Cancel => ("Cancel", LunaApprovalOutcome::Denied),
+            luna_proto::ApprovalDecision::Deny | luna_proto::ApprovalDecision::AllowTask => {
                 ("Deny", LunaApprovalOutcome::Denied)
             }
         };
@@ -3462,7 +3462,7 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         request_id: &str,
-        decision: zeron_proto::ApprovalDecision,
+        decision: luna_proto::ApprovalDecision,
     ) -> LunaApprovalOutcome {
         let binding = self.inner.current_codex_binding_key(chat_id);
         let runs = lock(&self.inner.runs);
@@ -3501,7 +3501,7 @@ impl SessionsEngine {
         else {
             unreachable!("checked LUNA send input")
         };
-        let approved = decision == zeron_proto::ApprovalDecision::AllowOnce && !expired;
+        let approved = decision == luna_proto::ApprovalDecision::AllowOnce && !expired;
         let outcome = if expired {
             LunaApprovalOutcome::Expired
         } else if approved {
@@ -3526,7 +3526,7 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         request_id: &str,
-        decision: zeron_proto::ApprovalDecision,
+        decision: luna_proto::ApprovalDecision,
     ) -> Result<bool, EngineError> {
         let target = lock(&self.inner.runs)
             .get(chat_id)
@@ -3907,8 +3907,7 @@ impl SessionsEngine {
         }
         if matches!(
             current.view.action,
-            zeron_proto::RecoveryAction::ObserveOnly
-                | zeron_proto::RecoveryAction::FixConfiguration
+            luna_proto::RecoveryAction::ObserveOnly | luna_proto::RecoveryAction::FixConfiguration
         ) {
             return Ok(None);
         }
@@ -3991,8 +3990,8 @@ impl SessionsEngine {
         let mut request = record.request.clone();
         if matches!(
             record.view.action,
-            zeron_proto::RecoveryAction::ContinueSession
-                | zeron_proto::RecoveryAction::SignInThenContinue
+            luna_proto::RecoveryAction::ContinueSession
+                | luna_proto::RecoveryAction::SignInThenContinue
         ) && record.view.acceptance == RecoveryAcceptance::Accepted
         {
             let Some(session_id) = record.provider_session_id.clone() else {
@@ -4576,24 +4575,24 @@ impl SessionsEngine {
 
 fn approval_answer(
     question: &UserInputQuestion,
-    decision: zeron_proto::ApprovalDecision,
+    decision: luna_proto::ApprovalDecision,
 ) -> Option<UserInputAnswer> {
     let approval = question.approval.as_ref()?;
     if approval.is_luna_cross_task() {
         return None;
     }
     let decision = match decision {
-        _ if approval.expires_at_ms <= now_ms() => zeron_proto::ApprovalDecision::Deny,
-        zeron_proto::ApprovalDecision::AllowTask if !approval.supports_task_allowance => {
-            zeron_proto::ApprovalDecision::Deny
+        _ if approval.expires_at_ms <= now_ms() => luna_proto::ApprovalDecision::Deny,
+        luna_proto::ApprovalDecision::AllowTask if !approval.supports_task_allowance => {
+            luna_proto::ApprovalDecision::Deny
         }
         decision => decision,
     };
     let label = match decision {
-        zeron_proto::ApprovalDecision::AllowOnce => "Allow once",
-        zeron_proto::ApprovalDecision::AllowTask => "Allow for task",
-        zeron_proto::ApprovalDecision::Deny => "Deny",
-        zeron_proto::ApprovalDecision::Cancel => "Cancel",
+        luna_proto::ApprovalDecision::AllowOnce => "Allow once",
+        luna_proto::ApprovalDecision::AllowTask => "Allow for task",
+        luna_proto::ApprovalDecision::Deny => "Deny",
+        luna_proto::ApprovalDecision::Cancel => "Cancel",
     };
     Some(UserInputAnswer {
         question_id: question.id.clone(),
@@ -4755,7 +4754,7 @@ impl Inner {
         let entries = std::mem::take(&mut *ledger);
         let (ordinary, explicit): (Vec<_>, Vec<_>) = entries
             .into_iter()
-            .partition(|steer| steer.delivery == zeron_harness::SteerDelivery::AllowFollowUpTurn);
+            .partition(|steer| steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn);
         *ledger = ordinary.into();
         explicit
     }
@@ -4875,7 +4874,7 @@ impl Inner {
 
     /// Record the chat's harness-native session id (and its cwd): live-process
     /// cache plus the durable workspace chat row — the row is what survives an
-    /// engine restart (zeron sessions.ts:1039).
+    /// engine restart (luna sessions.ts:1039).
     fn remember_harness_session(&self, chat_id: &str, session_id: &str, cwd: &str) {
         if session_id.is_empty() {
             return;
@@ -4900,7 +4899,7 @@ impl Inner {
     // yields a fresh session whose SessionStarted overwrites the row.
 
     /// The session id to resume for a run in `chat_id` launching from `cwd`
-    /// (zeron sessions.ts:736, looked up on every dispatch):
+    /// (luna sessions.ts:736, looked up on every dispatch):
     /// live-process cache → workspace chat row → journal scan (the crash path
     /// where the debounced row write never landed — SessionStarted/Done events
     /// are journaled per event, flushed immediately). Cwd-gated throughout:
@@ -5211,7 +5210,7 @@ impl SubagentSink {
         if let Err(err) = finished {
             tracing::warn!(doc = %self.doc_id, error = %err, "subagent sink finish failed");
         }
-        let entries = zeron_doc::join_continuation_entries(self.doc.read_entries().ok()?);
+        let entries = luna_doc::join_continuation_entries(self.doc.read_entries().ok()?);
         serde_json::to_string(&entries).ok()
     }
 }
@@ -5228,8 +5227,8 @@ fn subagent_chip_update(event: &AgentEvent) -> Option<&'static str> {
         }),
         AgentEvent::InputRequested { .. } => Some("waiting"),
         AgentEvent::ChildStatus { status } => Some(match status {
-            zeron_proto::ChildRuntimeStatus::Active => "running",
-            zeron_proto::ChildRuntimeStatus::Idle => "idle",
+            luna_proto::ChildRuntimeStatus::Active => "running",
+            luna_proto::ChildRuntimeStatus::Idle => "idle",
         }),
         AgentEvent::InputResolved { .. }
         | AgentEvent::UserMessage { .. }
@@ -5576,7 +5575,7 @@ fn stop_after_journal_failure(
                 original_acceptance: RecoveryAcceptance::Unknown,
                 acceptance: RecoveryAcceptance::Unknown,
                 failure: RecoveryFailure::Other,
-                action: zeron_proto::RecoveryAction::ObserveOnly,
+                action: luna_proto::RecoveryAction::ObserveOnly,
                 status: RecoveryStatus::CheckingDelivery,
                 attempt_count: 0,
                 max_attempts: MAX_AUTO_RETRIES,
@@ -5619,9 +5618,9 @@ async fn drive_run(
     let permission_policy = request.permission_policy.clone();
     let runtime_contract = request
         .model_options
-        .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+        .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
         .and_then(|value| {
-            serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+            serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
         });
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
@@ -5738,12 +5737,12 @@ async fn drive_run(
     // so the gate still catches real crashes. touch_session throttles at 10s.
     let mut live_heartbeat = tokio::time::interval(std::time::Duration::from_secs(15));
     live_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // PERSISTENT SESSION (zeron runsBySession): a completed turn on a
+    // PERSISTENT SESSION (luna runsBySession): a completed turn on a
     // steerable harness parks here instead of ending the run — the child and
     // its steering mailbox stay warm, and the next user message (dispatch
     // routes into a live run) starts the next turn with zero respawn/resume
     // latency. `Some(when)` = idle since then; the 30-min reaper below ends
-    // a session nobody comes back to (zeron SESSION_IDLE_MS).
+    // a session nobody comes back to (luna SESSION_IDLE_MS).
     const SESSION_IDLE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
     let mut idle_since: Option<tokio::time::Instant> = None;
     let steerable = harness.supports_steering();
@@ -5758,7 +5757,7 @@ async fn drive_run(
     // segment finalized Complete, status Idle, child and mailbox warm. A
     // false trip (the agent was quietly waiting on something invisible)
     // costs a status dip: the parked-resume path below re-arms Working the
-    // moment output flows again, and nothing is lost. `ZERON_TURN_QUIESCE_MS`
+    // moment output flows again, and nothing is lost. `LUNA_TURN_QUIESCE_MS`
     // overrides the window; 0 disables.
     // RETIRED for native drivers: a harness whose every turn shape ends with
     // a deterministic wire Done (claude/codex/cursor native) needs no
@@ -5768,7 +5767,7 @@ async fn drive_run(
     // ACP retains the watchdog only for unowned self-continued activity.
     let deterministic_turn_end = harness.deterministic_turn_end();
     let authoritative_prompt_end = harness.authoritative_prompt_end();
-    let quiesce_after: Option<std::time::Duration> = match std::env::var("ZERON_TURN_QUIESCE_MS")
+    let quiesce_after: Option<std::time::Duration> = match std::env::var("LUNA_TURN_QUIESCE_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
     {
@@ -5787,11 +5786,11 @@ async fn drive_run(
     // so the default 120s window read as 2min of stuck-Working after every
     // background notification (user report 2026-08-13). The in-flight
     // fold gate below still protects running tools; reasoning heartbeats
-    // push the window during real thinking. `ZERON_SELF_TURN_QUIESCE_MS`
+    // push the window during real thinking. `LUNA_SELF_TURN_QUIESCE_MS`
     // overrides; 0 falls back to the normal window. An explicit
-    // `ZERON_TURN_QUIESCE_MS=0` still disables the watchdog entirely.
+    // `LUNA_TURN_QUIESCE_MS=0` still disables the watchdog entirely.
     let self_quiesce_after: Option<std::time::Duration> =
-        match std::env::var("ZERON_SELF_TURN_QUIESCE_MS")
+        match std::env::var("LUNA_SELF_TURN_QUIESCE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
         {
@@ -5809,7 +5808,7 @@ async fn drive_run(
     // Live subagent sinks, parent tool-use id → transcript doc state.
     let mut subagents: std::collections::HashMap<String, SubagentSink> =
         std::collections::HashMap::new();
-    let mut child_activity: std::collections::HashMap<String, zeron_doc::SubagentActivity> =
+    let mut child_activity: std::collections::HashMap<String, luna_doc::SubagentActivity> =
         std::collections::HashMap::new();
 
     let mut final_completed_turn = None;
@@ -5841,7 +5840,7 @@ async fn drive_run(
                     inner.touch_session(&chat_id);
                     continue;
                 }
-                // Idle reaper (zeron SESSION_IDLE_MS): a parked persistent session
+                // Idle reaper (luna SESSION_IDLE_MS): a parked persistent session
                 // nobody returned to in 30 minutes releases its child. The turn
                 // was finalized at Done, so this end is clean — no aborted stamp.
                 _ = tokio::time::sleep_until(
@@ -5929,7 +5928,7 @@ async fn drive_run(
                     && steerable
                     && !folded.iter().any(|p| match p {
                         MessagePart::Tool { id, resolved: false, .. } => {
-                            id != zeron_proto::LIVE_PLAN_TOOL_ID
+                            id != luna_proto::LIVE_PLAN_TOOL_ID
                         }
                         MessagePart::Input { resolved: false, .. } => true,
                         _ => false,
@@ -6058,7 +6057,7 @@ async fn drive_run(
                         }
                     }
                 }
-                zeron_doc::fold_event_into_parts(&mut folded, &event);
+                luna_doc::fold_event_into_parts(&mut folded, &event);
                 if !dirty {
                     dirty = true;
                     flush_at = tokio::time::Instant::now()
@@ -6138,7 +6137,7 @@ async fn drive_run(
                     continue;
                 }
                 if !metadata_only {
-                    zeron_doc::fold_event_into_parts(&mut sink.folded, sub_event);
+                    luna_doc::fold_event_into_parts(&mut sink.folded, sub_event);
                     sink.dirty = true;
                 }
                 if !chip_streaming
@@ -6179,7 +6178,7 @@ async fn drive_run(
                     {
                         host.upload_tool_sidecar(
                             &chat_id,
-                            zeron_doc::SidecarPayload {
+                            luna_doc::SidecarPayload {
                                 part_id: doc_id,
                                 output: Some(json),
                                 diff: None,
@@ -6346,7 +6345,7 @@ async fn drive_run(
                 ) || matches!(
                     &event,
                     AgentEvent::ToolCall { id, .. }
-                        if id == zeron_proto::LIVE_PLAN_TOOL_ID || !seen_tools.contains(id)
+                        if id == luna_proto::LIVE_PLAN_TOOL_ID || !seen_tools.contains(id)
                 ));
             if self_continued {
                 tracing::info!(
@@ -6420,8 +6419,8 @@ async fn drive_run(
             // treating its reappearance after a park/steer reset as a stale
             // echo dropped the todo list for the rest of the run — from the
             // first boundary on, plans never rendered again.
-            AgentEvent::ToolCall { id, .. } if id == zeron_proto::LIVE_PLAN_TOOL_ID => {}
-            AgentEvent::ToolResult { id, .. } if id == zeron_proto::LIVE_PLAN_TOOL_ID => {}
+            AgentEvent::ToolCall { id, .. } if id == luna_proto::LIVE_PLAN_TOOL_ID => {}
+            AgentEvent::ToolResult { id, .. } if id == luna_proto::LIVE_PLAN_TOOL_ID => {}
             AgentEvent::ToolCall { id, .. } => {
                 if !in_segment(&folded, id) && seen_tools.contains(id) {
                     continue;
@@ -6498,7 +6497,7 @@ async fn drive_run(
                     checkpoints.end(&chat_id, &run_id, "steered").await;
                     checkpoints.start(&chat_id, &run_id, cwd).await;
                 }
-                if steer.delivery == zeron_harness::SteerDelivery::RequireActiveTurn {
+                if steer.delivery == luna_harness::SteerDelivery::RequireActiveTurn {
                     let transcript_written = match host.open(&chat_id) {
                         Ok(handle) => handle
                             .write_user_message(&steer.message_id, &steer.prompt, now_ms())
@@ -6799,7 +6798,7 @@ async fn drive_run(
             });
         }
 
-        // Defensive rule from zeron: a mid-run SessionStarted re-emission (Claude SDK
+        // Defensive rule from luna: a mid-run SessionStarted re-emission (Claude SDK
         // background re-invocations) must not wipe the segment being written.
         let skip_fold = matches!(&event, AgentEvent::SessionStarted { .. }) && !folded.is_empty();
         if !skip_fold {
@@ -6807,7 +6806,7 @@ async fn drive_run(
             // R2 sidecar PARKED (2026-08-10, product call): the fold's
             // summary/stats ARE the doc's whole record — no refs stamped, no
             // uploads. Full outputs survive only in the host's local run
-            // journal. To reintroduce: `zeron_doc::sidecar_payload(&event)`
+            // journal. To reintroduce: `luna_doc::sidecar_payload(&event)`
             // → `apply_sidecar_refs` → `doc_host.upload_tool_sidecar`, all
             // still in place and tested.
         }
@@ -7021,7 +7020,7 @@ async fn drive_run(
         {
             host.upload_tool_sidecar(
                 &chat_id,
-                zeron_doc::SidecarPayload {
+                luna_doc::SidecarPayload {
                     part_id: doc_id,
                     output: Some(json),
                     diff: None,
@@ -7042,7 +7041,7 @@ async fn drive_run(
     inner.set_status_with_completion(&chat_id, final_status, false, final_completed_turn);
     let (redispatch, explicit): (Vec<_>, Vec<_>) = orphans
         .into_iter()
-        .partition(|steer| steer.delivery == zeron_harness::SteerDelivery::AllowFollowUpTurn);
+        .partition(|steer| steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn);
     if let Some(host) = inner.doc_host() {
         for steer in explicit {
             if let Err(error) = host.mark_steer_correlation_unknown(&chat_id, &steer.message_id) {
@@ -7107,17 +7106,17 @@ mod tests {
         stop_after_journal_failure, subagent_doc_id, take_pending_ordinary_input,
     };
     use futures::StreamExt as _;
-    use std::collections::{HashSet, VecDeque};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-    use zeron_doc::{MessageRole, MessageStatus};
-    use zeron_proto::{
+    use luna_doc::{MessageRole, MessageStatus};
+    use luna_proto::{
         ContextControlState, ContextOperationStatus, HarnessId, Model, ReasoningLevel,
         RecoveryAcceptance, RecoveryAction, RecoveryFailure, RecoveryStatus, RunRequest,
         SandboxLevel, Session, SessionStatus, SteeringMode, TaskRecovery,
     };
-    use zeron_sync::DocsStore;
+    use luna_sync::DocsStore;
+    use std::collections::{HashSet, VecDeque};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     struct HoldingJournalHarness {
         release_first_turn: Arc<tokio::sync::Notify>,
@@ -7126,16 +7125,14 @@ mod tests {
     }
 
     async fn scripted_steer(
-        tx: &tokio::sync::mpsc::Sender<
-            Result<zeron_proto::AgentEvent, zeron_harness::HarnessError>,
-        >,
-        mut message: zeron_harness::SteerMessage,
-        token: &zeron_harness::CancellationToken,
+        tx: &tokio::sync::mpsc::Sender<Result<luna_proto::AgentEvent, luna_harness::HarnessError>>,
+        mut message: luna_harness::SteerMessage,
+        token: &luna_harness::CancellationToken,
         boundary: Option<&Arc<tokio::sync::Notify>>,
         release: Option<&Arc<tokio::sync::Notify>>,
     ) -> bool {
         if let Some(acceptance) = message.acceptance.take() {
-            let _ = acceptance.send(zeron_harness::SteerAcceptance::Accepted);
+            let _ = acceptance.send(luna_harness::SteerAcceptance::Accepted);
         }
         if let Some(boundary) = boundary {
             tokio::select! {
@@ -7144,7 +7141,7 @@ mod tests {
             }
         }
         if tx
-            .send(Ok(zeron_proto::AgentEvent::Steered {
+            .send(Ok(luna_proto::AgentEvent::Steered {
                 assistant_message_id: None,
                 next_assistant_message_id: None,
             }))
@@ -7154,7 +7151,7 @@ mod tests {
             return false;
         }
         if tx
-            .send(Ok(zeron_proto::AgentEvent::TextDelta {
+            .send(Ok(luna_proto::AgentEvent::TextDelta {
                 text: "steered".into(),
             }))
             .await
@@ -7168,8 +7165,8 @@ mod tests {
                 _ = token.cancelled() => return false,
             }
         }
-        tx.send(Ok(zeron_proto::AgentEvent::Done {
-            status: zeron_proto::DoneStatus::Completed,
+        tx.send(Ok(luna_proto::AgentEvent::Done {
+            status: luna_proto::DoneStatus::Completed,
             result: None,
             error: None,
             session_id: Some("synthetic-session".into()),
@@ -7179,7 +7176,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl zeron_harness::Harness for HoldingJournalHarness {
+    impl luna_harness::Harness for HoldingJournalHarness {
         fn id(&self) -> HarnessId {
             HarnessId::Mock
         }
@@ -7195,19 +7192,19 @@ mod tests {
         fn reasoning_levels(&self) -> &[ReasoningLevel] {
             &[ReasoningLevel::Medium]
         }
-        async fn models(&self) -> Result<Vec<Model>, zeron_harness::HarnessError> {
+        async fn models(&self) -> Result<Vec<Model>, luna_harness::HarnessError> {
             Ok(vec![])
         }
         async fn run(
             &self,
             _request: RunRequest,
-            controls: zeron_harness::RunControls,
+            controls: luna_harness::RunControls,
         ) -> Result<
             futures::stream::BoxStream<
                 'static,
-                Result<zeron_proto::AgentEvent, zeron_harness::HarnessError>,
+                Result<luna_proto::AgentEvent, luna_harness::HarnessError>,
             >,
-            zeron_harness::HarnessError,
+            luna_harness::HarnessError,
         > {
             let (tx, rx) = tokio::sync::mpsc::channel(16);
             let release = self.release_first_turn.clone();
@@ -7216,7 +7213,7 @@ mod tests {
             let token = controls.interrupt.clone();
             let mut steering = controls.steering;
             tokio::spawn(async move {
-                let started = zeron_proto::AgentEvent::SessionStarted {
+                let started = luna_proto::AgentEvent::SessionStarted {
                     harness: HarnessId::Mock,
                     model: "synthetic".into(),
                     tools: vec![],
@@ -7228,7 +7225,7 @@ mod tests {
                     return;
                 }
                 if tx
-                    .send(Ok(zeron_proto::AgentEvent::TextDelta {
+                    .send(Ok(luna_proto::AgentEvent::TextDelta {
                         text: "first".into(),
                     }))
                     .await
@@ -7238,20 +7235,20 @@ mod tests {
                 }
                 tokio::select! {
                     _ = release.notified() => {
-                        if tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Completed, result: None, error: None, session_id: Some("synthetic-session".into()) })).await.is_err() { return; }
+                        if tx.send(Ok(luna_proto::AgentEvent::Done { status: luna_proto::DoneStatus::Completed, result: None, error: None, session_id: Some("synthetic-session".into()) })).await.is_err() { return; }
                     }
                     Some(message) = steering.recv() => {
                         if !scripted_steer(&tx, message, &token, steer_boundary.as_ref(), release_steered.as_ref()).await { return; }
                     }
                     _ = token.cancelled() => {
-                        let _ = tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
+                        let _ = tx.send(Ok(luna_proto::AgentEvent::Done { status: luna_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
                         return;
                     }
                 }
                 loop {
                     tokio::select! {
                         _ = token.cancelled() => {
-                            let _ = tx.send(Ok(zeron_proto::AgentEvent::Done { status: zeron_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
+                            let _ = tx.send(Ok(luna_proto::AgentEvent::Done { status: luna_proto::DoneStatus::Interrupted, result: None, error: None, session_id: None })).await;
                             break;
                         }
                         Some(message) = steering.recv() => {
@@ -7315,7 +7312,7 @@ mod tests {
 
     async fn journal_event(
         receiver: &mut tokio::sync::broadcast::Receiver<super::JournaledEvent>,
-        predicate: impl Fn(&zeron_proto::AgentEvent) -> bool,
+        predicate: impl Fn(&luna_proto::AgentEvent) -> bool,
     ) -> u64 {
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
@@ -7361,7 +7358,7 @@ mod tests {
         cwd: &str,
         count: usize,
         finished: usize,
-    ) -> Vec<zeron_proto::GitCheckpoint> {
+    ) -> Vec<luna_proto::GitCheckpoint> {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let rows = checkpoints
@@ -7408,7 +7405,7 @@ mod tests {
             .unwrap();
         journal_event(
             &mut live,
-            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+            |event| matches!(event, luna_proto::AgentEvent::TextDelta { text } if text == "first"),
         )
         .await;
         std::fs::write(std::path::Path::new(&cwd).join("first.txt"), "first\n").unwrap();
@@ -7416,8 +7413,8 @@ mod tests {
         journal_event(&mut live, |event| {
             matches!(
                 event,
-                zeron_proto::AgentEvent::Done {
-                    status: zeron_proto::DoneStatus::Completed,
+                luna_proto::AgentEvent::Done {
+                    status: luna_proto::DoneStatus::Completed,
                     ..
                 }
             )
@@ -7443,7 +7440,7 @@ mod tests {
         );
         boundary.notify_one();
         journal_event(&mut live, |event| {
-            matches!(event, zeron_proto::AgentEvent::Steered { .. })
+            matches!(event, luna_proto::AgentEvent::Steered { .. })
         })
         .await;
         let rows = checkpoint_rows(&checkpoints, &cwd, 2, 1).await;
@@ -7456,8 +7453,8 @@ mod tests {
         journal_event(&mut live, |event| {
             matches!(
                 event,
-                zeron_proto::AgentEvent::Done {
-                    status: zeron_proto::DoneStatus::Completed,
+                luna_proto::AgentEvent::Done {
+                    status: luna_proto::DoneStatus::Completed,
                     ..
                 }
             )
@@ -7505,7 +7502,7 @@ mod tests {
             .unwrap();
         journal_event(
             &mut live,
-            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+            |event| matches!(event, luna_proto::AgentEvent::TextDelta { text } if text == "first"),
         )
         .await;
         std::fs::write(std::path::Path::new(&cwd).join("old.txt"), "old\n").unwrap();
@@ -7533,8 +7530,8 @@ mod tests {
         journal_event(&mut live, |event| {
             matches!(
                 event,
-                zeron_proto::AgentEvent::Done {
-                    status: zeron_proto::DoneStatus::Completed,
+                luna_proto::AgentEvent::Done {
+                    status: luna_proto::DoneStatus::Completed,
                     ..
                 }
             )
@@ -7585,7 +7582,7 @@ mod tests {
             .unwrap();
         journal_event(
             &mut live,
-            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+            |event| matches!(event, luna_proto::AgentEvent::TextDelta { text } if text == "first"),
         )
         .await;
         std::fs::write(std::path::Path::new(&cwd).join("pre.txt"), "pre\n").unwrap();
@@ -7609,7 +7606,7 @@ mod tests {
         assert_eq!(checkpoint_rows(&checkpoints, &cwd, 1, 0).await.len(), 1);
         boundary.notify_one();
         journal_event(&mut live, |event| {
-            matches!(event, zeron_proto::AgentEvent::Steered { .. })
+            matches!(event, luna_proto::AgentEvent::Steered { .. })
         })
         .await;
         let rows = checkpoint_rows(&checkpoints, &cwd, 2, 1).await;
@@ -7630,8 +7627,8 @@ mod tests {
         journal_event(&mut live, |event| {
             matches!(
                 event,
-                zeron_proto::AgentEvent::Done {
-                    status: zeron_proto::DoneStatus::Completed,
+                luna_proto::AgentEvent::Done {
+                    status: luna_proto::DoneStatus::Completed,
                     ..
                 }
             )
@@ -7718,20 +7715,20 @@ mod tests {
             .unwrap();
         journal_event(
             &mut live,
-            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+            |event| matches!(event, luna_proto::AgentEvent::TextDelta { text } if text == "first"),
         )
         .await;
         assert!(matches!(
             epoch.freeze(Duration::from_millis(40)).await,
-            Err(zeron_sync::write_epoch::EpochError::TimedOut)
+            Err(luna_sync::write_epoch::EpochError::TimedOut)
         ));
-        assert_eq!(epoch.phase(), zeron_sync::write_epoch::Phase::Open);
+        assert_eq!(epoch.phase(), luna_sync::write_epoch::Phase::Open);
         release.notify_one();
         journal_event(&mut live, |event| {
             matches!(
                 event,
-                zeron_proto::AgentEvent::Done {
-                    status: zeron_proto::DoneStatus::Completed,
+                luna_proto::AgentEvent::Done {
+                    status: luna_proto::DoneStatus::Completed,
                     ..
                 }
             )
@@ -7761,7 +7758,7 @@ mod tests {
         );
         assert!(matches!(
             epoch.freeze(Duration::from_millis(40)).await,
-            Err(zeron_sync::write_epoch::EpochError::TimedOut)
+            Err(luna_sync::write_epoch::EpochError::TimedOut)
         ));
 
         let warm_id = core
@@ -7776,14 +7773,14 @@ mod tests {
             .unwrap();
         assert_eq!(warm_id, first_id);
         journal_event(&mut live, |event| {
-            matches!(event, zeron_proto::AgentEvent::Steered { .. })
+            matches!(event, luna_proto::AgentEvent::Steered { .. })
         })
         .await;
         journal_event(&mut live, |event| {
             matches!(
                 event,
-                zeron_proto::AgentEvent::Done {
-                    status: zeron_proto::DoneStatus::Completed,
+                luna_proto::AgentEvent::Done {
+                    status: luna_proto::DoneStatus::Completed,
                     ..
                 }
             )
@@ -7822,7 +7819,7 @@ mod tests {
         // SessionStarted is durable; the following TextDelta fails before it
         // can enter live fanout or the assistant transcript fold.
         journal_event(&mut live, |event| {
-            matches!(event, zeron_proto::AgentEvent::SessionStarted { .. })
+            matches!(event, luna_proto::AgentEvent::SessionStarted { .. })
         })
         .await;
         let status = tokio::time::timeout(Duration::from_secs(3), async {
@@ -7899,7 +7896,7 @@ mod tests {
             .unwrap();
         journal_event(
             &mut live,
-            |event| matches!(event, zeron_proto::AgentEvent::TextDelta { text } if text == "first"),
+            |event| matches!(event, luna_proto::AgentEvent::TextDelta { text } if text == "first"),
         )
         .await;
         // The event is broadcast before the coalesced transcript commit.
@@ -7976,33 +7973,33 @@ mod tests {
 
     #[test]
     fn typed_approval_answers_fail_closed_for_unenforceable_task_allowance() {
-        let question = zeron_proto::UserInputQuestion {
+        let question = luna_proto::UserInputQuestion {
             id: "approval-1".into(),
             header: "Permission".into(),
             question: "Allow?".into(),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
-            approval: Some(zeron_proto::ApprovalRequest {
+            approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: "provider-1".into(),
                 provider: HarnessId::ClaudeCode,
                 turn_id: Some("turn-1".into()),
                 machine_name: "test-machine".into(),
-                action_kind: zeron_proto::ApprovalActionKind::Command,
+                action_kind: luna_proto::ApprovalActionKind::Command,
                 summary: "echo ok".into(),
-                requested_scope: zeron_proto::PermissionScope::Workspace,
+                requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: i64::MAX,
                 supports_task_allowance: false,
             }),
         };
-        let answer = approval_answer(&question, zeron_proto::ApprovalDecision::AllowTask).unwrap();
+        let answer = approval_answer(&question, luna_proto::ApprovalDecision::AllowTask).unwrap();
         assert_eq!(answer.labels, vec!["Deny"]);
         assert!(
             approval_answer(
-                &zeron_proto::UserInputQuestion {
+                &luna_proto::UserInputQuestion {
                     approval: None,
                     ..question
                 },
-                zeron_proto::ApprovalDecision::AllowOnce
+                luna_proto::ApprovalDecision::AllowOnce
             )
             .is_none()
         );
@@ -8095,7 +8092,7 @@ mod tests {
         assert!(answer.await.unwrap().is_empty());
         assert!(matches!(
             event_rx.recv().await,
-            Some(zeron_proto::AgentEvent::InputResolved { request_id })
+            Some(luna_proto::AgentEvent::InputResolved { request_id })
                 if request_id == "approval-1"
         ));
         assert!(!expire_pending_approval(&pending, &event_tx, "approval-1"));
@@ -8109,20 +8106,20 @@ mod tests {
             "approval-1".into(),
             PendingInput {
                 kind: PendingInputKind::Provider,
-                questions: vec![zeron_proto::UserInputQuestion {
+                questions: vec![luna_proto::UserInputQuestion {
                     id: "question-1".into(),
                     header: "Approval".into(),
                     question: "Allow?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
-                    approval: Some(zeron_proto::ApprovalRequest {
+                    approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-1".into(),
                         provider: HarnessId::Codex,
                         turn_id: None,
                         machine_name: "test-machine".into(),
-                        action_kind: zeron_proto::ApprovalActionKind::Command,
+                        action_kind: luna_proto::ApprovalActionKind::Command,
                         summary: "echo safe".into(),
-                        requested_scope: zeron_proto::PermissionScope::Workspace,
+                        requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: true,
                     }),
@@ -8144,20 +8141,20 @@ mod tests {
             Arc::new(crate::registry::HarnessRegistry::new()),
             Arc::new(DocsStore::open(root.path().join("store")).unwrap()),
         );
-        let question = |id: &str, action_kind| zeron_proto::UserInputQuestion {
+        let question = |id: &str, action_kind| luna_proto::UserInputQuestion {
             id: id.into(),
             header: "Approval".into(),
             question: "Allow?".into(),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
-            approval: Some(zeron_proto::ApprovalRequest {
+            approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: "claimed-local-ui".into(),
                 provider: HarnessId::Codex,
                 turn_id: Some("turn-a".into()),
                 machine_name: "synthetic".into(),
                 action_kind,
                 summary: "synthetic".into(),
-                requested_scope: zeron_proto::PermissionScope::Workspace,
+                requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: i64::MAX,
                 supports_task_allowance: false,
             }),
@@ -8183,7 +8180,7 @@ mod tests {
                 // override the server-owned pending kind.
                 questions: vec![question(
                     "luna-question",
-                    zeron_proto::ApprovalActionKind::Command,
+                    luna_proto::ApprovalActionKind::Command,
                 )],
                 resolver: luna_tx,
             },
@@ -8195,7 +8192,7 @@ mod tests {
                 kind: PendingInputKind::Provider,
                 questions: vec![question(
                     "provider-question",
-                    zeron_proto::ApprovalActionKind::Tool,
+                    luna_proto::ApprovalActionKind::Tool,
                 )],
                 resolver: provider_tx,
             },
@@ -8207,7 +8204,7 @@ mod tests {
                 kind: PendingInputKind::Provider,
                 questions: vec![question(
                     "forged-source-question",
-                    zeron_proto::ApprovalActionKind::LunaCrossTask,
+                    luna_proto::ApprovalActionKind::LunaCrossTask,
                 )],
                 resolver: forged_source_tx,
             },
@@ -8217,7 +8214,7 @@ mod tests {
             "ordinary-question".into(),
             PendingInput {
                 kind: PendingInputKind::Provider,
-                questions: vec![zeron_proto::UserInputQuestion {
+                questions: vec![luna_proto::UserInputQuestion {
                     id: "ordinary".into(),
                     header: "Question".into(),
                     question: "Which?".into(),
@@ -8244,7 +8241,7 @@ mod tests {
                 steerable: false,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
                 steer_tx,
-                interrupt_token: zeron_harness::CancellationToken::new(),
+                interrupt_token: luna_harness::CancellationToken::new(),
                 cancel,
                 hold_recovery_on_interrupt: Arc::new(AtomicBool::new(true)),
                 engine_tx,
@@ -8259,7 +8256,7 @@ mod tests {
                 .respond_approval(
                     "chat-a",
                     "claimed-ui-approval",
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .unwrap()
         );
@@ -8268,7 +8265,7 @@ mod tests {
                 .respond_input(
                     "chat-a",
                     "claimed-ui-approval",
-                    vec![zeron_proto::UserInputAnswer {
+                    vec![luna_proto::UserInputAnswer {
                         question_id: "luna-question".into(),
                         labels: vec!["Allow once".into()],
                     }],
@@ -8285,7 +8282,7 @@ mod tests {
                 .respond_approval(
                     "chat-a",
                     "forged-source",
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .unwrap()
         );
@@ -8300,7 +8297,7 @@ mod tests {
                 .respond_approval(
                     "chat-a",
                     "provider-approval",
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .unwrap()
         );
@@ -8310,7 +8307,7 @@ mod tests {
                 .respond_input(
                     "chat-a",
                     "ordinary-question",
-                    vec![zeron_proto::UserInputAnswer {
+                    vec![luna_proto::UserInputAnswer {
                         question_id: "ordinary".into(),
                         labels: vec!["A".into()],
                     }],
@@ -8324,7 +8321,7 @@ mod tests {
         tempfile::TempDir,
         SessionsEngine,
         PendingInputs,
-        tokio::sync::mpsc::UnboundedReceiver<zeron_proto::AgentEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<luna_proto::AgentEvent>,
     ) {
         let root = tempfile::tempdir().unwrap();
         let sessions = SessionsEngine::new(
@@ -8350,7 +8347,7 @@ mod tests {
                 steerable: false,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
                 steer_tx,
-                interrupt_token: zeron_harness::CancellationToken::new(),
+                interrupt_token: luna_harness::CancellationToken::new(),
                 cancel,
                 hold_recovery_on_interrupt: Arc::new(AtomicBool::new(true)),
                 engine_tx,
@@ -8413,7 +8410,7 @@ mod tests {
                 Some("project-a"),
                 None,
                 project_path.to_str(),
-                zeron_proto::TaskLineage::default(),
+                luna_proto::TaskLineage::default(),
             )
             .unwrap();
         let (steer_tx, _steer_rx) = tokio::sync::mpsc::channel(1);
@@ -8432,7 +8429,7 @@ mod tests {
                 steerable: false,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request()),
                 steer_tx,
-                interrupt_token: zeron_harness::CancellationToken::new(),
+                interrupt_token: luna_harness::CancellationToken::new(),
                 cancel,
                 hold_recovery_on_interrupt: Arc::new(AtomicBool::new(true)),
                 engine_tx,
@@ -8469,7 +8466,7 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum FakeInterruptMode {
-        Receipt(zeron_proto::CommandReceiptStatus),
+        Receipt(luna_proto::CommandReceiptStatus),
         CommitThenError,
         NoReceipt,
         ReadbackError,
@@ -8479,8 +8476,8 @@ mod tests {
     struct FakeControlEvidenceBackend {
         source_task_id: String,
         source_environment_id: String,
-        target: Mutex<zeron_proto::CrossTaskSummary>,
-        snapshots: Mutex<VecDeque<zeron_proto::TaskCommandSnapshot>>,
+        target: Mutex<luna_proto::CrossTaskSummary>,
+        snapshots: Mutex<VecDeque<luna_proto::TaskCommandSnapshot>>,
         snapshot_reads: AtomicUsize,
         gate_on_read: usize,
         entered_snapshot: Option<Arc<tokio::sync::Notify>>,
@@ -8488,8 +8485,8 @@ mod tests {
         control_calls: AtomicUsize,
         receipt_reads: AtomicUsize,
         interrupt_mode: Mutex<Option<FakeInterruptMode>>,
-        stored_receipt: Mutex<Option<zeron_proto::CommandReceipt>>,
-        submitted_request: Mutex<Option<zeron_proto::CrossTaskControlRequest>>,
+        stored_receipt: Mutex<Option<luna_proto::CommandReceipt>>,
+        submitted_request: Mutex<Option<luna_proto::CrossTaskControlRequest>>,
         readback_command_id: Mutex<Option<String>>,
     }
 
@@ -8505,11 +8502,11 @@ mod tests {
         async fn task(
             &self,
             task_id: &str,
-        ) -> Result<Option<zeron_proto::CrossTaskSummary>, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<Option<luna_proto::CrossTaskSummary>, crate::cross_task_tools::CrossTaskError>
         {
             let target = lock(&self.target);
             Ok(if task_id == self.source_task_id {
-                Some(zeron_proto::CrossTaskSummary {
+                Some(luna_proto::CrossTaskSummary {
                     task_id: self.source_task_id.clone(),
                     project_id: Some("project-a".into()),
                     environment_id: self.source_environment_id.clone(),
@@ -8524,34 +8521,34 @@ mod tests {
 
         async fn list(
             &self,
-            _: zeron_proto::CrossTaskListRequest,
+            _: luna_proto::CrossTaskListRequest,
             _: &crate::cross_task_tools::CrossTaskAuthority,
-        ) -> Result<zeron_proto::CrossTaskListPage, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<luna_proto::CrossTaskListPage, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
 
         async fn read(
             &self,
-            _: zeron_proto::CrossTaskReadRequest,
-        ) -> Result<zeron_proto::CrossTaskReadPage, crate::cross_task_tools::CrossTaskError>
+            _: luna_proto::CrossTaskReadRequest,
+        ) -> Result<luna_proto::CrossTaskReadPage, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
 
         async fn enqueue_queue(
             &self,
-            _: zeron_proto::CrossTaskSendRequest,
+            _: luna_proto::CrossTaskSendRequest,
             _: &crate::cross_task_tools::CrossTaskAuthority,
-        ) -> Result<zeron_proto::CrossTaskSendReceipt, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<luna_proto::CrossTaskSendReceipt, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
 
         async fn wait_event(
             &self,
-            _: zeron_proto::CrossTaskWaitRequest,
-        ) -> Result<Option<zeron_proto::CrossTaskWaitEvent>, crate::cross_task_tools::CrossTaskError>
+            _: luna_proto::CrossTaskWaitRequest,
+        ) -> Result<Option<luna_proto::CrossTaskWaitEvent>, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
@@ -8560,7 +8557,7 @@ mod tests {
             &self,
             _: &str,
             _: &crate::cross_task_tools::CrossTaskAuthority,
-        ) -> Result<zeron_proto::TaskCommandSnapshot, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<luna_proto::TaskCommandSnapshot, crate::cross_task_tools::CrossTaskError>
         {
             let read = self.snapshot_reads.fetch_add(1, Ordering::SeqCst) + 1;
             if read == self.gate_on_read
@@ -8583,7 +8580,7 @@ mod tests {
             _: &str,
             command_id: &str,
             _: &crate::cross_task_tools::CrossTaskAuthority,
-        ) -> Result<Option<zeron_proto::CommandReceipt>, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<Option<luna_proto::CommandReceipt>, crate::cross_task_tools::CrossTaskError>
         {
             self.receipt_reads.fetch_add(1, Ordering::SeqCst);
             *lock(&self.readback_command_id) = Some(command_id.into());
@@ -8604,16 +8601,16 @@ mod tests {
 
         async fn control(
             &self,
-            request: zeron_proto::CrossTaskControlRequest,
+            request: luna_proto::CrossTaskControlRequest,
             authority: &crate::cross_task_tools::CrossTaskAuthority,
             grant: &crate::cross_task_tools::CrossTaskControlGrant,
-        ) -> Result<zeron_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<luna_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError>
         {
             self.control_calls.fetch_add(1, Ordering::SeqCst);
             let Some(mode) = *lock(&self.interrupt_mode) else {
                 return Err(crate::cross_task_tools::CrossTaskError::Unsupported);
             };
-            if request.action != zeron_proto::CrossTaskControlAction::Interrupt
+            if request.action != luna_proto::CrossTaskControlAction::Interrupt
                 || grant.request != request
                 || grant.caller_task_id != authority.caller_task_id
                 || !authority.explicit_user_request
@@ -8624,19 +8621,19 @@ mod tests {
             *lock(&self.submitted_request) = Some(request.clone());
             let status = match mode {
                 FakeInterruptMode::Receipt(status) => status,
-                FakeInterruptMode::CommitThenError => zeron_proto::CommandReceiptStatus::Applied,
+                FakeInterruptMode::CommitThenError => luna_proto::CommandReceiptStatus::Applied,
                 FakeInterruptMode::NoReceipt
                 | FakeInterruptMode::ReadbackError
-                | FakeInterruptMode::ReadbackNever => zeron_proto::CommandReceiptStatus::Pending,
+                | FakeInterruptMode::ReadbackNever => luna_proto::CommandReceiptStatus::Pending,
             };
-            let receipt = zeron_proto::CommandReceipt {
+            let receipt = luna_proto::CommandReceipt {
                 command_id: request.command_id.clone(),
                 task_id: request.task_id.clone(),
                 intent: "stop".into(),
                 payload_hash: "synthetic-interrupt".into(),
                 status,
                 snapshot: lock(&self.snapshots).front().unwrap().clone(),
-                event_sequence: (status == zeron_proto::CommandReceiptStatus::Applied).then_some(1),
+                event_sequence: (status == luna_proto::CommandReceiptStatus::Applied).then_some(1),
                 actor_id: format!("luna-tool:{}", authority.caller_task_id),
                 client_id: "luna-cross-task".into(),
                 client_session_id: authority.caller_task_id.clone(),
@@ -8645,8 +8642,7 @@ mod tests {
                 reason: None,
                 recovery_action: None,
                 accepted_at_ms: 1,
-                committed_at_ms: (status == zeron_proto::CommandReceiptStatus::Applied)
-                    .then_some(2),
+                committed_at_ms: (status == luna_proto::CommandReceiptStatus::Applied).then_some(2),
                 observed_at_ms: 2,
             };
             if !matches!(mode, FakeInterruptMode::NoReceipt) {
@@ -8657,7 +8653,7 @@ mod tests {
                     "synthetic committed but response lost".into(),
                 ));
             }
-            Ok(zeron_proto::CrossTaskControlReceipt {
+            Ok(luna_proto::CrossTaskControlReceipt {
                 task_id: request.task_id,
                 command: receipt,
                 observed_status: "working".into(),
@@ -8677,7 +8673,7 @@ mod tests {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into()]),
             explicit_user_request: false,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
         }
     }
 
@@ -8688,7 +8684,7 @@ mod tests {
         Arc::new(FakeControlEvidenceBackend {
             source_task_id: source_task_id.into(),
             source_environment_id: core.device_id.clone(),
-            target: Mutex::new(zeron_proto::CrossTaskSummary {
+            target: Mutex::new(luna_proto::CrossTaskSummary {
                 task_id: "target-a".into(),
                 project_id: Some("project-a".into()),
                 environment_id: core.device_id.clone(),
@@ -8697,7 +8693,7 @@ mod tests {
                 archived: false,
                 updated_at_ms: 1,
             }),
-            snapshots: Mutex::new(VecDeque::from([zeron_proto::TaskCommandSnapshot {
+            snapshots: Mutex::new(VecDeque::from([luna_proto::TaskCommandSnapshot {
                 task_id: "target-a".into(),
                 task_revision: 7,
                 task_sequence: 12,
@@ -8764,7 +8760,7 @@ mod tests {
                 Some("project-a"),
                 None,
                 root.path().join("project-a").to_str(),
-                zeron_proto::TaskLineage::default(),
+                luna_proto::TaskLineage::default(),
             )
             .unwrap();
         let fence = crate::cross_task_tools::ApprovedSendFence {
@@ -8780,10 +8776,10 @@ mod tests {
                 .task_command_snapshot(&target)
                 .unwrap()
                 .snapshot,
-            request: zeron_proto::CrossTaskSendRequest {
+            request: luna_proto::CrossTaskSendRequest {
                 task_id: target,
                 message: "synthetic".into(),
-                mode: zeron_proto::CrossTaskSendMode::Queue,
+                mode: luna_proto::CrossTaskSendMode::Queue,
                 idempotency_key: "source-fence".into(),
             },
             expires_at_ms: crate::now_ms() + 30_000,
@@ -8840,13 +8836,13 @@ mod tests {
                 Some("project-a"),
                 None,
                 root.path().join("project-a").to_str(),
-                zeron_proto::TaskLineage::default(),
+                luna_proto::TaskLineage::default(),
             )
             .unwrap();
-        let request = zeron_proto::CrossTaskSendRequest {
+        let request = luna_proto::CrossTaskSendRequest {
             task_id: target.clone(),
             message: "synthetic postcommit follow-up".into(),
-            mode: zeron_proto::CrossTaskSendMode::Queue,
+            mode: luna_proto::CrossTaskSendMode::Queue,
             idempotency_key: "approved-postcommit".into(),
         };
         let fence = crate::cross_task_tools::ApprovedSendFence {
@@ -8878,7 +8874,7 @@ mod tests {
         assert_eq!(result.delivery_state, "queued");
         assert_eq!(
             result.command.status,
-            zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Applied
         );
         assert_eq!(
             core.doc_host
@@ -8886,10 +8882,10 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Applied
         );
         let stored = core.store.load_snapshot(&target).unwrap().unwrap();
-        let doc = zeron_doc::SessionDoc::from_snapshot(&stored).unwrap();
+        let doc = luna_doc::SessionDoc::from_snapshot(&stored).unwrap();
         assert_eq!(doc.read_queue().unwrap().len(), 1);
         assert!(core.doc_host.open(&target).is_err());
         assert!(core.doc_host.flush_all_checked().is_err());
@@ -8902,7 +8898,7 @@ mod tests {
         String,
         Arc<FakeControlEvidenceBackend>,
         super::PreparedControlEvidence,
-        tokio::sync::mpsc::UnboundedReceiver<zeron_proto::AgentEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<luna_proto::AgentEvent>,
     ) {
         let (root, core, source_task_id) = managed_codex_wait_fixture();
         let claim = ready_control_evidence_claim(&root, &core, &source_task_id);
@@ -8931,7 +8927,7 @@ mod tests {
         String,
         Arc<FakeControlEvidenceBackend>,
         super::LunaProspectiveInterruptGrant,
-        tokio::sync::mpsc::UnboundedReceiver<zeron_proto::AgentEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<luna_proto::AgentEvent>,
     ) {
         let (root, core, source_task_id, backend, evidence, mut events) =
             prospective_interrupt_fixture().await;
@@ -8942,14 +8938,14 @@ mod tests {
             .unwrap();
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            Ok(luna_proto::AgentEvent::InputRequested { .. })
         ));
         assert_eq!(
             core.sessions
                 .respond_luna_prospective_interrupt_local_ui(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .await,
             LunaApprovalOutcome::AllowedOnce
@@ -8957,7 +8953,7 @@ mod tests {
         assert_eq!(answer.await.unwrap()[0].labels, vec!["Allow once"]);
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
+            Ok(luna_proto::AgentEvent::InputResolved { request_id: resolved })
                 if resolved == request_id
         ));
         let grant = grant.await.unwrap();
@@ -9005,14 +9001,14 @@ mod tests {
             .unwrap();
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            Ok(luna_proto::AgentEvent::InputRequested { .. })
         ));
         assert_eq!(
             core.sessions
                 .respond_luna_prospective_interrupt_local_ui(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .await,
             LunaApprovalOutcome::AllowedOnce
@@ -9020,7 +9016,7 @@ mod tests {
         assert_eq!(answer.await.unwrap()[0].labels, vec!["Allow once"]);
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputResolved { .. })
+            Ok(luna_proto::AgentEvent::InputResolved { .. })
         ));
         (
             root,
@@ -9036,7 +9032,7 @@ mod tests {
     #[tokio::test]
     async fn private_interrupt_dispatch_classifies_exact_durable_receipts() {
         use super::LunaInterruptDispatchStatus as Outcome;
-        use zeron_proto::CommandReceiptStatus as Receipt;
+        use luna_proto::CommandReceiptStatus as Receipt;
 
         for (receipt_status, expected) in [
             (Receipt::Applied, Outcome::Applied),
@@ -9065,7 +9061,7 @@ mod tests {
             assert_eq!(request.command_id, result.command_id);
             assert_eq!(
                 request.action,
-                zeron_proto::CrossTaskControlAction::Interrupt
+                luna_proto::CrossTaskControlAction::Interrupt
             );
             assert_eq!(request.task_id, "target-a");
             assert_eq!(request.project_id, "project-a");
@@ -9127,7 +9123,7 @@ mod tests {
             } else {
                 assert_eq!(
                     result.receipt.as_ref().unwrap().status,
-                    zeron_proto::CommandReceiptStatus::Applied
+                    luna_proto::CommandReceiptStatus::Applied
                 );
             }
         }
@@ -9173,7 +9169,7 @@ mod tests {
             let (_root, core, source_task_id, backend, mut grant, _events) =
                 approved_interrupt_fixture().await;
             *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
-                zeron_proto::CommandReceiptStatus::Applied,
+                luna_proto::CommandReceiptStatus::Applied,
             ));
             match change {
                 "expiry" => grant.proposal.expires_at_ms = crate::now_ms() - 1,
@@ -9183,7 +9179,7 @@ mod tests {
                             &source_task_id,
                             HarnessId::Codex,
                             "provider-thread-b",
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic rebind before dispatch",
                         )
                         .unwrap();
@@ -9238,7 +9234,7 @@ mod tests {
             let (_root, core, _source_task_id, backend, grant, _events) =
                 approved_interrupt_fixture().await;
             *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
-                zeron_proto::CommandReceiptStatus::Applied,
+                luna_proto::CommandReceiptStatus::Applied,
             ));
             match change {
                 "project" => lock(&backend.target).project_id = Some("project-b".into()),
@@ -9282,7 +9278,7 @@ mod tests {
             let (_root, core, source_task_id, backend, grant, entered, release) =
                 approved_gated_interrupt_fixture().await;
             *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
-                zeron_proto::CommandReceiptStatus::Applied,
+                luna_proto::CommandReceiptStatus::Applied,
             ));
             let sessions = core.sessions.clone();
             let dispatching =
@@ -9299,7 +9295,7 @@ mod tests {
                             &source_task_id,
                             HarnessId::Codex,
                             "provider-thread-b",
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic rebind before submit",
                         )
                         .unwrap();
@@ -9343,7 +9339,7 @@ mod tests {
         let (_root, core, _source_task_id, backend, grant, _events) =
             approved_interrupt_fixture().await;
         *lock(&backend.interrupt_mode) = Some(FakeInterruptMode::Receipt(
-            zeron_proto::CommandReceiptStatus::Pending,
+            luna_proto::CommandReceiptStatus::Pending,
         ));
         let grant = Arc::new(Mutex::new(Some(grant)));
         let barrier = Arc::new(tokio::sync::Barrier::new(3));
@@ -9405,7 +9401,7 @@ mod tests {
                 .is_luna_pending_approval(&source_task_id, &request_id)
         );
         let event = events.try_recv().expect("one engine-owned request");
-        let zeron_proto::AgentEvent::InputRequested {
+        let luna_proto::AgentEvent::InputRequested {
             request_id: published_id,
             questions,
         } = event
@@ -9419,7 +9415,7 @@ mod tests {
         assert_eq!(approval.turn_id.as_deref(), Some("turn-a"));
         assert_eq!(
             approval.action_kind,
-            zeron_proto::ApprovalActionKind::LunaCrossTask
+            luna_proto::ApprovalActionKind::LunaCrossTask
         );
         assert!(!approval.supports_task_allowance);
         assert!(approval.expires_at_ms > crate::now_ms());
@@ -9458,7 +9454,7 @@ mod tests {
             assert_eq!(run_id, "run-a");
             assert_eq!(
                 proposal.action,
-                zeron_proto::CrossTaskControlAction::Interrupt
+                luna_proto::CrossTaskControlAction::Interrupt
             );
             assert_eq!(proposal.evidence.target_snapshot, expected_snapshot);
             assert!(proposal.matches_pending(
@@ -9487,7 +9483,7 @@ mod tests {
                 .respond_approval(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .unwrap()
         );
@@ -9495,7 +9491,7 @@ mod tests {
             core.sessions.respond_luna_local_ui_approval(
                 &source_task_id,
                 &request_id,
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -9515,7 +9511,7 @@ mod tests {
         assert!(grant.await.is_err());
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
+            Ok(luna_proto::AgentEvent::InputResolved { request_id: resolved })
                 if resolved == request_id
         ));
         assert!(!expire_pending_approval(
@@ -9540,7 +9536,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            Ok(luna_proto::AgentEvent::InputRequested { .. })
         ));
         let barrier = Arc::new(tokio::sync::Barrier::new(3));
         let responders = (0..2)
@@ -9555,7 +9551,7 @@ mod tests {
                         .respond_luna_prospective_interrupt_local_ui(
                             &task,
                             &request,
-                            zeron_proto::ApprovalDecision::AllowOnce,
+                            luna_proto::ApprovalDecision::AllowOnce,
                         )
                         .await
                 })
@@ -9587,11 +9583,11 @@ mod tests {
         assert_eq!(grant.proposal.evidence.target_snapshot, expected_snapshot);
         assert_eq!(
             grant.proposal.action,
-            zeron_proto::CrossTaskControlAction::Interrupt
+            luna_proto::CrossTaskControlAction::Interrupt
         );
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
+            Ok(luna_proto::AgentEvent::InputResolved { request_id: resolved })
                 if resolved == request_id
         ));
         assert!(
@@ -9606,9 +9602,9 @@ mod tests {
     #[tokio::test]
     async fn prospective_interrupt_local_denial_and_lost_receivers_mint_no_grant() {
         for decision in [
-            zeron_proto::ApprovalDecision::Deny,
-            zeron_proto::ApprovalDecision::Cancel,
-            zeron_proto::ApprovalDecision::AllowTask,
+            luna_proto::ApprovalDecision::Deny,
+            luna_proto::ApprovalDecision::Cancel,
+            luna_proto::ApprovalDecision::AllowTask,
         ] {
             let (_root, core, source_task_id, backend, evidence, mut events) =
                 prospective_interrupt_fixture().await;
@@ -9619,7 +9615,7 @@ mod tests {
                 .unwrap();
             assert!(matches!(
                 events.try_recv(),
-                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+                Ok(luna_proto::AgentEvent::InputRequested { .. })
             ));
             assert_eq!(
                 core.sessions
@@ -9631,7 +9627,7 @@ mod tests {
                     .await,
                 LunaApprovalOutcome::Denied
             );
-            let label = if decision == zeron_proto::ApprovalDecision::Cancel {
+            let label = if decision == luna_proto::ApprovalDecision::Cancel {
                 "Cancel"
             } else {
                 "Deny"
@@ -9655,7 +9651,7 @@ mod tests {
                 .respond_luna_prospective_interrupt_local_ui(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .await,
             LunaApprovalOutcome::RunEnded
@@ -9688,7 +9684,7 @@ mod tests {
                 .respond_luna_prospective_interrupt_local_ui(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .await,
             LunaApprovalOutcome::RunEnded
@@ -9729,7 +9725,7 @@ mod tests {
                 .unwrap();
             assert!(matches!(
                 events.try_recv(),
-                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+                Ok(luna_proto::AgentEvent::InputRequested { .. })
             ));
             match field {
                 "project" => lock(&backend.target).project_id = Some("project-b".into()),
@@ -9752,7 +9748,7 @@ mod tests {
                     .respond_luna_prospective_interrupt_local_ui(
                         &source_task_id,
                         &request_id,
-                        zeron_proto::ApprovalDecision::AllowOnce,
+                        luna_proto::ApprovalDecision::AllowOnce,
                     )
                     .await,
                 LunaApprovalOutcome::Stale,
@@ -9782,7 +9778,7 @@ mod tests {
                             &source_task_id,
                             HarnessId::Codex,
                             "provider-thread-b",
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic rebind after question",
                         )
                         .unwrap();
@@ -9818,7 +9814,7 @@ mod tests {
                 .respond_luna_prospective_interrupt_local_ui(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .await;
             assert_eq!(
@@ -9882,7 +9878,7 @@ mod tests {
                 .unwrap();
             assert!(matches!(
                 events.try_recv(),
-                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+                Ok(luna_proto::AgentEvent::InputRequested { .. })
             ));
             let sessions = core.sessions.clone();
             let task = source_task_id.clone();
@@ -9892,7 +9888,7 @@ mod tests {
                     .respond_luna_prospective_interrupt_local_ui(
                         &task,
                         &request,
-                        zeron_proto::ApprovalDecision::AllowOnce,
+                        luna_proto::ApprovalDecision::AllowOnce,
                     )
                     .await
             });
@@ -9906,7 +9902,7 @@ mod tests {
                             &source_task_id,
                             HarnessId::Codex,
                             "provider-thread-b",
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic rebind during approval",
                         )
                         .unwrap();
@@ -9962,7 +9958,7 @@ mod tests {
                 .respond_luna_prospective_interrupt_local_ui(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .await,
             LunaApprovalOutcome::Stale
@@ -9974,7 +9970,7 @@ mod tests {
                 .respond_luna_prospective_interrupt_local_ui(
                     &source_task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 )
                 .await,
             LunaApprovalOutcome::Stale
@@ -10042,7 +10038,7 @@ mod tests {
             assert!(lock(&pending).is_empty(), "{failure}");
             assert!(!matches!(
                 events.try_recv(),
-                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+                Ok(luna_proto::AgentEvent::InputRequested { .. })
             ));
         }
     }
@@ -10061,7 +10057,7 @@ mod tests {
                             &source_task_id,
                             HarnessId::Codex,
                             "provider-thread-b",
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic rebind",
                         )
                         .unwrap();
@@ -10094,7 +10090,7 @@ mod tests {
             assert_eq!(backend.receipt_reads.load(Ordering::SeqCst), 0);
             assert!(!matches!(
                 events.try_recv(),
-                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+                Ok(luna_proto::AgentEvent::InputRequested { .. })
             ));
         }
 
@@ -10135,7 +10131,7 @@ mod tests {
                 &source_task_id,
                 HarnessId::Codex,
                 "provider-thread-b",
-                zeron_proto::BindingOrigin::ContextReset,
+                luna_proto::BindingOrigin::ContextReset,
                 "synthetic rebind during read",
             )
             .unwrap();
@@ -10156,7 +10152,7 @@ mod tests {
         );
         assert!(!matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            Ok(luna_proto::AgentEvent::InputRequested { .. })
         ));
     }
 
@@ -10172,7 +10168,7 @@ mod tests {
                 .unwrap();
             assert!(matches!(
                 events.try_recv(),
-                Ok(zeron_proto::AgentEvent::InputRequested { .. })
+                Ok(luna_proto::AgentEvent::InputRequested { .. })
             ));
             match end {
                 "deadline" => {
@@ -10220,7 +10216,7 @@ mod tests {
             assert!(grant.await.is_err());
             assert!(matches!(
                 events.try_recv(),
-                Ok(zeron_proto::AgentEvent::InputResolved { request_id: resolved })
+                Ok(luna_proto::AgentEvent::InputResolved { request_id: resolved })
                     if resolved == request_id
             ));
             assert!(
@@ -10241,7 +10237,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputRequested { .. })
+            Ok(luna_proto::AgentEvent::InputRequested { .. })
         ));
         core.sessions.inner.remove_run(&source_task_id, "run-a");
         assert!(
@@ -10260,7 +10256,7 @@ mod tests {
             core.sessions.respond_luna_local_ui_approval(
                 &source_task_id,
                 &request_id,
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -10299,7 +10295,7 @@ mod tests {
             restarted.sessions.respond_luna_local_ui_approval(
                 &source_task_id,
                 &request_id,
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -10479,7 +10475,7 @@ mod tests {
                             &source_task_id,
                             HarnessId::Codex,
                             "provider-thread-b",
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic rebind",
                         )
                         .unwrap();
@@ -10831,7 +10827,7 @@ mod tests {
                 &task_id,
                 HarnessId::Codex,
                 "provider-thread-b",
-                zeron_proto::BindingOrigin::ContextReset,
+                luna_proto::BindingOrigin::ContextReset,
                 "synthetic rebind",
             )
             .unwrap();
@@ -11036,7 +11032,7 @@ mod tests {
                 &task_id,
                 HarnessId::Codex,
                 "provider-thread-b",
-                zeron_proto::BindingOrigin::ContextReset,
+                luna_proto::BindingOrigin::ContextReset,
                 "synthetic warm rebind",
             )
             .unwrap();
@@ -11086,7 +11082,7 @@ mod tests {
         );
 
         sessions.inner.journal.fail_next_append_for_tests();
-        let event = zeron_proto::AgentEvent::TextDelta {
+        let event = luna_proto::AgentEvent::TextDelta {
             text: "not persisted".into(),
         };
         let error = sessions.inner.publish("chat-a", &event, None).unwrap_err();
@@ -11143,7 +11139,7 @@ mod tests {
         request_id: &str,
         bound_run_id: &str,
         expires_at_ms: i64,
-    ) -> tokio::sync::oneshot::Receiver<Vec<zeron_proto::UserInputAnswer>> {
+    ) -> tokio::sync::oneshot::Receiver<Vec<luna_proto::UserInputAnswer>> {
         let mut proposal = build_fake_archive_proposal(
             request_id,
             "chat-a",
@@ -11179,7 +11175,7 @@ mod tests {
                     sessions.respond_luna_local_ui_approval(
                         &task_id,
                         "approval-a",
-                        zeron_proto::ApprovalDecision::AllowOnce,
+                        luna_proto::ApprovalDecision::AllowOnce,
                     )
                 })
             })
@@ -11207,7 +11203,7 @@ mod tests {
         assert_eq!(grant.await.unwrap().proposal.source_task_id, task_id);
         assert!(matches!(
             events.try_recv(),
-            Ok(zeron_proto::AgentEvent::InputResolved { request_id })
+            Ok(luna_proto::AgentEvent::InputResolved { request_id })
                 if request_id == "approval-a"
         ));
         assert!(events.try_recv().is_err());
@@ -11215,7 +11211,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "approval-a",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -11234,7 +11230,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 "chat-a",
                 "unsupported",
-                zeron_proto::ApprovalDecision::AllowTask,
+                luna_proto::ApprovalDecision::AllowTask,
             ),
             LunaApprovalOutcome::Denied
         );
@@ -11246,7 +11242,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 "chat-a",
                 "user-deny",
-                zeron_proto::ApprovalDecision::Deny,
+                luna_proto::ApprovalDecision::Deny,
             ),
             LunaApprovalOutcome::Denied
         );
@@ -11262,7 +11258,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 "chat-a",
                 "user-cancel",
-                zeron_proto::ApprovalDecision::Cancel,
+                luna_proto::ApprovalDecision::Cancel,
             ),
             LunaApprovalOutcome::Denied
         );
@@ -11274,7 +11270,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 "chat-a",
                 "expired",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Expired
         );
@@ -11290,7 +11286,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 "chat-a",
                 "stale-run",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -11308,7 +11304,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 "chat-a",
                 "replaced-run",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -11327,7 +11323,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 "chat-a",
                 "cancelled",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::RunEnded
         );
@@ -11347,7 +11343,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "lost-resolver",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::RunEnded
         );
@@ -11359,20 +11355,20 @@ mod tests {
             "forged-marker".into(),
             PendingInput {
                 kind: PendingInputKind::Provider,
-                questions: vec![zeron_proto::UserInputQuestion {
+                questions: vec![luna_proto::UserInputQuestion {
                     id: "forged-question".into(),
                     header: "Forged".into(),
                     question: "Allow?".into(),
                     options: vec!["Allow once".into()],
                     multi_select: false,
-                    approval: Some(zeron_proto::ApprovalRequest {
+                    approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "claimed-local-ui".into(),
                         provider: HarnessId::Codex,
                         turn_id: None,
                         machine_name: "synthetic".into(),
-                        action_kind: zeron_proto::ApprovalActionKind::LunaCrossTask,
+                        action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
                         summary: "forged source".into(),
-                        requested_scope: zeron_proto::PermissionScope::Workspace,
+                        requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: crate::now_ms() + 30_000,
                         supports_task_allowance: false,
                     }),
@@ -11384,7 +11380,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "forged-marker",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -11392,16 +11388,16 @@ mod tests {
     }
 
     struct FakeArchiveBackend {
-        target: zeron_proto::CrossTaskSummary,
-        snapshot: zeron_proto::TaskCommandSnapshot,
+        target: luna_proto::CrossTaskSummary,
+        snapshot: luna_proto::TaskCommandSnapshot,
         live: Mutex<FakeLiveIdentity>,
         calls: AtomicUsize,
         suppress_readback: AtomicBool,
-        receipt: Mutex<Option<zeron_proto::CrossTaskControlReceipt>>,
+        receipt: Mutex<Option<luna_proto::CrossTaskControlReceipt>>,
     }
 
     impl FakeArchiveBackend {
-        fn readback(&self, command_id: &str) -> Option<zeron_proto::CrossTaskControlReceipt> {
+        fn readback(&self, command_id: &str) -> Option<luna_proto::CrossTaskControlReceipt> {
             if self.suppress_readback.load(Ordering::SeqCst) {
                 return None;
             }
@@ -11427,61 +11423,61 @@ mod tests {
         async fn task(
             &self,
             task_id: &str,
-        ) -> Result<Option<zeron_proto::CrossTaskSummary>, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<Option<luna_proto::CrossTaskSummary>, crate::cross_task_tools::CrossTaskError>
         {
             Ok((task_id == self.target.task_id).then(|| self.target.clone()))
         }
 
         async fn list(
             &self,
-            _: zeron_proto::CrossTaskListRequest,
+            _: luna_proto::CrossTaskListRequest,
             _: &crate::cross_task_tools::CrossTaskAuthority,
-        ) -> Result<zeron_proto::CrossTaskListPage, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<luna_proto::CrossTaskListPage, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
 
         async fn read(
             &self,
-            _: zeron_proto::CrossTaskReadRequest,
-        ) -> Result<zeron_proto::CrossTaskReadPage, crate::cross_task_tools::CrossTaskError>
+            _: luna_proto::CrossTaskReadRequest,
+        ) -> Result<luna_proto::CrossTaskReadPage, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
 
         async fn enqueue_queue(
             &self,
-            _: zeron_proto::CrossTaskSendRequest,
+            _: luna_proto::CrossTaskSendRequest,
             _: &crate::cross_task_tools::CrossTaskAuthority,
-        ) -> Result<zeron_proto::CrossTaskSendReceipt, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<luna_proto::CrossTaskSendReceipt, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
 
         async fn wait_event(
             &self,
-            _: zeron_proto::CrossTaskWaitRequest,
-        ) -> Result<Option<zeron_proto::CrossTaskWaitEvent>, crate::cross_task_tools::CrossTaskError>
+            _: luna_proto::CrossTaskWaitRequest,
+        ) -> Result<Option<luna_proto::CrossTaskWaitEvent>, crate::cross_task_tools::CrossTaskError>
         {
             Err(crate::cross_task_tools::CrossTaskError::Unsupported)
         }
 
         async fn control(
             &self,
-            request: zeron_proto::CrossTaskControlRequest,
+            request: luna_proto::CrossTaskControlRequest,
             _: &crate::cross_task_tools::CrossTaskAuthority,
             _: &crate::cross_task_tools::CrossTaskControlGrant,
-        ) -> Result<zeron_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError>
+        ) -> Result<luna_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError>
         {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let receipt = zeron_proto::CrossTaskControlReceipt {
+            let receipt = luna_proto::CrossTaskControlReceipt {
                 task_id: request.task_id.clone(),
-                command: zeron_proto::CommandReceipt {
+                command: luna_proto::CommandReceipt {
                     command_id: request.command_id,
                     task_id: request.task_id,
                     intent: "setArchived".into(),
                     payload_hash: "synthetic-archive".into(),
-                    status: zeron_proto::CommandReceiptStatus::Applied,
+                    status: luna_proto::CommandReceiptStatus::Applied,
                     snapshot: self.snapshot.clone(),
                     event_sequence: Some(1),
                     actor_id: "synthetic-luna".into(),
@@ -11515,7 +11511,7 @@ mod tests {
         target_task_id: String,
         target_project_id: String,
         target_environment_id: String,
-        target_snapshot: zeron_proto::TaskCommandSnapshot,
+        target_snapshot: luna_proto::TaskCommandSnapshot,
     }
 
     impl From<&LunaSyntheticArchiveProposal> for FakeLiveIdentity {
@@ -11540,7 +11536,7 @@ mod tests {
         tempfile::TempDir,
         crate::EngineCore,
         String,
-        tokio::sync::mpsc::UnboundedReceiver<zeron_proto::AgentEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<luna_proto::AgentEvent>,
     ) {
         let (root, core, task_id) = managed_codex_wait_fixture();
         let (engine_tx, events) = tokio::sync::mpsc::unbounded_channel();
@@ -11592,7 +11588,7 @@ mod tests {
         source_binding: ProviderBindingKey,
         source_call_id: String,
     ) -> LunaSyntheticArchiveProposal {
-        let snapshot = zeron_proto::TaskCommandSnapshot {
+        let snapshot = luna_proto::TaskCommandSnapshot {
             task_id: "task-a".into(),
             task_revision: 7,
             task_sequence: 12,
@@ -11600,8 +11596,8 @@ mod tests {
             binding_generation: Some(2),
             active_turn_id: None,
         };
-        let request = zeron_proto::CrossTaskControlRequest {
-            action: zeron_proto::CrossTaskControlAction::Archive,
+        let request = luna_proto::CrossTaskControlRequest {
+            action: luna_proto::CrossTaskControlAction::Archive,
             task_id: "task-a".into(),
             project_id: "project-a".into(),
             environment_id: source_environment_id.into(),
@@ -11634,7 +11630,7 @@ mod tests {
         pending: &PendingInputs,
         proposal: LunaSyntheticArchiveProposal,
     ) -> (
-        tokio::sync::oneshot::Receiver<Vec<zeron_proto::UserInputAnswer>>,
+        tokio::sync::oneshot::Receiver<Vec<luna_proto::UserInputAnswer>>,
         tokio::sync::oneshot::Receiver<LunaSyntheticArchiveGrant>,
     ) {
         let (resolver, answer) = tokio::sync::oneshot::channel();
@@ -11657,7 +11653,7 @@ mod tests {
 
     fn fake_archive_backend(proposal: &LunaSyntheticArchiveProposal) -> Arc<FakeArchiveBackend> {
         Arc::new(FakeArchiveBackend {
-            target: zeron_proto::CrossTaskSummary {
+            target: luna_proto::CrossTaskSummary {
                 task_id: "task-a".into(),
                 project_id: Some("project-a".into()),
                 environment_id: proposal.target_environment_id.clone(),
@@ -11677,10 +11673,10 @@ mod tests {
     async fn dispatch_fake_archive_once(
         sessions: &SessionsEngine,
         grant: LunaSyntheticArchiveGrant,
-        attempted: zeron_proto::CrossTaskControlRequest,
+        attempted: luna_proto::CrossTaskControlRequest,
         backend: Arc<FakeArchiveBackend>,
         now_ms: i64,
-    ) -> Result<zeron_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError> {
+    ) -> Result<luna_proto::CrossTaskControlReceipt, crate::cross_task_tools::CrossTaskError> {
         use crate::cross_task_tools::{
             CrossTaskAuthority, CrossTaskControlGrant, CrossTaskError, CrossTaskTools,
         };
@@ -11720,7 +11716,7 @@ mod tests {
             allow_projectless: false,
             granted_scopes: std::collections::HashSet::from(["threads.manage".into()]),
             explicit_user_request: true,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
         };
         let exact_grant = CrossTaskControlGrant {
             caller_task_id: proposal.source_task_id,
@@ -11767,7 +11763,7 @@ mod tests {
                     sessions.respond_luna_local_ui_approval(
                         &task_id,
                         "approved",
-                        zeron_proto::ApprovalDecision::AllowOnce,
+                        luna_proto::ApprovalDecision::AllowOnce,
                     )
                 })
             })
@@ -11803,7 +11799,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             receipt.command.status,
-            zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Applied
         );
         assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
         assert_eq!(backend.readback(&receipt.command.command_id), Some(receipt));
@@ -11811,7 +11807,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "approved",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -11835,7 +11831,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "uncertain",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::AllowedOnce
         );
@@ -11855,7 +11851,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "uncertain",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -11882,13 +11878,13 @@ mod tests {
                 sessions.respond_luna_local_ui_approval(
                     &task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 ),
                 LunaApprovalOutcome::AllowedOnce
             );
             let mut fake_now = crate::now_ms();
             match case {
-                0 => attempted.action = zeron_proto::CrossTaskControlAction::Unarchive,
+                0 => attempted.action = luna_proto::CrossTaskControlAction::Unarchive,
                 1 => attempted.command_id.push_str("-changed"),
                 2 => attempted.project_id = "project-b".into(),
                 3 => lock(&backend.live).source_task_id = "another-caller".into(),
@@ -11941,9 +11937,9 @@ mod tests {
             .pending_inputs
             .clone();
         for (case, decision) in [
-            ("deny", zeron_proto::ApprovalDecision::Deny),
-            ("cancel", zeron_proto::ApprovalDecision::Cancel),
-            ("allow-task", zeron_proto::ApprovalDecision::AllowTask),
+            ("deny", luna_proto::ApprovalDecision::Deny),
+            ("cancel", luna_proto::ApprovalDecision::Cancel),
+            ("allow-task", luna_proto::ApprovalDecision::AllowTask),
         ] {
             let proposal = fake_archive_proposal(&core, &task_id, case);
             let backend = fake_archive_backend(&proposal);
@@ -11964,7 +11960,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "expired-fake",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Expired
         );
@@ -11979,7 +11975,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "replaced-fake",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::Stale
         );
@@ -12004,7 +12000,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "lost-fake",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::RunEnded
         );
@@ -12025,7 +12021,7 @@ mod tests {
                 sessions.respond_luna_local_ui_approval(
                     &task_id,
                     &request_id,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 ),
                 LunaApprovalOutcome::Stale
             );
@@ -12067,7 +12063,7 @@ mod tests {
                             &task_id,
                             HarnessId::Codex,
                             thread,
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic pre-approval rebind",
                         )
                         .unwrap();
@@ -12087,7 +12083,7 @@ mod tests {
                 sessions.respond_luna_local_ui_approval(
                     &task_id,
                     case,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 ),
                 LunaApprovalOutcome::Stale,
                 "{case}"
@@ -12118,7 +12114,7 @@ mod tests {
                 sessions.respond_luna_local_ui_approval(
                     &task_id,
                     case,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 ),
                 LunaApprovalOutcome::AllowedOnce
             );
@@ -12130,7 +12126,7 @@ mod tests {
                             &task_id,
                             HarnessId::Codex,
                             "provider-thread-a",
-                            zeron_proto::BindingOrigin::ContextReset,
+                            luna_proto::BindingOrigin::ContextReset,
                             "synthetic post-approval rebind",
                         )
                         .unwrap();
@@ -12180,7 +12176,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "closed-event-channel",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::RunEnded
         );
@@ -12201,7 +12197,7 @@ mod tests {
             sessions.respond_luna_local_ui_approval(
                 &task_id,
                 "closed-grant-channel",
-                zeron_proto::ApprovalDecision::AllowOnce,
+                luna_proto::ApprovalDecision::AllowOnce,
             ),
             LunaApprovalOutcome::RunEnded
         );
@@ -12254,7 +12250,7 @@ mod tests {
                 sessions.respond_luna_local_ui_approval(
                     &task_id,
                     case,
-                    zeron_proto::ApprovalDecision::AllowOnce,
+                    luna_proto::ApprovalDecision::AllowOnce,
                 ),
                 LunaApprovalOutcome::Stale,
                 "{case}"
@@ -12296,7 +12292,7 @@ mod tests {
             &mut parts,
             &AgentEvent::ToolCall {
                 id: "i".into(),
-                call: zeron_proto::ToolCall::Unknown {
+                call: luna_proto::ToolCall::Unknown {
                     name: "Generate image".into(),
                     input: None,
                 },
@@ -12335,12 +12331,12 @@ mod tests {
             harness: None,
             provider_account_id: None,
             model: Some("grok-4.6".into()),
-            reasoning: Some(zeron_proto::ReasoningLevel::High),
+            reasoning: Some(luna_proto::ReasoningLevel::High),
             model_options: serde_json::Map::new(),
             cwd: "/tmp".into(),
             sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: true,
-            permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_mode: luna_proto::PermissionMode::Ask,
             parent_permission_ceiling: None,
             environment_permission_ceiling: None,
             permission_policy: None,
@@ -12456,7 +12452,7 @@ mod tests {
         assert!(!config.can_route(HarnessId::Grok, &follow_up));
         follow_up.model = initial.model.clone();
 
-        follow_up.reasoning = Some(zeron_proto::ReasoningLevel::Medium);
+        follow_up.reasoning = Some(luna_proto::ReasoningLevel::Medium);
         assert!(!config.can_route(HarnessId::Grok, &follow_up));
         follow_up.reasoning = initial.reasoning;
 
@@ -12468,7 +12464,7 @@ mod tests {
         follow_up.provider_account_id = initial.provider_account_id.clone();
 
         follow_up.model_options.insert(
-            zeron_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
+            luna_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
             "rotated-native-identity".into(),
         );
         assert!(
@@ -12508,7 +12504,7 @@ mod tests {
                 steerable: true,
                 runtime_config: RuntimeConfig::from_request(HarnessId::Codex, &request),
                 steer_tx,
-                interrupt_token: zeron_harness::CancellationToken::new(),
+                interrupt_token: luna_harness::CancellationToken::new(),
                 cancel,
                 hold_recovery_on_interrupt: Arc::new(AtomicBool::new(true)),
                 engine_tx,

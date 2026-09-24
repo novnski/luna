@@ -2,18 +2,18 @@
 //! binary anywhere, `run()` must npm-install the pinned adapter into
 //! `$LUNA_ADAPTERS_DIR`, spawn it via node, and reach SessionStarted (the
 //! full initialize → session/new handshake) — the exact path that used to be
-//! `npx -y` at chat time (zeronsh/comet#95).
+//! `npx -y` at chat time (historical issue #95).
 //!
 //! Ignored: needs network, npm, and the pi CLI on the machine. Run with
-//! `cargo test -p zeron-harness --test managed_install -- --ignored`.
+//! `cargo test -p luna-harness --test managed_install -- --ignored`.
 //!
 //! Single-test binary: it mutates LUNA_ADAPTERS_DIR process-wide.
 
 use futures::StreamExt;
+use luna_harness::{AcpHarness, Harness, RunControls};
+use luna_proto::{AgentEvent, RunRequest};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use zeron_harness::{AcpHarness, Harness, RunControls};
-use zeron_proto::{AgentEvent, RunRequest};
 
 #[tokio::test]
 #[ignore = "network + npm + codex CLI; installs the pinned adapter for real"]
@@ -42,9 +42,9 @@ async fn managed_install_reaches_session_started() {
         reasoning: None,
         model_options: serde_json::Map::new(),
         cwd: std::env::temp_dir().display().to_string(),
-        sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+        sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,

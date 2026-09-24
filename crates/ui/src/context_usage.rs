@@ -4,7 +4,7 @@ use gpui::{
     Context, IntoElement, PathBuilder, Render, SharedString, Window, canvas, div, point,
     prelude::*, px,
 };
-use zeron_proto::{ContextOperationStatus, ContextUsage};
+use luna_proto::{ContextOperationStatus, ContextUsage};
 
 pub fn render(
     usage: Option<ContextUsage>,

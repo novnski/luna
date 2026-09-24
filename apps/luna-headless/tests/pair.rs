@@ -3,12 +3,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tempfile::TempDir;
-use tokio::net::TcpListener;
-use zeron_engine::{
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessId, HarnessRegistry,
 };
-use zeron_rpc::remote_auth::{IssuedPairing, RedeemPairing, RemoteScope};
+use luna_rpc::remote_auth::{IssuedPairing, RedeemPairing, RemoteScope};
+use tempfile::TempDir;
+use tokio::net::TcpListener;
 
 fn accounts(root: &Path) -> AgentAccountsConfig {
     AgentAccountsConfig {
@@ -39,7 +39,7 @@ async fn minimal_binary_issues_one_time_pairing_for_exact_engine() {
     core.set_auth(Auth::new(config));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server = tokio::spawn(zeron_rpc::serve_ws_listener(listener, core.rpc_service()));
+    let server = tokio::spawn(luna_rpc::serve_ws_listener(listener, core.rpc_service()));
 
     let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_luna-headless"))
         .args([
@@ -71,7 +71,7 @@ async fn minimal_binary_issues_one_time_pairing_for_exact_engine() {
         issued.pairing.scopes,
         vec![RemoteScope::EnvironmentRead, RemoteScope::TasksRead]
     );
-    let client = zeron_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let client = luna_rpc::memory_client(core.remote_rpc_service().unwrap());
     let session = client
         .redeem_remote_pairing(RedeemPairing {
             target: issued.target.clone(),
@@ -107,10 +107,10 @@ async fn minimal_binary_issues_one_time_pairing_for_exact_engine() {
         "mismatched pairing credential must not be printed"
     );
     assert!(String::from_utf8_lossy(&wrong.stderr).contains("issued grant revoked"));
-    let local = zeron_rpc::memory_client(core.rpc_service());
-    let pairings: Vec<zeron_rpc::remote_auth::PairingView> = local
+    let local = luna_rpc::memory_client(core.rpc_service());
+    let pairings: Vec<luna_rpc::remote_auth::PairingView> = local
         .call_as(
-            zeron_rpc::methods::LIST_REMOTE_PAIRINGS,
+            luna_rpc::methods::LIST_REMOTE_PAIRINGS,
             serde_json::json!({}),
         )
         .await

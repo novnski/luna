@@ -31,8 +31,8 @@ an owned signed feed exists. The manual steps it automates, for reference
 
 1. Build the universal (or per-arch) binary:
    ```sh
-   cargo build --release -p zeron --target aarch64-apple-darwin
-   cargo build --release -p zeron --target x86_64-apple-darwin
+   cargo build --release -p luna --target aarch64-apple-darwin
+   cargo build --release -p luna --target x86_64-apple-darwin
    lipo -create -output luna \
      target/aarch64-apple-darwin/release/luna \
      target/x86_64-apple-darwin/release/luna

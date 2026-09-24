@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/base"]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1"
+gpui = { path = "../zui/crates/gpui" }
+gpui_macros = { path = "../zui/crates/gpui_macros" }
+gpui_platform = { path = "../zui/crates/gpui_platform", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+raw-window-handle = "0.6.2"
+ropey = { version = "=2.0.0-beta.1", features = ["metric_chars", "metric_lines_lf", "metric_utf16"] }
+schemars = "1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+smol = "2"
+sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+tracing = "0.1.41"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"

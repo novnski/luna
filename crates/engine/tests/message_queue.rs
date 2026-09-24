@@ -13,19 +13,17 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use luna_sync::LocalExecutableKind;
 use sha2::{Digest, Sha256};
-use zeron_sync::LocalExecutableKind;
 
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, QueueClaimMode, QueueDeliveryGate, QueueMessageStatus, QueuedMessage,
     SessionCommandPayload, SessionMessageEntry,
 };
-use zeron_engine::doc_host::{
-    BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome,
-};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_engine::doc_host::{BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome};
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode, ToolCall,
     UserInputQuestion,
 };
@@ -159,14 +157,14 @@ impl Harness for HeldHarness {
                 question: "which one?".into(),
                 options: vec!["a".into(), "b".into()],
                 multi_select: false,
-                approval: self.approves.then(|| zeron_proto::ApprovalRequest {
+                approval: self.approves.then(|| luna_proto::ApprovalRequest {
                     provider_request_id: "approval-1".into(),
                     provider: HarnessId::Mock,
                     turn_id: None,
                     machine_name: "synthetic".into(),
-                    action_kind: zeron_proto::ApprovalActionKind::Command,
+                    action_kind: luna_proto::ApprovalActionKind::Command,
                     summary: "synthetic approval".into(),
-                    requested_scope: zeron_proto::PermissionScope::Workspace,
+                    requested_scope: luna_proto::PermissionScope::Workspace,
                     expires_at_ms: i64::MAX,
                     supports_task_allowance: false,
                 }),
@@ -221,10 +219,10 @@ impl Harness for HeldHarness {
                                     let acceptance = match steer_outcome {
                                         HarnessSteerOutcome::Incorporated
                                         | HarnessSteerOutcome::Accepted => {
-                                            zeron_harness::SteerAcceptance::Accepted
+                                            luna_harness::SteerAcceptance::Accepted
                                         }
                                         HarnessSteerOutcome::Rejected => {
-                                            zeron_harness::SteerAcceptance::Rejected(
+                                            luna_harness::SteerAcceptance::Rejected(
                                                 "synthetic provider rejection".into(),
                                             )
                                         }
@@ -232,7 +230,7 @@ impl Harness for HeldHarness {
                                     let _ = tx.send(acceptance);
                                 }
                                 let event = if steer_outcome == HarnessSteerOutcome::Incorporated
-                                    || steer.delivery == zeron_harness::SteerDelivery::AllowFollowUpTurn
+                                    || steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn
                                 {
                                     AgentEvent::Steered {
                                         assistant_message_id: Some("a-before-steer".into()),
@@ -280,10 +278,10 @@ fn queue_texts(core: &EngineCore) -> Vec<String> {
         .collect()
 }
 
-async fn enqueue_follow_up(client: &zeron_rpc::RpcClient, text: &str, behavior: &str) -> String {
+async fn enqueue_follow_up(client: &luna_rpc::RpcClient, text: &str, behavior: &str) -> String {
     let reply = client
         .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
+            luna_rpc::methods::QUEUE_MESSAGE,
             serde_json::json!({
                 "chatId": CHAT,
                 "text": text,
@@ -296,7 +294,7 @@ async fn enqueue_follow_up(client: &zeron_rpc::RpcClient, text: &str, behavior: 
     reply["id"].as_str().expect("queue id").to_string()
 }
 
-fn held_for(core: &EngineCore, id: &str, reason: zeron_doc::QueueHoldReason) -> bool {
+fn held_for(core: &EngineCore, id: &str, reason: luna_doc::QueueHoldReason) -> bool {
     core.doc_host
         .queued_message(CHAT, id)
         .ok()
@@ -400,10 +398,10 @@ fn assemble_at(path: &std::path::Path, harness: Arc<HeldHarness>) -> EngineCore 
 }
 
 async fn create_chat(core: &EngineCore) {
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
-            zeron_rpc::methods::MUTATE,
+            luna_rpc::methods::MUTATE,
             serde_json::json!({
                 "op": "createChat",
                 "chatId": CHAT,
@@ -611,7 +609,7 @@ async fn restart_marks_an_unresolved_claim_unknown_without_replaying_it() {
             .doc()
             .claim_queued(&id, 1, "missing-receipt", QueueClaimMode::NextTurn, 1)
             .unwrap(),
-        zeron_doc::QueueClaimOutcome::Claimed(_)
+        luna_doc::QueueClaimOutcome::Claimed(_)
     ));
     core.doc_host.flush_all();
     core.shutdown().await;
@@ -659,7 +657,7 @@ async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
             .unwrap()
             .unwrap()
             .status,
-        zeron_proto::CommandReceiptStatus::Applied
+        luna_proto::CommandReceiptStatus::Applied
     );
 
     // Simulate a crash snapshot from the tiny window after the durable
@@ -672,7 +670,7 @@ async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
             text: "accepted once".into(),
             attachments: Vec::new(),
             hold_for_turn_end: true,
-            follow_up_behavior: zeron_proto::FollowUpBehavior::Queue,
+            follow_up_behavior: luna_proto::FollowUpBehavior::Queue,
             hold_reason: None,
             issued_by: core.device_id.clone(),
             issued_at: 1,
@@ -922,7 +920,7 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steer_preference_uses_native_acceptance_and_settles_the_same_row() {
     let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -935,7 +933,7 @@ async fn steer_preference_uses_native_acceptance_and_settles_the_same_row() {
 
     let reply = client
         .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
+            luna_rpc::methods::QUEUE_MESSAGE,
             serde_json::json!({
                 "chatId": CHAT,
                 "text": "hold this",
@@ -981,7 +979,7 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
     let (harness, prompts) = HeldHarness::accepted_only(SteeringMode::StepBoundary);
     let core = assemble_at(&data_dir, harness.clone());
     create_chat(&core).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -1000,7 +998,7 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
 
     let reply = client
         .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
+            luna_rpc::methods::QUEUE_MESSAGE,
             serde_json::json!({
                 "chatId": CHAT,
                 "text": "accepted only",
@@ -1041,7 +1039,7 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
 
     let second_reply = client
         .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
+            luna_rpc::methods::QUEUE_MESSAGE,
             serde_json::json!({
                 "chatId": CHAT,
                 "text": "accepted only",
@@ -1063,7 +1061,7 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
                 .flatten()
                 .is_some_and(|row| {
                     matches!(row.status, QueueMessageStatus::Held)
-                        && row.hold_reason == Some(zeron_doc::QueueHoldReason::SteeringUnavailable)
+                        && row.hold_reason == Some(luna_doc::QueueHoldReason::SteeringUnavailable)
                 })
         },
         "second identical steer to remain honestly held",
@@ -1114,7 +1112,7 @@ async fn accepted_steer_without_incorporation_becomes_unknown_and_never_replays(
     assert!(matches!(second.status, QueueMessageStatus::Held));
     assert_eq!(
         second.hold_reason,
-        Some(zeron_doc::QueueHoldReason::SteeringUnavailable)
+        Some(luna_doc::QueueHoldReason::SteeringUnavailable)
     );
     restarted
         .doc_host
@@ -1141,7 +1139,7 @@ async fn rejected_steer_never_auto_drains_but_explicit_send_and_queue_still_work
     let (harness, prompts) = HeldHarness::rejecting(SteeringMode::StepBoundary);
     let core = assemble_at(&data_dir, harness.clone());
     create_chat(&core).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -1164,7 +1162,7 @@ async fn rejected_steer_never_auto_drains_but_explicit_send_and_queue_still_work
             held_for(
                 &core,
                 &rejected_id,
-                zeron_doc::QueueHoldReason::ProviderRejected,
+                luna_doc::QueueHoldReason::ProviderRejected,
             )
         },
         "the provider-rejected steer to return to Held",
@@ -1276,7 +1274,7 @@ async fn rejected_steer_never_auto_drains_but_explicit_send_and_queue_still_work
             held_for(
                 &core,
                 &persisted_id,
-                zeron_doc::QueueHoldReason::ProviderRejected,
+                luna_doc::QueueHoldReason::ProviderRejected,
             )
         },
         "the restart-check steer to be rejected",
@@ -1308,11 +1306,11 @@ async fn rejected_steer_never_auto_drains_but_explicit_send_and_queue_still_work
         .queued_message(CHAT, &persisted_id)
         .unwrap()
         .expect("rejected Steer survives restart");
-    assert_eq!(row.follow_up_behavior, zeron_proto::FollowUpBehavior::Steer);
+    assert_eq!(row.follow_up_behavior, luna_proto::FollowUpBehavior::Steer);
     assert!(matches!(row.status, QueueMessageStatus::Held));
     assert_eq!(
         row.hold_reason,
-        Some(zeron_doc::QueueHoldReason::ProviderRejected)
+        Some(luna_doc::QueueHoldReason::ProviderRejected)
     );
     restarted
         .doc_host
@@ -1332,7 +1330,7 @@ async fn persistent_done_releases_unconfirmed_steer_for_authorized_next_send() {
     let (harness, prompts) = HeldHarness::accepted_only_persistent(SteeringMode::StepBoundary);
     let core = assemble_at(&tmp.path().join("data"), harness.clone());
     create_chat(&core).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -1351,7 +1349,7 @@ async fn persistent_done_releases_unconfirmed_steer_for_authorized_next_send() {
 
     let first = client
         .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
+            luna_rpc::methods::QUEUE_MESSAGE,
             serde_json::json!({
                 "chatId": CHAT,
                 "text": "accepted on persistent stream",
@@ -1399,7 +1397,7 @@ async fn persistent_done_releases_unconfirmed_steer_for_authorized_next_send() {
                 "authorized after persistent Done",
                 Vec::new(),
                 true,
-                zeron_proto::FollowUpBehavior::Queue,
+                luna_proto::FollowUpBehavior::Queue,
                 None,
             )
             .expect("queue authorized next message")
@@ -1465,7 +1463,7 @@ async fn steer_now_leaves_the_row_when_the_agent_cannot_steer_mid_turn() {
             "still queued",
             Vec::new(),
             true,
-            zeron_proto::FollowUpBehavior::Steer,
+            luna_proto::FollowUpBehavior::Steer,
             None,
         )
         .expect("queue held message");
@@ -1478,7 +1476,7 @@ async fn steer_now_leaves_the_row_when_the_agent_cannot_steer_mid_turn() {
             .unwrap()
             .unwrap()
             .hold_reason,
-        Some(zeron_doc::QueueHoldReason::SteeringUnavailable)
+        Some(luna_doc::QueueHoldReason::SteeringUnavailable)
     );
 
     harness.finish.send(()).unwrap();
@@ -1519,7 +1517,7 @@ async fn stale_steer_remains_queued_when_the_previous_turn_is_already_idle() {
             "after cancel",
             Vec::new(),
             true,
-            zeron_proto::FollowUpBehavior::Steer,
+            luna_proto::FollowUpBehavior::Steer,
             None,
         )
         .expect("queue held message");
@@ -1549,7 +1547,7 @@ async fn stale_steer_remains_queued_when_the_previous_turn_is_already_idle() {
             .unwrap()
             .unwrap()
             .hold_reason,
-        Some(zeron_doc::QueueHoldReason::StaleTurn)
+        Some(luna_doc::QueueHoldReason::StaleTurn)
     );
 
     let _ = harness.finish.send(());
@@ -1580,7 +1578,7 @@ async fn a_message_with_attachments_holds_even_for_a_steerable_agent() {
             "with a file",
             vec!["att-1".into()],
             true,
-            zeron_proto::FollowUpBehavior::Steer,
+            luna_proto::FollowUpBehavior::Steer,
             None,
         )
         .expect("queue attachment message");
@@ -1603,7 +1601,7 @@ async fn a_message_with_attachments_holds_even_for_a_steerable_agent() {
             .unwrap()
             .unwrap()
             .hold_reason,
-        Some(zeron_doc::QueueHoldReason::AttachmentsUnsupported)
+        Some(luna_doc::QueueHoldReason::AttachmentsUnsupported)
     );
     assert!(
         user_messages(&core)
@@ -1869,7 +1867,7 @@ async fn acknowledged_removal_cannot_materialize_after_turn_end() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_rpc_reorders_and_streams() {
     let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -1882,7 +1880,7 @@ async fn queue_rpc_reorders_and_streams() {
 
     let mut rx = client
         .subscribe(
-            zeron_rpc::methods::WATCH_QUEUE,
+            luna_rpc::methods::WATCH_QUEUE,
             serde_json::json!({ "chatId": CHAT }),
         )
         .await
@@ -1900,7 +1898,7 @@ async fn queue_rpc_reorders_and_streams() {
     for text in ["a", "b", "c"] {
         client
             .call(
-                zeron_rpc::methods::QUEUE_MESSAGE,
+                luna_rpc::methods::QUEUE_MESSAGE,
                 serde_json::json!({ "chatId": CHAT, "text": text }),
             )
             .await
@@ -1921,7 +1919,7 @@ async fn queue_rpc_reorders_and_streams() {
         .clone();
     client
         .call(
-            zeron_rpc::methods::MOVE_QUEUED_MESSAGE,
+            luna_rpc::methods::MOVE_QUEUED_MESSAGE,
             serde_json::json!({ "chatId": CHAT, "id": last_id, "toIndex": 0 }),
         )
         .await
@@ -1930,7 +1928,7 @@ async fn queue_rpc_reorders_and_streams() {
 
     client
         .call(
-            zeron_rpc::methods::REMOVE_QUEUED_MESSAGE,
+            luna_rpc::methods::REMOVE_QUEUED_MESSAGE,
             serde_json::json!({ "chatId": CHAT, "id": last_id }),
         )
         .await
@@ -2045,7 +2043,7 @@ async fn a_message_holds_while_the_agent_waits_on_a_question() {
         || {
             core.sessions
                 .session_status(CHAT)
-                .is_some_and(|s| s.status == zeron_proto::SessionStatus::AwaitingInput)
+                .is_some_and(|s| s.status == luna_proto::SessionStatus::AwaitingInput)
         },
         "the agent to park on its question",
     )
@@ -2059,7 +2057,7 @@ async fn a_message_holds_while_the_agent_waits_on_a_question() {
             "follow-up",
             Vec::new(),
             true,
-            zeron_proto::FollowUpBehavior::Steer,
+            luna_proto::FollowUpBehavior::Steer,
             None,
         )
         .expect("queue follow-up");
@@ -2081,7 +2079,7 @@ async fn a_message_holds_while_the_agent_waits_on_a_question() {
             .unwrap()
             .unwrap()
             .hold_reason,
-        Some(zeron_doc::QueueHoldReason::AwaitingInput)
+        Some(luna_doc::QueueHoldReason::AwaitingInput)
     );
 
     harness.finish.send(()).unwrap();
@@ -2105,7 +2103,7 @@ async fn a_steer_request_stays_queued_while_approval_is_pending() {
     wait_for(
         || {
             core.sessions.session_status(CHAT).is_some_and(|session| {
-                session.status == zeron_proto::SessionStatus::AwaitingApproval
+                session.status == luna_proto::SessionStatus::AwaitingApproval
             })
         },
         "the agent to park on approval",
@@ -2120,7 +2118,7 @@ async fn a_steer_request_stays_queued_while_approval_is_pending() {
             "after approval",
             Vec::new(),
             true,
-            zeron_proto::FollowUpBehavior::Steer,
+            luna_proto::FollowUpBehavior::Steer,
             None,
         )
         .unwrap();
@@ -2131,7 +2129,7 @@ async fn a_steer_request_stays_queued_while_approval_is_pending() {
             .unwrap()
             .unwrap()
             .hold_reason,
-        Some(zeron_doc::QueueHoldReason::AwaitingApproval)
+        Some(luna_doc::QueueHoldReason::AwaitingApproval)
     );
     assert!(
         !prompts
@@ -2369,10 +2367,10 @@ async fn protected_edit_rpc_round_trips_its_camel_case_protocol() {
         .doc_host
         .queue_message(CHAT, "rpc edit", Vec::new())
         .expect("queue row");
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let begin = client
         .call(
-            zeron_rpc::methods::BEGIN_QUEUED_MESSAGE_EDIT,
+            luna_rpc::methods::BEGIN_QUEUED_MESSAGE_EDIT,
             serde_json::json!({
                 "chatId": CHAT,
                 "id": id,
@@ -2387,7 +2385,7 @@ async fn protected_edit_rpc_round_trips_its_camel_case_protocol() {
 
     let finish = client
         .call(
-            zeron_rpc::methods::FINISH_QUEUED_MESSAGE_EDIT,
+            luna_rpc::methods::FINISH_QUEUED_MESSAGE_EDIT,
             serde_json::json!({
                 "chatId": CHAT,
                 "id": id,
@@ -2531,15 +2529,15 @@ async fn failed_queue_dispatch_stays_paused_until_explicit_retry() {
 async fn queued_turn_uses_current_config_at_turn_end_and_send_now() {
     for send_now in [false, true] {
         let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
-        let mut config = zeron_proto::ChatConfig {
+        let mut config = luna_proto::ChatConfig {
             harness: HarnessId::Mock,
             provider_account_id: None,
             model: Some("old-model".into()),
             reasoning: Some(ReasoningLevel::Medium),
             model_options: Default::default(),
-            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
-            permission_mode: zeron_proto::PermissionMode::Ask,
-            effective_permission_mode: zeron_proto::PermissionMode::Ask,
+            sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
+            permission_mode: luna_proto::PermissionMode::Ask,
+            effective_permission_mode: luna_proto::PermissionMode::Ask,
             permission_ceiling_source: None,
             permission_degradation_reason: None,
             permission_audit: Vec::new(),

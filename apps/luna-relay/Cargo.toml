@@ -6,8 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-zeron-rpc.workspace = true
-zeron-proto.workspace = true
+luna-rpc.workspace = true
+luna-proto.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 futures.workspace = true

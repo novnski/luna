@@ -26,16 +26,16 @@ use gpui::{
 
 use crate::composer::ComposerInput;
 use futures::{StreamExt, stream};
+use luna_engine::registry::TitleSettings;
+use luna_engine::registry::{HarnessDescriptor, descriptor_enabled};
 use std::time::Duration;
-use zeron_engine::registry::TitleSettings;
-use zeron_engine::registry::{HarnessDescriptor, descriptor_enabled};
 
-use zeron_proto::Model;
-use zeron_proto::{
+use luna_proto::Model;
+use luna_proto::{
     AgentAccountsSnapshot, AgentLoginPoll, AgentLoginStart, AgentLoginStatus, HarnessId,
     InstructionSettingsView, IntegrationInventoryView, IntegrationKind, RuntimeContractView,
 };
-use zeron_rpc::methods;
+use luna_rpc::methods;
 
 use crate::pickers::visible_harnesses;
 use crate::popover::{self, Loadable};
@@ -949,7 +949,7 @@ impl HarnessesPage {
                             .filter(|h| {
                                 descriptor_enabled(h)
                                     && h.installed
-                                    && zeron_harness::supports_titles(h.id)
+                                    && luna_harness::supports_titles(h.id)
                                     && h.id != HarnessId::Mock
                             })
                             .map(|h| {
@@ -1828,7 +1828,7 @@ mod tests {
     use crate::state::AppState;
     use crate::theme::Theme;
     use gpui::AppContext;
-    use zeron_proto::{InstructionSettingsView, RuntimeContractView, RuntimeDelivery, Space};
+    use luna_proto::{InstructionSettingsView, RuntimeContractView, RuntimeDelivery, Space};
 
     fn project(id: &str) -> Space {
         Space {

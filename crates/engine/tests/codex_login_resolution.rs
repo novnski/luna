@@ -8,8 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
-use zeron_engine::{AgentAccounts, AgentAccountsConfig};
-use zeron_proto::{AgentLoginMode, HarnessId};
+use luna_engine::{AgentAccounts, AgentAccountsConfig};
+use luna_proto::{AgentLoginMode, HarnessId};
 
 fn test_accounts(root: &Path) -> AgentAccounts {
     let config = AgentAccountsConfig {
@@ -60,7 +60,7 @@ async fn login_child() {
     let Ok(expected) = std::env::var("CODEX_LOGIN_EXPECTED") else {
         return;
     };
-    let root = std::env::temp_dir().join(format!("zeron-codex-login-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("luna-codex-login-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let native_auth = root.join("codex/auth.json");
     if expected == "true" {
@@ -80,7 +80,7 @@ async fn login_child() {
         let poll = accounts.poll_login(&start.login_id).await.unwrap();
         assert_eq!(
             poll.status,
-            zeron_proto::AgentLoginStatus::Pending,
+            luna_proto::AgentLoginStatus::Pending,
             "an unchanged existing native login is not completion of the new flow"
         );
         accounts.cancel_login(&start.login_id);
@@ -120,7 +120,7 @@ fn probe(path: &Path, override_path: Option<&Path>, expected: bool) {
     command
         .env("PATH", path)
         .env("CODEX_LOGIN_EXPECTED", expected.to_string())
-        .env("ZERON_NO_LOGIN_SHELL", "1");
+        .env("LUNA_NO_LOGIN_SHELL", "1");
     if let Some(path) = override_path {
         command.env("CODEX_EXECUTABLE", path);
     }

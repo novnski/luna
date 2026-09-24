@@ -1,5 +1,5 @@
 [package]
-name = "zeron-ui"
+name = "luna-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -63,15 +63,15 @@ required-features = ["project-palette-fixture"]
 
 [dependencies]
 url = "2"
-zeron-proto.workspace = true
+luna-proto.workspace = true
 similar.workspace = true
-zeron-doc.workspace = true
-zeron-engine.workspace = true
-zeron-harness.workspace = true
-zeron-rpc.workspace = true
-zeron-update.workspace = true
-zeron-syntax.workspace = true
-zeron-theme.workspace = true
+luna-doc.workspace = true
+luna-engine.workspace = true
+luna-harness.workspace = true
+luna-rpc.workspace = true
+luna-update.workspace = true
+luna-syntax.workspace = true
+luna-theme.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui_tokio.workspace = true

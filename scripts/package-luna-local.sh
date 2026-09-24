@@ -33,7 +33,7 @@ if [[ -e "$candidate" ]]; then
 fi
 
 # Ignore caller-provided target and signing/notary settings for this local candidate.
-env -u CARGO_TARGET_DIR CARGO_INCREMENTAL=0 cargo build --locked --release -p zeron
+env -u CARGO_TARGET_DIR CARGO_INCREMENTAL=0 cargo build --locked --release -p luna
 stage="$(mktemp -d "$out/.stage.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 app="$stage/LUNA.app"

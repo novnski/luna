@@ -9,16 +9,15 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use tokio::sync::Notify;
-use zeron_doc::{
+use luna_doc::{
     MessageRole, QueueClaimMode, QueueDeliveryGate, QueueHoldReason, QueueMessageStatus,
 };
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::{
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_harness::{
     ContextCompactRequest, Harness, HarnessError, ProviderForkProgress,
     ProviderForkProgressReporter, RunControls,
 };
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, BindingOrigin, COMPOSER_DRAFT_VERSION, ChatConfig, CommandReasonCode,
     CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftRead, ContextControlState,
     ContextHandoff, ContextHandoffKind, ContextOperationStatus, DoneStatus, DraftContext,
@@ -26,7 +25,8 @@ use zeron_proto::{
     ProviderForkCapability, ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest,
     SandboxLevel, SteeringMode, TaskCommandRead,
 };
-use zeron_rpc::{RpcClient, methods};
+use luna_rpc::{RpcClient, methods};
+use tokio::sync::Notify;
 
 struct CountingHarness {
     runs: Arc<AtomicUsize>,
@@ -94,11 +94,11 @@ impl Harness for HistoryHarness {
         request: ProviderForkRequest,
     ) -> Result<ProviderForkResult, HarnessError> {
         let source_checkpoint = match &request.boundary {
-            zeron_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id }
-            | zeron_proto::ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
+            luna_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id }
+            | luna_proto::ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
                 checkpoint_id.clone()
             }
-            zeron_proto::ProviderForkBoundary::Tip => {
+            luna_proto::ProviderForkBoundary::Tip => {
                 if request.source_session_id == "synthetic-history-source" {
                     "provider-message-1".into()
                 } else {
@@ -342,7 +342,7 @@ impl Harness for CountingHarness {
                             match steer {
                                 Some(mut steer) => {
                                     if let Some(tx) = steer.acceptance.take() {
-                                        let _ = tx.send(zeron_harness::SteerAcceptance::Accepted);
+                                        let _ = tx.send(luna_harness::SteerAcceptance::Accepted);
                                     }
                                 }
                                 None => break DoneStatus::Completed,
@@ -889,7 +889,7 @@ async fn steer_queue_case(
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble_with_steering(root.path(), runs, true, steering);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
 
     let run = execute(
@@ -937,7 +937,7 @@ async fn steer_queue_case(
             "steer this row",
             attachments,
             true,
-            zeron_proto::FollowUpBehavior::Steer,
+            luna_proto::FollowUpBehavior::Steer,
             None,
         )
         .unwrap();
@@ -989,7 +989,7 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     let task_id = uuid::Uuid::new_v4().to_string();
     let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let initial = snapshot(&client, &task_id).await;
     let create = envelope(
         "atomic-create-lifecycle",
@@ -1038,7 +1038,7 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     tokio::task::yield_now().await;
 
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     assert!(core.workspace.chat(&task_id).unwrap().is_none());
     assert!(core.task_identity.view(&task_id).is_none());
     let created = execute(&client, create).await;
@@ -1053,13 +1053,13 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     std::fs::create_dir_all(core.uploads.dir()).unwrap();
     std::fs::write(&blob, b"synthetic").unwrap();
     let mut local_draft = composer_draft(&task_id, "unsent fixture");
-    local_draft.attachments.push(zeron_proto::DraftBlob {
+    local_draft.attachments.push(luna_proto::DraftBlob {
         attachment_id: "l18-private-fixture".into(),
         name: "l18-private-fixture.png".into(),
         path: Some(blob.to_string_lossy().to_string()),
         sha256: None,
         size: Some(9),
-        state: zeron_proto::DraftBlobState::Saved,
+        state: luna_proto::DraftBlobState::Saved,
         error: None,
     });
     core.store
@@ -1068,7 +1068,7 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     core.store
         .prepare_task_cleanup(&core.device_id, &task_id, core.cleanup_boot_id_for_tests())
         .unwrap();
-    let second_service = zeron_rpc::memory_client(core.rpc_service());
+    let second_service = luna_rpc::memory_client(core.rpc_service());
     assert_eq!(core.cleanup_worker_count_for_tests(), 1);
     assert_eq!(
         core.store.task_cleanup_state(&task_id).unwrap().unwrap().0,
@@ -1125,7 +1125,7 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     tokio::task::yield_now().await;
 
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     assert!(core.workspace.chat(&task_id).unwrap().is_some());
     assert!(!core.task_identity.view(&task_id).unwrap().task.tombstoned);
     assert!(snapshot_row_exists(&db_path, &task_id));
@@ -1164,7 +1164,7 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     drop(core);
     tokio::task::yield_now().await;
     let final_core = assemble(root.path(), runs, false);
-    let final_client = zeron_rpc::memory_client(final_core.rpc_service());
+    let final_client = luna_rpc::memory_client(final_core.rpc_service());
     assert!(final_core.workspace.chat(&task_id).unwrap().is_none());
     assert!(
         final_core
@@ -1220,12 +1220,12 @@ async fn project_delete_requires_exact_children_and_preserves_workspace_files() 
             false,
         )
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task_in_space(&client, "delete-a", "project-a", &project).await;
     create_task_in_space(&client, "keep-b", "project-b", &unrelated).await;
     core.workspace.set_chat_archived("delete-a", true).unwrap();
     core.store
-        .save_activity_project_policy(&zeron_proto::HistoryProjectPolicy {
+        .save_activity_project_policy(&luna_proto::HistoryProjectPolicy {
             project_id: "project-a".into(),
             excluded_path_prefixes: vec!["private".into()],
             excluded_terms: Vec::new(),
@@ -1303,18 +1303,18 @@ async fn project_cleanup_failure_resumes_from_durable_child_list() {
             false,
         )
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task_in_space(&client, "recover-project-task", "recover-project", &project).await;
     let candidate = core.uploads.dir().join("project-retry.png");
     std::fs::create_dir_all(&candidate).unwrap();
     let mut draft = composer_draft("recover-project-task", "unsent");
-    draft.attachments.push(zeron_proto::DraftBlob {
+    draft.attachments.push(luna_proto::DraftBlob {
         attachment_id: "project-retry".into(),
         name: "project-retry.png".into(),
         path: Some(candidate.to_string_lossy().to_string()),
         sha256: None,
         size: None,
-        state: zeron_proto::DraftBlobState::Saved,
+        state: luna_proto::DraftBlobState::Saved,
         error: None,
     });
     core.store
@@ -1366,7 +1366,7 @@ async fn project_cleanup_failure_resumes_from_durable_child_list() {
         reopened.uploads.dir(),
         candidate
     );
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let completed: serde_json::Value = client
         .call_as(
             methods::GET_PROJECT_CLEANUP,
@@ -1398,7 +1398,7 @@ async fn project_recovery_waits_for_durable_registry_delete() {
             false,
         )
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task_in_space(&client, &task_id, "flush-failure-project", &project).await;
     assert!(core.task_identity.view(&task_id).is_some());
     let handle = core.doc_host.open(&task_id).unwrap();
@@ -1409,13 +1409,13 @@ async fn project_recovery_waits_for_durable_registry_delete() {
     std::fs::create_dir_all(core.uploads.dir()).unwrap();
     std::fs::write(&blob, b"synthetic").unwrap();
     let mut draft = composer_draft(&task_id, "keep until durable");
-    draft.attachments.push(zeron_proto::DraftBlob {
+    draft.attachments.push(luna_proto::DraftBlob {
         attachment_id: "registry-failure-fixture".into(),
         name: "registry-failure-fixture.png".into(),
         path: Some(blob.to_string_lossy().to_string()),
         sha256: None,
         size: Some(9),
-        state: zeron_proto::DraftBlobState::Saved,
+        state: luna_proto::DraftBlobState::Saved,
         error: None,
     });
     core.store
@@ -1462,7 +1462,7 @@ async fn project_recovery_waits_for_durable_registry_delete() {
     assert!(snapshot_row_exists(&db_path, &task_id));
     assert!(blob.exists());
     let persisted = core.store.load_snapshot("registry1").unwrap().unwrap();
-    let persisted = zeron_doc::RegistryDoc::from_bytes(&persisted, &core.device_id).unwrap();
+    let persisted = luna_doc::RegistryDoc::from_bytes(&persisted, &core.device_id).unwrap();
     assert!(persisted.space("flush-failure-project").unwrap().is_some());
     assert!(persisted.chat(&task_id).unwrap().is_some());
 
@@ -1481,7 +1481,7 @@ async fn project_recovery_waits_for_durable_registry_delete() {
         .unwrap();
     assert_eq!(status["state"], "completed", "{status}");
     let persisted = core.store.load_snapshot("registry1").unwrap().unwrap();
-    let persisted = zeron_doc::RegistryDoc::from_bytes(&persisted, &core.device_id).unwrap();
+    let persisted = luna_doc::RegistryDoc::from_bytes(&persisted, &core.device_id).unwrap();
     assert!(persisted.space("flush-failure-project").unwrap().is_none());
     assert!(persisted.chat(&task_id).unwrap().is_none());
     assert!(core.task_identity.view(&task_id).unwrap().task.tombstoned);
@@ -1515,7 +1515,7 @@ async fn project_recovery_waits_for_durable_registry_delete() {
 async fn deletion_settles_a_held_synthetic_run_before_tombstoning() {
     let root = tempfile::tempdir().unwrap();
     let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), true);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, "held-delete", &core.device_id).await;
     let start = execute(
         &client,
@@ -1562,18 +1562,18 @@ async fn deletion_cleanup_failure_is_reported_and_resumes_after_restart() {
     let root = tempfile::tempdir().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, "retry-delete", &core.device_id).await;
     let candidate = core.uploads.dir().join("retry-fixture.png");
     std::fs::create_dir_all(&candidate).unwrap(); // cannot be unlinked as a regular blob
     let mut draft = composer_draft("retry-delete", "unsent fixture");
-    draft.attachments.push(zeron_proto::DraftBlob {
+    draft.attachments.push(luna_proto::DraftBlob {
         attachment_id: "retry-fixture".into(),
         name: "retry-fixture.png".into(),
         path: Some(candidate.to_string_lossy().to_string()),
         sha256: None,
         size: None,
-        state: zeron_proto::DraftBlobState::Saved,
+        state: luna_proto::DraftBlobState::Saved,
         error: None,
     });
     core.store
@@ -1611,7 +1611,7 @@ async fn deletion_cleanup_failure_is_reported_and_resumes_after_restart() {
     std::fs::write(&candidate, b"synthetic").unwrap();
 
     let reopened = assemble(root.path(), runs, false);
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let completed: serde_json::Value = client
         .call_as(
             methods::GET_TASK_CLEANUP,
@@ -1636,19 +1636,19 @@ async fn abandoned_task_preparation_reopens_drafts_without_deleting_data() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, &task_id, &core.device_id).await;
     let blob = core.uploads.dir().join("abandoned-preparation.png");
     std::fs::create_dir_all(core.uploads.dir()).unwrap();
     std::fs::write(&blob, b"synthetic").unwrap();
     let mut draft = composer_draft(&task_id, "before crash");
-    draft.attachments.push(zeron_proto::DraftBlob {
+    draft.attachments.push(luna_proto::DraftBlob {
         attachment_id: "abandoned-preparation".into(),
         name: "abandoned-preparation.png".into(),
         path: Some(blob.to_string_lossy().to_string()),
         sha256: None,
         size: Some(9),
-        state: zeron_proto::DraftBlobState::Saved,
+        state: luna_proto::DraftBlobState::Saved,
         error: None,
     });
     core.store
@@ -1662,7 +1662,7 @@ async fn abandoned_task_preparation_reopens_drafts_without_deleting_data() {
     tokio::task::yield_now().await;
 
     let reopened = assemble(root.path(), runs, false);
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     assert!(reopened.workspace.chat(&task_id).unwrap().is_some());
     assert!(
         !reopened
@@ -1718,7 +1718,7 @@ async fn stale_project_preparation_never_deletes_a_moved_survivor() {
             true,
         )
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task_in_space(&client, &task_id, "old-project", &nested).await;
     assert!(core.task_identity.view(&task_id).is_some());
     let handle = core.doc_host.open(&task_id).unwrap();
@@ -1728,13 +1728,13 @@ async fn stale_project_preparation_never_deletes_a_moved_survivor() {
     std::fs::create_dir_all(core.uploads.dir()).unwrap();
     std::fs::write(&blob, b"synthetic").unwrap();
     let mut draft = composer_draft(&task_id, "keep me");
-    draft.attachments.push(zeron_proto::DraftBlob {
+    draft.attachments.push(luna_proto::DraftBlob {
         attachment_id: "moved-survivor".into(),
         name: "moved-survivor.png".into(),
         path: Some(blob.to_string_lossy().to_string()),
         sha256: None,
         size: Some(9),
-        state: zeron_proto::DraftBlobState::Saved,
+        state: luna_proto::DraftBlobState::Saved,
         error: None,
     });
     core.store
@@ -1773,7 +1773,7 @@ async fn stale_project_preparation_never_deletes_a_moved_survivor() {
     tokio::task::yield_now().await;
 
     let reopened = assemble(root.path(), runs, false);
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let survivor = reopened.workspace.chat(&task_id).unwrap().unwrap();
     assert_eq!(survivor.space_id.as_deref(), Some("new-project"));
     assert!(
@@ -1808,8 +1808,8 @@ async fn cleanup_worker_advances_beyond_one_batch_without_touching_live_tasks() 
             .prepare_task_cleanup(&core.device_id, &task, "prior-boot")
             .unwrap();
     }
-    let _first = zeron_rpc::memory_client(core.rpc_service());
-    let _second = zeron_rpc::memory_client(core.rpc_service());
+    let _first = luna_rpc::memory_client(core.rpc_service());
+    let _second = luna_rpc::memory_client(core.rpc_service());
     assert_eq!(core.cleanup_worker_count_for_tests(), 1);
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -1838,7 +1838,7 @@ async fn local_projection_rolls_back_with_terminal_receipt_failure_and_recovers_
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
     let before = snapshot(&client, &task_id).await;
     assert!(
@@ -1916,7 +1916,7 @@ async fn local_projection_rolls_back_with_terminal_receipt_failure_and_recovers_
     drop(core);
     tokio::task::yield_now().await;
     let reopened = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     assert_eq!(
         reopened.workspace.chat(&task_id).unwrap().unwrap().title,
         None,
@@ -1958,7 +1958,7 @@ async fn local_projection_rolls_back_with_terminal_receipt_failure_and_recovers_
     drop(reopened);
 
     let final_core = assemble(root.path(), runs, false);
-    let final_client = zeron_rpc::memory_client(final_core.rpc_service());
+    let final_client = luna_rpc::memory_client(final_core.rpc_service());
     assert_eq!(
         final_core
             .workspace
@@ -1995,8 +1995,8 @@ async fn duplicate_send_survives_two_clients_response_loss_and_restart() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), false);
-    let client_a = zeron_rpc::memory_client(core.rpc_service());
-    let client_b = zeron_rpc::memory_client(core.rpc_service());
+    let client_a = luna_rpc::memory_client(core.rpc_service());
+    let client_b = luna_rpc::memory_client(core.rpc_service());
     create_task(&client_a, &task_id, &core.device_id).await;
     core.workspace.rename_chat(&task_id, "Pre-titled").unwrap();
     let before = snapshot(&client_a, &task_id).await;
@@ -2095,7 +2095,7 @@ async fn duplicate_send_survives_two_clients_response_loss_and_restart() {
     drop(client_b);
     drop(core);
     let reopened = assemble(root.path(), runs.clone(), false);
-    let restarted_client = zeron_rpc::memory_client(reopened.rpc_service());
+    let restarted_client = luna_rpc::memory_client(reopened.rpc_service());
     let after_restart = execute(&restarted_client, command).await;
     assert_eq!(after_restart, applied);
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2109,8 +2109,8 @@ async fn durable_queue_commands_dedupe_and_revision_fence_edit_remove() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs, false);
-    let client_a = zeron_rpc::memory_client(core.rpc_service());
-    let client_b = zeron_rpc::memory_client(core.rpc_service());
+    let client_a = luna_rpc::memory_client(core.rpc_service());
+    let client_b = luna_rpc::memory_client(core.rpc_service());
     create_task(&client_a, &task_id, &core.device_id).await;
     core.doc_host.open(&task_id).unwrap();
     core.doc_host.pause_all_queues();
@@ -2320,7 +2320,7 @@ async fn failed_queue_snapshot_never_applies_or_clears_the_draft_and_retry_reope
     let message_id = "durable-enqueue-row";
     let failed_command_id = "durable-enqueue-failed";
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
     core.doc_host.open(&task_id).unwrap();
     core.doc_host.pause_all_queues();
@@ -2404,7 +2404,7 @@ async fn failed_queue_snapshot_never_applies_or_clears_the_draft_and_retry_reope
     drop(core);
 
     let reopened = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     reopened.doc_host.open(&task_id).unwrap();
     reopened.doc_host.pause_all_queues();
     assert!(
@@ -2495,7 +2495,7 @@ async fn failed_edit_and_remove_projections_stay_absent_after_abrupt_reopen() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
     core.doc_host.open(&task_id).unwrap();
     core.doc_host.pause_all_queues();
@@ -2584,7 +2584,7 @@ async fn failed_edit_and_remove_projections_stay_absent_after_abrupt_reopen() {
     drop(core);
 
     let reopened = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let row = reopened
         .doc_host
         .queued_message(&task_id, "projection-failure-row")
@@ -2666,7 +2666,7 @@ async fn failed_durable_claim_never_reaches_the_provider_and_reopens_held() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), true);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
 
     let run = execute(
@@ -2745,7 +2745,7 @@ async fn failed_durable_claim_never_reaches_the_provider_and_reopens_held() {
         .queued_message(&task_id, "claim-failure-row")
         .unwrap()
         .unwrap();
-    assert!(matches!(row.status, zeron_doc::QueueMessageStatus::Held));
+    assert!(matches!(row.status, luna_doc::QueueMessageStatus::Held));
 
     {
         let db = rusqlite::Connection::open(&db_path).unwrap();
@@ -2762,7 +2762,7 @@ async fn failed_durable_claim_never_reaches_the_provider_and_reopens_held() {
         .queued_message(&task_id, "claim-failure-row")
         .unwrap()
         .unwrap();
-    assert!(matches!(row.status, zeron_doc::QueueMessageStatus::Held));
+    assert!(matches!(row.status, luna_doc::QueueMessageStatus::Held));
     assert_eq!(runs.load(Ordering::SeqCst), 1);
     reopened.shutdown().await;
 }
@@ -2775,7 +2775,7 @@ async fn failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_re
     let command_id = "correlation-storage-failure";
     let message_id = "correlation-storage-row";
     let core = assemble(root.path(), runs.clone(), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
     core.doc_host.open(&task_id).unwrap();
     core.doc_host.pause_all_queues();
@@ -2828,7 +2828,7 @@ async fn failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_re
             None,
         )
         .unwrap();
-    assert_eq!(begin.kind, zeron_sync::TaskCommandBeginKind::Accepted);
+    assert_eq!(begin.kind, luna_sync::TaskCommandBeginKind::Accepted);
     core.doc_host
         .set_task_command_correlation(command_id, message_id)
         .unwrap();
@@ -2838,7 +2838,7 @@ async fn failed_correlation_commit_keeps_receipt_pending_and_claim_visible_on_re
             .doc()
             .claim_queued(message_id, 1, command_id, QueueClaimMode::SendNow, now)
             .unwrap(),
-        zeron_doc::QueueClaimOutcome::Claimed(_)
+        luna_doc::QueueClaimOutcome::Claimed(_)
     ));
     core.doc_host.flush_all();
 
@@ -2941,7 +2941,7 @@ async fn accepted_stop_fences_send_now_and_holds_the_queue() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), true);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
     core.workspace.rename_chat(&task_id, "Pre-titled").unwrap();
     let before_run = snapshot(&client, &task_id).await;
@@ -3028,7 +3028,7 @@ async fn accepted_stop_fences_send_now_and_holds_the_queue() {
         .queued_message(&task_id, "stop-race-queued")
         .unwrap()
         .expect("stop holds the pending queue row");
-    assert!(matches!(row.status, zeron_doc::QueueMessageStatus::Held));
+    assert!(matches!(row.status, luna_doc::QueueMessageStatus::Held));
     assert_eq!(runs.load(Ordering::SeqCst), 1);
     core.shutdown().await;
 }
@@ -3039,7 +3039,7 @@ async fn revision_binding_turn_and_lifecycle_fences_are_visible() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs, true);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
     core.workspace.rename_chat(&task_id, "Pre-titled").unwrap();
     let before = snapshot(&client, &task_id).await;
@@ -3238,7 +3238,7 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
     let runs = Arc::new(AtomicUsize::new(0));
     let task_ids = ["org-a", "org-b", "org-c"];
     let core = assemble(root.path(), runs, false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     for task_id in task_ids {
         let receipt = execute(
             &client,
@@ -3299,7 +3299,7 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
 
     let mut pinned = core.workspace.read_chats().unwrap();
     pinned.sort_by(|left, right| {
-        zeron_proto::compare_pin_order(
+        luna_proto::compare_pin_order(
             left.pinned_order.as_deref().expect("filtered pin key"),
             right.pinned_order.as_deref().expect("filtered pin key"),
         )
@@ -3388,7 +3388,7 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
         .filter(|chat| chat.pinned_order.is_some())
         .collect();
     persisted_pins.sort_by(|left, right| {
-        zeron_proto::compare_pin_order(
+        luna_proto::compare_pin_order(
             left.pinned_order.as_deref().unwrap(),
             right.pinned_order.as_deref().unwrap(),
         )
@@ -3407,7 +3407,7 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
 async fn dense_pin_insertion_changes_only_requested_tasks_and_rejects_stale_neighbors() {
     let root = tempfile::tempdir().unwrap();
     let core = assemble(root.path(), Arc::new(AtomicUsize::new(0)), false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     for task_id in ["pin-left", "pin-right"] {
         create_task(&client, task_id, &core.device_id).await;
         let receipt = execute(
@@ -3616,7 +3616,7 @@ async fn same_workspace_project_move_is_atomic_and_preserves_task_state() {
             true,
         )
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task_in_space(&client, "move-task", "source-project", &nested).await;
     core.workspace
         .rename_chat("move-task", "Keep this task")
@@ -3745,7 +3745,7 @@ async fn exact_non_git_workspace_move_succeeds_and_different_root_is_rejected() 
             false,
         )
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let created = execute(
         &client,
         envelope(
@@ -3842,7 +3842,7 @@ async fn active_task_cannot_move_under_execution() {
             true,
         )
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_task_in_space(&client, "active-move", "source", &nested).await;
     let run = execute(
         &client,
@@ -3914,7 +3914,7 @@ async fn clear_context_atomically_advances_binding_and_retains_local_state() {
     let compactions = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble_context(root.path(), runs.clone(), compactions, false, false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, &task_id, &core.device_id).await;
     core.doc_host.open(&task_id).unwrap();
     run_once(&client, &task_id, "clear-context-run", "remember this").await;
@@ -4053,7 +4053,7 @@ async fn clear_context_atomically_advances_binding_and_retains_local_state() {
     assert_eq!(state.binding_generation, Some(after_binding.generation));
     assert_eq!(
         state.last_boundary.as_ref().map(|boundary| boundary.kind),
-        Some(zeron_proto::ContextBoundaryKind::Cleared)
+        Some(luna_proto::ContextBoundaryKind::Cleared)
     );
     let entries = handle.doc().read_entries().unwrap();
     assert!(entries.len() > before_entries.len());
@@ -4129,7 +4129,7 @@ async fn provider_switch_creates_fresh_binding_and_holds_incompatible_queue() {
         false,
         false,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, &task_id, &core.device_id).await;
     core.doc_host.open(&task_id).unwrap();
     run_once(
@@ -4213,7 +4213,7 @@ async fn provider_switch_creates_fresh_binding_and_holds_incompatible_queue() {
     assert_eq!(state.last_handoff.as_ref(), Some(&expected_handoff));
     assert_eq!(
         state.last_boundary.as_ref().map(|boundary| boundary.kind),
-        Some(zeron_proto::ContextBoundaryKind::ProviderSwitched)
+        Some(luna_proto::ContextBoundaryKind::ProviderSwitched)
     );
     let row = core
         .doc_host
@@ -4236,7 +4236,7 @@ async fn compact_is_idempotent_and_restart_unknown_is_never_replayed() {
     let compactions = Arc::new(AtomicUsize::new(0));
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble_context(root.path(), runs.clone(), compactions.clone(), false, false);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, &task_id, &core.device_id).await;
     run_once(&client, &task_id, "compact-run", "fill provider context").await;
     wait_for_no_live_run(&core, &task_id).await;
@@ -4353,7 +4353,7 @@ async fn compact_is_idempotent_and_restart_unknown_is_never_replayed() {
     drop(core);
 
     let reopened = assemble_context(root.path(), runs, compactions.clone(), false, false);
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let restarted_state = reopened.doc_host.context_control(&task_id).unwrap();
     assert_eq!(
         restarted_state.compact.status,
@@ -4411,7 +4411,7 @@ async fn automatic_codex_context_events_gate_real_queue_drain_and_restart() {
         completed_done.clone(),
         CodexContextOutcome::Completed,
     );
-    let completed_client = zeron_rpc::memory_client(completed_core.rpc_service());
+    let completed_client = luna_rpc::memory_client(completed_core.rpc_service());
     create_codex_context_task(
         &completed_client,
         &completed_task,
@@ -4495,7 +4495,7 @@ async fn automatic_codex_context_events_gate_real_queue_drain_and_restart() {
         unknown_done.clone(),
         CodexContextOutcome::Missing,
     );
-    let unknown_client = zeron_rpc::memory_client(unknown_core.rpc_service());
+    let unknown_client = luna_rpc::memory_client(unknown_core.rpc_service());
     create_codex_context_task(&unknown_client, &unknown_task, &unknown_core.device_id).await;
     start_codex_context_run(&unknown_client, &unknown_task).await;
     wait_for_context_status(
@@ -4602,7 +4602,7 @@ async fn model_change_waits_for_safe_turn_and_keeps_binding_generation() {
         true,
         false,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_configured_task(&client, &task_id, &core.device_id).await;
     let before_first_turn = execute(
         &client,
@@ -4747,7 +4747,7 @@ async fn staged_history_fork_persists_acknowledged_id_and_replay_never_mutates_t
         HarnessId::Opencode,
         HistoryForkBehavior::FailAfterAcknowledgement,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     create_materialized_history_task(&core, &client, &source_task_id, HarnessId::Opencode).await;
     let fork_snapshot = snapshot(&client, &source_task_id).await;
     let command = envelope(
@@ -4785,7 +4785,7 @@ async fn staged_history_fork_persists_acknowledged_id_and_replay_never_mutates_t
         HarnessId::Opencode,
         HistoryForkBehavior::FailAfterAcknowledgement,
     );
-    let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
+    let reopened_client = luna_rpc::memory_client(reopened.rpc_service());
     let replay = execute(&reopened_client, command).await;
     assert_eq!(replay.status, CommandReceiptStatus::Pending);
     assert_eq!(
@@ -4803,7 +4803,7 @@ async fn staged_history_fork_persists_acknowledged_id_and_replay_never_mutates_t
         HarnessId::Opencode,
         HistoryForkBehavior::FailPreflight,
     );
-    let preflight_client = zeron_rpc::memory_client(preflight_core.rpc_service());
+    let preflight_client = luna_rpc::memory_client(preflight_core.rpc_service());
     let preflight_source = uuid::Uuid::new_v4().to_string();
     create_materialized_history_task(
         &preflight_core,
@@ -4846,7 +4846,7 @@ async fn fork_initial_prompt_grant_commits_with_its_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let forks = Arc::new(Mutex::new(Vec::new()));
     let core = assemble_history(dir.path(), forks, HarnessId::Opencode);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let source_id = uuid::Uuid::new_v4().to_string();
     create_materialized_history_task(&core, &client, &source_id, HarnessId::Opencode).await;
     core.doc_host.flush_all();
@@ -4886,7 +4886,7 @@ async fn fork_initial_prompt_grant_commits_with_its_snapshot() {
         core.store
             .local_executable_hash(
                 &failed_target,
-                zeron_sync::LocalExecutableKind::Command,
+                luna_sync::LocalExecutableKind::Command,
                 &format!("fork-run:{failed_command_id}"),
             )
             .unwrap()
@@ -4922,11 +4922,7 @@ async fn fork_initial_prompt_grant_commits_with_its_snapshot() {
     let run_id = format!("fork-run:{command_id}");
     assert!(
         core.store
-            .local_executable_hash(
-                &target_id,
-                zeron_sync::LocalExecutableKind::Command,
-                &run_id
-            )
+            .local_executable_hash(&target_id, luna_sync::LocalExecutableKind::Command, &run_id)
             .unwrap()
             .is_some()
     );
@@ -4934,7 +4930,7 @@ async fn fork_initial_prompt_grant_commits_with_its_snapshot() {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if handle.doc().read_commands().unwrap().iter().any(|row| {
-                row.id == run_id && row.status == zeron_doc::SessionCommandStatus::Applied
+                row.id == run_id && row.status == luna_doc::SessionCommandStatus::Applied
             }) {
                 break;
             }
@@ -4951,7 +4947,7 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     let dir = tempfile::tempdir().unwrap();
     let forks = Arc::new(Mutex::new(Vec::new()));
     let core = assemble_history(dir.path(), forks.clone(), HarnessId::Opencode);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let source_task_id = uuid::Uuid::new_v4().to_string();
     let target_task_id = uuid::Uuid::new_v4().to_string();
 
@@ -5171,11 +5167,11 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     assert_eq!(calls.len(), 3);
     assert!(matches!(
         calls[0].boundary,
-        zeron_proto::ProviderForkBoundary::Tip
+        luna_proto::ProviderForkBoundary::Tip
     ));
     assert!(matches!(
         calls[1].boundary,
-        zeron_proto::ProviderForkBoundary::Tip
+        luna_proto::ProviderForkBoundary::Tip
     ));
     assert_eq!(calls[2].source_session_id, "synthetic-history-fork-2");
     drop(calls);
@@ -5187,7 +5183,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     let dir = tempfile::tempdir().unwrap();
     let forks = Arc::new(Mutex::new(Vec::new()));
     let core = assemble_history(dir.path(), forks.clone(), HarnessId::Codex);
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let task_id = uuid::Uuid::new_v4().to_string();
 
     assert_eq!(
@@ -5239,7 +5235,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
                     .read_entries()
                     .ok()?
                     .into_iter()
-                    .find(|entry| entry.role == zeron_doc::MessageRole::Assistant)
+                    .find(|entry| entry.role == luna_doc::MessageRole::Assistant)
                     .and_then(|entry| handle.doc().provider_checkpoint(&entry.id))
             });
             if ready
@@ -5384,7 +5380,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
         core.store
             .local_executable_hash(
                 &task_id,
-                zeron_sync::LocalExecutableKind::Command,
+                luna_sync::LocalExecutableKind::Command,
                 internal_run_id,
             )
             .unwrap()
@@ -5442,7 +5438,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
                 .read_commands()
                 .unwrap()
                 .iter()
-                .all(|command| command.status != zeron_doc::SessionCommandStatus::Pending);
+                .all(|command| command.status != luna_doc::SessionCommandStatus::Pending);
             if command_settled
                 && snapshot(&client, &task_id)
                     .await
@@ -5467,7 +5463,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
             .iter()
             .any(|command| {
                 command.id == internal_run_id
-                    && command.status == zeron_doc::SessionCommandStatus::Applied
+                    && command.status == luna_doc::SessionCommandStatus::Applied
             })
     );
     let restore_snapshot = snapshot(&client, &task_id).await;
@@ -5524,13 +5520,13 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     assert_eq!(calls.len(), 2);
     assert!(matches!(
         &calls[0].boundary,
-        zeron_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id }
+        luna_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id }
             if checkpoint_id == "provider-message-1"
     ));
     assert_eq!(calls[1].source_session_id, before_binding.provider_task_id);
     assert!(matches!(
         &calls[1].boundary,
-        zeron_proto::ProviderForkBoundary::ThroughCheckpoint { checkpoint_id }
+        luna_proto::ProviderForkBoundary::ThroughCheckpoint { checkpoint_id }
             if checkpoint_id == "provider-message-1"
     ));
     drop(calls);

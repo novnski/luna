@@ -5,18 +5,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, QueueDeliveryGate, QueuedMessage, SessionMessageEntry,
 };
-use zeron_engine::{
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
 };
-use zeron_proto::{
+use luna_proto::{
     ApprovalActionKind, ApprovalRequest, ChatConfig, HarnessId, PermissionMode, PermissionScope,
     SandboxLevel, Session, SessionStatus, UserInputQuestion,
 };
-use zeron_rpc::methods;
-use zeron_ui::*;
+use luna_rpc::methods;
+use luna_ui::*;
 
 const APPROVAL: &str = "15151515-1515-4151-8151-151515151515";
 const INPUT: &str = "25252525-2525-4252-8252-252525252525";
@@ -182,7 +182,7 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
             role: MessageRole::Assistant,
             parts: vec![MessagePart::AsyncQuestion {
                 id: "aq-synthetic-call".into(),
-                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Which synthetic sample should I use?".into(),
                     options: Some(vec!["Option A".into(), "Option B".into()]),
                 }],
@@ -206,8 +206,8 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
             .any(|chat| chat.id == COMPLETE && !chat.unseen()),
         "completed synthetic task must be idle in Activity filter"
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
-    let snapshot: zeron_proto::AttentionSnapshot = client
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let snapshot: luna_proto::AttentionSnapshot = client
         .call_as(
             methods::GET_ATTENTION,
             serde_json::json!({"targetDeviceId": core.device_id}),
@@ -283,7 +283,7 @@ fn main() -> anyhow::Result<()> {
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
         .port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,

@@ -6,19 +6,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
+use luna_proto::WorkspaceScope;
 use luna_relay::protocol::{Control, VERSION, proof};
 use luna_relay::{ClientKey, RelayConfig, RouteConfig, Target};
+use luna_rpc::remote_auth::{
+    AuthenticateRemote, CreatePairing, RedeemPairing, RemoteAuthStore, RemoteEnvironment,
+    RemoteRpcService, RemoteScope,
+};
+use luna_rpc::{RpcClient, RpcError, RpcReply, RpcService, methods};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use zeron_proto::WorkspaceScope;
-use zeron_rpc::remote_auth::{
-    AuthenticateRemote, CreatePairing, RedeemPairing, RemoteAuthStore, RemoteEnvironment,
-    RemoteRpcService, RemoteScope,
-};
-use zeron_rpc::{RpcClient, RpcError, RpcReply, RpcService, methods};
 
 const HOST_KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const CLIENT_KEY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -42,8 +42,8 @@ fn target() -> Target {
         device_id: "machine-a".into(),
         workspace_scope: WorkspaceScope::Development,
         environment_id: "env-a".into(),
-        protocol_version: zeron_rpc::remote_auth::PROTOCOL_VERSION,
-        required_capabilities: vec![zeron_rpc::remote_auth::CAPABILITY.into()],
+        protocol_version: luna_rpc::remote_auth::PROTOCOL_VERSION,
+        required_capabilities: vec![luna_rpc::remote_auth::CAPABILITY.into()],
     }
 }
 
@@ -84,7 +84,7 @@ async fn pair(
     auth: &Arc<RemoteAuthStore>,
     label: &str,
     scopes: Vec<RemoteScope>,
-) -> zeron_rpc::remote_auth::IssuedPairing {
+) -> luna_rpc::remote_auth::IssuedPairing {
     auth.create_pairing(CreatePairing {
         label: label.into(),
         scopes,
@@ -96,11 +96,11 @@ async fn pair(
 
 async fn connect_paired(
     port: u16,
-    pair: &zeron_rpc::remote_auth::IssuedPairing,
-) -> (RpcClient, zeron_rpc::remote_auth::IssuedSession) {
+    pair: &luna_rpc::remote_auth::IssuedPairing,
+) -> (RpcClient, luna_rpc::remote_auth::IssuedSession) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(client) = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{port}")).await
+        if let Ok(client) = luna_rpc::connect_ws(&format!("ws://127.0.0.1:{port}")).await
             && let Ok(session) = client
                 .redeem_remote_pairing(RedeemPairing {
                     target: pair.target.clone(),
@@ -185,7 +185,7 @@ async fn exact_route_keeps_l29_principals_separate_and_revocation_closes_active_
             auth_for_factory.clone(),
         ))
     });
-    let guarded_task = tokio::spawn(zeron_rpc::serve_ws_listener_with_factory(guarded, factory));
+    let guarded_task = tokio::spawn(luna_rpc::serve_ws_listener_with_factory(guarded, factory));
     let config_path = root.path().join("relay.json");
     private_json(&config_path, &config());
     let (relay_listener, relay_port) = port().await;
@@ -227,7 +227,7 @@ async fn exact_route_keeps_l29_principals_separate_and_revocation_closes_active_
 
     let pair_a = pair(&auth, "A", vec![RemoteScope::EnvironmentRead]).await;
     let (client_a, session_a) = connect_paired(forward_port, &pair_a).await;
-    let client_b = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{forward_port}"))
+    let client_b = luna_rpc::connect_ws(&format!("ws://127.0.0.1:{forward_port}"))
         .await
         .unwrap();
     assert!(
@@ -351,7 +351,7 @@ async fn exact_route_keeps_l29_principals_separate_and_revocation_closes_active_
 #[tokio::test]
 async fn host_rejects_local_owner_ipc_even_with_valid_relay_credentials() {
     let (owner_listener, owner_port) = port().await;
-    let owner_task = tokio::spawn(zeron_rpc::serve_ws_listener(
+    let owner_task = tokio::spawn(luna_rpc::serve_ws_listener(
         owner_listener,
         Arc::new(FakeEngine),
     ));
@@ -572,7 +572,7 @@ async fn actual_relay_host_client_binaries_start_route_and_stop() {
             auth_for_factory.clone(),
         ))
     });
-    let guarded_task = tokio::spawn(zeron_rpc::serve_ws_listener_with_factory(guarded, factory));
+    let guarded_task = tokio::spawn(luna_rpc::serve_ws_listener_with_factory(guarded, factory));
     let config_path = root.path().join("relay.json");
     let target_path = root.path().join("target.json");
     let host_key_path = root.path().join("host.key");

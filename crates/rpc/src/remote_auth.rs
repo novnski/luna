@@ -12,15 +12,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use getrandom::fill;
+use luna_proto::WorkspaceScope;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
-use zeron_proto::WorkspaceScope;
 
 use crate::{RpcClient, RpcError, RpcReply, RpcService, methods, parse_params};
 
 pub const PROTOCOL_VERSION: u16 = 1;
-pub const CAPABILITY: &str = zeron_proto::capabilities::REMOTE_AUTH_V1;
+pub const CAPABILITY: &str = luna_proto::capabilities::REMOTE_AUTH_V1;
 const MAX_PAIRING_TTL_SECS: u64 = 600;
 const MAX_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 
@@ -231,7 +231,7 @@ impl RemoteAuthStore {
                 .any(|capability| capability == CAPABILITY)
             || target.required_capabilities.iter().any(|capability| {
                 capability != CAPABILITY
-                    && !zeron_proto::capabilities::CURRENT.contains(&capability.as_str())
+                    && !luna_proto::capabilities::CURRENT.contains(&capability.as_str())
             })
         {
             return Err(denied("remote protocol or capability mismatch"));

@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use sha2::{Digest, Sha256};
-use zeron_doc::{MessagePart, MessageRole, SessionMessageEntry};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_proto::{
+use luna_doc::{MessagePart, MessageRole, SessionMessageEntry};
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_proto::{
     APPSHOT_CONTEXT_MARKER, ActivityKind, ComposerDraft, ComposerDraftRead, DraftAppshot,
     DraftBlob, DraftBlobState, DraftContext, HarnessId, HistorySearchPage,
 };
-use zeron_rpc::methods;
+use luna_rpc::methods;
+use sha2::{Digest, Sha256};
 
 fn account_config(root: &std::path::Path) -> AgentAccountsConfig {
     AgentAccountsConfig {
@@ -38,7 +38,7 @@ fn assemble(root: &std::path::Path) -> EngineCore {
 
 fn rich_draft(path: String, bytes: &[u8]) -> ComposerDraft {
     ComposerDraft {
-        version: zeron_proto::COMPOSER_DRAFT_VERSION,
+        version: luna_proto::COMPOSER_DRAFT_VERSION,
         draft_id: "task-l08".into(),
         task_id: Some("task-l08".into()),
         revision: 11,
@@ -103,7 +103,7 @@ async fn appshot_draft_lifecycle_projects_into_owned_history_without_private_con
     core.workspace
         .create_chat("task-l08", Some("synthetic-project"), None, None, None)
         .unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
             methods::UPLOAD_CHUNK,
@@ -231,7 +231,7 @@ async fn rich_draft_restarts_and_missing_blob_stays_visibly_unsaved() {
         .unwrap();
     let root = tempfile::tempdir().unwrap();
     let core = assemble(root.path());
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let upload_id = "draft-fixture";
     client
         .call(
@@ -264,7 +264,7 @@ async fn rich_draft_restarts_and_missing_blob_stays_visibly_unsaved() {
     drop(core);
 
     let reopened = assemble(root.path());
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let read: ComposerDraftRead = client
         .call_as(
             methods::GET_COMPOSER_DRAFT,

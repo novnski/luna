@@ -5,22 +5,22 @@
 #   scripts/dev-demo.sh            # build, seed demo data, open the app
 #   scripts/dev-demo.sh --slow     # pace mock streams (~10s) to watch streaming
 #
-# Everything lives under /tmp/zeron-demo-*; re-runs reuse it. Ctrl-C cleans up.
+# Everything lives under /tmp/luna-demo-*; re-runs reuse it. Ctrl-C cleans up.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DAEMON_DIR=/tmp/zeron-demo-daemon
-UI_DIR=/tmp/zeron-demo-ui
+DAEMON_DIR=/tmp/luna-demo-daemon
+UI_DIR=/tmp/luna-demo-ui
 IPC=27921
 DELAY=""
 [[ "${1:-}" == "--slow" ]] && DELAY=350
 
 echo "▸ building (first run takes a few minutes)…"
-cargo build -p zeron -q
+cargo build -p luna -q
 
 echo "▸ starting engine daemon on :$IPC"
-env LUNA_DATA_DIR="$DAEMON_DIR" LUNA_IPC_PORT=$IPC ZERON_HARNESS=mock \
-  ${DELAY:+ZERON_MOCK_DELAY_MS=$DELAY} RUST_LOG=warn \
+env LUNA_DATA_DIR="$DAEMON_DIR" LUNA_IPC_PORT=$IPC LUNA_HARNESS=mock \
+  ${DELAY:+LUNA_MOCK_DELAY_MS=$DELAY} RUST_LOG=warn \
   ./target/debug/luna headless &
 DAEMON_PID=$!
 trap 'kill $DAEMON_PID 2>/dev/null || true' EXIT
@@ -29,14 +29,14 @@ for _ in $(seq 1 40); do
   sleep 0.25
 done
 
-probe() { cargo run -q -p zeron-rpc --example rpc_probe -- "ws://127.0.0.1:$IPC" "$@"; }
+probe() { cargo run -q -p luna-rpc --example rpc_probe -- "ws://127.0.0.1:$IPC" "$@"; }
 
 if [[ ! -f "$DAEMON_DIR/.demo-seeded" ]]; then
   echo "▸ seeding demo chats"
   DEV=$(probe LocalDevice '{}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["deviceId"])')
   # One space per demo folder, created up-front (chats join by space id).
   declare -A SPACES=()
-  for project in zeron soccertcg zeron aether; do
+  for project in luna soccertcg luna aether; do
     sid=$(uuidgen | tr 'A-Z' 'a-z')
     probe Mutate "{\"op\":\"createSpace\",\"spaceId\":\"$sid\",\"deviceId\":\"$DEV\",\"path\":\"$HOME/github/$project\"}" >/dev/null
     SPACES[$project]="$sid"
@@ -53,10 +53,10 @@ if [[ ! -f "$DAEMON_DIR/.demo-seeded" ]]; then
     fi
     probe Mutate "{\"op\":\"setChatActivity\",\"chatId\":\"$id\",\"lastMessageAt\":$(( ($(date +%s) - $4*3600) * 1000 ))}" >/dev/null
   }
-  seed "Native Zeron Rust Rewrite"    zeron zeron/main                 0  run
-  seed "Rebalance Player Stats Caps"  soccertcg    zeron/rebalance-player-stat-caps  2  run
-  seed "Craft Premium TCG Experience" soccertcg    zeron/craft-premium-tcg-exp       26 skip
-  seed "Initial Context Exploration"  zeron        zeron/initial-context-exploration 14 skip
+  seed "Native Luna Rust Rewrite"    luna luna/main                 0  run
+  seed "Rebalance Player Stats Caps"  soccertcg    luna/rebalance-player-stat-caps  2  run
+  seed "Craft Premium TCG Experience" soccertcg    luna/craft-premium-tcg-exp       26 skip
+  seed "Initial Context Exploration"  luna        luna/initial-context-exploration 14 skip
   seed "Soccer TCG Repo Creation"     aether       aether/main                       48 skip
   touch "$DAEMON_DIR/.demo-seeded"
 fi

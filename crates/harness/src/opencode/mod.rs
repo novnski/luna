@@ -33,7 +33,7 @@
 //! Attempt ≥ [`RETRY_REPORT_ATTEMPT`] surfaces an error chip; attempt ≥
 //! [`RETRY_ABORT_ATTEMPT`] aborts the turn instead of retrying forever.
 //! A prompt that produces NO session-scoped event within
-//! [`default_stall_bound`] (`ZERON_OPENCODE_STALL_MS`, 0 disables) errors
+//! [`default_stall_bound`] (`LUNA_OPENCODE_STALL_MS`, 0 disables) errors
 //! out instead of spinning "Working" forever.
 
 use std::collections::{HashMap, VecDeque};
@@ -48,7 +48,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ProviderForkBoundary, ProviderForkCapability,
     ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest, SlashCommand,
     SteeringMode, TodoItem, ToolCall, UserInputAnswer, UserInputQuestion,
@@ -64,7 +64,7 @@ use crate::{
 /// plugin-heavy starts can take minutes. Shared by chat startup and model
 /// discovery (same boot either way).
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
-const STARTUP_TIMEOUT_ENV: &str = "ZERON_OPENCODE_STARTUP_TIMEOUT_SECS";
+const STARTUP_TIMEOUT_ENV: &str = "LUNA_OPENCODE_STARTUP_TIMEOUT_SECS";
 
 /// Health-poll cadence while the server boots.
 const HEALTH_POLL: Duration = Duration::from_millis(150);
@@ -88,7 +88,7 @@ const RETRY_ABORT_ATTEMPT: u64 = 8;
 
 /// Default bound on prompt-send → first session-scoped bus event.
 const DEFAULT_STALL_BOUND: Duration = Duration::from_secs(60);
-const STALL_ENV: &str = "ZERON_OPENCODE_STALL_MS";
+const STALL_ENV: &str = "LUNA_OPENCODE_STALL_MS";
 
 /// What a wedged/silent run usually means for opencode.
 const STALL_HINT: &str = "The model provider is likely unreachable or rejecting requests. \
@@ -528,7 +528,7 @@ impl Server {
             .arg("--hostname")
             .arg("127.0.0.1")
             .env("OPENCODE_SERVER_PASSWORD", &password)
-            .env("OPENCODE_CLIENT", "zeron");
+            .env("OPENCODE_CLIENT", "luna");
         crate::compose_child_path(&mut cmd, exe);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
@@ -550,7 +550,7 @@ impl Server {
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zeron_harness::opencode", "stderr: {line}");
+                    tracing::debug!(target: "luna_harness::opencode", "stderr: {line}");
                     tail.push(&line);
                 }
             });
@@ -1605,7 +1605,7 @@ async fn run_session(session: Session) {
             .permission_policy
             .as_ref()
             .map(|policy| policy.effective_mode)
-            .unwrap_or(zeron_proto::PermissionMode::Ask),
+            .unwrap_or(luna_proto::PermissionMode::Ask),
     );
 
     // ---- session create/resume -------------------------------------------
@@ -1621,7 +1621,7 @@ async fn run_session(session: Session) {
                         .to_owned(),
                     Err(e) => {
                         tracing::debug!(
-                            target: "zeron_harness::opencode",
+                            target: "luna_harness::opencode",
                             "session resume failed (starting fresh): {e}"
                         );
                         create_session(&server, dir, &permission_rules).await?
@@ -1779,7 +1779,7 @@ async fn run_session(session: Session) {
     .await;
     if connect_wait.is_err() {
         tracing::debug!(
-            target: "zeron_harness::opencode",
+            target: "luna_harness::opencode",
             "event bus not connected within 15s; prompting anyway"
         );
     }
@@ -2139,19 +2139,19 @@ async fn run_session(session: Session) {
 
     if !done_sent {
         // Consumer went away (stream dropped): nothing to report to.
-        tracing::debug!(target: "zeron_harness::opencode", "run loop ended without settling");
+        tracing::debug!(target: "luna_harness::opencode", "run loop ended without settling");
     }
     bus_handle.abort();
     server.shutdown(kill_grace).await;
 }
 
-fn opencode_permission_rules(mode: zeron_proto::PermissionMode) -> Value {
+fn opencode_permission_rules(mode: luna_proto::PermissionMode) -> Value {
     match mode {
-        zeron_proto::PermissionMode::Full => json!([
+        luna_proto::PermissionMode::Full => json!([
             { "permission": "*", "pattern": "*", "action": "allow" }
         ]),
         // Auto is resolved to Ask by the engine for OpenCode.
-        zeron_proto::PermissionMode::Ask | zeron_proto::PermissionMode::Auto => json!([
+        luna_proto::PermissionMode::Ask | luna_proto::PermissionMode::Auto => json!([
             { "permission": "*", "pattern": "*", "action": "ask" },
             { "permission": "read", "pattern": "*", "action": "allow" },
             { "permission": "edit", "pattern": "*", "action": "allow" },
@@ -2251,7 +2251,7 @@ async fn create_session(
         }
         if attempt == 0 && status.is_server_error() {
             tracing::debug!(
-                target: "zeron_harness::opencode",
+                target: "luna_harness::opencode",
                 "POST /session answered {status}; retrying once (the lazy-migration crash self-heals)"
             );
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -2457,7 +2457,7 @@ async fn post_prompt(
                 req = server.scoped(req, dir_owned.as_deref()).await;
                 if let Err(e) = req.send().await {
                     tracing::debug!(
-                        target: "zeron_harness::opencode",
+                        target: "luna_harness::opencode",
                         "command turn failed: {e}"
                     );
                 }
@@ -2512,7 +2512,7 @@ struct BusCtx<'a> {
     event_tx: &'a mpsc::Sender<Result<AgentEvent, HarnessError>>,
     request_input: &'a Arc<RequestInput>,
     auto_approve: bool,
-    permission_policy: &'a zeron_proto::PermissionPolicy,
+    permission_policy: &'a luna_proto::PermissionPolicy,
     main_feed: &'a mut SessionFeed,
     children: &'a mut HashMap<String, ChildRun>,
     pending_spawns: &'a mut VecDeque<PendingSpawn>,
@@ -2932,7 +2932,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 question: format!("{summary}. Target: {}.", permission_policy.machine_name),
                 options: opencode_approval_options(protocol),
                 multi_select: false,
-                approval: Some(zeron_proto::ApprovalRequest {
+                approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: id.to_owned(),
                     provider: HarnessId::Opencode,
                     turn_id: props
@@ -2941,11 +2941,11 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                         .map(str::to_owned),
                     machine_name: permission_policy.machine_name.clone(),
                     action_kind: match permission_name {
-                        "bash" => zeron_proto::ApprovalActionKind::Command,
-                        "edit" | "write" => zeron_proto::ApprovalActionKind::FileChange,
-                        "webfetch" | "websearch" => zeron_proto::ApprovalActionKind::Network,
-                        "external_directory" => zeron_proto::ApprovalActionKind::ExternalPath,
-                        _ => zeron_proto::ApprovalActionKind::Tool,
+                        "bash" => luna_proto::ApprovalActionKind::Command,
+                        "edit" | "write" => luna_proto::ApprovalActionKind::FileChange,
+                        "webfetch" | "websearch" => luna_proto::ApprovalActionKind::Network,
+                        "external_directory" => luna_proto::ApprovalActionKind::ExternalPath,
+                        _ => luna_proto::ApprovalActionKind::Tool,
                     },
                     summary,
                     requested_scope: permission_policy.scope,
@@ -3081,7 +3081,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 };
                 if let Err(e) = reply {
                     tracing::debug!(
-                        target: "zeron_harness::opencode",
+                        target: "luna_harness::opencode",
                         "question reply failed: {e}"
                     );
                 }

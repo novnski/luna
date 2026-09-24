@@ -20,18 +20,18 @@ TARBALL="$STAGE.tar.gz"
 
 cd "$ROOT"
 if [[ "$PROFILE" == "release" ]]; then
-  cargo build --release -p zeron
+  cargo build --release -p luna
   BIN="$ROOT/target/release/luna"
 else
-  cargo build -p zeron
+  cargo build -p luna
   BIN="$ROOT/target/debug/luna"
 fi
 
 rm -rf "$STAGE" "$TARBALL"
 mkdir -p "$STAGE"
 install -m 755 "$BIN" "$STAGE/luna"
-install -m 644 "$ROOT/dist/zeron.desktop" "$STAGE/luna.desktop"
-install -m 644 "$ROOT/dist/zeron.png" "$STAGE/luna.png"
+install -m 644 "$ROOT/dist/luna.desktop" "$STAGE/luna.desktop"
+install -m 644 "$ROOT/dist/luna.png" "$STAGE/luna.png"
 mkdir -p "$STAGE/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$STAGE/licenses/fonts/"
 

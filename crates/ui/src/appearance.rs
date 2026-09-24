@@ -20,8 +20,8 @@
 //! already-laid-out elements to re-run their paint with the new palette.
 
 use gpui::{App, Global, Subscription, Window};
+use luna_theme::{AccentSelection, SurfacePreference, ThemeSelection};
 use serde::{Deserialize, Serialize};
-use zeron_theme::{AccentSelection, SurfacePreference, ThemeSelection};
 
 use crate::settings::{self, SavePolicy};
 use crate::theme::{Appearance, Theme};
@@ -291,10 +291,10 @@ pub fn apply_registry_change(cx: &mut App) {
     reapply_window_background(cx);
 }
 
-fn model_appearance(appearance: Appearance) -> zeron_theme::Appearance {
+fn model_appearance(appearance: Appearance) -> luna_theme::Appearance {
     match appearance {
-        Appearance::Dark => zeron_theme::Appearance::Dark,
-        Appearance::Light => zeron_theme::Appearance::Light,
+        Appearance::Dark => luna_theme::Appearance::Dark,
+        Appearance::Light => luna_theme::Appearance::Light,
     }
 }
 

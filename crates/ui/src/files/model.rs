@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use zeron_proto::{
+use luna_proto::{
     WorkspaceDirectoryPage, WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileSearchMatch,
 };
 

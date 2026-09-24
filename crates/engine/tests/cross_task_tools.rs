@@ -3,23 +3,23 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use tempfile::TempDir;
-use tokio_util::sync::CancellationToken;
-use zeron_engine::cross_task_tools::{
+use luna_engine::cross_task_tools::{
     CrossTaskAuthority, CrossTaskControlGrant, CrossTaskError, CrossTaskTools,
 };
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::CodexHarness;
-use zeron_proto::{
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_harness::CodexHarness;
+use luna_proto::{
     ACTIVITY_ENVELOPE_VERSION, ActivityEnvelope, ActivityKind, ActivityOutcome, ActivityRedaction,
     ActivitySourceRef, CrossTaskControlAction, CrossTaskControlRequest, CrossTaskListRequest,
     CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendRequest, CrossTaskWaitRequest,
     CrossTaskWaitTarget, HarnessId, RuntimeDelivery, Session, SessionStatus, TaskLineage,
 };
+use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
-    use zeron_proto::{
+    use luna_proto::{
         AgentEvent, ApprovalDecision, DoneStatus, PermissionMode, RunRequest, SandboxLevel,
     };
 
@@ -135,9 +135,9 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
                             decision
                         ),
                         if approvals <= 2 {
-                            zeron_engine::sessions::LunaApprovalOutcome::AllowedOnce
+                            luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
                         } else {
-                            zeron_engine::sessions::LunaApprovalOutcome::Denied
+                            luna_engine::sessions::LunaApprovalOutcome::Denied
                         }
                     );
                     assert_eq!(
@@ -146,7 +146,7 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
                             &request_id,
                             ApprovalDecision::AllowOnce
                         ),
-                        zeron_engine::sessions::LunaApprovalOutcome::Stale
+                        luna_engine::sessions::LunaApprovalOutcome::Stale
                     );
                 }
                 AgentEvent::Done { status, .. } => break (approvals, status),
@@ -163,7 +163,7 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
         .task_command_receipt("l25-send-1")
         .unwrap()
         .unwrap();
-    assert_eq!(receipt.status, zeron_proto::CommandReceiptStatus::Applied);
+    assert_eq!(receipt.status, luna_proto::CommandReceiptStatus::Applied);
     assert_eq!(receipt.task_id, target);
     assert!(receipt.committed_at_ms.is_some());
     let queued = core
@@ -211,7 +211,7 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
         .task_command_receipt("l25-send-1")
         .unwrap()
         .unwrap();
-    assert_eq!(persisted.status, zeron_proto::CommandReceiptStatus::Applied);
+    assert_eq!(persisted.status, luna_proto::CommandReceiptStatus::Applied);
     assert_eq!(persisted.event_sequence, receipt.event_sequence);
     assert_eq!(
         reopened
@@ -227,10 +227,10 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
 
 #[tokio::test]
 async fn approved_provider_send_rejects_target_revision_changed_while_waiting() {
-    use zeron_proto::{
+    use luna_proto::{
         AgentEvent, ApprovalDecision, DoneStatus, PermissionMode, RunRequest, SandboxLevel,
     };
-    use zeron_rpc::methods;
+    use luna_rpc::methods;
 
     let root = TempDir::new().unwrap();
     let registry = Arc::new(HarnessRegistry::new());
@@ -253,7 +253,7 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
     )
     .unwrap();
     let rpc = core.rpc_service();
-    let client = zeron_rpc::memory_client(rpc.clone());
+    let client = luna_rpc::memory_client(rpc.clone());
     let project_path = root.path().join("project-a");
     std::fs::create_dir_all(&project_path).unwrap();
     core.workspace
@@ -317,7 +317,7 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
                         .task_command_snapshot(&target)
                         .unwrap()
                         .snapshot;
-                    let changed: zeron_proto::CommandReceipt = client
+                    let changed: luna_proto::CommandReceipt = client
                         .call_as(
                             methods::EXECUTE_TASK_COMMAND,
                             serde_json::json!({
@@ -332,14 +332,14 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
                         )
                         .await
                         .unwrap();
-                    assert_eq!(changed.status, zeron_proto::CommandReceiptStatus::Applied);
+                    assert_eq!(changed.status, luna_proto::CommandReceiptStatus::Applied);
                     assert_eq!(
                         core.sessions.respond_luna_local_ui_approval(
                             &source,
                             &request_id,
                             ApprovalDecision::AllowOnce
                         ),
-                        zeron_engine::sessions::LunaApprovalOutcome::AllowedOnce
+                        luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
                     );
                 }
                 AgentEvent::Done { status, .. } => break status,
@@ -367,7 +367,7 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
 
 #[tokio::test]
 async fn approved_provider_send_sql_failure_has_no_queued_receipt_or_row() {
-    use zeron_proto::{
+    use luna_proto::{
         AgentEvent, ApprovalDecision, DoneStatus, PermissionMode, RunRequest, SandboxLevel,
     };
 
@@ -466,7 +466,7 @@ async fn approved_provider_send_sql_failure_has_no_queued_receipt_or_row() {
                             &request_id,
                             ApprovalDecision::AllowOnce
                         ),
-                        zeron_engine::sessions::LunaApprovalOutcome::AllowedOnce
+                        luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
                     );
                 }
                 AgentEvent::Done { status, .. } => break status,
@@ -482,7 +482,7 @@ async fn approved_provider_send_sql_failure_has_no_queued_receipt_or_row() {
         .task_command_receipt("l25-storage-fail")
         .unwrap()
         .unwrap();
-    assert_ne!(receipt.status, zeron_proto::CommandReceiptStatus::Applied);
+    assert_ne!(receipt.status, luna_proto::CommandReceiptStatus::Applied);
     assert!(
         core.doc_host
             .queued_message(&target, "l25-storage-fail")
@@ -813,7 +813,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         .unwrap();
     assert_eq!(
         created.command.status,
-        zeron_proto::CommandReceiptStatus::Applied
+        luna_proto::CommandReceiptStatus::Applied
     );
     assert!(core.workspace.chat(&new_task).unwrap().is_some());
     let created_retry = tools
@@ -864,7 +864,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         .unwrap();
     assert_eq!(
         archived.command.status,
-        zeron_proto::CommandReceiptStatus::Applied
+        luna_proto::CommandReceiptStatus::Applied
     );
     assert!(core.workspace.chat(&task_c).unwrap().unwrap().archived);
     let retried = tools
@@ -905,7 +905,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         .unwrap();
     assert_eq!(
         unarchived.command.status,
-        zeron_proto::CommandReceiptStatus::Applied
+        luna_proto::CommandReceiptStatus::Applied
     );
     assert!(!core.workspace.chat(&task_c).unwrap().unwrap().archived);
 
@@ -940,7 +940,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         .unwrap();
     assert_ne!(
         move_result.command.status,
-        zeron_proto::CommandReceiptStatus::Applied
+        luna_proto::CommandReceiptStatus::Applied
     );
     assert_eq!(
         core.workspace
@@ -979,7 +979,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         .unwrap();
     assert_eq!(
         stopped.command.status,
-        zeron_proto::CommandReceiptStatus::Conflict
+        luna_proto::CommandReceiptStatus::Conflict
     );
 
     let mut send_authority = authority;
@@ -998,7 +998,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
     assert_eq!(queued.queued_message_id, "synthetic-command-1");
     assert_eq!(
         queued.command.status,
-        zeron_proto::CommandReceiptStatus::Applied
+        luna_proto::CommandReceiptStatus::Applied
     );
     assert_eq!(queued.delivery_state, "queued");
     let repeated = tools
@@ -1020,7 +1020,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
     assert!(matches!(
         conflict,
         CrossTaskError::CommandOutcome {
-            status: zeron_proto::CommandReceiptStatus::Conflict,
+            status: luna_proto::CommandReceiptStatus::Conflict,
             ..
         }
     ));

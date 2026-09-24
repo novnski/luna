@@ -26,15 +26,15 @@ use gpui::{
 use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
-use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
-use zeron_engine::sessions::LunaApprovalOutcome;
-use zeron_proto::{
+use luna_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
+use luna_engine::sessions::LunaApprovalOutcome;
+use luna_proto::{
     CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot, DraftBlob,
     DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState, FileSearchMatch,
     HarnessId, RunRequest, SandboxLevel, SlashCommand, UserInputAnswer, UserInputQuestion,
     capabilities,
 };
-use zeron_rpc::{RpcError, methods};
+use luna_rpc::{RpcError, methods};
 
 use crate::appshots::{self, CapturedAppshot};
 use crate::attachments::{self, StagedAttachment};
@@ -49,17 +49,17 @@ use crate::theme::Theme;
 // Constants + pure decision logic
 // ---------------------------------------------------------------------------
 
-/// Expanded-mode textarea vertical padding: `pt-4 pb-1` (zeron composer.tsx
+/// Expanded-mode textarea vertical padding: `pt-4 pb-1` (luna composer.tsx
 /// line 578) = 16 + 4.
 pub const TEXTAREA_PAD_V: f32 = 20.0;
 /// The expanded textarea BOX (content + padding) is clamped by the original's
 /// auto-grow effect: `ta.style.height = Math.min(Math.max(scrollHeight, 76),
-/// 260)` (zeron composer.tsx line 235). The 76px floor applies even when
+/// 260)` (luna composer.tsx line 235). The 76px floor applies even when
 /// empty — it's what makes the always-expanded new-chat composer tall.
 pub const TEXTAREA_MIN: f32 = 76.0;
 pub const TEXTAREA_MAX: f32 = 260.0;
 /// Expanded actions row: `pt-1` (4) + h-8 picker chips (32 — the tallest
-/// children; composer/styles.tsx pickerChip) + `pb-2.5` (10) — zeron
+/// children; composer/styles.tsx pickerChip) + `pb-2.5` (10) — luna
 /// composer-actions.tsx line 60.
 pub const ACTIONS_ROW_HEIGHT: f32 = 46.0;
 /// The pill's 1px hairline, top + bottom (`rounded-[26px] border`).
@@ -314,7 +314,7 @@ fn input_drag_scroll_delta(
     distance.signum() * (distance.abs() * 0.2).clamp(1.0, line_height)
 }
 
-/// Staged-attachment strip metrics (zeron attachment-ui.tsx AttachmentStrip:
+/// Staged-attachment strip metrics (luna attachment-ui.tsx AttachmentStrip:
 /// `flex flex-wrap gap-2 px-4 pt-3`, `size-14` thumbs).
 pub const STRIP_THUMB: f32 = 56.0;
 pub const STRIP_GAP: f32 = 8.0;
@@ -675,17 +675,17 @@ pub fn pending_input_request(
 fn approval_decision(
     question: &UserInputQuestion,
     answers: &[UserInputAnswer],
-) -> zeron_proto::ApprovalDecision {
+) -> luna_proto::ApprovalDecision {
     let selected = answers
         .iter()
         .find(|answer| answer.question_id == question.id)
         .and_then(|answer| answer.labels.first())
         .map(String::as_str);
     match selected {
-        Some("Allow once") => zeron_proto::ApprovalDecision::AllowOnce,
-        Some("Allow for task") => zeron_proto::ApprovalDecision::AllowTask,
-        Some("Cancel") => zeron_proto::ApprovalDecision::Cancel,
-        _ => zeron_proto::ApprovalDecision::Deny,
+        Some("Allow once") => luna_proto::ApprovalDecision::AllowOnce,
+        Some("Allow for task") => luna_proto::ApprovalDecision::AllowTask,
+        Some("Cancel") => luna_proto::ApprovalDecision::Cancel,
+        _ => luna_proto::ApprovalDecision::Deny,
     }
 }
 
@@ -696,7 +696,7 @@ fn luna_approval_question(
         question
             .approval
             .as_ref()
-            .is_some_and(zeron_proto::ApprovalRequest::is_luna_cross_task)
+            .is_some_and(luna_proto::ApprovalRequest::is_luna_cross_task)
     });
     if !has_luna_marker {
         return Ok(None);
@@ -728,7 +728,7 @@ pub fn input_request_resolved(transcript: &[SessionMessageEntry], request_id: &s
 /// after emitting it, so a newer assistant message does not supersede it.
 pub fn pending_async_question(
     transcript: &[SessionMessageEntry],
-) -> Option<(String, Vec<zeron_proto::AsyncUserInputQuestion>)> {
+) -> Option<(String, Vec<luna_proto::AsyncUserInputQuestion>)> {
     transcript
         .iter()
         .rev()
@@ -843,7 +843,7 @@ impl Wizard {
 
     pub fn new_async(
         message_id: String,
-        questions: Vec<zeron_proto::AsyncUserInputQuestion>,
+        questions: Vec<luna_proto::AsyncUserInputQuestion>,
     ) -> Self {
         let mut wizard = Self::new(
             message_id,
@@ -1051,7 +1051,7 @@ const MENTION_TOOLTIP_HEIGHT: f32 = 24.0;
 const MENTION_SIDE_PAD: &str = "\u{00A0}";
 /// A private URI scheme keeps file mentions distinguishable from ordinary
 /// Markdown links pasted into the composer.
-const FILE_MENTION_SCHEME: &str = "zeron-file:";
+const FILE_MENTION_SCHEME: &str = "luna-file:";
 
 /// A restorable point in the input's history: text plus where the caret and
 /// selection sat when the edit landed.
@@ -4171,7 +4171,7 @@ fn mention_response_is_current(state: &FileMentionState, request: u64) -> bool {
 fn mention_error_message(err: &RpcError) -> SharedString {
     match err {
         RpcError::UnknownMethod(_) => {
-            "The session's device runs an older zeron — update it to search its files".into()
+            "The session's device runs an older luna — update it to search its files".into()
         }
         RpcError::Transport(_) | RpcError::Closed => "The session's device is unreachable".into(),
         RpcError::BadParams(_) | RpcError::Failed(_) => "File search failed".into(),
@@ -4182,7 +4182,7 @@ fn mention_error_message(err: &RpcError) -> SharedString {
 fn slash_error_message(err: &RpcError) -> SharedString {
     match err {
         RpcError::UnknownMethod(_) => {
-            "The session's device runs an older zeron — update it to list commands".into()
+            "The session's device runs an older luna — update it to list commands".into()
         }
         RpcError::Transport(_) | RpcError::Closed => "The session's device is unreachable".into(),
         RpcError::BadParams(_) | RpcError::Failed(_) => {
@@ -4251,7 +4251,7 @@ pub struct Composer {
     /// gets focus back on close.
     preview_focus: FocusHandle,
     /// Focus grab deferred to the next render (open sites don't all have a
-    /// `Window` — the `ZERON_ATTACH_PREVIEW` boot knob opens in `new`).
+    /// `Window` — the `LUNA_ATTACH_PREVIEW` boot knob opens in `new`).
     preview_focus_pending: bool,
     /// In-flight file-picker prompt (paperclip).
     picker_task: Option<Task<()>>,
@@ -4671,9 +4671,9 @@ impl Composer {
             _answer_input_events: answer_input_events,
         };
         // Dev knob: pre-stage attachments (drop/paste can't be synthesized on
-        // a rig) — `ZERON_ATTACH=/path/a.png[,/path/b.png]`, and
-        // `ZERON_ATTACH_PREVIEW=1` boots with the first one's lightbox open.
-        if let Ok(spec) = std::env::var("ZERON_ATTACH") {
+        // a rig) — `LUNA_ATTACH=/path/a.png[,/path/b.png]`, and
+        // `LUNA_ATTACH_PREVIEW=1` boots with the first one's lightbox open.
+        if let Ok(spec) = std::env::var("LUNA_ATTACH") {
             let staged: Vec<StagedAttachment> = spec
                 .split(',')
                 .filter(|s| !s.trim().is_empty())
@@ -4681,13 +4681,13 @@ impl Composer {
                     match attachments::stage_file(std::path::Path::new(path.trim())) {
                         Ok(att) => Some(att),
                         Err(err) => {
-                            tracing::warn!(%path, error = %err, "ZERON_ATTACH stage failed");
+                            tracing::warn!(%path, error = %err, "LUNA_ATTACH stage failed");
                             None
                         }
                     }
                 })
                 .collect();
-            if std::env::var("ZERON_ATTACH_PREVIEW").is_ok_and(|v| v == "1")
+            if std::env::var("LUNA_ATTACH_PREVIEW").is_ok_and(|v| v == "1")
                 && let Some(first) = staged.first()
             {
                 composer.preview = Some(attachments::PreviewImage::new(
@@ -4707,7 +4707,7 @@ impl Composer {
         composer
     }
 
-    /// Capture-knob passthrough (`ZERON_OPEN_DIALOG=model`): open the
+    /// Capture-knob passthrough (`LUNA_OPEN_DIALOG=model`): open the
     /// combined harness/model menu.
     pub fn debug_open_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pickers
@@ -4935,7 +4935,7 @@ impl Composer {
             .filter_map(|comment| serde_json::to_value(comment).ok())
             .collect();
         ComposerDraft {
-            version: zeron_proto::COMPOSER_DRAFT_VERSION,
+            version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: self.draft_id_for(key),
             task_id: (!key.is_empty()).then(|| key.to_string()),
             revision: self.draft_revisions.get(key).copied().unwrap_or(1),
@@ -5748,7 +5748,7 @@ impl Composer {
                         }
                         let receipt = engine
                             .client()
-                            .call_as::<Option<zeron_proto::CommandReceipt>>(
+                            .call_as::<Option<luna_proto::CommandReceipt>>(
                                 methods::GET_TASK_COMMAND_RECEIPT,
                                 serde_json::json!({
                                     "commandId": submission.command_id.clone()
@@ -6133,7 +6133,7 @@ impl Composer {
             };
             let mut current = engine
                 .client()
-                .call_as::<Option<zeron_proto::CommandReceipt>>(
+                .call_as::<Option<luna_proto::CommandReceipt>>(
                     methods::GET_TASK_COMMAND_RECEIPT,
                     receipt_params,
                 )
@@ -6151,7 +6151,7 @@ impl Composer {
                             continue;
                         };
                         if let Ok(receipt) =
-                            serde_json::from_value::<zeron_proto::CommandReceipt>(value.clone())
+                            serde_json::from_value::<luna_proto::CommandReceipt>(value.clone())
                         {
                             break receipt;
                         }
@@ -7777,15 +7777,15 @@ impl Composer {
 
     fn context_send_block_reason(&self, cx: &App) -> Option<&'static str> {
         match self.state.read(cx).context_control.compact.status {
-            zeron_proto::ContextOperationStatus::Running => {
+            luna_proto::ContextOperationStatus::Running => {
                 Some("Context compaction is still running. Your draft was not changed or sent.")
             }
-            zeron_proto::ContextOperationStatus::Unknown => Some(
+            luna_proto::ContextOperationStatus::Unknown => Some(
                 "Context compaction completion is unresolved. Your draft was not changed or sent; clear context before sending again.",
             ),
-            zeron_proto::ContextOperationStatus::Idle
-            | zeron_proto::ContextOperationStatus::Completed
-            | zeron_proto::ContextOperationStatus::Failed => None,
+            luna_proto::ContextOperationStatus::Idle
+            | luna_proto::ContextOperationStatus::Completed
+            | luna_proto::ContextOperationStatus::Failed => None,
         }
     }
 
@@ -7877,7 +7877,7 @@ impl Composer {
     fn send(
         &mut self,
         text: String,
-        follow_up_behavior: Option<zeron_proto::FollowUpBehavior>,
+        follow_up_behavior: Option<luna_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
         if let Some(reason) = self.context_send_block_reason(cx) {
@@ -8156,7 +8156,7 @@ impl Composer {
         // so the doc frame dedups it away).
         let echo = SessionMessageEntry {
             id: message_id.clone(),
-            role: zeron_doc::MessageRole::User,
+            role: luna_doc::MessageRole::User,
             parts: vec![MessagePart::Text {
                 id: "t0".into(),
                 text: echo_text.clone(),
@@ -8365,7 +8365,7 @@ impl Composer {
                     if should_publish_optimistic_echo(queue) {
                         let refreshed = SessionMessageEntry {
                             id: message_id.clone(),
-                            role: zeron_doc::MessageRole::User,
+                            role: luna_doc::MessageRole::User,
                             parts: vec![MessagePart::Text {
                                 id: "t0".into(),
                                 text: content.clone(),
@@ -8408,7 +8408,7 @@ impl Composer {
                 // a blocking CreateWorktree relay RPC here: the RPC had no
                 // timeout, so a lost relay frame wedged the send on "Sending…"
                 // forever while the session ran remotely anyway (2026-08-18).
-                let mut run_worktree: Option<zeron_proto::WorktreeSpec> = None;
+                let mut run_worktree: Option<luna_proto::WorktreeSpec> = None;
                 // The picked ref rides createChat so the session footer names
                 // it from the first frame (it read "Select ref" until the
                 // host's diff reconciler got around to stamping the branch).
@@ -8441,7 +8441,7 @@ impl Composer {
                                 // current checkout state.
                                 let base =
                                     base.clone().unwrap_or_else(|| "HEAD".to_string());
-                                run_worktree = Some(zeron_proto::WorktreeSpec {
+                                run_worktree = Some(luna_proto::WorktreeSpec {
                                     repo_path: repo_path.clone(),
                                     base: base.clone(),
                                 });
@@ -8614,7 +8614,7 @@ impl Composer {
                     .await;
                 if let Ok(Some(receipt)) = engine
                     .client()
-                    .call_as::<Option<zeron_proto::CommandReceipt>>(
+                    .call_as::<Option<luna_proto::CommandReceipt>>(
                         methods::GET_TASK_COMMAND_RECEIPT,
                         serde_json::json!({ "commandId": message_id.clone() }),
                     )
@@ -9299,7 +9299,7 @@ impl Composer {
         let composer_for_a11y = cx.entity().downgrade();
         let options = question.options.iter().enumerate().map(|(ix, label)| {
             // Selection reads on the row only while no typed override exists
-            // (typed answers win — zeron question-panel.tsx `isSel`).
+            // (typed answers win — luna question-panel.tsx `isSel`).
             let picked = wizard.is_picked(ix) && typed_empty;
             let composer_for_a11y = composer_for_a11y.clone();
             div()
@@ -9330,7 +9330,7 @@ impl Composer {
                 } else {
                     gpui::transparent_black()
                 })
-                // zeron question-panel.tsx option rows: `transition-colors`.
+                // luna question-panel.tsx option rows: `transition-colors`.
                 .bg(if picked {
                     crate::theme::ink(0.09)
                 } else {
@@ -9559,7 +9559,7 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::of(cx);
-        // Zeron composer-actions.tsx: a size-7 filled circle — up-arrow to
+        // Luna composer-actions.tsx: a size-7 filled circle — up-arrow to
         // send/queue, a dark rounded square on the same light circle to stop.
         match mode {
             SendButtonMode::Stop => div()
@@ -9780,7 +9780,7 @@ impl Render for Composer {
         // UP FRONT that a send will queue (a durable local write delivered on
         // reconnect) instead of letting the button imply instant delivery.
         let queue_notice: Option<(SharedString, bool)> = {
-            use zeron_proto::ConnectivityState as S;
+            use luna_proto::ConnectivityState as S;
             let state = self.state.read(cx);
             let degraded = match state.selected_chat.as_deref() {
                 Some(id) => state.chat_delivery_degraded(id),
@@ -9806,7 +9806,7 @@ impl Render for Composer {
                 (text, offline)
             })
         };
-        // Centered composer column (zeron `mx-auto w-full max-w-3xl`).
+        // Centered composer column (luna `mx-auto w-full max-w-3xl`).
         let container = div()
             .w_full()
             .max_w(px(COMPOSER_MAX_WIDTH))
@@ -10098,7 +10098,7 @@ impl Render for Composer {
             .justify_center()
             .rounded_full()
             .cursor_pointer()
-            // zeron composer-actions.tsx attach: `transition-colors`.
+            // luna composer-actions.tsx attach: `transition-colors`.
             .bg(motion::hover_blend(
                 "composer-attach",
                 gpui::transparent_black(),
@@ -10495,8 +10495,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+    use luna_rpc::{RpcReply, RpcService};
     use tokio::sync::oneshot;
-    use zeron_rpc::{RpcReply, RpcService};
 
     fn composer_focus_window(
         cx: &mut gpui::TestAppContext,
@@ -10609,7 +10609,7 @@ mod tests {
                         .filter(|submission| submission.task_id.as_deref() == task_id)
                         .cloned()
                         .collect();
-                    RpcReply::value(&zeron_proto::ComposerDraftRead { draft, submissions })
+                    RpcReply::value(&luna_proto::ComposerDraftRead { draft, submissions })
                 }
                 methods::SAVE_COMPOSER_DRAFT => {
                     if self.fail_saves.load(Ordering::SeqCst) {
@@ -10710,8 +10710,8 @@ mod tests {
                     RpcReply::value(&serde_json::json!({ "ok": true }))
                 }
                 methods::GET_TASK_COMMAND_SNAPSHOT => {
-                    RpcReply::value(&zeron_proto::TaskCommandRead {
-                        snapshot: zeron_proto::TaskCommandSnapshot {
+                    RpcReply::value(&luna_proto::TaskCommandRead {
+                        snapshot: luna_proto::TaskCommandSnapshot {
                             task_id: params["taskId"].as_str().unwrap().into(),
                             ..Default::default()
                         },
@@ -10760,7 +10760,7 @@ mod tests {
 
     fn test_draft(task_id: &str, revision: u64, text: &str) -> ComposerDraft {
         ComposerDraft {
-            version: zeron_proto::COMPOSER_DRAFT_VERSION,
+            version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: task_id.into(),
             task_id: Some(task_id.into()),
             revision,
@@ -10777,14 +10777,14 @@ mod tests {
         task_id: &str,
         command_id: &str,
         status: CommandReceiptStatus,
-    ) -> zeron_proto::CommandReceipt {
-        zeron_proto::CommandReceipt {
+    ) -> luna_proto::CommandReceipt {
+        luna_proto::CommandReceipt {
             command_id: command_id.into(),
             task_id: task_id.into(),
             intent: "session".into(),
             payload_hash: "synthetic-mock".into(),
             status,
-            snapshot: zeron_proto::TaskCommandSnapshot {
+            snapshot: luna_proto::TaskCommandSnapshot {
                 task_id: task_id.into(),
                 ..Default::default()
             },
@@ -10795,8 +10795,8 @@ mod tests {
             execution_environment: None,
             correlation_id: None,
             reason: (status == CommandReceiptStatus::Rejected).then(|| {
-                zeron_proto::CommandReceiptReason {
-                    code: zeron_proto::CommandReasonCode::OperationRejected,
+                luna_proto::CommandReceiptReason {
+                    code: luna_proto::CommandReasonCode::OperationRejected,
                     message: "synthetic rejection".into(),
                 }
             }),
@@ -10807,7 +10807,7 @@ mod tests {
         }
     }
 
-    fn mock_task_chat(task: &str) -> zeron_proto::Chat {
+    fn mock_task_chat(task: &str) -> luna_proto::Chat {
         serde_json::from_value(serde_json::json!({
             "id": task,
             "deviceId": "local",
@@ -10834,7 +10834,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::memory_client(service),
+                luna_rpc::memory_client(service),
             ));
             state.selected_chat = Some(task_id.into());
         });
@@ -10923,7 +10923,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::memory_client(service.clone()),
+                luna_rpc::memory_client(service.clone()),
             ));
         });
         let composer = cx.new(|cx| Composer::new(state, cx));
@@ -11019,7 +11019,7 @@ mod tests {
         )]));
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::memory_client(new_service.clone()),
+                luna_rpc::memory_client(new_service.clone()),
             ));
         });
         composer.update(cx, |composer, cx| composer.on_state_changed(cx));
@@ -11320,7 +11320,7 @@ mod tests {
         let reopened_state = cx.new(|_| AppState::new());
         reopened_state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::memory_client(service.clone()),
+                luna_rpc::memory_client(service.clone()),
             ));
         });
         let reopened = cx.new(|cx| Composer::new(reopened_state, cx));
@@ -11843,11 +11843,11 @@ mod tests {
     fn context_running_or_unknown_blocks_before_draft_capture(cx: &mut gpui::TestAppContext) {
         for (status, expected) in [
             (
-                zeron_proto::ContextOperationStatus::Running,
+                luna_proto::ContextOperationStatus::Running,
                 "Context compaction is still running. Your draft was not changed or sent.",
             ),
             (
-                zeron_proto::ContextOperationStatus::Unknown,
+                luna_proto::ContextOperationStatus::Unknown,
                 "Context compaction completion is unresolved. Your draft was not changed or sent; clear context before sending again.",
             ),
         ] {
@@ -11897,7 +11897,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::RpcClient::new(out, inbound),
+                luna_rpc::RpcClient::new(out, inbound),
             ));
             state.selected_chat = Some("c".into());
             // A send in flight reads as Working — the double-Enter window.
@@ -12058,7 +12058,7 @@ mod tests {
             }],
             created_at: 0,
             device_id: "synthetic".into(),
-            status: Some(zeron_doc::MessageStatus::Streaming),
+            status: Some(luna_doc::MessageStatus::Streaming),
             continuation_of: None,
         };
         let state = cx.new(|_| AppState::new());
@@ -12278,7 +12278,7 @@ mod tests {
         let raw = local_file_link("src/a file#[x].rs", false);
         assert_eq!(
             raw,
-            "[a file#\\[x\\].rs](zeron-file:src/a%20file%23%5Bx%5D.rs)"
+            "[a file#\\[x\\].rs](luna-file:src/a%20file%23%5Bx%5D.rs)"
         );
         let links = file_mention_links(&raw);
         assert_eq!(links.len(), 1);
@@ -12287,7 +12287,7 @@ mod tests {
         assert!(!links[0].is_dir);
 
         let folder = local_file_link("src/components", true);
-        assert_eq!(folder, "[components](zeron-file:src/components/)");
+        assert_eq!(folder, "[components](luna-file:src/components/)");
         let links = file_mention_links(&folder);
         assert_eq!(links[0].path, "src/components");
         assert!(links[0].is_dir);
@@ -12297,12 +12297,12 @@ mod tests {
     fn dropped_mentions_are_separated_from_surrounding_text() {
         let (inserted, cursor_advance) =
             dropped_file_mention("fixnow", 3..3, "src/lib.rs", false).expect("valid drop");
-        assert_eq!(inserted, " [lib.rs](zeron-file:src/lib.rs) ");
+        assert_eq!(inserted, " [lib.rs](luna-file:src/lib.rs) ");
         assert_eq!(cursor_advance, inserted.len());
 
         let (inserted, cursor_advance) =
             dropped_file_mention("fix now", 3..3, "src/components", true).expect("valid drop");
-        assert_eq!(inserted, " [components](zeron-file:src/components/)");
+        assert_eq!(inserted, " [components](luna-file:src/components/)");
         assert_eq!(cursor_advance, inserted.len() + 1);
     }
 
@@ -12410,12 +12410,12 @@ mod tests {
     fn sent_mention_display_leaves_plain_prompts_untouched() {
         assert_eq!(sent_mention_display("fix the composer"), None);
         assert_eq!(
-            sent_mention_display("what is a zeron-file: link?"),
+            sent_mention_display("what is a luna-file: link?"),
             None,
             "scheme substring without a valid mention link"
         );
         assert_eq!(
-            sent_mention_display("[a.rs](zeron-file:../a.rs)"),
+            sent_mention_display("[a.rs](luna-file:../a.rs)"),
             None,
             "a hostile path never becomes a chip in the transcript either"
         );
@@ -12435,14 +12435,14 @@ mod tests {
     #[test]
     fn luna_approval_marker_chooses_only_the_direct_single_question_route() {
         let mut provider = question("provider", &["Deny", "Allow once"], false);
-        provider.approval = Some(zeron_proto::ApprovalRequest {
+        provider.approval = Some(luna_proto::ApprovalRequest {
             provider_request_id: "provider".into(),
             provider: HarnessId::Codex,
             turn_id: Some("turn-a".into()),
             machine_name: "synthetic".into(),
-            action_kind: zeron_proto::ApprovalActionKind::Tool,
+            action_kind: luna_proto::ApprovalActionKind::Tool,
             summary: "provider action".into(),
-            requested_scope: zeron_proto::PermissionScope::Workspace,
+            requested_scope: luna_proto::PermissionScope::Workspace,
             expires_at_ms: i64::MAX,
             supports_task_allowance: false,
         });
@@ -12454,8 +12454,7 @@ mod tests {
 
         let mut luna = provider.clone();
         luna.id = "luna".into();
-        luna.approval.as_mut().unwrap().action_kind =
-            zeron_proto::ApprovalActionKind::LunaCrossTask;
+        luna.approval.as_mut().unwrap().action_kind = luna_proto::ApprovalActionKind::LunaCrossTask;
         assert_eq!(
             luna_approval_question(&[luna.clone()]).unwrap(),
             Some(&luna)
@@ -12469,7 +12468,7 @@ mod tests {
                     labels: vec!["Allow once".into()],
                 }],
             ),
-            zeron_proto::ApprovalDecision::AllowOnce
+            luna_proto::ApprovalDecision::AllowOnce
         );
     }
 
@@ -12538,7 +12537,7 @@ mod tests {
 
     #[test]
     fn auto_grow_math() {
-        // The source heights (zeron composer.tsx line 235 clamp, composer-
+        // The source heights (luna composer.tsx line 235 clamp, composer-
         // actions.tsx row, 1px hairlines): 76+46+2 empty … 260+46+2 capped.
         assert_eq!(COMPOSER_MIN_HEIGHT, 124.0);
         assert_eq!(COMPOSER_MAX_HEIGHT, 308.0);
@@ -12555,7 +12554,7 @@ mod tests {
             h4,
             4.0 * INPUT_LINE_HEIGHT + TEXTAREA_PAD_V + ACTIONS_ROW_HEIGHT + PILL_BORDER_V
         );
-        // Caps at a 260px textarea box (zeron max-h-[260px] / the JS clamp).
+        // Caps at a 260px textarea box (luna max-h-[260px] / the JS clamp).
         assert_eq!(
             composer_total_height(input_content_height(100)),
             COMPOSER_MAX_HEIGHT
@@ -13221,7 +13220,7 @@ mod tests {
     fn async_question_selection_waits_for_send_and_uses_index_ids() {
         let mut wizard = Wizard::new_async(
             "aq-call-1".into(),
-            vec![zeron_proto::AsyncUserInputQuestion {
+            vec![luna_proto::AsyncUserInputQuestion {
                 title: "Which option?".into(),
                 options: Some(vec!["A".into(), "B".into()]),
             }],
@@ -13254,7 +13253,7 @@ mod tests {
             role: MessageRole::Assistant,
             parts: vec![MessagePart::AsyncQuestion {
                 id: "aq-call-1".into(),
-                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Which option?".into(),
                     options: Some(vec!["A".into(), "B".into()]),
                 }],
@@ -13262,7 +13261,7 @@ mod tests {
             }],
             created_at: 1,
             device_id: "synthetic".into(),
-            status: Some(zeron_doc::MessageStatus::Complete),
+            status: Some(luna_doc::MessageStatus::Complete),
             continuation_of: None,
         };
         let later = SessionMessageEntry {
@@ -13302,14 +13301,14 @@ mod tests {
             ) -> Result<RpcReply, RpcError> {
                 match method {
                     methods::GET_COMPOSER_DRAFT => {
-                        RpcReply::value(&zeron_proto::ComposerDraftRead {
+                        RpcReply::value(&luna_proto::ComposerDraftRead {
                             draft: None,
                             submissions: vec![],
                         })
                     }
                     methods::GET_TASK_COMMAND_SNAPSHOT => {
-                        RpcReply::value(&zeron_proto::TaskCommandRead {
-                            snapshot: zeron_proto::TaskCommandSnapshot {
+                        RpcReply::value(&luna_proto::TaskCommandRead {
+                            snapshot: luna_proto::TaskCommandSnapshot {
                                 task_id: "async-task".into(),
                                 ..Default::default()
                             },
@@ -13326,13 +13325,13 @@ mod tests {
                             serde_json::json!([])
                         );
                         self.calls.fetch_add(1, Ordering::SeqCst);
-                        RpcReply::value(&zeron_proto::CommandReceipt {
+                        RpcReply::value(&luna_proto::CommandReceipt {
                             command_id: params["commandId"].as_str().unwrap().into(),
                             task_id: "async-task".into(),
                             intent: "respondAsyncQuestion".into(),
                             payload_hash: "synthetic".into(),
                             status: CommandReceiptStatus::Pending,
-                            snapshot: zeron_proto::TaskCommandSnapshot {
+                            snapshot: luna_proto::TaskCommandSnapshot {
                                 task_id: "async-task".into(),
                                 ..Default::default()
                             },
@@ -13364,7 +13363,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::memory_client(service.clone()),
+                luna_rpc::memory_client(service.clone()),
             ));
             state.selected_chat = Some("async-task".into());
             state.transcript = vec![SessionMessageEntry {
@@ -13372,7 +13371,7 @@ mod tests {
                 role: MessageRole::Assistant,
                 parts: vec![MessagePart::AsyncQuestion {
                     id: "aq-call-1".into(),
-                    questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    questions: vec![luna_proto::AsyncUserInputQuestion {
                         title: "Optional question?".into(),
                         options: Some(vec!["A".into(), "B".into()]),
                     }],
@@ -13380,7 +13379,7 @@ mod tests {
                 }],
                 created_at: 1,
                 device_id: "synthetic".into(),
-                status: Some(zeron_doc::MessageStatus::Complete),
+                status: Some(luna_doc::MessageStatus::Complete),
                 continuation_of: None,
             }];
         });
@@ -13482,14 +13481,14 @@ mod tests {
                 self.methods.lock().unwrap().push(method.into());
                 match method {
                     methods::GET_COMPOSER_DRAFT => {
-                        RpcReply::value(&zeron_proto::ComposerDraftRead {
+                        RpcReply::value(&luna_proto::ComposerDraftRead {
                             draft: None,
                             submissions: vec![],
                         })
                     }
                     methods::GET_TASK_COMMAND_SNAPSHOT => {
-                        RpcReply::value(&zeron_proto::TaskCommandRead {
-                            snapshot: zeron_proto::TaskCommandSnapshot {
+                        RpcReply::value(&luna_proto::TaskCommandRead {
+                            snapshot: luna_proto::TaskCommandSnapshot {
                                 task_id: "async-task".into(),
                                 ..Default::default()
                             },
@@ -13500,7 +13499,7 @@ mod tests {
                         })
                     }
                     methods::GET_TASK_COMMAND_RECEIPT => {
-                        RpcReply::value(&Option::<zeron_proto::CommandReceipt>::None)
+                        RpcReply::value(&Option::<luna_proto::CommandReceipt>::None)
                     }
                     methods::EXECUTE_TASK_COMMAND => {
                         self.envelopes.lock().unwrap().push(params.clone());
@@ -13508,13 +13507,13 @@ mod tests {
                         if call < 2 {
                             return Err(RpcError::Transport("synthetic lost reply".into()));
                         }
-                        RpcReply::value(&zeron_proto::CommandReceipt {
+                        RpcReply::value(&luna_proto::CommandReceipt {
                             command_id: params["commandId"].as_str().unwrap().into(),
                             task_id: "async-task".into(),
                             intent: "respondAsyncQuestion".into(),
                             payload_hash: "synthetic".into(),
                             status: CommandReceiptStatus::Applied,
-                            snapshot: zeron_proto::TaskCommandSnapshot {
+                            snapshot: luna_proto::TaskCommandSnapshot {
                                 task_id: "async-task".into(),
                                 ..Default::default()
                             },
@@ -13548,7 +13547,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::memory_client(service.clone()),
+                luna_rpc::memory_client(service.clone()),
             ));
             state.selected_chat = Some("async-task".into());
             state.transcript = vec![SessionMessageEntry {
@@ -13556,7 +13555,7 @@ mod tests {
                 role: MessageRole::Assistant,
                 parts: vec![MessagePart::AsyncQuestion {
                     id: "aq-call-1".into(),
-                    questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    questions: vec![luna_proto::AsyncUserInputQuestion {
                         title: "Which option?".into(),
                         options: Some(vec!["A".into(), "B".into()]),
                     }],
@@ -13564,7 +13563,7 @@ mod tests {
                 }],
                 created_at: 1,
                 device_id: "synthetic".into(),
-                status: Some(zeron_doc::MessageStatus::Complete),
+                status: Some(luna_doc::MessageStatus::Complete),
                 continuation_of: None,
             }];
         });
@@ -13729,7 +13728,7 @@ mod tests {
 
     #[test]
     fn pending_input_detection() {
-        use zeron_doc::MessageStatus;
+        use luna_doc::MessageStatus;
         let input_part = MessagePart::Input {
             id: "in-r1".into(),
             request_id: "r1".into(),

@@ -5,18 +5,16 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::{Connection, params};
-use tempfile::TempDir;
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, RegistryDoc, SessionDoc, SessionMessageEntry,
 };
-use zeron_engine::backup::{
-    BackupError, BackupService, IsolatedRoot, RecoveryKey, inspect_archive,
-};
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, InstanceLock};
-use zeron_proto::HarnessId;
-use zeron_proto::{AppshotActivityKind, AppshotActivityRecord, Chat, Space};
-use zeron_sync::DocsStore;
+use luna_engine::backup::{BackupError, BackupService, IsolatedRoot, RecoveryKey, inspect_archive};
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, InstanceLock};
+use luna_proto::HarnessId;
+use luna_proto::{AppshotActivityKind, AppshotActivityRecord, Chat, Space};
+use luna_sync::DocsStore;
+use rusqlite::{Connection, params};
+use tempfile::TempDir;
 
 fn fixture() -> (TempDir, PathBuf, PathBuf) {
     let parent = TempDir::new().unwrap();

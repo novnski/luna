@@ -12,12 +12,12 @@ $root = Join-Path $PSScriptRoot ('../target/windows-lifecycle-' + [guid]::NewGui
 $root = [IO.Path]::GetFullPath($root)
 New-Item -ItemType Directory -Path $root | Out-Null
 
-if (-not ('ZeronWindowProbe' -as [type])) {
+if (-not ('LunaWindowProbe' -as [type])) {
 Add-Type @'
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
-public static class ZeronWindowProbe {
+public static class LunaWindowProbe {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetClassName(IntPtr hwnd, StringBuilder name, int count);
     [DllImport("user32.dll")]
@@ -31,9 +31,9 @@ $overrides = @{
     LOCALAPPDATA = (Join-Path $root 'AppData/Local')
     APPDATA = (Join-Path $root 'AppData/Roaming')
     LUNA_DATA_DIR = (Join-Path $root 'LUNA')
-    ZERON_EDGE_TOKEN = $null; LUNA_IPC_PORT = '0'
-    ZERON_EDGE_URL = 'http://127.0.0.1:1'; ZERON_ORG_ID = $null
-    ZERON_HARNESS = 'mock'; RUST_BACKTRACE = '1'
+    LUNA_EDGE_TOKEN = $null; LUNA_IPC_PORT = '0'
+    LUNA_EDGE_URL = 'http://127.0.0.1:1'; LUNA_ORG_ID = $null
+    LUNA_HARNESS = 'mock'; RUST_BACKTRACE = '1'
 }
 $saved = @{}
 foreach ($key in $overrides.Keys) {
@@ -60,9 +60,9 @@ try {
             if ($p.MainWindowHandle -eq 0) { throw "Run $run did not open a window within 25s" }
             $hwnd = $p.MainWindowHandle
             $class = [Text.StringBuilder]::new(256)
-            [void][ZeronWindowProbe]::GetClassName($hwnd, $class, $class.Capacity)
+            [void][LunaWindowProbe]::GetClassName($hwnd, $class, $class.Capacity)
             [uint32]$owner = 0
-            [void][ZeronWindowProbe]::GetWindowThreadProcessId($hwnd, [ref]$owner)
+            [void][LunaWindowProbe]::GetWindowThreadProcessId($hwnd, [ref]$owner)
             if ($owner -ne $p.Id -or $class.ToString() -eq 'ConsoleWindowClass') {
                 throw "Probe selected a non-application window (class=$class owner=$owner)"
             }

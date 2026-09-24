@@ -9,15 +9,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
-use zeron_engine::{
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
 };
-use zeron_proto::{
+use luna_proto::{
     ChatConfig, HarnessId, HistoryProjectPolicy, PermissionMode, SandboxLevel, ToolCall,
 };
-use zeron_rpc::methods;
-use zeron_ui::*;
+use luna_rpc::methods;
+use luna_ui::*;
 
 const TASK_ALPHA: &str = "14141414-1414-4141-8141-141414141414";
 const TASK_COLLISION: &str = "24242424-2424-4242-8242-242424242424";
@@ -306,8 +306,8 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
             index_accessibility_text: false,
             index_screenshot_text: false,
         })?;
-    let client = zeron_rpc::memory_client(core.rpc_service());
-    let rebuilt: zeron_proto::HistoryRebuildResult = client
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let rebuilt: luna_proto::HistoryRebuildResult = client
         .call_as(
             methods::REBUILD_SESSION_HISTORY,
             serde_json::json!({"taskIds": []}),
@@ -373,7 +373,7 @@ fn main() -> anyhow::Result<()> {
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
         .port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,

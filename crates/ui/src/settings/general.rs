@@ -1,7 +1,7 @@
 //! Device-local task behavior preferences shown at the Settings entry point.
 
 use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*, px};
-use zeron_proto::FollowUpBehavior;
+use luna_proto::FollowUpBehavior;
 
 use crate::popover::{self, ScrollRailHost};
 use crate::settings::widgets;

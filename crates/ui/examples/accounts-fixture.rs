@@ -3,12 +3,12 @@
 //! upstream provider or the macOS Keychain.
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use std::sync::Arc;
-use zeron_proto::{
+use luna_proto::{
     AgentAccount, AgentAccountWarning, AgentAccountsSnapshot, AgentAuthKind,
     AgentAuthenticationState, HarnessId,
 };
-use zeron_ui::*;
+use luna_ui::*;
+use std::sync::Arc;
 
 fn unused_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -65,16 +65,16 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     let runtime = tokio::runtime::Runtime::new()?;
-    let registry = Arc::new(zeron_engine::HarnessRegistry::new());
+    let registry = Arc::new(luna_engine::HarnessRegistry::new());
     let profile =
-        zeron_engine::EngineProfile::development(&engine_data, "fixture-org", "fixture-user");
+        luna_engine::EngineProfile::development(&engine_data, "fixture-org", "fixture-user");
     let core = runtime.block_on(async {
-        zeron_engine::EngineCore::assemble_with_profile_and_agent_accounts_config(
+        luna_engine::EngineCore::assemble_with_profile_and_agent_accounts_config(
             profile,
             registry,
             HarnessId::Mock,
             None,
-            zeron_engine::AgentAccountsConfig {
+            luna_engine::AgentAccountsConfig {
                 data_dir: engine_data.clone(),
                 claude_config_dir: claude_dir,
                 claude_config_file: claude_config,
@@ -83,14 +83,14 @@ fn main() -> anyhow::Result<()> {
             },
         )
     })?;
-    let mut auth_config = zeron_engine::AuthConfig::new("", &engine_data);
+    let mut auth_config = luna_engine::AuthConfig::new("", &engine_data);
     auth_config.use_in_memory_credentials_for_tests();
     auth_config.dev_user_id = "fixture-user".into();
-    core.set_auth(zeron_engine::Auth::new(auth_config));
+    core.set_auth(luna_engine::Auth::new(auth_config));
     core.workspace
         .create_chat("fixture-chat", None, Some(&core.device_id), None, None)?;
     let ipc_port = unused_port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: data.clone(),
         ipc_port,
@@ -168,8 +168,8 @@ fn main() -> anyhow::Result<()> {
             let state = cx.new(|_| {
                 let mut state = state::AppState::new();
                 state.fixture_attachment_engine(handle);
-                state.connection = zeron_proto::view::ConnectionStatus::Ready;
-                state.workspace_scope = Some(zeron_proto::WorkspaceScope::Development);
+                state.connection = luna_proto::view::ConnectionStatus::Ready;
+                state.workspace_scope = Some(luna_proto::WorkspaceScope::Development);
                 state.local_device_id = Some(device.clone());
                 state.devices = vec![
                     serde_json::from_value(serde_json::json!({

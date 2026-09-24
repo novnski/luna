@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{AgentEvent, SUBAGENT_INPUT_KEEP, ToolCall, ToolDiff, UserInputQuestion};
+use luna_proto::{AgentEvent, SUBAGENT_INPUT_KEEP, ToolCall, ToolDiff, UserInputQuestion};
 
 use crate::constants::MSG_INLINE_MAX;
 
@@ -263,7 +263,7 @@ pub enum MessagePart {
     #[serde(rename_all = "camelCase")]
     AsyncQuestion {
         id: String,
-        questions: Vec<zeron_proto::AsyncUserInputQuestion>,
+        questions: Vec<luna_proto::AsyncUserInputQuestion>,
         #[serde(default)]
         resolved: bool,
     },
@@ -327,7 +327,7 @@ impl MessagePart {
 /// In place because the fold runs once per streamed event: rebuilding the
 /// accumulator each time made long turns O(n²) in allocations.
 ///
-/// Semantics from zeron `foldEventIntoParts`:
+/// Semantics from luna `foldEventIntoParts`:
 /// - `SessionStarted` / `Steered` reset the accumulator (turn boundary — makes replay safe).
 /// - `TextDelta` appends to the trailing text part, or starts a new one if the trail is not text
 ///   (a tool call in between breaks the text block).
@@ -517,9 +517,9 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         } => {
             let status = match event.as_ref() {
                 AgentEvent::Done { status, .. } => Some(match status {
-                    zeron_proto::DoneStatus::Errored => SubagentStatus::Failed,
-                    zeron_proto::DoneStatus::Interrupted => SubagentStatus::Interrupted,
-                    zeron_proto::DoneStatus::Completed => SubagentStatus::Done,
+                    luna_proto::DoneStatus::Errored => SubagentStatus::Failed,
+                    luna_proto::DoneStatus::Interrupted => SubagentStatus::Interrupted,
+                    luna_proto::DoneStatus::Completed => SubagentStatus::Done,
                 }),
                 // A new assignment reopens a settled chip. Providers may
                 // announce it with user text or a confirmed turn boundary.
@@ -528,8 +528,8 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 | AgentEvent::InputResolved { .. } => Some(SubagentStatus::Running),
                 AgentEvent::InputRequested { .. } => Some(SubagentStatus::Waiting),
                 AgentEvent::ChildStatus { status } => Some(match status {
-                    zeron_proto::ChildRuntimeStatus::Active => SubagentStatus::Running,
-                    zeron_proto::ChildRuntimeStatus::Idle => SubagentStatus::Idle,
+                    luna_proto::ChildRuntimeStatus::Active => SubagentStatus::Running,
+                    luna_proto::ChildRuntimeStatus::Idle => SubagentStatus::Idle,
                 }),
                 _ => None,
             };
@@ -732,7 +732,7 @@ pub fn continuation_id(root: &str, index: usize) -> String {
 ///
 /// Splitting happens at part boundaries; an oversized text part is itself chunked at char
 /// boundaries. Returns one Vec per resulting entry — the first keeps the root id, the rest are
-/// continuations (`continuation_id(root, i)`), matching `splitMessageEntry` in zeron.
+/// continuations (`continuation_id(root, i)`), matching `splitMessageEntry` in luna.
 pub fn split_parts(parts: &[MessagePart]) -> Vec<Vec<MessagePart>> {
     let mut chunks: Vec<Vec<MessagePart>> = vec![Vec::new()];
     let mut current_bytes = 0usize;
@@ -820,14 +820,14 @@ mod tests {
             &mut parts,
             &AgentEvent::ToolCall {
                 id: "item-1".into(),
-                call: call(zeron_proto::ComputerUseStatus::Running, false),
+                call: call(luna_proto::ComputerUseStatus::Running, false),
             },
         );
         fold_event_into_parts(
             &mut parts,
             &AgentEvent::ToolCall {
                 id: "item-1".into(),
-                call: call(zeron_proto::ComputerUseStatus::Unknown, true),
+                call: call(luna_proto::ComputerUseStatus::Unknown, true),
             },
         );
         fold_event_into_parts(
@@ -843,7 +843,7 @@ mod tests {
             parts.as_slice(),
             [MessagePart::Tool {
                 call: ToolCall::ComputerUse {
-                    status: zeron_proto::ComputerUseStatus::Unknown,
+                    status: luna_proto::ComputerUseStatus::Unknown,
                     screenshot_observed: true,
                     ..
                 },
@@ -852,8 +852,8 @@ mod tests {
             }]
         ));
         assert_eq!(
-            sanitize_tool_call(&call(zeron_proto::ComputerUseStatus::Unknown, true)),
-            call(zeron_proto::ComputerUseStatus::Unknown, true)
+            sanitize_tool_call(&call(luna_proto::ComputerUseStatus::Unknown, true)),
+            call(luna_proto::ComputerUseStatus::Unknown, true)
         );
     }
 
@@ -861,7 +861,7 @@ mod tests {
     fn async_question_folds_once_without_becoming_pending_input() {
         let event = AgentEvent::AsyncQuestions {
             message_id: "call-1".into(),
-            questions: vec![zeron_proto::AsyncUserInputQuestion {
+            questions: vec![luna_proto::AsyncUserInputQuestion {
                 title: "Which option?".into(),
                 options: Some(vec!["A".into(), "B".into()]),
             }],
@@ -994,7 +994,7 @@ mod tests {
         fold_event_into_parts(
             &mut parts,
             &AgentEvent::SessionStarted {
-                harness: zeron_proto::HarnessId::Mock,
+                harness: luna_proto::HarnessId::Mock,
                 model: "m".into(),
                 tools: vec![],
                 cwd: "/".into(),
@@ -1345,7 +1345,7 @@ mod tests {
 
     #[test]
     fn subagent_events_refresh_the_spawn_chip_in_place() {
-        use zeron_proto::DoneStatus;
+        use luna_proto::DoneStatus;
         let mut parts = Vec::new();
         fold_event_into_parts(
             &mut parts,
@@ -1431,7 +1431,7 @@ mod tests {
 
     #[test]
     fn child_observations_keep_waiting_usage_result_and_reactivation_distinct() {
-        use zeron_proto::DoneStatus;
+        use luna_proto::DoneStatus;
         let mut parts = Vec::new();
         fold_event_into_parts(
             &mut parts,
@@ -1483,7 +1483,7 @@ mod tests {
         fold_event_into_parts(
             &mut parts,
             &tagged(AgentEvent::ChildStatus {
-                status: zeron_proto::ChildRuntimeStatus::Idle,
+                status: luna_proto::ChildRuntimeStatus::Idle,
             }),
         );
         assert!(matches!(
@@ -1539,7 +1539,7 @@ mod tests {
         // Mis-keyed tagged traffic (claude's background shells settled
         // through the subagent subtype, 2026-08-20) must not stamp lifecycle
         // onto an ordinary tool chip — the genus gate is the CALL.
-        use zeron_proto::DoneStatus;
+        use luna_proto::DoneStatus;
         let mut parts = Vec::new();
         fold_event_into_parts(
             &mut parts,

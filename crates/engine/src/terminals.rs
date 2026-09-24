@@ -1,5 +1,5 @@
 //! Terminals — PTY sessions owned by this device (feature-inventory §3.4; port of
-//! zeron's `terminals.ts` over `portable-pty`).
+//! luna's `terminals.ts` over `portable-pty`).
 //!
 //! - `open` spawns the user's login shell in the chat's cwd; `subscribe` replays a
 //!   bounded 1MB window (resumable via `afterSeq`) then tails live output, batched
@@ -10,7 +10,7 @@
 //!   Exited in-memory sessions expire after 30 minutes; saved history has its
 //!   own count and per-terminal output bounds.
 //! - Ownership: M5 is single-user local — every IPC/relay caller is the device
-//!   owner, so the per-user owner re-checks from zeron's Router land with real
+//!   owner, so the per-user owner re-checks from luna's Router land with real
 //!   multi-account auth in M6.
 
 use std::collections::{HashMap, VecDeque};
@@ -29,8 +29,8 @@ mod history;
 mod windows;
 use tokio::sync::mpsc;
 
-use zeron_doc::TERMINAL_OUTPUT_BATCH_MS;
-use zeron_proto::{TerminalEvent, TerminalInventoryEntry, TerminalProcessState, TerminalSession};
+use luna_doc::TERMINAL_OUTPUT_BATCH_MS;
+use luna_proto::{TerminalEvent, TerminalInventoryEntry, TerminalProcessState, TerminalSession};
 
 use history::TerminalHistory;
 
@@ -283,7 +283,7 @@ impl Terminals {
             cmd.cwd(cwd);
             cmd.env("TERM", "xterm-256color");
             cmd.env("COLORTERM", "truecolor");
-            cmd.env("TERM_PROGRAM", "Zeron");
+            cmd.env("TERM_PROGRAM", "Luna");
             let child = pair
                 .slave
                 .spawn_command(cmd)
@@ -815,7 +815,7 @@ mod windows_tests {
 
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64;
-    use zeron_proto::TerminalEvent;
+    use luna_proto::TerminalEvent;
 
     use super::Terminals;
 

@@ -2,7 +2,7 @@
 //! once with no orphaned output. Silent gaps are measured for diagnostics;
 //! silence is never proof that an ACP prompt has completed (#296).
 //!
-//! SURVEY_RUNS=3 cargo test -p zeron-harness --test real_quiet_survey -- --ignored --nocapture
+//! SURVEY_RUNS=3 cargo test -p luna-harness --test real_quiet_survey -- --ignored --nocapture
 //! Uninstalled/unauthenticated agents are skipped. For mandatory live Pi
 //! regression coverage with an injected delay, use real_acp_lifecycle.rs.
 
@@ -11,8 +11,8 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
-use zeron_harness::{AcpHarness, CancellationToken, Harness, RunControls, SteerMessage};
-use zeron_proto::{
+use luna_harness::{AcpHarness, CancellationToken, Harness, RunControls, SteerMessage};
+use luna_proto::{
     AgentEvent, DoneStatus, RunRequest, SandboxLevel, UserInputAnswer, UserInputQuestion,
 };
 
@@ -64,7 +64,7 @@ async fn probe_once(harness: AcpHarness) -> ProbeOutcome {
         cwd: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,

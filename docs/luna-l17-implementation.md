@@ -23,12 +23,12 @@ Base: `b33548978ca942e4dba06410ef101b7dff0b2bbc` on `codex/l17-backup-restore` i
 
 ## Verification
 
-- `cargo check --locked -p zeron-engine`: passed (`/tmp/luna-l17-check2.log`).
-- `cargo build --locked -p zeron-engine`: passed after final code changes (`/tmp/luna-l17-build-final.log`).
-- `cargo test --locked -p zeron-engine --test backup_restore`: three synthetic-root integration tests passed (`/tmp/luna-l17-test-final.log`). They cover encrypted/verified export, wrong key, corruption/truncation, excluded fake secrets, recovery of a deleted attachment, staged activation/change conflict, rollback, and refusal of forbidden target material.
-- `cargo test --locked -p zeron-engine --lib backup::tests::`: three unit tests passed (`/tmp/luna-l17-unit-final.log`). They cover both interrupted-swap recovery points and retention selection.
+- `cargo check --locked -p luna-engine`: passed (`/tmp/luna-l17-check2.log`).
+- `cargo build --locked -p luna-engine`: passed after final code changes (`/tmp/luna-l17-build-final.log`).
+- `cargo test --locked -p luna-engine --test backup_restore`: three synthetic-root integration tests passed (`/tmp/luna-l17-test-final.log`). They cover encrypted/verified export, wrong key, corruption/truncation, excluded fake secrets, recovery of a deleted attachment, staged activation/change conflict, rollback, and refusal of forbidden target material.
+- `cargo test --locked -p luna-engine --lib backup::tests::`: three unit tests passed (`/tmp/luna-l17-unit-final.log`). They cover both interrupted-swap recovery points and retention selection.
 - `rustfmt --edition 2024 --check crates/engine/src/backup.rs crates/engine/tests/backup_restore.rs`: passed (`/tmp/luna-l17-fmt-final.log`).
-- `cargo clippy --locked -p zeron-engine --test backup_restore`: passed with warnings in existing engine/dependency files, none in the new backup module (`/tmp/luna-l17-clippy-final.log`).
+- `cargo clippy --locked -p luna-engine --test backup_restore`: passed with warnings in existing engine/dependency files, none in the new backup module (`/tmp/luna-l17-clippy-final.log`).
 - `cargo fmt --all -- --check` fails on pre-existing unrelated formatting differences in UI files; no unrelated files were changed.
 
 ## Shared file and protected-path readback

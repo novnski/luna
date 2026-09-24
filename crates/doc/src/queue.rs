@@ -16,8 +16,8 @@
 //! the only one that *takes* from the queue — see `DocHost::drain_queue`.
 
 use loro::ToJson;
+use luna_proto::{ChatConfig, FollowUpBehavior};
 use serde::{Deserialize, Serialize};
-use zeron_proto::{ChatConfig, FollowUpBehavior};
 
 use crate::schema::{DocError, SessionDoc};
 
@@ -299,7 +299,7 @@ impl SessionDoc {
     /// than racing provider delivery.
     pub fn hold_queue_for_context_change(
         &self,
-        provider: zeron_proto::HarnessId,
+        provider: luna_proto::HarnessId,
         hold_all: bool,
         now_ms: i64,
         text_hash: impl Fn(&str) -> String,
@@ -1267,7 +1267,7 @@ mod tests {
 
     #[test]
     fn context_boundary_holds_relevant_rows_and_fails_closed_on_claims() {
-        let config: zeron_proto::ChatConfig = serde_json::from_value(serde_json::json!({
+        let config: luna_proto::ChatConfig = serde_json::from_value(serde_json::json!({
             "harness": "mock",
             "model": "synthetic",
             "reasoning": "medium",
@@ -1284,7 +1284,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             clear_doc
-                .hold_queue_for_context_change(zeron_proto::HarnessId::Mock, true, 2_000, |_| {
+                .hold_queue_for_context_change(luna_proto::HarnessId::Mock, true, 2_000, |_| {
                     "hash".into()
                 })
                 .unwrap(),
@@ -1309,7 +1309,7 @@ mod tests {
         ));
         assert!(
             switch_doc
-                .hold_queue_for_context_change(zeron_proto::HarnessId::Codex, false, 3_000, |_| {
+                .hold_queue_for_context_change(luna_proto::HarnessId::Codex, false, 3_000, |_| {
                     "hash".into()
                 },)
                 .is_err(),

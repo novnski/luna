@@ -8,18 +8,18 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
-use zeron_doc::{
+use luna_doc::{
     QueueHoldReason, QueuedMessage, SessionCommandEntry, SessionCommandPayload,
     SessionCommandStatus, SessionDoc,
 };
-use zeron_engine::chat2_host::EngineChatSink;
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_engine::chat2_host::EngineChatSink;
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode,
 };
-use zeron_sync::chat_client::ChatDocSink;
+use luna_sync::chat_client::ChatDocSink;
 
 const CHAT: &str = "synthetic-l29-chat";
 
@@ -197,7 +197,7 @@ async fn foreign_rows_cannot_run_from_an_open_chat_or_replay() {
     let sink = EngineChatSink::new(&handle.doc_arc(), core.store.clone(), CHAT);
     assert!(matches!(
         sink.apply_row(&update, 1),
-        zeron_sync::chat_client::RowImportOutcome::Applied
+        luna_sync::chat_client::RowImportOutcome::Applied
     ));
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(
@@ -226,7 +226,7 @@ async fn foreign_rows_cannot_run_from_an_open_chat_or_replay() {
     );
     assert!(matches!(
         sink.apply_replay_row(&update, 2),
-        zeron_sync::chat_client::RowImportOutcome::Applied
+        luna_sync::chat_client::RowImportOutcome::Applied
     ));
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(runs.load(Ordering::SeqCst), 0, "replay dispatched");
@@ -307,7 +307,7 @@ async fn a_foreign_edit_cannot_reuse_a_locally_authorized_queue_id() {
     let sink = EngineChatSink::new(&handle.doc_arc(), core.store.clone(), CHAT);
     assert!(matches!(
         sink.apply_row(&update, 1),
-        zeron_sync::chat_client::RowImportOutcome::Applied
+        luna_sync::chat_client::RowImportOutcome::Applied
     ));
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(runs.load(Ordering::SeqCst), 0);

@@ -1,7 +1,7 @@
 //! The pending-message queue, docked above the composer.
 //!
 //! Everything you typed while the agent was busy, in the order it will be sent.
-//! The rows live on the session doc ([`zeron_doc::QueuedMessage`]), so the phone
+//! The rows live on the session doc ([`luna_doc::QueuedMessage`]), so the phone
 //! shows the same queue and either device can reorder it.
 //!
 //! Each row exposes either explicit `Steer now` (when the running harness can
@@ -15,8 +15,8 @@ use gpui::{
 };
 use sha2::{Digest, Sha256};
 
-use zeron_doc::{QueueDeliveryGate, QueueHoldReason, QueueMessageStatus, QueuedMessage};
-use zeron_rpc::methods;
+use luna_doc::{QueueDeliveryGate, QueueHoldReason, QueueMessageStatus, QueuedMessage};
+use luna_rpc::methods;
 
 use crate::composer::{Composer, QUEUE_COMPOSER_OVERLAP};
 use crate::icons::{self, icon};
@@ -184,7 +184,7 @@ fn queue_hold_reason_label(reason: QueueHoldReason) -> &'static str {
 /// reaches this resolver, so there is no automatic interrupt/fresh-turn
 /// fallback. The engine owns the revision/turn/binding fences.
 fn resolve_queue_primary_action(
-    behavior: zeron_proto::FollowUpBehavior,
+    behavior: luna_proto::FollowUpBehavior,
     run_live: bool,
     harness_steers_mid_turn: bool,
     has_attachments: bool,
@@ -192,13 +192,13 @@ fn resolve_queue_primary_action(
     blocked: Option<QueuePrimaryBlock>,
 ) -> QueuePrimaryResolution {
     let action = match behavior {
-        zeron_proto::FollowUpBehavior::Queue => QueuePrimaryAction::SendNow,
-        zeron_proto::FollowUpBehavior::Steer
+        luna_proto::FollowUpBehavior::Queue => QueuePrimaryAction::SendNow,
+        luna_proto::FollowUpBehavior::Steer
             if run_live && harness_steers_mid_turn && !has_attachments && !has_hold_reason =>
         {
             QueuePrimaryAction::SteerNow
         }
-        zeron_proto::FollowUpBehavior::Steer => QueuePrimaryAction::SendNow,
+        luna_proto::FollowUpBehavior::Steer => QueuePrimaryAction::SendNow,
     };
     QueuePrimaryResolution { action, blocked }
 }
@@ -432,7 +432,7 @@ impl Composer {
                     .map(|item| {
                         let supported = state.chat_host_supports(
                             &chat_id,
-                            zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
+                            luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
                         );
                         (chat_id, item, supported)
                     })
@@ -472,10 +472,8 @@ impl Composer {
         let (items, chat_id, host_supports_actions) = {
             let state = self.state.read(cx);
             let chat_id = state.selected_chat.clone()?;
-            let host_supports_actions = state.chat_host_supports(
-                &chat_id,
-                zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
-            );
+            let host_supports_actions = state
+                .chat_host_supports(&chat_id, luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1);
             (state.queue.clone(), chat_id, host_supports_actions)
         };
         self.prepare_queue_previews(&items, window, cx);
@@ -574,7 +572,7 @@ impl Composer {
         let text = match (&item.status, &item.delivery_gate, item.hold_reason) {
             (
                 QueueMessageStatus::Claimed {
-                    mode: zeron_doc::QueueClaimMode::SteerNow,
+                    mode: luna_doc::QueueClaimMode::SteerNow,
                     ..
                 },
                 _,
@@ -597,7 +595,7 @@ impl Composer {
             }
             (
                 QueueMessageStatus::DeliveryUnknown {
-                    mode: zeron_doc::QueueClaimMode::SteerNow,
+                    mode: luna_doc::QueueClaimMode::SteerNow,
                     ..
                 },
                 _,
@@ -1314,10 +1312,8 @@ impl Composer {
             else {
                 return;
             };
-            let supported = state.chat_host_supports(
-                &chat_id,
-                zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
-            );
+            let supported = state
+                .chat_host_supports(&chat_id, luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1);
             let Some(revision) = state
                 .queue
                 .iter()
@@ -1360,7 +1356,7 @@ impl Composer {
                 let selected_matches =
                     composer.state.read(cx).selected_chat.as_deref() == Some(chat_id.as_str());
                 match result {
-                    Ok(receipt) if receipt.status == zeron_proto::CommandReceiptStatus::Applied => {
+                    Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
                         if selected_matches {
                             composer.state.update(cx, |state, cx| {
                                 state.queue.retain(|item| item.id != id);
@@ -1467,7 +1463,7 @@ impl Composer {
             else {
                 return;
             };
-            let capability = zeron_proto::capabilities::MESSAGE_QUEUE_EDIT_LEASE_V1;
+            let capability = luna_proto::capabilities::MESSAGE_QUEUE_EDIT_LEASE_V1;
             let supported = engine.engine_info().supports(capability)
                 && state.chat_host_supports(&chat_id, capability);
             (chat_id, host_device_id, supported)
@@ -1798,14 +1794,14 @@ impl Composer {
                     .await
                     .map_err(|err| err.to_string())?;
                     let outcome = match receipt.status {
-                        zeron_proto::CommandReceiptStatus::Applied => "committed",
-                        zeron_proto::CommandReceiptStatus::Conflict => match receipt
+                        luna_proto::CommandReceiptStatus::Applied => "committed",
+                        luna_proto::CommandReceiptStatus::Conflict => match receipt
                             .reason
                             .as_ref()
                             .map(|reason| reason.code)
                         {
-                            Some(zeron_proto::CommandReasonCode::QueueClaimed) => "claimed",
-                            Some(zeron_proto::CommandReasonCode::QueueMissing) => "missing",
+                            Some(luna_proto::CommandReasonCode::QueueClaimed) => "claimed",
+                            Some(luna_proto::CommandReasonCode::QueueMissing) => "missing",
                             _ => "conflict",
                         },
                         _ => "lost",
@@ -1968,7 +1964,7 @@ impl Composer {
             let supported = !queue_action_needs_host(method)
                 || state.chat_host_supports(
                     &chat_id,
-                    zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
+                    luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
                 );
             (chat_id, host, supported)
         };
@@ -2042,8 +2038,8 @@ impl Composer {
                     serde_json::json!({
                         "sent": matches!(
                             receipt.status,
-                            zeron_proto::CommandReceiptStatus::Pending
-                                | zeron_proto::CommandReceiptStatus::Applied
+                            luna_proto::CommandReceiptStatus::Pending
+                                | luna_proto::CommandReceiptStatus::Applied
                         ),
                         "receipt": receipt,
                     })
@@ -2113,12 +2109,12 @@ mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
     use gpui::AppContext as _;
-    use zeron_doc::{QueueClaimMode, QueueHoldReason, QueueMessageStatus, QueuedMessage};
-    use zeron_proto::{
+    use luna_doc::{QueueClaimMode, QueueHoldReason, QueueMessageStatus, QueuedMessage};
+    use luna_proto::{
         Chat, CommandReceipt, CommandReceiptStatus, Device, FollowUpBehavior, TaskCommandRead,
         TaskCommandSnapshot,
     };
-    use zeron_rpc::{RpcError, RpcReply, RpcService, methods};
+    use luna_rpc::{RpcError, RpcReply, RpcService, methods};
 
     use super::{
         PANEL_PAD_TOP, QueuePrimaryAction, QueuePrimaryBlock, QueuePrimaryResolution, ROW_SLOT,
@@ -2248,7 +2244,7 @@ mod tests {
         );
 
         let root = tempfile::tempdir().unwrap();
-        let uploads = zeron_engine::Uploads::new(root.path());
+        let uploads = luna_engine::Uploads::new(root.path());
         uploads.append(&first, "QQ==", Some(0)).unwrap();
         let committed = uploads.commit(&first, "queue-edit.png").unwrap();
         assert!(std::path::Path::new(&committed).is_file());
@@ -2327,7 +2323,7 @@ mod tests {
         }
         assert_eq!(
             resolve_queue_primary_action(
-                zeron_proto::FollowUpBehavior::Steer,
+                luna_proto::FollowUpBehavior::Steer,
                 false,
                 false,
                 false,
@@ -2387,7 +2383,7 @@ mod tests {
         let rpc = Arc::new(QueueActionRpc::default());
         let state = cx.new(|_| {
             let mut state = AppState::new();
-            state.set_test_engine(EngineHandle::from_test_client(zeron_rpc::memory_client(
+            state.set_test_engine(EngineHandle::from_test_client(luna_rpc::memory_client(
                 rpc.clone(),
             )));
             state.chats = vec![test_chat()];
@@ -2398,7 +2394,7 @@ mod tests {
                 last_seen_at: None,
                 created_at: None,
                 version: None,
-                capabilities: vec![zeron_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1.into()],
+                capabilities: vec![luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1.into()],
             }];
             state.selected_chat = Some("chat".into());
             state.queue = vec![held_steer(QueueMessageStatus::Held)];

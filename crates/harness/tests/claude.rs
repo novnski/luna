@@ -11,11 +11,11 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
-use zeron_harness::{
+use luna_harness::{
     CancellationToken, ClaudeHarness, Harness, HarnessError, RunControls, SteerAcceptance,
     SteerMessage,
 };
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, ToolCall,
     UserInputAnswer, UserInputQuestion,
 };
@@ -48,7 +48,7 @@ fn request(prompt: &str) -> RunRequest {
         cwd: String::new(),
         sandbox: SandboxLevel::DangerFullAccess,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -103,7 +103,7 @@ async fn synthetic_luna_instructions_append_without_replacing_provider_prompt() 
     let root = tempfile::tempdir().unwrap();
     let mut req = request("scenario:runtime-instructions");
     req.cwd = root.path().to_str().unwrap().into();
-    req.model_options.insert(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(), serde_json::json!({
+    req.model_options.insert(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(), serde_json::json!({
         "version": 1,
         "contentHash": "synthetic",
         "environment": {"LUNA_THREAD_ID":"thread-a","LUNA_ENVIRONMENT_ID":"environment-a","LUNA_MACHINE_ID":"machine-a"},
@@ -349,14 +349,14 @@ async fn ask_user_question_round_trips_through_the_control_channel() {
         invoke_luna_tool: None,
     };
     let mut req = request("scenario:askuser");
-    req.permission_mode = zeron_proto::PermissionMode::Full;
+    req.permission_mode = luna_proto::PermissionMode::Full;
     req.auto_approve = true;
-    req.permission_policy = Some(zeron_proto::PermissionPolicy {
-        requested_mode: zeron_proto::PermissionMode::Full,
-        effective_mode: zeron_proto::PermissionMode::Full,
-        scope: zeron_proto::PermissionScope::Full,
-        reviewer: zeron_proto::ApprovalReviewer::None,
-        escalation: zeron_proto::PermissionEscalation::None,
+    req.permission_policy = Some(luna_proto::PermissionPolicy {
+        requested_mode: luna_proto::PermissionMode::Full,
+        effective_mode: luna_proto::PermissionMode::Full,
+        scope: luna_proto::PermissionScope::Full,
+        reviewer: luna_proto::ApprovalReviewer::None,
+        escalation: luna_proto::PermissionEscalation::None,
         machine_name: "test-machine".into(),
         provider_mapping: "test full".into(),
         ..Default::default()
@@ -397,7 +397,7 @@ async fn steering_lines_are_written_to_stdin_mid_run() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: None,
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await
@@ -441,7 +441,7 @@ async fn explicit_steer_does_not_claim_incorporation_from_a_text_echo() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
-            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(acceptance_tx),
         })
         .await
@@ -468,7 +468,7 @@ async fn explicit_claude_write_ack_without_echo_is_not_incorporated() {
         .send(SteerMessage {
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
-            delivery: zeron_harness::SteerDelivery::RequireActiveTurn,
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(acceptance_tx),
         })
         .await
@@ -693,7 +693,7 @@ async fn captured_live_background_subagent_frames_replay_correctly() {
 
 /// Live smoke against the REAL claude CLI (2.1.x, must be installed + authed):
 /// one trivial turn through the stdio permission channel, ending on the
-/// result frame. `cargo test -p zeron-harness --test claude -- --ignored`.
+/// result frame. `cargo test -p luna-harness --test claude -- --ignored`.
 #[tokio::test]
 #[ignore = "spawns the real claude CLI; needs install + auth + network"]
 async fn live_real_cli_single_turn() {
@@ -798,7 +798,7 @@ async fn live_models_discovery() {
     eprintln!("{} Claude model rows discovered", models.len());
 }
 
-/// Live smoke against the real CLI: `cargo test -p zeron-harness --test
+/// Live smoke against the real CLI: `cargo test -p luna-harness --test
 /// claude -- --ignored live_commands`. No model turn, no API cost.
 #[tokio::test]
 #[ignore]

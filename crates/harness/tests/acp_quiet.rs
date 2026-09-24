@@ -10,8 +10,8 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
-use zeron_harness::{AcpHarness, CancellationToken, Harness, RunControls, SteerMessage};
-use zeron_proto::{
+use luna_harness::{AcpHarness, CancellationToken, Harness, RunControls, SteerMessage};
+use luna_proto::{
     AgentEvent, DoneStatus, RunRequest, SandboxLevel, UserInputAnswer, UserInputQuestion,
 };
 
@@ -22,7 +22,7 @@ fn init_env() {
     ONCE.call_once(|| {
         // SAFETY: set before any harness runs in this test process; all
         // tests in this binary share the one value.
-        unsafe { std::env::set_var("ZERON_ACP_QUIET_SETTLE_MS", QUIET_MS.to_string()) };
+        unsafe { std::env::set_var("LUNA_ACP_QUIET_SETTLE_MS", QUIET_MS.to_string()) };
     });
 }
 
@@ -50,7 +50,7 @@ fn request(prompt: &str) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -86,7 +86,7 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
 async fn collect_until_done(
     stream: &mut futures::stream::BoxStream<
         'static,
-        Result<AgentEvent, zeron_harness::HarnessError>,
+        Result<AgentEvent, luna_harness::HarnessError>,
     >,
 ) -> Vec<AgentEvent> {
     tokio::time::timeout(Duration::from_secs(15), async {
@@ -131,7 +131,7 @@ async fn delayed_turn(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "second".into(),
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await
@@ -140,7 +140,7 @@ async fn delayed_turn(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "third".into(),
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await
@@ -168,7 +168,7 @@ async fn delayed_turn(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "fourth".into(),
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await
@@ -234,7 +234,7 @@ async fn cancel_quiet(scenario: &str) {
         .send(SteerMessage {
             message_id: None,
             prompt: "must not run".into(),
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await

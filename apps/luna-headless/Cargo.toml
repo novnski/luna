@@ -10,9 +10,9 @@ name = "luna-headless"
 path = "src/main.rs"
 
 [dependencies]
-zeron-engine.workspace = true
-zeron-rpc.workspace = true
-zeron-proto.workspace = true
+luna-engine.workspace = true
+luna-rpc.workspace = true
+luna-proto.workspace = true
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

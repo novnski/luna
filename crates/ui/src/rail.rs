@@ -10,7 +10,7 @@
 use gpui::{AnyElement, Context, ListOffset, SharedString, div, prelude::*, px};
 use std::time::{Duration, Instant};
 
-use zeron_doc::{MessagePart, MessageRole, SessionMessageEntry};
+use luna_doc::{MessagePart, MessageRole, SessionMessageEntry};
 
 use crate::motion;
 use crate::popover;
@@ -218,13 +218,12 @@ impl GlideTimeline {
     }
 }
 
-/// `ZERON_SCROLL_TRACE=1` logs per-frame glide positions at `warn` level —
-/// the smoothness measurement knob (same family as `ZERON_FRAME_STATS`).
+/// `LUNA_SCROLL_TRACE=1` logs per-frame glide positions at `warn` level —
+/// the smoothness measurement knob (same family as `LUNA_FRAME_STATS`).
 fn scroll_trace_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("ZERON_SCROLL_TRACE").is_ok_and(|v| !v.is_empty() && v != "0")
-    })
+    *ENABLED
+        .get_or_init(|| std::env::var("LUNA_SCROLL_TRACE").is_ok_and(|v| !v.is_empty() && v != "0"))
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +575,7 @@ impl Transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_doc::MessageStatus;
+    use luna_doc::MessageStatus;
 
     fn entry(id: &str, role: MessageRole, text: &str) -> SessionMessageEntry {
         SessionMessageEntry {

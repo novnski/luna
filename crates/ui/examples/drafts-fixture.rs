@@ -16,19 +16,19 @@ use base64::Engine as _;
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
-use sha2::{Digest, Sha256};
-use zeron_engine::{
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
 };
-use zeron_harness::{ContextCompactRequest, Harness, HarnessError, RunControls, SteerAcceptance};
-use zeron_proto::{
+use luna_harness::{ContextCompactRequest, Harness, HarnessError, RunControls, SteerAcceptance};
+use luna_proto::{
     AgentEvent, ChatConfig, ComposerDraft, ContextOperationStatus, DoneStatus, DraftBlob,
     DraftBlobState, DraftContext, HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest,
     SandboxLevel, SteeringMode, TaskLineage, ToolCall,
 };
-use zeron_rpc::RpcService as _;
-use zeron_rpc::methods;
-use zeron_ui::*;
+use luna_rpc::RpcService as _;
+use luna_rpc::methods;
+use luna_ui::*;
+use sha2::{Digest, Sha256};
 
 const TASK_A: &str = "l08-native-a";
 const TASK_B: &str = "l08-native-b";
@@ -758,7 +758,7 @@ fn account_config(root: &Path) -> AgentAccountsConfig {
 
 fn draft(task_id: &str, revision: u64, text: &str) -> ComposerDraft {
     ComposerDraft {
-        version: zeron_proto::COMPOSER_DRAFT_VERSION,
+        version: luna_proto::COMPOSER_DRAFT_VERSION,
         draft_id: task_id.into(),
         task_id: Some(task_id.into()),
         revision,
@@ -772,7 +772,7 @@ fn draft(task_id: &str, revision: u64, text: &str) -> ComposerDraft {
 }
 
 async fn seed_recovery(core: &EngineCore) -> anyhow::Result<()> {
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let png = base64::engine::general_purpose::STANDARD.decode(PNG_B64)?;
     client
         .call(
@@ -838,7 +838,7 @@ async fn seed_recovery(core: &EngineCore) -> anyhow::Result<()> {
 }
 
 async fn seed_queue(core: &EngineCore) -> anyhow::Result<()> {
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     core.doc_host.open(TASK_A)?;
     core.doc_host.pause_all_queues();
     client
@@ -883,7 +883,7 @@ async fn seed_queue(core: &EngineCore) -> anyhow::Result<()> {
             Vec::new(),
         ),
     ] {
-        let receipt: zeron_proto::CommandReceipt = client
+        let receipt: luna_proto::CommandReceipt = client
             .call_as(
                 methods::EXECUTE_TASK_COMMAND,
                 serde_json::json!({
@@ -913,7 +913,7 @@ async fn seed_queue(core: &EngineCore) -> anyhow::Result<()> {
             )
             .await?;
         anyhow::ensure!(
-            receipt.status == zeron_proto::CommandReceiptStatus::Applied,
+            receipt.status == luna_proto::CommandReceiptStatus::Applied,
             "fixture queue seed was not applied"
         );
     }
@@ -921,7 +921,7 @@ async fn seed_queue(core: &EngineCore) -> anyhow::Result<()> {
 }
 
 async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let project = turn_recovery_project(root);
     std::fs::create_dir_all(&project)?;
     core.doc_host.open(TASK_A)?;
@@ -949,7 +949,7 @@ async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()
         .ok_or_else(|| anyhow::anyhow!("fixture upload returned no path"))?;
     let request = turn_recovery_request(&project, attachment);
     ensure_turn_recovery_request_matches_chat(core, &request)?;
-    let receipt: zeron_proto::CommandReceipt = client
+    let receipt: luna_proto::CommandReceipt = client
         .call_as(
             methods::EXECUTE_TASK_COMMAND,
             serde_json::json!({
@@ -973,7 +973,7 @@ async fn seed_turn_recovery(core: &EngineCore, root: &Path) -> anyhow::Result<()
     anyhow::ensure!(
         matches!(
             receipt.status,
-            zeron_proto::CommandReceiptStatus::Pending | zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Pending | luna_proto::CommandReceiptStatus::Applied
         ),
         "fixture recovery request was not accepted"
     );
@@ -1062,20 +1062,20 @@ enum L11SeedOutcome {
 fn l11_command_receipt(
     core: &EngineCore,
     command_id: &str,
-) -> anyhow::Result<Option<zeron_proto::CommandReceipt>> {
+) -> anyhow::Result<Option<luna_proto::CommandReceipt>> {
     Ok(core.doc_host.task_command_receipt(command_id)?)
 }
 
 async fn wait_for_l11_applied_receipt(
     core: &EngineCore,
     command_id: &str,
-) -> anyhow::Result<zeron_proto::CommandReceipt> {
+) -> anyhow::Result<luna_proto::CommandReceipt> {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Some(receipt) = l11_command_receipt(core, command_id)? {
                 match receipt.status {
-                    zeron_proto::CommandReceiptStatus::Pending => {}
-                    zeron_proto::CommandReceiptStatus::Applied => return Ok(receipt),
+                    luna_proto::CommandReceiptStatus::Pending => {}
+                    luna_proto::CommandReceiptStatus::Applied => return Ok(receipt),
                     status => {
                         anyhow::bail!(
                             "L11 fixture command {command_id} ended {status:?}: {:?}",
@@ -1097,8 +1097,8 @@ async fn l11_rpc_call<T: serde::de::DeserializeOwned>(
     params: serde_json::Value,
 ) -> anyhow::Result<T> {
     match core.rpc_service().handle(method, params).await? {
-        zeron_rpc::RpcReply::Value(value) => Ok(serde_json::from_value(value)?),
-        zeron_rpc::RpcReply::Stream(_) => anyhow::bail!("unexpected stream reply from {method}"),
+        luna_rpc::RpcReply::Value(value) => Ok(serde_json::from_value(value)?),
+        luna_rpc::RpcReply::Stream(_) => anyhow::bail!("unexpected stream reply from {method}"),
     }
 }
 
@@ -1106,7 +1106,7 @@ async fn execute_l11_fenced_command(
     core: &EngineCore,
     command_id: &str,
     intent: serde_json::Value,
-) -> anyhow::Result<zeron_proto::CommandReceipt> {
+) -> anyhow::Result<luna_proto::CommandReceipt> {
     execute_l11_task_fenced_command(core, L11_TASK_A, command_id, intent).await
 }
 
@@ -1115,8 +1115,8 @@ async fn execute_l11_task_fenced_command(
     task_id: &str,
     command_id: &str,
     intent: serde_json::Value,
-) -> anyhow::Result<zeron_proto::CommandReceipt> {
-    let read: zeron_proto::TaskCommandRead = l11_rpc_call(
+) -> anyhow::Result<luna_proto::CommandReceipt> {
+    let read: luna_proto::TaskCommandRead = l11_rpc_call(
         core,
         methods::GET_TASK_COMMAND_SNAPSHOT,
         serde_json::json!({ "taskId": task_id }),
@@ -1139,8 +1139,8 @@ async fn execute_l11_task_fenced_command(
 async fn ensure_l11_history(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     const COMMAND: &str = "l11-native-history-command";
     match l11_command_receipt(core, COMMAND)? {
-        Some(receipt) if receipt.status == zeron_proto::CommandReceiptStatus::Applied => {}
-        Some(receipt) if receipt.status == zeron_proto::CommandReceiptStatus::Pending => {
+        Some(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {}
+        Some(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Pending => {
             wait_for_l11_applied_receipt(core, COMMAND).await?;
         }
         Some(receipt) => anyhow::bail!(
@@ -1164,8 +1164,8 @@ async fn ensure_l11_history(core: &EngineCore, root: &Path) -> anyhow::Result<()
             )
             .await?;
             match receipt.status {
-                zeron_proto::CommandReceiptStatus::Applied => {}
-                zeron_proto::CommandReceiptStatus::Pending => {
+                luna_proto::CommandReceiptStatus::Applied => {}
+                luna_proto::CommandReceiptStatus::Pending => {
                     wait_for_l11_applied_receipt(core, COMMAND).await?;
                 }
                 status => anyhow::bail!(
@@ -1256,7 +1256,7 @@ async fn seed_l11_context_controls_at(
         )
         .await?;
         anyhow::ensure!(
-            queued.status == zeron_proto::CommandReceiptStatus::Applied,
+            queued.status == luna_proto::CommandReceiptStatus::Applied,
             "L11 fixture queue request ended {:?}: {:?}",
             queued.status,
             queued.reason
@@ -1281,8 +1281,8 @@ async fn seed_l11_context_controls_at(
         anyhow::ensure!(
             matches!(
                 outcome,
-                zeron_proto::ComposerDraftSaveOutcome::Saved
-                    | zeron_proto::ComposerDraftSaveOutcome::Unchanged
+                luna_proto::ComposerDraftSaveOutcome::Saved
+                    | luna_proto::ComposerDraftSaveOutcome::Unchanged
             ),
             "L11 fixture draft was not saved: {outcome:?}"
         );
@@ -1331,7 +1331,7 @@ fn repair_l11_pristine_draft_metadata(core: &EngineCore) -> anyhow::Result<()> {
     record.updated_at_ms = chrono::Utc::now().timestamp_millis();
     anyhow::ensure!(
         core.store.save_composer_draft(&core.device_id, &record)?
-            == zeron_proto::ComposerDraftSaveOutcome::Saved,
+            == luna_proto::ComposerDraftSaveOutcome::Saved,
         "legacy L11 fixture draft metadata was not repaired"
     );
     Ok(())
@@ -1713,7 +1713,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let ipc_port = unused_port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,
@@ -1863,7 +1863,7 @@ mod tests {
         core
     }
 
-    fn l11_draft(core: &EngineCore) -> zeron_proto::ComposerDraftRead {
+    fn l11_draft(core: &EngineCore) -> luna_proto::ComposerDraftRead {
         core.store
             .read_composer_draft(&core.device_id, Some(L11_TASK_A), None)
             .unwrap()
@@ -1878,7 +1878,7 @@ mod tests {
             .unwrap()
             .iter()
             .filter(|entry| {
-                entry.role == zeron_doc::MessageRole::User
+                entry.role == luna_doc::MessageRole::User
                     && entry.id == "l11-native-history-message"
             })
             .count()
@@ -1957,12 +1957,12 @@ mod tests {
         let fresh = tempfile::tempdir().unwrap();
         assert_eq!(
             settings::UiSettings::load(fresh.path()).follow_up_behavior,
-            zeron_proto::FollowUpBehavior::Queue
+            luna_proto::FollowUpBehavior::Queue
         );
 
         let persisted = tempfile::tempdir().unwrap();
         let mut saved = settings::UiSettings::default();
-        saved.follow_up_behavior = zeron_proto::FollowUpBehavior::Steer;
+        saved.follow_up_behavior = luna_proto::FollowUpBehavior::Steer;
         std::fs::write(
             persisted.path().join("ui-settings.json"),
             serde_json::to_vec_pretty(&saved).unwrap(),
@@ -1970,7 +1970,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             settings::UiSettings::load(persisted.path()).follow_up_behavior,
-            zeron_proto::FollowUpBehavior::Steer
+            luna_proto::FollowUpBehavior::Steer
         );
     }
 
@@ -2023,7 +2023,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Applied
         );
         assert_eq!(
             core.doc_host
@@ -2031,7 +2031,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Applied
         );
         let queue = core
             .doc_host
@@ -2049,7 +2049,7 @@ mod tests {
             core.store
                 .save_composer_draft(&core.device_id, &user_draft)
                 .unwrap(),
-            zeron_proto::ComposerDraftSaveOutcome::Unchanged,
+            luna_proto::ComposerDraftSaveOutcome::Unchanged,
             "the restored rich draft must pass the submit save gate at its existing revision"
         );
         assert_eq!(
@@ -2081,7 +2081,7 @@ mod tests {
             .store
             .save_composer_draft(&core.device_id, &user_draft)
             .unwrap();
-        assert_eq!(saved, zeron_proto::ComposerDraftSaveOutcome::Saved);
+        assert_eq!(saved, luna_proto::ComposerDraftSaveOutcome::Saved);
         let mut user_config = core
             .workspace
             .chat(L11_TASK_A)
@@ -2158,7 +2158,7 @@ mod tests {
             core.store
                 .save_composer_draft(&core.device_id, &legacy)
                 .unwrap(),
-            zeron_proto::ComposerDraftSaveOutcome::Saved
+            luna_proto::ComposerDraftSaveOutcome::Saved
         );
         repair_l11_pristine_draft_metadata(&core).unwrap();
         let mut repaired = l11_draft(&core).draft.unwrap();
@@ -2189,7 +2189,7 @@ mod tests {
         );
         assert_eq!(l11_history_seed_count(&core), 1);
         assert!(!root.path().join(L11_BOOTSTRAP_MARKER).exists());
-        let legacy_conflict: zeron_proto::CommandReceipt = l11_rpc_call(
+        let legacy_conflict: luna_proto::CommandReceipt = l11_rpc_call(
             &core,
             methods::EXECUTE_TASK_COMMAND,
             serde_json::json!({
@@ -2211,7 +2211,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             legacy_conflict.status,
-            zeron_proto::CommandReceiptStatus::Conflict
+            luna_proto::CommandReceiptStatus::Conflict
         );
         assert!(
             core.doc_host
@@ -2317,7 +2317,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             start.status,
-            zeron_proto::CommandReceiptStatus::Pending | zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Pending | luna_proto::CommandReceiptStatus::Applied
         ));
         let trace = root.path().join("l11-context-control-trace.jsonl");
         let control = root.path().join("l11-fixture-control.json");
@@ -2381,7 +2381,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             second.status,
-            zeron_proto::CommandReceiptStatus::Pending | zeron_proto::CommandReceiptStatus::Applied
+            luna_proto::CommandReceiptStatus::Pending | luna_proto::CommandReceiptStatus::Applied
         ));
         wait_for_trace_count(&trace, "runStarted", 2).await;
         write_control_atomic(&control, 4, "autoContextRunning");
@@ -2429,7 +2429,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             view.current_binding.unwrap().reconciliation.state,
-            zeron_proto::ReconciliationState::Unsupported
+            luna_proto::ReconciliationState::Unsupported
         );
         assert!(
             core.task_identity
@@ -2455,13 +2455,13 @@ mod tests {
         seed_l11_context_controls(&core, root.path()).await.unwrap();
 
         let port = unused_port();
-        let ipc = zeron_engine::serve_ipc(port, core.rpc_service())
+        let ipc = luna_engine::serve_ipc(port, core.rpc_service())
             .await
             .unwrap();
-        let client = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{port}"))
+        let client = luna_rpc::connect_ws(&format!("ws://127.0.0.1:{port}"))
             .await
             .unwrap();
-        let snapshot: zeron_proto::TaskCommandRead = client
+        let snapshot: luna_proto::TaskCommandRead = client
             .call_as(
                 methods::GET_TASK_COMMAND_SNAPSHOT,
                 serde_json::json!({ "taskId": L11_TASK_A }),
@@ -2471,7 +2471,7 @@ mod tests {
         let generation = snapshot.snapshot.binding_generation.unwrap();
         let compact = tokio::spawn(async move {
             client
-                .call_as::<zeron_proto::CommandReceipt>(
+                .call_as::<luna_proto::CommandReceipt>(
                     methods::EXECUTE_TASK_COMMAND,
                     serde_json::json!({
                         "commandId":"l11-native-ipc-compact",
@@ -2498,14 +2498,14 @@ mod tests {
             .expect("compact RPC stayed bounded")
             .expect("compact RPC task joined")
             .expect("compact RPC returned a receipt");
-        assert_eq!(receipt.status, zeron_proto::CommandReceiptStatus::Applied);
+        assert_eq!(receipt.status, luna_proto::CommandReceiptStatus::Applied);
         assert_eq!(
             core.doc_host
                 .context_control(L11_TASK_A)
                 .unwrap()
                 .compact
                 .status,
-            zeron_proto::ContextOperationStatus::Completed
+            luna_proto::ContextOperationStatus::Completed
         );
         wait_for_trace(&trace, "compactCompleted").await;
         assert_eq!(
@@ -2543,7 +2543,7 @@ mod tests {
         let mut runtime_config = original_chat.config.clone().unwrap();
         runtime_config
             .permission_audit
-            .push(zeron_proto::PermissionAuditEntry {
+            .push(luna_proto::PermissionAuditEntry {
                 actor: "engine:fixture".into(),
                 machine: "fixture-host".into(),
                 requested_mode: PermissionMode::Ask,
@@ -2628,7 +2628,7 @@ mod tests {
                 rx
             }),
             steering: steering_rx,
-            interrupt: zeron_harness::CancellationToken::new(),
+            interrupt: luna_harness::CancellationToken::new(),
             invoke_luna_tool: None,
         };
         let request = RunRequest {

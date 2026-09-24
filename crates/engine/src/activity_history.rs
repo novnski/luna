@@ -1,9 +1,9 @@
 //! L14 derived activity envelopes over authoritative transcript and receipt records.
 
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 use std::collections::HashMap;
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 
-use zeron_proto::{
+use luna_proto::{
     ACTIVITY_ENVELOPE_VERSION, APPSHOT_CONTEXT_MARKER, ActivityEnvelope, ActivityKind,
     ActivityOutcome, ActivityRedaction, ActivitySourceRef, AppshotActivityKind,
     AppshotActivityRecord, Chat, CommandReceiptStatus, HistoryProjectPolicy, TaskCommandEvent,
@@ -114,7 +114,7 @@ const METADATA_LIMIT: usize = 240;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ActivityRunMetadata {
-    pub harness: Option<zeron_proto::HarnessId>,
+    pub harness: Option<luna_proto::HarnessId>,
     pub model: Option<String>,
 }
 
@@ -433,10 +433,10 @@ fn tool_event(
 ) {
     let outcome = if let ToolCall::ComputerUse { status, .. } = call {
         match status {
-            zeron_proto::ComputerUseStatus::Running => ActivityOutcome::Pending,
-            zeron_proto::ComputerUseStatus::ProviderFailed => ActivityOutcome::Failed,
-            zeron_proto::ComputerUseStatus::ProviderCompleted
-            | zeron_proto::ComputerUseStatus::Unknown => ActivityOutcome::Unknown,
+            luna_proto::ComputerUseStatus::Running => ActivityOutcome::Pending,
+            luna_proto::ComputerUseStatus::ProviderFailed => ActivityOutcome::Failed,
+            luna_proto::ComputerUseStatus::ProviderCompleted
+            | luna_proto::ComputerUseStatus::Unknown => ActivityOutcome::Unknown,
         }
     } else if !resolved {
         ActivityOutcome::Pending
@@ -539,11 +539,11 @@ fn tool_event(
             format!(
                 "Provider computer use · {action} · {} · screenshot observed: {screenshot_observed}",
                 match status {
-                    zeron_proto::ComputerUseStatus::Running => "running",
-                    zeron_proto::ComputerUseStatus::ProviderCompleted =>
+                    luna_proto::ComputerUseStatus::Running => "running",
+                    luna_proto::ComputerUseStatus::ProviderCompleted =>
                         "provider completed; target outcome unverified",
-                    zeron_proto::ComputerUseStatus::ProviderFailed => "provider failed",
-                    zeron_proto::ComputerUseStatus::Unknown => "outcome unknown; do not replay",
+                    luna_proto::ComputerUseStatus::ProviderFailed => "provider failed",
+                    luna_proto::ComputerUseStatus::Unknown => "outcome unknown; do not replay",
                 }
             ),
         ),
@@ -895,7 +895,7 @@ fn strip_url_secrets(url: &str) -> String {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use zeron_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
+    use luna_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel};
 
     #[test]
     fn computer_use_provider_completion_never_becomes_semantic_success() {
@@ -905,7 +905,7 @@ mod tests {
             task_id: Some("task".into()),
             thread_id: "provider".into(),
             turn_id: "turn".into(),
-            status: zeron_proto::ComputerUseStatus::ProviderCompleted,
+            status: luna_proto::ComputerUseStatus::ProviderCompleted,
             screenshot_observed: true,
         };
         let (kind, summary, _, outcome, _, app, _, _) = tool_event(&call, true, false, None);

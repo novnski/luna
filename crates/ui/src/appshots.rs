@@ -54,7 +54,7 @@ pub const MAX_CAPTURE_RGBA_BYTES: u64 = 128 * 1024 * 1024;
 /// but it must not become an unbounded store of decoded image data.
 pub const MAX_STAGED_APPSHOT_BYTES: u64 = 4 * crate::attachments::MAX_ATTACHMENT_BYTES;
 
-pub const CONTEXT_MARKER: &str = zeron_proto::APPSHOT_CONTEXT_MARKER;
+pub const CONTEXT_MARKER: &str = luna_proto::APPSHOT_CONTEXT_MARKER;
 #[cfg(target_os = "macos")]
 const SCREEN_RECORDING_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
@@ -589,7 +589,7 @@ pub fn semantic_settings_url() -> Option<&'static str> {
 }
 
 /// Register the platform global shortcut and, on Linux, the local activation
-/// socket used by `zeron appshot` when the desktop owns shortcut setup.
+/// socket used by `luna appshot` when the desktop owns shortcut setup.
 pub fn start_global_shortcut(
     activation_dir: PathBuf,
 ) -> futures::channel::mpsc::UnboundedReceiver<()> {
@@ -605,9 +605,9 @@ pub async fn capture_active_window() -> Result<CapturedAppshot, CaptureError> {
     result
 }
 
-/// Ask the running headed Zeron process to capture an Appshot. Linux desktop
+/// Ask the running headed Luna process to capture an Appshot. Linux desktop
 /// environments that do not implement the Global Shortcuts portal can bind
-/// `zeron appshot` in their native Keyboard Shortcuts settings.
+/// `luna appshot` in their native Keyboard Shortcuts settings.
 #[cfg(target_os = "linux")]
 pub fn request_running_appshot(data_dir: &Path) -> Result<(), CaptureError> {
     linux::request_running_appshot(data_dir)

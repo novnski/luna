@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::settings::TaskNotificationPolicy;
-use zeron_proto::{
+use luna_proto::{
     AttentionItem, AttentionKind, AttentionReadRequest, AttentionSnapshot, AttentionTarget,
     AttentionTransition, AttentionTransitionBatch, AttentionTransitionClaim,
     AttentionTransitionKind, TerminalInventoryEntry, TerminalProcessState,
@@ -204,7 +204,7 @@ impl Shell {
                         )
                         .await?,
                 )
-                .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))?;
+                .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))?;
                 let transitions: AttentionTransitionBatch = serde_json::from_value(
                     handle
                         .client()
@@ -219,7 +219,7 @@ impl Shell {
                         )
                         .await?,
                 )
-                .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))?;
+                .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))?;
                 let terminals = handle
                     .client()
                     .call_as::<Vec<TerminalInventoryEntry>>(
@@ -227,7 +227,7 @@ impl Shell {
                         serde_json::json!({}),
                     )
                     .await;
-                Ok::<_, zeron_rpc::RpcError>((snapshot, transitions, terminals))
+                Ok::<_, luna_rpc::RpcError>((snapshot, transitions, terminals))
             }
             .await;
             this.update(cx, |shell, cx| {
@@ -670,10 +670,10 @@ impl Shell {
             .any(|(status, chat)| {
                 matches!(
                     status,
-                    zeron_proto::ChatIndicator::AwaitingApproval
-                        | zeron_proto::ChatIndicator::AwaitingInput
-                        | zeron_proto::ChatIndicator::Errored
-                        | zeron_proto::ChatIndicator::Completed
+                    luna_proto::ChatIndicator::AwaitingApproval
+                        | luna_proto::ChatIndicator::AwaitingInput
+                        | luna_proto::ChatIndicator::Errored
+                        | luna_proto::ChatIndicator::Completed
                 ) || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
             });
         div()
@@ -737,7 +737,7 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_proto::{
+    use luna_proto::{
         ATTENTION_CONTRACT_VERSION, AttentionLifecycle, AttentionSeverity, AttentionSourcePointer,
     };
 

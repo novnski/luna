@@ -9,9 +9,9 @@
 use std::{borrow::Cow, collections::HashMap, sync::LazyLock};
 
 use gpui::{AssetSource, Img, Result, SharedString, Styled as _, img};
+use luna_syntax::LanguageId;
 use rust_embed::RustEmbed;
 use serde::Deserialize;
-use zeron_syntax::LanguageId;
 
 use crate::theme::{Appearance, Theme};
 

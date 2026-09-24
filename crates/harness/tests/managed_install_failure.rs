@@ -1,20 +1,20 @@
-//! The zeronsh/comet#95 condition, reproduced: npm dying silently with an
+//! The historical issue #95 condition, reproduced: npm dying silently with an
 //! errno-encoded exit (254 = ENOENT — npm/cli#4838) during the adapter
 //! fallback. The old `npx -y` path surfaced this as "harness protocol error:
 //! initialize: app-server exited before responding; Codex exited unexpectedly
 //! (exit code 254)" with nothing actionable. The managed install must instead
 //! fail the run with the decoded errno and a recovery hint.
 //!
-//! Single-test binary: it mutates PATH/SHELL/ZERON_* env process-wide.
+//! Single-test binary: it mutates PATH/SHELL/LUNA_* env process-wide.
 
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
 
+use luna_harness::{AcpHarness, Harness, HarnessError, RunControls};
+use luna_proto::{RunRequest, SandboxLevel};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use zeron_harness::{AcpHarness, Harness, HarnessError, RunControls};
-use zeron_proto::{RunRequest, SandboxLevel};
 
 #[tokio::test]
 async fn silent_npm_enoent_death_surfaces_decoded_error() {
@@ -29,7 +29,7 @@ async fn silent_npm_enoent_death_surfaces_decoded_error() {
     // SAFETY: single-test binary — nothing else reads env concurrently.
     unsafe {
         std::env::set_var("LUNA_ADAPTERS_DIR", dir.path().join("adapters"));
-        std::env::set_var("ZERON_NO_LOGIN_SHELL", "1");
+        std::env::set_var("LUNA_NO_LOGIN_SHELL", "1");
         std::env::set_var("PATH", &bin);
         std::env::set_var("HOME", dir.path());
         std::env::remove_var("PI_ACP_EXECUTABLE");
@@ -53,7 +53,7 @@ async fn silent_npm_enoent_death_surfaces_decoded_error() {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,

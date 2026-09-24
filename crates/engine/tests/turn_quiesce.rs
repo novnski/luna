@@ -6,7 +6,7 @@
 //! 2. The agent re-invokes ITSELF on a background-task notification and
 //!    streams real output with no prompt behind it. The old parked gate
 //!    dropped that output on the floor ("Build finished successfully…"
-//!    existed in the agent's session data, was absent from zeron's doc).
+//!    existed in the agent's session data, was absent from luna's doc).
 //! 3. A steer ("what about now") becomes the next turn — the agent answers,
 //!    and the turn-end reply is LOST upstream. No Done ever arrives; the
 //!    session read Working forever (the live heartbeat defeats the 45s
@@ -25,10 +25,10 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use tokio::sync::{Mutex, mpsc};
 
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
-use zeron_engine::{EngineCore, HarnessRegistry, SteerOutcome};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+use luna_engine::{EngineCore, HarnessRegistry, SteerOutcome};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SessionStatus, SteeringMode, ToolCall,
 };
@@ -43,7 +43,7 @@ fn init_quiesce_env() {
     ONCE.call_once(|| {
         // SAFETY: called before any engine (and thus any reader of the var)
         // exists in this test process; all tests share the one value.
-        unsafe { std::env::set_var("ZERON_TURN_QUIESCE_MS", QUIESCE_MS.to_string()) };
+        unsafe { std::env::set_var("LUNA_TURN_QUIESCE_MS", QUIESCE_MS.to_string()) };
     });
 }
 
@@ -58,7 +58,7 @@ fn run_request(prompt: &str) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,

@@ -1,6 +1,6 @@
 //! Provider capability policy for harness-owned context controls.
 
-use zeron_proto::{CompactMechanism, ContextControlCapabilities, HarnessId};
+use luna_proto::{CompactMechanism, ContextControlCapabilities, HarnessId};
 
 pub fn capabilities_for(harness: HarnessId) -> ContextControlCapabilities {
     let (context_usage, compact, unavailable, note) = match harness {

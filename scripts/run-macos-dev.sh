@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and run an isolated macOS development bundle. Zeron.app may remain
+# Build and run an isolated macOS development bundle. Luna.app may remain
 # open: this bundle has a separate LaunchServices/TCC identity, data directory,
 # and engine IPC port.
 
@@ -27,7 +27,7 @@ if pgrep -f -x "$CONTENTS/MacOS/luna" >/dev/null 2>&1; then
 fi
 
 cd "$ROOT"
-cargo build -p zeron
+cargo build -p luna
 
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources" "$DATA_DIR"
 install -m 755 "$ROOT/target/debug/luna" "$CONTENTS/MacOS/luna"
@@ -74,7 +74,7 @@ OPEN_ENV=(
   --env "LUNA_DATA_DIR=$DATA_DIR"
   --env "LUNA_IPC_PORT=$IPC_PORT"
 )
-if [[ -n "${ZERON_OPEN_ROUTE:-}" ]]; then
-  OPEN_ENV+=(--env "ZERON_OPEN_ROUTE=$ZERON_OPEN_ROUTE")
+if [[ -n "${LUNA_OPEN_ROUTE:-}" ]]; then
+  OPEN_ENV+=(--env "LUNA_OPEN_ROUTE=$LUNA_OPEN_ROUTE")
 fi
 exec open -W "${OPEN_ENV[@]}" "$APP" --args "$@"

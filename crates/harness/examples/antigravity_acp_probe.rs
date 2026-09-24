@@ -1,6 +1,6 @@
 //! live probe: the installed antigravity acp server's raw model catalog and,
 //! with `--prompt`, the session updates and usage one short turn produces.
-//! run from a directory outside any zeron project so preview discovery never
+//! run from a directory outside any luna project so preview discovery never
 //! probes the server's ports.
 use std::process::Stdio;
 
@@ -12,7 +12,7 @@ async fn main() {
     let server = std::env::var_os("ANTIGRAVITY_ACP_EXECUTABLE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            zeron_harness::AcpHarness::antigravity()
+            luna_harness::AcpHarness::antigravity()
                 .launch_program()
                 .expect("installed antigravity acp server")
         });
@@ -68,7 +68,7 @@ async fn main() {
 
     let init = call("initialize", json!({
         "protocolVersion": 1,
-        "clientInfo": { "name": "zeron-probe", "version": "0" },
+        "clientInfo": { "name": "luna-probe", "version": "0" },
         "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
     }))
     .await;

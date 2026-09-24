@@ -1,8 +1,8 @@
 //! Frame → [`AgentEvent`] normalization (init dedupe, subagent tagging, tool
 //! decoding, error-code mapping).
 
+use luna_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, ToolCall};
 use serde_json::Value;
-use zeron_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, ToolCall};
 
 use super::wire::{ContentBlock, Frame, InitIntegrationObservation};
 
@@ -647,7 +647,7 @@ impl Normalizer {
                         .partition(|m| is_internal_diagnostic(m));
                     for diagnostic in &diagnostics {
                         tracing::debug!(
-                            target: "zeron_harness::claude",
+                            target: "luna_harness::claude",
                             "internal CLI diagnostic (not surfaced): {diagnostic}"
                         );
                     }

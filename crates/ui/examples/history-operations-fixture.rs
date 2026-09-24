@@ -11,17 +11,17 @@ use std::sync::{Arc, Mutex};
 
 use futures::{StreamExt, stream::BoxStream};
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use zeron_engine::{
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
 };
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, ChatConfig, CommandReceipt, CommandReceiptStatus, DoneStatus, HarnessId, Model,
     PermissionMode, ProviderForkBoundary, ProviderForkCapability, ProviderForkRequest,
     ProviderForkResult, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
 };
-use zeron_rpc::{RpcClient, methods};
-use zeron_ui::*;
+use luna_rpc::{RpcClient, methods};
+use luna_ui::*;
 
 const TASK_ID: &str = "13131313-1313-4131-8131-131313131313";
 const UNSUPPORTED_TASK_ID: &str = "13131313-1313-4131-8131-131313131314";
@@ -436,7 +436,7 @@ else:
 #[cfg(unix)]
 fn fixture_metadata_client(
     root: &Path,
-) -> anyhow::Result<zeron_harness::codex::native::CodexNativeClient> {
+) -> anyhow::Result<luna_harness::codex::native::CodexNativeClient> {
     use std::os::unix::fs::PermissionsExt;
 
     let executable = root.join("provider-state/fake-codex-metadata.py");
@@ -444,7 +444,7 @@ fn fixture_metadata_client(
     std::fs::write(&executable, FAKE_CODEX_METADATA_SERVER)?;
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
     Ok(
-        zeron_harness::codex::native::CodexNativeClient::new(root.join("synthetic-codex"))
+        luna_harness::codex::native::CodexNativeClient::new(root.join("synthetic-codex"))
             .with_executable(executable),
     )
 }
@@ -452,7 +452,7 @@ fn fixture_metadata_client(
 #[cfg(not(unix))]
 fn fixture_metadata_client(
     _root: &Path,
-) -> anyhow::Result<zeron_harness::codex::native::CodexNativeClient> {
+) -> anyhow::Result<luna_harness::codex::native::CodexNativeClient> {
     anyhow::bail!("the L13 native fixture requires a Unix synthetic metadata executable")
 }
 
@@ -462,7 +462,7 @@ async fn execute(
     command_id: &str,
     intent: serde_json::Value,
 ) -> anyhow::Result<CommandReceipt> {
-    let snapshot: zeron_proto::TaskCommandRead = client
+    let snapshot: luna_proto::TaskCommandRead = client
         .call_as(
             methods::GET_TASK_COMMAND_SNAPSHOT,
             serde_json::json!({ "taskId": task_id }),
@@ -570,28 +570,28 @@ fn seed_unsupported_visible_history(core: &EngineCore) -> anyhow::Result<bool> {
         return Ok(false);
     }
     let entries = [
-        zeron_doc::SessionMessageEntry {
+        luna_doc::SessionMessageEntry {
             id: UNSUPPORTED_USER_MESSAGE_ID.into(),
-            role: zeron_doc::MessageRole::User,
-            parts: vec![zeron_doc::MessagePart::Text {
+            role: luna_doc::MessageRole::User,
+            parts: vec![luna_doc::MessagePart::Text {
                 id: "text".into(),
                 text: "Prepare a safe synthetic context handoff for a new task draft.".into(),
             }],
             created_at: 1,
             device_id: core.device_id.clone(),
-            status: Some(zeron_doc::MessageStatus::Complete),
+            status: Some(luna_doc::MessageStatus::Complete),
             continuation_of: None,
         },
-        zeron_doc::SessionMessageEntry {
+        luna_doc::SessionMessageEntry {
             id: UNSUPPORTED_ASSISTANT_MESSAGE_ID.into(),
-            role: zeron_doc::MessageRole::Assistant,
-            parts: vec![zeron_doc::MessagePart::Text {
+            role: luna_doc::MessageRole::Assistant,
+            parts: vec![luna_doc::MessagePart::Text {
                 id: "text".into(),
                 text: "This completed synthetic conversation is visible context only. Review the opt-in draft before sending it.".into(),
             }],
             created_at: 2,
             device_id: core.device_id.clone(),
-            status: Some(zeron_doc::MessageStatus::Complete),
+            status: Some(luna_doc::MessageStatus::Complete),
             continuation_of: None,
         },
     ];
@@ -640,7 +640,7 @@ async fn seed(
     history: &FixtureHistoryHarness,
     root: &Path,
 ) -> anyhow::Result<()> {
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     seed_history_task(
         &client,
         core,
@@ -730,7 +730,7 @@ fn main() -> anyhow::Result<()> {
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
         .port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,
@@ -875,7 +875,7 @@ mod tests {
         };
 
         let core = assemble();
-        let client = zeron_rpc::memory_client(core.rpc_service());
+        let client = luna_rpc::memory_client(core.rpc_service());
         let created = execute(
             &client,
             UNSUPPORTED_TASK_ID,
@@ -919,20 +919,20 @@ mod tests {
             .read_entries()
             .unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].role, zeron_doc::MessageRole::User);
-        assert_eq!(entries[1].role, zeron_doc::MessageRole::Assistant);
+        assert_eq!(entries[0].role, luna_doc::MessageRole::User);
+        assert_eq!(entries[1].role, luna_doc::MessageRole::Assistant);
         assert!(
             entries
                 .iter()
-                .all(|entry| entry.status == Some(zeron_doc::MessageStatus::Complete))
+                .all(|entry| entry.status == Some(luna_doc::MessageStatus::Complete))
         );
-        let handoff = zeron_proto::ContextHandoff {
-            kind: zeron_proto::ContextHandoffKind::RecentVisibleHistory,
+        let handoff = luna_proto::ContextHandoff {
+            kind: luna_proto::ContextHandoffKind::RecentVisibleHistory,
             text: entries
                 .iter()
                 .flat_map(|entry| entry.parts.iter())
                 .filter_map(|part| match part {
-                    zeron_doc::MessagePart::Text { text, .. } => Some(text.as_str()),
+                    luna_doc::MessagePart::Text { text, .. } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -977,7 +977,7 @@ mod tests {
         drop(core);
 
         let reopened = assemble();
-        let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
+        let reopened_client = luna_rpc::memory_client(reopened.rpc_service());
         seed_unsupported_task(&reopened_client, &reopened, root.path())
             .await
             .unwrap();
@@ -1008,17 +1008,17 @@ mod tests {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| entry.role == zeron_doc::MessageRole::User)
+                .filter(|entry| entry.role == luna_doc::MessageRole::User)
                 .count(),
             2
         );
         let assistants = entries
             .iter()
-            .filter(|entry| entry.role == zeron_doc::MessageRole::Assistant)
+            .filter(|entry| entry.role == luna_doc::MessageRole::Assistant)
             .collect::<Vec<_>>();
         assert_eq!(assistants.len(), 2);
         assert!(assistants.iter().all(|entry| {
-            entry.status == Some(zeron_doc::MessageStatus::Complete)
+            entry.status == Some(luna_doc::MessageStatus::Complete)
                 && handle.doc().provider_checkpoint(&entry.id).is_some()
         }));
         assert_eq!(
@@ -1063,7 +1063,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (core, history) = assemble_with_metadata(root.path());
         seed(&core, &history, root.path()).await.unwrap();
-        let client = zeron_rpc::memory_client(core.rpc_service());
+        let client = luna_rpc::memory_client(core.rpc_service());
         let source_chat = core.workspace.chat(TASK_ID).unwrap().unwrap();
         let source_binding = core
             .task_identity
@@ -1071,7 +1071,7 @@ mod tests {
             .unwrap()
             .current_binding
             .unwrap();
-        let source_snapshot: zeron_proto::TaskCommandRead = client
+        let source_snapshot: luna_proto::TaskCommandRead = client
             .call_as(
                 methods::GET_TASK_COMMAND_SNAPSHOT,
                 serde_json::json!({ "taskId": TASK_ID }),
@@ -1163,7 +1163,7 @@ mod tests {
             .unwrap();
         assert!(child_entries.iter().any(|entry| {
             entry.parts.iter().any(|part| {
-                matches!(part, zeron_doc::MessagePart::Text { text, .. }
+                matches!(part, luna_doc::MessagePart::Text { text, .. }
                     if text == "Continue the independent child while its source is archived.")
             })
         }));
@@ -1284,7 +1284,7 @@ mod tests {
             .unwrap();
         core.set_auth(Auth::new(auth_config(root.path())));
         seed(&core, &history, root.path()).await.unwrap();
-        let client = zeron_rpc::memory_client(core.rpc_service());
+        let client = luna_rpc::memory_client(core.rpc_service());
         let receipt = execute(
             &client,
             TASK_ID,
@@ -1296,7 +1296,7 @@ mod tests {
         assert_eq!(receipt.status, CommandReceiptStatus::Pending);
         assert_eq!(
             receipt.reason.unwrap().code,
-            zeron_proto::CommandReasonCode::ProviderAcceptanceUnknown
+            luna_proto::CommandReasonCode::ProviderAcceptanceUnknown
         );
         assert!(!core.workspace.chat(TASK_ID).unwrap().unwrap().archived);
         assert!(

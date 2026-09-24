@@ -6,15 +6,15 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use luna_engine::backup::{BackupService, IsolatedRoot};
+use luna_engine::backup_control::BackupControl;
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
+use luna_proto::HarnessId;
+use luna_proto::{BackupArchiveRequest, BackupAvailability, BackupConfigureRequest};
+use luna_rpc::{memory_client, methods};
+use luna_sync::DocsStore;
 use std::sync::Arc;
 use tempfile::TempDir;
-use zeron_engine::backup::{BackupService, IsolatedRoot};
-use zeron_engine::backup_control::BackupControl;
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
-use zeron_proto::HarnessId;
-use zeron_proto::{BackupArchiveRequest, BackupAvailability, BackupConfigureRequest};
-use zeron_rpc::{memory_client, methods};
-use zeron_sync::DocsStore;
 
 fn marked_root(path: &Path) {
     fs::create_dir(path).unwrap();
@@ -254,7 +254,7 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
     .unwrap()
     .with_backup_control_for_tests(control);
     let client = memory_client(core.rpc_service());
-    let status: zeron_proto::BackupStatus = serde_json::from_value(
+    let status: luna_proto::BackupStatus = serde_json::from_value(
         client
             .call(methods::GET_BACKUP_STATUS, serde_json::json!({}))
             .await
@@ -283,7 +283,7 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
             .await
             .is_err()
     );
-    let status: zeron_proto::BackupStatus = serde_json::from_value(
+    let status: luna_proto::BackupStatus = serde_json::from_value(
         client
             .call(methods::GET_BACKUP_STATUS, serde_json::json!({}))
             .await
@@ -301,14 +301,14 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
             .await
             .is_err()
     );
-    let summary: zeron_proto::BackupSummary = serde_json::from_value(
+    let summary: luna_proto::BackupSummary = serde_json::from_value(
         client
             .call(methods::BACKUP_NOW, serde_json::json!({}))
             .await
             .unwrap(),
     )
     .unwrap();
-    let preview: zeron_proto::BackupPreview = serde_json::from_value(
+    let preview: luna_proto::BackupPreview = serde_json::from_value(
         client
             .call(
                 methods::INSPECT_BACKUP,
@@ -320,7 +320,7 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
     .unwrap();
     assert_eq!(preview.document_count, 1);
     assert!(!preview.restore_activation_available);
-    let stage: zeron_proto::BackupStageStatus = serde_json::from_value(
+    let stage: luna_proto::BackupStageStatus = serde_json::from_value(
         client
             .call(
                 methods::STAGE_BACKUP_RESTORE,
@@ -334,7 +334,7 @@ async fn local_rpc_reports_copy_only_status_and_rejects_foreign_target() {
     .unwrap();
     assert!(Path::new(&stage.staging_path).is_dir());
     assert!(!stage.restore_activation_available);
-    let rechecked: zeron_proto::BackupStageStatus = serde_json::from_value(
+    let rechecked: luna_proto::BackupStageStatus = serde_json::from_value(
         client
             .call(
                 methods::STAGE_BACKUP_RESTORE,
@@ -369,7 +369,7 @@ async fn ordinary_unmarked_fixture_root_has_no_backup_control_or_vault_probe() {
     )
     .unwrap();
     let client = memory_client(core.rpc_service());
-    let status: zeron_proto::BackupStatus = serde_json::from_value(
+    let status: luna_proto::BackupStatus = serde_json::from_value(
         client
             .call(methods::GET_BACKUP_STATUS, serde_json::json!({}))
             .await
@@ -390,7 +390,7 @@ async fn ordinary_unmarked_fixture_root_has_no_backup_control_or_vault_probe() {
     let receipt = BackupService::run_managed_offline_if_due(&owner, 1_700_000_000_000)
         .unwrap()
         .unwrap();
-    let after: zeron_proto::BackupStatus = serde_json::from_value(
+    let after: luna_proto::BackupStatus = serde_json::from_value(
         client
             .call(methods::GET_BACKUP_STATUS, serde_json::json!({}))
             .await

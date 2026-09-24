@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use luna_proto::{TerminalEvent, TerminalInventoryEntry, TerminalProcessState};
 use rusqlite::{Connection, OptionalExtension, params};
-use zeron_proto::{TerminalEvent, TerminalInventoryEntry, TerminalProcessState};
 
 const MAX_SAVED_OUTPUT_BYTES: i64 = 1024 * 1024;
 const MAX_SAVED_TERMINALS: usize = 256;

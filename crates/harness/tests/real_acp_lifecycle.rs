@@ -1,13 +1,13 @@
 //! Real Pi ACP + model regression for #296. Requires an authenticated Pi and
 //! fixtures/pi-slow-model.ts loaded as a Pi extension (35s delay by default).
 //! PI_ACP_EXECUTABLE and PI_ACP_PI_COMMAND can select isolated installations.
-//! cargo test -p zeron-harness --test real_acp_lifecycle -- --ignored --nocapture
+//! cargo test -p luna-harness --test real_acp_lifecycle -- --ignored --nocapture
 
 use futures::StreamExt;
+use luna_harness::{AcpHarness, CancellationToken, Harness, RunControls, SteerMessage};
+use luna_proto::{AgentEvent, DoneStatus, RunRequest, SandboxLevel};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
-use zeron_harness::{AcpHarness, CancellationToken, Harness, RunControls, SteerMessage};
-use zeron_proto::{AgentEvent, DoneStatus, RunRequest, SandboxLevel};
 
 async fn live_run(cancel: bool) {
     let cwd = tempfile::tempdir().unwrap();
@@ -27,7 +27,7 @@ async fn live_run(cancel: bool) {
         harness: None, provider_account_id: None, model: None, reasoning: None,
         model_options: serde_json::Map::new(), cwd: cwd.path().display().to_string(),
         sandbox: SandboxLevel::WorkspaceWrite, auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -63,7 +63,7 @@ async fn live_run(cancel: bool) {
                         steer.send(SteerMessage {
                             prompt: format!("Do not call tools. Reply exactly {word}."),
                             message_id: None,
-                            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                             acceptance: None,
                         }).await.unwrap();
                     }

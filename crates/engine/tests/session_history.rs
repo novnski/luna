@@ -4,15 +4,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
-use zeron_engine::{EngineCore, HarnessRegistry, RunJournal};
-use zeron_harness::mock::MockHarness;
-use zeron_proto::{
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+use luna_engine::{EngineCore, HarnessRegistry, RunJournal};
+use luna_harness::mock::MockHarness;
+use luna_proto::{
     ActivityRedaction, AgentEvent, ChatConfig, HarnessId, HistoryProjectPolicy,
     HistoryRebuildResult, HistorySearchPage, HistorySearchRequest, PermissionMode, SandboxLevel,
     ToolCall,
 };
-use zeron_rpc::methods;
+use luna_rpc::methods;
 
 fn config() -> ChatConfig {
     ChatConfig {
@@ -111,7 +111,7 @@ fn raw_activity_index_for_task(path: &std::path::Path, task_id: &str) -> String 
 }
 
 async fn search(
-    client: &zeron_rpc::RpcClient,
+    client: &luna_rpc::RpcClient,
     query: &str,
     project_id: Option<&str>,
     global: bool,
@@ -134,7 +134,7 @@ async fn search(
 }
 
 async fn wait_for_search(
-    client: &zeron_rpc::RpcClient,
+    client: &luna_rpc::RpcClient,
     query: &str,
     project: &str,
 ) -> HistorySearchPage {
@@ -272,7 +272,7 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
         .push_message(&entry("prompt-b", MessageRole::User, "alpha request", 30))
         .unwrap();
 
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let rebuilt: HistoryRebuildResult = serde_json::from_value(
         client
             .call(
@@ -614,7 +614,7 @@ async fn session_history_search_rebuild_filters_links_redacts_and_reopens() {
     core.shutdown().await;
     drop(core);
     let reopened = assemble(dir.path());
-    let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
+    let reopened_client = luna_rpc::memory_client(reopened.rpc_service());
     let persisted = wait_for_search(&reopened_client, "incremental sentinel", "project-a").await;
     assert_eq!(persisted.events[0].task_id, "task-a");
     assert!(

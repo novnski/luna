@@ -43,8 +43,8 @@ use gpui::{
 };
 use unicode_width::UnicodeWidthChar as _;
 
-use zeron_proto::{Chat, CheckoutDiff, GitActionPreview, GitHistoryCommit, GitPrStatus};
-use zeron_rpc::methods;
+use luna_proto::{Chat, CheckoutDiff, GitActionPreview, GitHistoryCommit, GitPrStatus};
+use luna_rpc::methods;
 
 use crate::comments::{self, CommentSide, ReviewComment};
 use crate::composer::{ComposerInput, ComposerInputEvent};
@@ -57,7 +57,7 @@ use crate::motion::{self, AnimationExt as _, CHEVRON, COLLAPSE};
 use crate::popover::{self, Popup};
 use crate::state::{AppState, EngineHandle};
 use crate::theme::Theme;
-use zeron_syntax::LanguageId as Lang;
+use luna_syntax::LanguageId as Lang;
 
 mod git_actions;
 
@@ -175,8 +175,8 @@ pub struct SourceLineRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffHighlights {
-    pub old: Option<Arc<zeron_syntax::HighlightedDocument>>,
-    pub new: Option<Arc<zeron_syntax::HighlightedDocument>>,
+    pub old: Option<Arc<luna_syntax::HighlightedDocument>>,
+    pub new: Option<Arc<luna_syntax::HighlightedDocument>>,
 }
 
 impl DiffHighlights {
@@ -207,7 +207,7 @@ impl DiffHighlights {
         }
     }
 
-    pub fn spans(&self, line: &DiffLine) -> &[zeron_syntax::HighlightSpan] {
+    pub fn spans(&self, line: &DiffLine) -> &[luna_syntax::HighlightSpan] {
         let Some(source_ref) = self.source_ref(line) else {
             return &[];
         };
@@ -1027,7 +1027,7 @@ fn excerpt_side(
     side: SourceSide,
     language: Lang,
     path: &str,
-) -> Option<Arc<zeron_syntax::HighlightedDocument>> {
+) -> Option<Arc<luna_syntax::HighlightedDocument>> {
     let max_line = file
         .hunks
         .iter()
@@ -1062,7 +1062,7 @@ fn excerpt_side(
             .map(|(_, text)| *text)
             .collect::<Vec<_>>()
             .join("\n");
-        let document = zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+        let document = luna_syntax::highlight(luna_syntax::HighlightRequest {
             source: &source,
             path: Some(path),
             fence_tag: None,
@@ -1072,14 +1072,14 @@ fn excerpt_side(
             lines[number as usize - 1] = spans;
         }
     }
-    Some(Arc::new(zeron_syntax::HighlightedDocument {
+    Some(Arc::new(luna_syntax::HighlightedDocument {
         language,
         lines,
     }))
 }
 
 fn excerpt_highlights(file: &FileDiff, language: Lang) -> Option<DiffHighlights> {
-    if !zeron_syntax::supports_language(language) {
+    if !luna_syntax::supports_language(language) {
         return None;
     }
     let old = if file.status == FileStatus::Added {
@@ -1100,7 +1100,7 @@ fn excerpt_highlights(file: &FileDiff, language: Lang) -> Option<DiffHighlights>
     Some(DiffHighlights { old, new })
 }
 
-fn sources_match_patch(file: &FileDiff, response: &zeron_proto::CheckoutFileDiffText) -> bool {
+fn sources_match_patch(file: &FileDiff, response: &luna_proto::CheckoutFileDiffText) -> bool {
     let old = response
         .old_text
         .as_deref()
@@ -1133,7 +1133,7 @@ fn sources_match_patch(file: &FileDiff, response: &zeron_proto::CheckoutFileDiff
 fn full_highlights(
     file: &FileDiff,
     language: Lang,
-    response: &zeron_proto::CheckoutFileDiffText,
+    response: &luna_proto::CheckoutFileDiffText,
 ) -> Option<DiffHighlights> {
     if response.stale
         || response.binary
@@ -1143,7 +1143,7 @@ fn full_highlights(
         return None;
     }
     let parse = |source: &str, path: &str| {
-        zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+        luna_syntax::highlight(luna_syntax::HighlightRequest {
             source,
             path: Some(path),
             fence_tag: None,
@@ -1162,7 +1162,7 @@ fn full_highlights(
         Some(source) => Some(parse(source, &file.path)?),
         None => None,
     };
-    if old.is_none() && new.is_none() && zeron_syntax::supports_language(language) {
+    if old.is_none() && new.is_none() && luna_syntax::supports_language(language) {
         return None;
     }
     Some(DiffHighlights { old, new })
@@ -1706,9 +1706,9 @@ pub struct Changes {
     git_task: Option<Task<()>>,
     git_pr_status: Option<GitPrStatus>,
     git_pr_task: Option<Task<()>>,
-    checkpoints: Option<zeron_proto::GitCheckpointList>,
-    checkpoint_diff: Option<zeron_proto::GitCheckpointDiff>,
-    checkpoint_restore: Option<zeron_proto::GitCheckpointRestorePreview>,
+    checkpoints: Option<luna_proto::GitCheckpointList>,
+    checkpoint_diff: Option<luna_proto::GitCheckpointDiff>,
+    checkpoint_restore: Option<luna_proto::GitCheckpointRestorePreview>,
     checkpoint_notice: Option<String>,
     checkpoint_receipt: Option<String>,
     checkpoint_task: Option<Task<()>>,
@@ -2153,7 +2153,7 @@ impl Changes {
                 changes.scoped_inflight = None;
                 match result.and_then(|value| {
                     serde_json::from_value::<CheckoutDiff>(value)
-                        .map_err(|e| zeron_rpc::RpcError::Failed(e.to_string()))
+                        .map_err(|e| luna_rpc::RpcError::Failed(e.to_string()))
                 }) {
                     Ok(diff) => {
                         changes.scoped = Some(diff);
@@ -3059,7 +3059,7 @@ impl Changes {
         parsed_key: &str,
         cx: &mut Context<Self>,
     ) -> Option<Arc<DiffHighlights>> {
-        let lang = zeron_syntax::language_for_path(&file.path)?;
+        let lang = luna_syntax::language_for_path(&file.path)?;
         let fingerprint = hash64(&[parsed_key, &file.path]);
         if let Some(slot) = self.highlights.get(&file.path)
             && slot.fingerprint == fingerprint
@@ -3071,7 +3071,7 @@ impl Changes {
                 DiffHighlightState::Pending | DiffHighlightState::Plain => None,
             };
         }
-        if !zeron_syntax::supports_language(lang) {
+        if !luna_syntax::supports_language(lang) {
             self.highlights.insert(
                 file.path.clone(),
                 HighlightSlot {
@@ -3123,7 +3123,7 @@ impl Changes {
         let fetch_path = path.clone();
         let fetch_task = match (active, engine) {
             (Some(diff), Some(engine)) => Some(cx.spawn(async move |this, cx| {
-                let request = zeron_proto::GetCheckoutFileDiffTextRequest {
+                let request = luna_proto::GetCheckoutFileDiffTextRequest {
                     checkout_id: diff.checkout_id,
                     cwd: diff.cwd,
                     path: fetch_path.clone(),
@@ -3149,7 +3149,7 @@ impl Changes {
                     .await
                     .ok()
                     .and_then(|value| {
-                        serde_json::from_value::<zeron_proto::CheckoutFileDiffText>(value).ok()
+                        serde_json::from_value::<luna_proto::CheckoutFileDiffText>(value).ok()
                     });
                 let highlights = match response {
                     Some(response) => {
@@ -3503,7 +3503,7 @@ impl Changes {
             theme.ink(0.05)
         };
 
-        // Chevron (zeron checkout-diff-sidebar): chevron-right closed,
+        // Chevron (luna checkout-diff-sidebar): chevron-right closed,
         // chevron-down open; gpui divs have no rotation transform at the
         // pinned rev, so the glyph swap crossfades over the same 200 ms.
         let chevron_icon = if collapsed {
@@ -4389,7 +4389,7 @@ fn code_text_viewport(
 /// paint-only syntax runs.
 fn diff_line_row(
     line: &DiffLine,
-    spans: &[zeron_syntax::HighlightSpan],
+    spans: &[luna_syntax::HighlightSpan],
     theme: &Theme,
     gutter_px: f32,
     code_width: DiffCodeWidth,
@@ -4756,7 +4756,7 @@ fn draft_cite_path(draft: &CommentDraft) -> &str {
 
 /// The expanded body of one file section: notices, hunk headers, +/-/context
 /// lines with a coloured accent bar, dual line-number gutters, a marker
-/// column, and paint-only syntax runs (zeron checkout-diff-sidebar).
+/// column, and paint-only syntax runs (luna checkout-diff-sidebar).
 /// Shared with the transcript's tool-diff detail blocks — the same component
 /// renders a checkout diff section and an inline ACP tool diff. (The changes
 /// pane itself virtualizes these rows individually; this stacked form serves
@@ -5400,7 +5400,7 @@ rename to new_name.rs
 
     #[test]
     fn sticky_header_uses_the_content_theme_in_dark_and_light() {
-        use zeron_theme::{AccentSelection, SurfacePreference};
+        use luna_theme::{AccentSelection, SurfacePreference};
 
         for (appearance, variant_id) in [
             (crate::theme::Appearance::Dark, "gruvbox-dark"),
@@ -5829,7 +5829,7 @@ rename to new_name.rs
         let highlight = Arc::new(DiffHighlights {
             old: None,
             new: Some(Arc::new(
-                zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+                luna_syntax::highlight(luna_syntax::HighlightRequest {
                     source: &source,
                     path: Some("x.ts"),
                     fence_tag: None,
@@ -6054,7 +6054,7 @@ rename to new_name.rs
         assert_eq!(diff_phase(Some(&full)), DiffPhase::List);
         // Engine may report files without patch text (truncation edge).
         let mut summarized = diff("co", "d", "/w", "");
-        summarized.files.push(zeron_proto::DiffFileSummary {
+        summarized.files.push(luna_proto::DiffFileSummary {
             path: "x".into(),
             old_path: None,
             status: "modified".into(),
@@ -6208,7 +6208,7 @@ rename to new_name.rs
         let new_source = "export function new(value: string) {\n    return value.trim();\n}\n";
         let parse = |source| {
             Arc::new(
-                zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+                luna_syntax::highlight(luna_syntax::HighlightRequest {
                     source,
                     path: Some("src/derive.ts"),
                     fence_tag: None,
@@ -6263,13 +6263,13 @@ rename to new_name.rs
             highlights
                 .spans(&deleted)
                 .iter()
-                .any(|span| span.kind == zeron_syntax::HighlightKind::Function)
+                .any(|span| span.kind == luna_syntax::HighlightKind::Function)
         );
         assert!(
             highlights
                 .spans(&added)
                 .iter()
-                .any(|span| span.kind == zeron_syntax::HighlightKind::Function)
+                .any(|span| span.kind == luna_syntax::HighlightKind::Function)
         );
     }
 
@@ -6305,21 +6305,21 @@ rename to new_name.rs
             (
                 "src/card.tsx",
                 "const view: JSX.Element = <main id=\"app\" />;",
-                zeron_syntax::HighlightKind::Tag,
+                luna_syntax::HighlightKind::Tag,
             ),
             (
                 "src/Greeter.kt",
                 "fun greet(name: String) = println(name)",
-                zeron_syntax::HighlightKind::Function,
+                luna_syntax::HighlightKind::Function,
             ),
             (
                 "Dockerfile",
                 "RUN echo \"hello\"",
-                zeron_syntax::HighlightKind::Function,
+                luna_syntax::HighlightKind::Function,
             ),
         ] {
             let document = Arc::new(
-                zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+                luna_syntax::highlight(luna_syntax::HighlightRequest {
                     source,
                     path: Some(path),
                     fence_tag: None,
@@ -6412,13 +6412,13 @@ rename to new_name.rs
             highlights
                 .spans(deleted)
                 .iter()
-                .any(|span| span.kind == zeron_syntax::HighlightKind::Comment)
+                .any(|span| span.kind == luna_syntax::HighlightKind::Comment)
         );
         assert!(
             highlights
                 .spans(added)
                 .iter()
-                .any(|span| span.kind == zeron_syntax::HighlightKind::Comment)
+                .any(|span| span.kind == luna_syntax::HighlightKind::Comment)
         );
     }
 
@@ -6451,7 +6451,7 @@ rename to new_name.rs
             deletions: 1,
             max_line: 1,
         };
-        let response = zeron_proto::CheckoutFileDiffText {
+        let response = luna_proto::CheckoutFileDiffText {
             diff_checksum: "sum".into(),
             old_text: Some("let old = 1;\n".into()),
             new_text: Some("different snapshot\n".into()),

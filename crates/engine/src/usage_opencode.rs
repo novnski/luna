@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::DateTime;
+use luna_proto::{LimitAvailability, UsageLimitSnapshot, UsageLimitWindow, UsageProvider};
 use reqwest::redirect::Policy;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use zeron_proto::{LimitAvailability, UsageLimitSnapshot, UsageLimitWindow, UsageProvider};
 
 struct Credential {
     token: String,

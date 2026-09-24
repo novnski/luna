@@ -3,14 +3,14 @@
 //! Completed turn with text. Arg 1 = executable (default: PATH resolution),
 //! arg 2 = model (`provider/model`), arg 3 = prompt.
 //!
-//!     cargo run -p zeron-harness --example opencode_turn_probe -- \
+//!     cargo run -p luna-harness --example opencode_turn_probe -- \
 //!         ~/.opencode/bin/opencode opencode/muse-spark-1.3-contributor-free \
 //!         "Read /tmp/note.txt and reply with its secret word."
 
 use futures::StreamExt;
+use luna_harness::{CancellationToken, Harness, OpencodeHarness, RunControls};
+use luna_proto::{AgentEvent, RunRequest, SandboxLevel};
 use tokio::sync::mpsc;
-use zeron_harness::{CancellationToken, Harness, OpencodeHarness, RunControls};
-use zeron_proto::{AgentEvent, RunRequest, SandboxLevel};
 
 #[tokio::main]
 async fn main() {
@@ -32,7 +32,7 @@ async fn main() {
         cwd: cwd.into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -97,7 +97,7 @@ async fn main() {
     };
     eprintln!("--- done: {status:?} text={text:?} tools={tools}");
     match status {
-        Some(zeron_proto::DoneStatus::Completed) if !text.trim().is_empty() => {}
+        Some(luna_proto::DoneStatus::Completed) if !text.trim().is_empty() => {}
         _ => std::process::exit(1),
     }
 }

@@ -62,11 +62,11 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, RegistryDoc, SessionCommandEntry,
     SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry,
 };
-use zeron_proto::{
+use luna_proto::{
     AttentionMutationRequest, AttentionMutationResult, AttentionProducerAvailability,
     AttentionReadRequest, AttentionSnapshot, AttentionTransitionBatch, AttentionTransitionClaim,
     BackupArchiveRequest, BackupAvailability, BackupConfigureRequest, BackupStatus, BackupSummary,
@@ -79,8 +79,8 @@ use zeron_proto::{
     PermissionMode, ProviderForkCapability, ProviderForkRequest, TaskCommandEvent,
     TaskCommandSnapshot, TaskLineage, ToolCall, UsageRequest, WorkspaceScope,
 };
-use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
-use zeron_sync::{DocsStore, LocalExecutableChange, LocalExecutableKind};
+use luna_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
+use luna_sync::{DocsStore, LocalExecutableChange, LocalExecutableKind};
 
 use crate::agent_accounts::AgentAccounts;
 use crate::auth::Auth;
@@ -202,7 +202,7 @@ async fn update_harness_enabled<F>(
     sign_out: F,
 ) -> Result<(), RpcError>
 where
-    F: std::future::Future<Output = Result<(), zeron_harness::HarnessError>>,
+    F: std::future::Future<Output = Result<(), luna_harness::HarnessError>>,
 {
     // Keep this exact ticket through provider sign-out and preference publish.
     // A frozen device must reject before the external future is polled.
@@ -464,7 +464,7 @@ enum TaskCommandIntent {
 
 #[derive(Debug, Clone)]
 struct ValidatedProjectMove {
-    destination: zeron_proto::Space,
+    destination: luna_proto::Space,
 }
 
 fn commit_validated_project_move(
@@ -670,7 +670,7 @@ struct RelayCommandParams {
     chat_id: String,
     /// The full command entry, client-minted id included — the exactly-once
     /// key the host claims in its processed ledger before executing.
-    entry: zeron_doc::SessionCommandEntry,
+    entry: luna_doc::SessionCommandEntry,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1032,7 +1032,7 @@ enum MutateParams {
     SetChatHost { chat_id: String, device_id: String },
     #[serde(rename_all = "camelCase")]
     SetChatArchived { chat_id: String, archived: bool },
-    /// Full-config replace on the chat row (zeron `SetChatConfig`): the
+    /// Full-config replace on the chat row (luna `SetChatConfig`): the
     /// composer's mid-session model / reasoning / options changes, LWW-synced
     /// so they survive restarts and reach every device.
     #[serde(rename_all = "camelCase")]
@@ -1079,20 +1079,20 @@ pub struct EngineRpc {
     git_checkpoints: Option<crate::git_checkpoints::GitCheckpoints>,
     workspace_files: crate::WorkspaceFiles,
     terminals: Terminals,
-    previews: Option<zeron_preview::PreviewService>,
+    previews: Option<luna_preview::PreviewService>,
     change_requests: CheckoutChangeRequests,
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
     agent_accounts: AgentAccounts,
     model_cache: std::sync::Arc<crate::model_cache::ModelCache>,
-    codex_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
-    opencode_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
-    claude_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
+    codex_usage_last_good: std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
+    opencode_usage_last_good: std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
+    claude_usage_last_good: std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
     task_identity: crate::TaskIdentityService,
     auth: Option<Auth>,
-    remote_auth: Option<std::sync::Arc<zeron_rpc::RemoteAuthStore>>,
+    remote_auth: Option<std::sync::Arc<luna_rpc::RemoteAuthStore>>,
     links: Option<std::sync::Arc<LinkCache>>,
-    updater: Option<zeron_update::Updater>,
+    updater: Option<luna_update::Updater>,
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
     cleanup_boot_id: String,
@@ -1106,11 +1106,11 @@ impl Drop for EngineRpc {
 }
 
 impl EngineRpc {
-    fn usage_providers_for(harnesses: &[HarnessId]) -> Vec<zeron_proto::UsageProvider> {
+    fn usage_providers_for(harnesses: &[HarnessId]) -> Vec<luna_proto::UsageProvider> {
         [
-            (HarnessId::Codex, zeron_proto::UsageProvider::Codex),
-            (HarnessId::Opencode, zeron_proto::UsageProvider::OpenCodeGo),
-            (HarnessId::ClaudeCode, zeron_proto::UsageProvider::Claude),
+            (HarnessId::Codex, luna_proto::UsageProvider::Codex),
+            (HarnessId::Opencode, luna_proto::UsageProvider::OpenCodeGo),
+            (HarnessId::ClaudeCode, luna_proto::UsageProvider::Claude),
         ]
         .into_iter()
         .filter_map(|(harness, provider)| harnesses.contains(&harness).then_some(provider))
@@ -1120,8 +1120,8 @@ impl EngineRpc {
     /// Settings → Agents is authoritative for which providers Usage exposes
     /// on this device, including historical buckets and cached quota rows.
     fn retain_enabled_usage(
-        snapshot: &mut zeron_proto::UsageSnapshot,
-        enabled: &[zeron_proto::UsageProvider],
+        snapshot: &mut luna_proto::UsageSnapshot,
+        enabled: &[luna_proto::UsageProvider],
     ) {
         snapshot
             .summary
@@ -1138,13 +1138,13 @@ impl EngineRpc {
             .summary
             .sources
             .iter()
-            .any(|source| source.status == zeron_proto::UsageSourceStatus::Partial);
+            .any(|source| source.status == luna_proto::UsageSourceStatus::Partial);
     }
 
     fn attach_account_live_limits(
-        snapshot: &mut zeron_proto::UsageSnapshot,
-        observed: zeron_proto::UsageLimitSnapshot,
-        last_good: &std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
+        snapshot: &mut luna_proto::UsageSnapshot,
+        observed: luna_proto::UsageLimitSnapshot,
+        last_good: &std::sync::Mutex<Option<luna_proto::UsageLimitSnapshot>>,
         failure_detail: &'static str,
     ) {
         let Some(index) = snapshot
@@ -1155,7 +1155,7 @@ impl EngineRpc {
             return;
         };
         match observed.availability {
-            zeron_proto::LimitAvailability::Ready => {
+            luna_proto::LimitAvailability::Ready => {
                 *last_good
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = observed
@@ -1164,13 +1164,13 @@ impl EngineRpc {
                     .map(|_| observed.clone());
                 snapshot.limits[index] = observed;
             }
-            zeron_proto::LimitAvailability::Unsupported => {
+            luna_proto::LimitAvailability::Unsupported => {
                 *last_good
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 snapshot.limits[index] = observed;
             }
-            zeron_proto::LimitAvailability::ProbeFailed => {
+            luna_proto::LimitAvailability::ProbeFailed => {
                 let last_good = last_good
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1179,27 +1179,27 @@ impl EngineRpc {
                     observed.verified_account_id.is_some()
                         && last_good.verified_account_id == observed.verified_account_id
                 }) {
-                    last_good.availability = zeron_proto::LimitAvailability::ProbeFailed;
+                    last_good.availability = luna_proto::LimitAvailability::ProbeFailed;
                     last_good.detail = Some(failure_detail.into());
                     snapshot.limits[index] = last_good;
                 } else {
                     snapshot.limits[index] = observed;
                 }
             }
-            zeron_proto::LimitAvailability::Unverified => {
+            luna_proto::LimitAvailability::Unverified => {
                 snapshot.limits[index] = observed;
             }
         }
     }
 
-    async fn attach_codex_live_limits(&self, snapshot: &mut zeron_proto::UsageSnapshot) {
+    async fn attach_codex_live_limits(&self, snapshot: &mut luna_proto::UsageSnapshot) {
         if crate::usage::synthetic_mode_requested() {
             return;
         }
         let Some(index) = snapshot
             .limits
             .iter()
-            .position(|limit| limit.provider == zeron_proto::UsageProvider::Codex)
+            .position(|limit| limit.provider == luna_proto::UsageProvider::Codex)
         else {
             return;
         };
@@ -1212,19 +1212,19 @@ impl EngineRpc {
                 Some("Selected Codex account home is unavailable".into());
             return;
         }
-        let client = zeron_harness::codex::native::CodexNativeClient::new(&home)
+        let client = luna_harness::codex::native::CodexNativeClient::new(&home)
             .for_execution_home(&home, force_file_auth);
         let outcome =
             tokio::time::timeout(Duration::from_secs(8), client.read_account_rate_limits()).await;
         // A user can switch named Codex accounts while the provider replies.
         // Never publish a different selected home under the old selection.
         if self.agent_accounts.codex_usage_target().ok() != Some((home, force_file_auth)) {
-            snapshot.limits[index].availability = zeron_proto::LimitAvailability::Unverified;
+            snapshot.limits[index].availability = luna_proto::LimitAvailability::Unverified;
             snapshot.limits[index].detail =
                 Some("Codex account selection changed during refresh".into());
             return;
         }
-        use zeron_harness::codex::native::CodexQuotaObservation;
+        use luna_harness::codex::native::CodexQuotaObservation;
         match outcome {
             Ok(Ok(CodexQuotaObservation::Ready(read))) => {
                 let limit = crate::usage::live_codex_limit(read);
@@ -1255,19 +1255,19 @@ impl EngineRpc {
                 if let Some(mut limit) = last_good
                     .filter(|limit| limit.verified_account_id.as_deref() == Some(id.as_str()))
                 {
-                    limit.availability = zeron_proto::LimitAvailability::ProbeFailed;
+                    limit.availability = luna_proto::LimitAvailability::ProbeFailed;
                     limit.detail =
                         Some("Codex app-server refresh failed · last good values".into());
                     snapshot.limits[index] = limit;
                 } else {
                     snapshot.limits[index].availability =
-                        zeron_proto::LimitAvailability::ProbeFailed;
+                        luna_proto::LimitAvailability::ProbeFailed;
                     snapshot.limits[index].detail =
                         Some("Codex app-server refresh failed · quota unavailable".into());
                 }
             }
             _ => {
-                snapshot.limits[index].availability = zeron_proto::LimitAvailability::ProbeFailed;
+                snapshot.limits[index].availability = luna_proto::LimitAvailability::ProbeFailed;
                 snapshot.limits[index].detail =
                     Some("Codex app-server usage check failed · quota unavailable".into());
             }
@@ -1301,7 +1301,7 @@ impl EngineRpc {
         let engine_info = EngineInfo {
             device_id: doc_host.device_id().to_string(),
             workspace_scope,
-            capabilities: zeron_proto::capabilities::current(),
+            capabilities: luna_proto::capabilities::current(),
         };
         let rpc = Self {
             backup_control: None,
@@ -1824,7 +1824,7 @@ impl EngineRpc {
         });
     }
 
-    pub fn with_previews(mut self, previews: zeron_preview::PreviewService) -> Self {
+    pub fn with_previews(mut self, previews: luna_preview::PreviewService) -> Self {
         self.previews = Some(previews);
         self
     }
@@ -1835,11 +1835,11 @@ impl EngineRpc {
         self
     }
 
-    pub fn with_remote_auth(mut self, auth: std::sync::Arc<zeron_rpc::RemoteAuthStore>) -> Self {
+    pub fn with_remote_auth(mut self, auth: std::sync::Arc<luna_rpc::RemoteAuthStore>) -> Self {
         self.remote_auth = Some(auth);
         self.engine_info
             .capabilities
-            .push(zeron_proto::capabilities::REMOTE_AUTH_V1.into());
+            .push(luna_proto::capabilities::REMOTE_AUTH_V1.into());
         self
     }
 
@@ -1883,7 +1883,7 @@ impl EngineRpc {
     }
 
     /// Attach the release checker (UpdateStatus stream + ApplyUpdate).
-    pub fn with_updater(mut self, updater: zeron_update::Updater) -> Self {
+    pub fn with_updater(mut self, updater: luna_update::Updater) -> Self {
         self.updater = Some(updater);
         self
     }
@@ -1906,7 +1906,7 @@ impl EngineRpc {
         ))
     }
 
-    fn updater(&self) -> Result<&zeron_update::Updater, RpcError> {
+    fn updater(&self) -> Result<&luna_update::Updater, RpcError> {
         self.updater
             .as_ref()
             .ok_or_else(|| RpcError::Failed("updates unavailable".into()))
@@ -1990,7 +1990,7 @@ impl EngineRpc {
             .attention_snapshot()
             .map_err(|error| RpcError::Failed(error.to_string()))?;
         Ok(AttentionSnapshot {
-            contract_version: zeron_proto::ATTENTION_CONTRACT_VERSION,
+            contract_version: luna_proto::ATTENTION_CONTRACT_VERSION,
             revision: stored.revision,
             read_at_ms: crate::now_ms(),
             unresolved_count: stored.unresolved_count,
@@ -2007,7 +2007,7 @@ impl EngineRpc {
     }
 
     fn validate_composer_draft(&self, draft: &ComposerDraft) -> Result<(), RpcError> {
-        if draft.version != zeron_proto::COMPOSER_DRAFT_VERSION {
+        if draft.version != luna_proto::COMPOSER_DRAFT_VERSION {
             return Err(RpcError::BadParams(
                 "unsupported composer draft version".into(),
             ));
@@ -2147,7 +2147,7 @@ impl EngineRpc {
     /// name an existing linked worktree for a new chat, but it is verified
     /// against the space repository before any filesystem walk begins.
     async fn file_search_root(&self, p: &FileSearchParams) -> Result<std::path::PathBuf, RpcError> {
-        let target = zeron_proto::WorkspaceTarget {
+        let target = luna_proto::WorkspaceTarget {
             chat_id: p.chat_id.clone(),
             space_id: p.space_id.clone(),
             checkout_path: p.path.clone(),
@@ -2662,7 +2662,7 @@ impl EngineRpc {
             )
             .map_err(|error| RpcError::Failed(error.to_string()))?;
         match begin.kind {
-            zeron_sync::TaskCommandBeginKind::Duplicate => {
+            luna_sync::TaskCommandBeginKind::Duplicate => {
                 if begin.receipt.status != CommandReceiptStatus::Pending
                     || begin.receipt.reason.is_some()
                     || !self.safe_local_projection_retry(&command.task_id, &command.intent)
@@ -2680,11 +2680,11 @@ impl EngineRpc {
                     );
                 }
             }
-            zeron_sync::TaskCommandBeginKind::Conflict => {
+            luna_sync::TaskCommandBeginKind::Conflict => {
                 self.doc_host.publish_task_receipt(begin.receipt.clone());
                 return Ok(begin.receipt);
             }
-            zeron_sync::TaskCommandBeginKind::Accepted => {
+            luna_sync::TaskCommandBeginKind::Accepted => {
                 self.doc_host.publish_task_receipt(begin.receipt.clone());
             }
         }
@@ -2842,7 +2842,7 @@ impl EngineRpc {
                 );
             };
             if item.delivery_gate.is_some()
-                || !matches!(item.status, zeron_doc::QueueMessageStatus::Held)
+                || !matches!(item.status, luna_doc::QueueMessageStatus::Held)
             {
                 return self.finish_task_command(
                     &command.command_id,
@@ -3286,7 +3286,7 @@ impl EngineRpc {
     fn ensure_history_operation_ready(
         &self,
         task_id: &str,
-    ) -> Result<(Chat, zeron_proto::ExecutionBinding), crate::EngineError> {
+    ) -> Result<(Chat, luna_proto::ExecutionBinding), crate::EngineError> {
         let chat = self
             .workspace
             .chat(task_id)?
@@ -3355,7 +3355,7 @@ impl EngineRpc {
                 "task configuration and provider binding disagree".into(),
             ));
         }
-        if capability_for(binding.provider_id) == zeron_proto::ProviderForkCapability::None {
+        if capability_for(binding.provider_id) == luna_proto::ProviderForkCapability::None {
             return Err(crate::EngineError::Other(
                 unavailable_reason(binding.provider_id)
                     .unwrap_or("provider-backed fork is unsupported")
@@ -3369,7 +3369,7 @@ impl EngineRpc {
         &self,
         task_id: &str,
         chat: &Chat,
-        binding: &zeron_proto::ExecutionBinding,
+        binding: &luna_proto::ExecutionBinding,
         review: &HistoryReviewToken,
     ) -> Result<(), crate::EngineError> {
         let snapshot = self
@@ -3424,10 +3424,10 @@ impl EngineRpc {
         &self,
         command_id: &str,
         chat: &Chat,
-        binding: &zeron_proto::ExecutionBinding,
-        boundary: zeron_proto::ProviderForkBoundary,
+        binding: &luna_proto::ExecutionBinding,
+        boundary: luna_proto::ProviderForkBoundary,
         require_current_binding: bool,
-    ) -> Result<zeron_proto::ProviderForkResult, TaskProjectionError> {
+    ) -> Result<luna_proto::ProviderForkResult, TaskProjectionError> {
         let config = chat.config.as_ref().ok_or_else(|| {
             TaskProjectionError::Mutation(crate::EngineError::Other(
                 "task has no provider configuration".into(),
@@ -3472,11 +3472,11 @@ impl EngineRpc {
         let doc_host = self.doc_host.clone();
         let tracked_command_id = command_id.to_string();
         let progress = move |event| match event {
-            zeron_harness::ProviderForkProgress::MutationStarted => {
+            luna_harness::ProviderForkProgress::MutationStarted => {
                 tracked_progress.lock().unwrap().0 = true;
                 Ok(())
             }
-            zeron_harness::ProviderForkProgress::Acknowledged {
+            luna_harness::ProviderForkProgress::Acknowledged {
                 provider_session_id,
             } => {
                 {
@@ -3488,10 +3488,10 @@ impl EngineRpc {
                     .set_task_command_correlation(&tracked_command_id, &provider_session_id)
                 {
                     Ok(Some(_)) => Ok(()),
-                    Ok(None) => Err(zeron_harness::HarnessError::Protocol(
+                    Ok(None) => Err(luna_harness::HarnessError::Protocol(
                         "history command receipt vanished before provider acknowledgement".into(),
                     )),
-                    Err(error) => Err(zeron_harness::HarnessError::Protocol(error.to_string())),
+                    Err(error) => Err(luna_harness::HarnessError::Protocol(error.to_string())),
                 }
             }
         };
@@ -3567,7 +3567,7 @@ impl EngineRpc {
         prompt: &str,
         config: &ChatConfig,
         provider_session_id: &str,
-    ) -> Result<zeron_proto::RunRequest, crate::EngineError> {
+    ) -> Result<luna_proto::RunRequest, crate::EngineError> {
         let mut request = self
             .doc_host
             .request_from_chat_row(source_task_id, prompt)
@@ -3593,7 +3593,7 @@ impl EngineRpc {
         doc: &SessionDoc,
         command_id: &str,
         message_id: &str,
-        request: zeron_proto::RunRequest,
+        request: luna_proto::RunRequest,
     ) -> Result<(), crate::EngineError> {
         doc.queue_command(&SessionCommandEntry {
             id: command_id.to_string(),
@@ -3896,12 +3896,12 @@ impl EngineRpc {
         requested: &ContextHandoff,
     ) -> Result<ContextHandoff, crate::EngineError> {
         if requested.message_ids.is_empty()
-            || requested.message_ids.len() > zeron_proto::MAX_CONTEXT_HANDOFF_MESSAGES
+            || requested.message_ids.len() > luna_proto::MAX_CONTEXT_HANDOFF_MESSAGES
         {
             return Err(crate::EngineError::Other(format!(
                 "context handoff must contain 1–{} visible messages and at most {} bytes",
-                zeron_proto::MAX_CONTEXT_HANDOFF_MESSAGES,
-                zeron_proto::MAX_CONTEXT_HANDOFF_BYTES
+                luna_proto::MAX_CONTEXT_HANDOFF_MESSAGES,
+                luna_proto::MAX_CONTEXT_HANDOFF_BYTES
             )));
         }
         let entries = self.doc_host.open(task_id)?.doc().read_entries()?;
@@ -3922,9 +3922,9 @@ impl EngineRpc {
                     ))
                 })?;
             let role = match entry.role {
-                zeron_doc::MessageRole::User => "User",
-                zeron_doc::MessageRole::Assistant => "Assistant",
-                zeron_doc::MessageRole::System => {
+                luna_doc::MessageRole::User => "User",
+                luna_doc::MessageRole::Assistant => "Assistant",
+                luna_doc::MessageRole::System => {
                     return Err(crate::EngineError::Other(
                         "system messages cannot be included in a provider handoff".into(),
                     ));
@@ -3934,7 +3934,7 @@ impl EngineRpc {
                 .parts
                 .iter()
                 .filter_map(|part| match part {
-                    zeron_doc::MessagePart::Text { text, .. } => Some(text.trim()),
+                    luna_doc::MessagePart::Text { text, .. } => Some(text.trim()),
                     _ => None,
                 })
                 .filter(|text| !text.is_empty())
@@ -3955,7 +3955,7 @@ impl EngineRpc {
         for (message_id, role, visible) in resolved.into_iter().rev() {
             let separator = usize::from(!selected.is_empty()) * 2;
             let prefix = format!("{role}: ");
-            let remaining = zeron_proto::MAX_CONTEXT_HANDOFF_BYTES.saturating_sub(bytes);
+            let remaining = luna_proto::MAX_CONTEXT_HANDOFF_BYTES.saturating_sub(bytes);
             if remaining <= separator + prefix.len() {
                 break;
             }
@@ -4118,16 +4118,16 @@ impl EngineRpc {
                             .iter()
                             .any(|entry| entry.id == boundary_id)
                         {
-                            doc.push_message(&zeron_doc::SessionMessageEntry {
+                            doc.push_message(&luna_doc::SessionMessageEntry {
                                 id: boundary_id,
-                                role: zeron_doc::MessageRole::System,
-                                parts: vec![zeron_doc::MessagePart::Text {
+                                role: luna_doc::MessageRole::System,
+                                parts: vec![luna_doc::MessagePart::Text {
                                     id: "boundary".into(),
                                     text: boundary_text,
                                 }],
                                 created_at: crate::now_ms(),
                                 device_id: self.doc_host.device_id().to_string(),
-                                status: Some(zeron_doc::MessageStatus::Complete),
+                                status: Some(luna_doc::MessageStatus::Complete),
                                 continuation_of: None,
                             })?;
                         }
@@ -4896,7 +4896,7 @@ impl EngineRpc {
                         command_id,
                         &source,
                         &old_binding,
-                        zeron_proto::ProviderForkBoundary::ThroughCheckpoint {
+                        luna_proto::ProviderForkBoundary::ThroughCheckpoint {
                             checkpoint_id: recovery_view.source_tip_checkpoint_id.clone(),
                         },
                         false,
@@ -5061,7 +5061,7 @@ impl EngineRpc {
                             })
                             .collect();
                         pinned.sort_by(|left, right| {
-                            zeron_proto::compare_pin_order(
+                            luna_proto::compare_pin_order(
                                 left.pinned_order.as_deref().expect("filtered pin key"),
                                 right.pinned_order.as_deref().expect("filtered pin key"),
                             )
@@ -5117,7 +5117,7 @@ impl EngineRpc {
                         let right = pinned
                             .get(insertion)
                             .and_then(|chat| chat.pinned_order.as_deref());
-                        let order = zeron_proto::pin_order_between(left, right)
+                        let order = luna_proto::pin_order_between(left, right)
                             .map_err(|error| crate::EngineError::Other(error.into()))?;
                         doc.set_chat_pinned_order(&owned_task_id, Some(&order))?;
                         Ok(())
@@ -5502,7 +5502,7 @@ impl EngineRpc {
                             && item.text == text
                             && item.attachments == attachments
                             && item.delivery_gate.is_none()
-                            && matches!(item.status, zeron_doc::QueueMessageStatus::Held)
+                            && matches!(item.status, luna_doc::QueueMessageStatus::Held)
                     });
                 let (outcome, committed) = if already_applied {
                     // Crash window: the queue projection committed but the
@@ -6207,22 +6207,22 @@ where
     .boxed()
 }
 
-/// The transcript watch as delta frames (`zeron_doc::transcript_delta`): a
+/// The transcript watch as delta frames (`luna_doc::transcript_delta`): a
 /// full `reset` first, then only changed entries per commit — the whole-Vec
 /// serialization here was the per-tick cost that scaled with transcript size.
 fn doc_messages_stream(
     rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
-    doc: std::sync::Arc<zeron_doc::SessionDoc>,
+    doc: std::sync::Arc<luna_doc::SessionDoc>,
 ) -> BoxStream<'static, serde_json::Value> {
-    use zeron_doc::transcript_delta::{TranscriptFrame, diff_transcript};
+    use luna_doc::transcript_delta::{TranscriptFrame, diff_transcript};
     futures::stream::unfold(
         (
             rx,
             None::<crate::doc_host::TranscriptSnapshot>,
             doc,
             None,
-            zeron_proto::ContextControlState::default(),
-            zeron_doc::TranscriptBaseline::default(),
+            luna_proto::ContextControlState::default(),
+            luna_doc::TranscriptBaseline::default(),
         ),
         |(
             mut rx,
@@ -6245,7 +6245,7 @@ fn doc_messages_stream(
                 };
                 let replay_baseline = match prev.as_ref() {
                     None => {
-                        opening_baseline = zeron_doc::TranscriptBaseline::capture(&current.entries);
+                        opening_baseline = luna_doc::TranscriptBaseline::capture(&current.entries);
                         Some(opening_baseline.clone())
                     }
                     Some(prev)
@@ -6285,7 +6285,7 @@ fn doc_messages_stream(
                 }
                 previous_usage = usage;
                 previous_context = context_control.clone();
-                let value = serde_json::to_value(zeron_doc::TranscriptUpdate {
+                let value = serde_json::to_value(luna_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
                     context_control,
@@ -6435,7 +6435,7 @@ fn activity_metadata_fingerprint(chat: &Chat) -> String {
 fn task_command_history(
     store: &DocsStore,
     task_id: &str,
-) -> Result<(Vec<TaskCommandEvent>, bool), zeron_sync::StoreError> {
+) -> Result<(Vec<TaskCommandEvent>, bool), luna_sync::StoreError> {
     const MAX_EVENTS: usize = 10_000;
     let mut cursor = 0;
     let mut events = Vec::new();
@@ -6515,18 +6515,18 @@ fn index_activity_task(
 
 fn cross_task_summary(
     chat: &Chat,
-    session: Option<&zeron_proto::Session>,
-) -> zeron_proto::CrossTaskSummary {
+    session: Option<&luna_proto::Session>,
+) -> luna_proto::CrossTaskSummary {
     let live = session.filter(|session| {
         session.device_id == chat.device_id
             && session.updated_at.timestamp_millis().saturating_add(45_000) >= crate::now_ms()
     });
-    let indicator = zeron_proto::chat_indicator(chat, live);
+    let indicator = luna_proto::chat_indicator(chat, live);
     let status = serde_json::to_value(indicator)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".into());
-    zeron_proto::CrossTaskSummary {
+    luna_proto::CrossTaskSummary {
         task_id: chat.id.clone(),
         project_id: chat.space_id.clone(),
         environment_id: chat.device_id.clone(),
@@ -6545,13 +6545,13 @@ fn cross_task_summary(
 }
 
 fn require_local_control_evidence_scope(
-    caller: &zeron_proto::CrossTaskSummary,
-    target: &zeron_proto::CrossTaskSummary,
+    caller: &luna_proto::CrossTaskSummary,
+    target: &luna_proto::CrossTaskSummary,
     task_id: &str,
     authority: &CrossTaskAuthority,
     local_device_id: &str,
 ) -> Result<(), CrossTaskError> {
-    if authority.delivery != zeron_proto::RuntimeDelivery::CodexDynamicTools {
+    if authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools {
         return Err(CrossTaskError::Unavailable);
     }
     if !authority.granted_scopes.contains("threads.read") {
@@ -6608,7 +6608,7 @@ async fn local_control_evidence_target(
     if task_id.is_empty() || task_id.len() > 128 {
         return Err(CrossTaskError::Input);
     }
-    if authority.delivery != zeron_proto::RuntimeDelivery::CodexDynamicTools {
+    if authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools {
         return Err(CrossTaskError::Unavailable);
     }
     if !authority.granted_scopes.contains("threads.read") {
@@ -6635,7 +6635,7 @@ async fn local_control_evidence_target(
 }
 
 fn cross_task_queue_command(
-    request: &zeron_proto::CrossTaskSendRequest,
+    request: &luna_proto::CrossTaskSendRequest,
     authority: &CrossTaskAuthority,
 ) -> TaskCommandParams {
     TaskCommandParams {
@@ -6660,10 +6660,10 @@ fn cross_task_queue_command(
 }
 
 fn cross_task_control_command(
-    request: &zeron_proto::CrossTaskControlRequest,
+    request: &luna_proto::CrossTaskControlRequest,
     authority: &CrossTaskAuthority,
 ) -> TaskCommandParams {
-    use zeron_proto::CrossTaskControlAction as Action;
+    use luna_proto::CrossTaskControlAction as Action;
     let intent = match request.action {
         Action::Create => TaskCommandIntent::CreateChat {
             space_id: Some(request.project_id.clone()),
@@ -6716,7 +6716,7 @@ impl CrossTaskBackend for EngineRpc {
     async fn task(
         &self,
         task_id: &str,
-    ) -> Result<Option<zeron_proto::CrossTaskSummary>, CrossTaskError> {
+    ) -> Result<Option<luna_proto::CrossTaskSummary>, CrossTaskError> {
         let Some(identity) = self.task_identity.view(task_id) else {
             return Ok(None);
         };
@@ -6792,9 +6792,9 @@ impl CrossTaskBackend for EngineRpc {
 
     async fn list(
         &self,
-        request: zeron_proto::CrossTaskListRequest,
+        request: luna_proto::CrossTaskListRequest,
         authority: &CrossTaskAuthority,
-    ) -> Result<zeron_proto::CrossTaskListPage, CrossTaskError> {
+    ) -> Result<luna_proto::CrossTaskListPage, CrossTaskError> {
         let managed = self
             .task_identity
             .managed_task_ids()
@@ -6870,7 +6870,7 @@ impl CrossTaskBackend for EngineRpc {
         } else {
             None
         };
-        Ok(zeron_proto::CrossTaskListPage {
+        Ok(luna_proto::CrossTaskListPage {
             tasks,
             next_cursor,
             has_more,
@@ -6879,8 +6879,8 @@ impl CrossTaskBackend for EngineRpc {
 
     async fn read(
         &self,
-        request: zeron_proto::CrossTaskReadRequest,
-    ) -> Result<zeron_proto::CrossTaskReadPage, CrossTaskError> {
+        request: luna_proto::CrossTaskReadRequest,
+    ) -> Result<luna_proto::CrossTaskReadPage, CrossTaskError> {
         let task = CrossTaskBackend::task(self, &request.task_id)
             .await?
             .ok_or(CrossTaskError::TargetScope)?;
@@ -6901,7 +6901,7 @@ impl CrossTaskBackend for EngineRpc {
             .map_err(|_| CrossTaskError::Backend("redacted history read failed".into()))?;
         let turns = events
             .into_iter()
-            .map(|event| zeron_proto::CrossTaskTurnSummary {
+            .map(|event| luna_proto::CrossTaskTurnSummary {
                 turn_id: event.turn_id,
                 status: serde_json::to_value(event.outcome)
                     .ok()
@@ -6914,7 +6914,7 @@ impl CrossTaskBackend for EngineRpc {
             .map(|cursor| serde_json::to_string(&cursor))
             .transpose()
             .map_err(|_| CrossTaskError::InvalidBackendResult)?;
-        Ok(zeron_proto::CrossTaskReadPage {
+        Ok(luna_proto::CrossTaskReadPage {
             task,
             turns,
             next_cursor,
@@ -6925,13 +6925,13 @@ impl CrossTaskBackend for EngineRpc {
 
     async fn enqueue_queue(
         &self,
-        request: zeron_proto::CrossTaskSendRequest,
+        request: luna_proto::CrossTaskSendRequest,
         authority: &CrossTaskAuthority,
-    ) -> Result<zeron_proto::CrossTaskSendReceipt, CrossTaskError> {
+    ) -> Result<luna_proto::CrossTaskSendReceipt, CrossTaskError> {
         if !authority.explicit_user_request || !authority.granted_scopes.contains("threads.send") {
             return Err(CrossTaskError::UserRequest);
         }
-        if request.mode != zeron_proto::CrossTaskSendMode::Queue {
+        if request.mode != luna_proto::CrossTaskSendMode::Queue {
             return Err(CrossTaskError::Unsupported);
         }
         let task = CrossTaskBackend::task(self, &request.task_id)
@@ -6960,7 +6960,7 @@ impl CrossTaskBackend for EngineRpc {
         let sequence = receipt
             .event_sequence
             .ok_or(CrossTaskError::InvalidBackendResult)?;
-        Ok(zeron_proto::CrossTaskSendReceipt {
+        Ok(luna_proto::CrossTaskSendReceipt {
             task_id: request.task_id,
             queued_message_id: request.idempotency_key,
             activity_cursor: format!("command:{sequence}"),
@@ -6971,10 +6971,10 @@ impl CrossTaskBackend for EngineRpc {
 
     async fn enqueue_approved_queue(
         &self,
-        request: zeron_proto::CrossTaskSendRequest,
+        request: luna_proto::CrossTaskSendRequest,
         authority: &CrossTaskAuthority,
         fence: &crate::cross_task_tools::ApprovedSendFence,
-    ) -> Result<zeron_proto::CrossTaskSendReceipt, CrossTaskError> {
+    ) -> Result<luna_proto::CrossTaskSendReceipt, CrossTaskError> {
         if authority.caller_task_id != fence.source_task_id
             || authority.local_environment_id != self.engine_info.device_id
             || !authority.granted_scopes.contains("threads.read")
@@ -7034,7 +7034,7 @@ impl CrossTaskBackend for EngineRpc {
         let sequence = receipt
             .event_sequence
             .ok_or(CrossTaskError::InvalidBackendResult)?;
-        Ok(zeron_proto::CrossTaskSendReceipt {
+        Ok(luna_proto::CrossTaskSendReceipt {
             task_id: request.task_id,
             queued_message_id: request.idempotency_key,
             activity_cursor: format!("command:{sequence}"),
@@ -7045,8 +7045,8 @@ impl CrossTaskBackend for EngineRpc {
 
     async fn wait_event(
         &self,
-        request: zeron_proto::CrossTaskWaitRequest,
-    ) -> Result<Option<zeron_proto::CrossTaskWaitEvent>, CrossTaskError> {
+        request: luna_proto::CrossTaskWaitRequest,
+    ) -> Result<Option<luna_proto::CrossTaskWaitEvent>, CrossTaskError> {
         let mut sessions = self.workspace.watch_session_rows();
         let mut chats = self.workspace.watch_chats();
         loop {
@@ -7065,14 +7065,14 @@ impl CrossTaskBackend for EngineRpc {
                 ) || row.as_ref().is_some_and(|row| {
                     matches!(
                         row.status,
-                        zeron_proto::SessionStatus::AwaitingApproval
-                            | zeron_proto::SessionStatus::AwaitingInput
-                            | zeron_proto::SessionStatus::Errored
+                        luna_proto::SessionStatus::AwaitingApproval
+                            | luna_proto::SessionStatus::AwaitingInput
+                            | luna_proto::SessionStatus::Errored
                     )
                 });
                 let completed = task.status == "completed"
                     || row.as_ref().is_some_and(|row| {
-                        row.status == zeron_proto::SessionStatus::Idle
+                        row.status == luna_proto::SessionStatus::Idle
                             && row.last_completed_turn.is_some()
                     });
                 if !needs_attention && !completed {
@@ -7091,7 +7091,7 @@ impl CrossTaskBackend for EngineRpc {
                 );
                 let cursor = format!("state:{:x}", Sha256::digest(cursor_material.as_bytes()));
                 if target.after_cursor.as_deref() != Some(cursor.as_str()) {
-                    return Ok(Some(zeron_proto::CrossTaskWaitEvent {
+                    return Ok(Some(luna_proto::CrossTaskWaitEvent {
                         task,
                         cursor,
                         needs_attention,
@@ -7108,11 +7108,11 @@ impl CrossTaskBackend for EngineRpc {
 
     async fn control(
         &self,
-        request: zeron_proto::CrossTaskControlRequest,
+        request: luna_proto::CrossTaskControlRequest,
         authority: &CrossTaskAuthority,
         grant: &CrossTaskControlGrant,
-    ) -> Result<zeron_proto::CrossTaskControlReceipt, CrossTaskError> {
-        use zeron_proto::CrossTaskControlAction as Action;
+    ) -> Result<luna_proto::CrossTaskControlReceipt, CrossTaskError> {
+        use luna_proto::CrossTaskControlAction as Action;
         if !authority.explicit_user_request
             || !authority.granted_scopes.contains("threads.manage")
             || grant.caller_task_id != authority.caller_task_id
@@ -7214,7 +7214,7 @@ impl CrossTaskBackend for EngineRpc {
             .unwrap_or_else(|| "missing".into());
         let settled =
             receipt.status.is_terminal() && !self.sessions.turn_in_flight(&request.task_id);
-        Ok(zeron_proto::CrossTaskControlReceipt {
+        Ok(luna_proto::CrossTaskControlReceipt {
             task_id: request.task_id,
             command: receipt,
             observed_status,
@@ -7282,7 +7282,7 @@ impl RpcService for EngineRpc {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::CREATE_REMOTE_PAIRING => {
-                let request: zeron_rpc::remote_auth::CreatePairing = parse_params(params)?;
+                let request: luna_rpc::remote_auth::CreatePairing = parse_params(params)?;
                 let store = self
                     .remote_auth
                     .as_ref()
@@ -7459,16 +7459,16 @@ impl RpcService for EngineRpc {
                 let enabled = Self::usage_providers_for(&self.registry.enabled_set());
                 let homes = (!synthetic).then(|| self.agent_accounts.usage_history_paths());
                 let opencode = (!synthetic
-                    && enabled.contains(&zeron_proto::UsageProvider::OpenCodeGo))
+                    && enabled.contains(&luna_proto::UsageProvider::OpenCodeGo))
                 .then(|| tokio::spawn(crate::usage_opencode::read_go_limits()));
                 let claude_accounts = self.agent_accounts.clone();
-                let claude = (!synthetic && enabled.contains(&zeron_proto::UsageProvider::Claude))
+                let claude = (!synthetic && enabled.contains(&luna_proto::UsageProvider::Claude))
                     .then(|| {
                         tokio::spawn(async move { claude_accounts.read_claude_usage_limit().await })
                     });
                 if let Some((_, _, data_dir)) = homes.as_ref().filter(|_| {
-                    enabled.contains(&zeron_proto::UsageProvider::Codex)
-                        || enabled.contains(&zeron_proto::UsageProvider::Claude)
+                    enabled.contains(&luna_proto::UsageProvider::Codex)
+                        || enabled.contains(&luna_proto::UsageProvider::Claude)
                 }) {
                     crate::usage::refresh_live_prices(data_dir).await;
                 }
@@ -7481,7 +7481,7 @@ impl RpcService for EngineRpc {
                 })
                 .await
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
-                if enabled.contains(&zeron_proto::UsageProvider::Codex) {
+                if enabled.contains(&luna_proto::UsageProvider::Codex) {
                     self.attach_codex_live_limits(&mut snapshot).await;
                 }
                 if let Some(opencode) = opencode
@@ -7689,7 +7689,7 @@ impl RpcService for EngineRpc {
                 let provider_delivery = provider
                     .and_then(|provider| self.registry.resolve(provider).ok())
                     .map(|adapter| adapter.luna_runtime_delivery())
-                    .unwrap_or(zeron_proto::RuntimeDelivery::Unsupported);
+                    .unwrap_or(luna_proto::RuntimeDelivery::Unsupported);
                 let session_id = binding
                     .map(|binding| binding.provider_task_id)
                     .filter(|id| !id.is_empty())
@@ -7744,16 +7744,16 @@ impl RpcService for EngineRpc {
                     // detail. The app-facing readback uses the LUNA task id.
                     receipt.provider_session_id.clear();
                 }
-                RpcReply::value(&zeron_proto::RuntimeContractView {
+                RpcReply::value(&luna_proto::RuntimeContractView {
                     task_id: p.task_id,
                     provider,
                     provider_delivery,
                     effective: receipt,
                     unavailable_reason: match provider_delivery {
-                        zeron_proto::RuntimeDelivery::Unsupported => Some(
+                        luna_proto::RuntimeDelivery::Unsupported => Some(
                             "This provider has no verified LUNA runtime instruction or tool delivery path.".into()
                         ),
-                        zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly => Some(
+                        luna_proto::RuntimeDelivery::ClaudeInstructionsOnly => Some(
                             "Claude instructions are supported; LUNA tools are unavailable until its scoped MCP transport is verified.".into()
                         ),
                         _ if !has_receipt => Some(
@@ -7853,7 +7853,7 @@ impl RpcService for EngineRpc {
                         // Catalog reads never need a native login prompt.
                         // Force the file-auth transport even for the native
                         // account; an unavailable catalog stays unavailable.
-                        let client = zeron_harness::codex::native::CodexNativeClient::new(&home)
+                        let client = luna_harness::codex::native::CodexNativeClient::new(&home)
                             .for_execution_home(&home, true);
                         let (catalog, mcp_config) = tokio::join!(
                             tokio::time::timeout(
@@ -7972,9 +7972,9 @@ impl RpcService for EngineRpc {
                         model: None,
                         reasoning: None,
                         model_options: serde_json::Map::new(),
-                        sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
-                        permission_mode: zeron_proto::PermissionMode::Ask,
-                        effective_permission_mode: zeron_proto::PermissionMode::Ask,
+                        sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
+                        permission_mode: luna_proto::PermissionMode::Ask,
+                        effective_permission_mode: luna_proto::PermissionMode::Ask,
                         permission_ceiling_source: None,
                         permission_degradation_reason: None,
                         permission_audit: Vec::new(),
@@ -8056,7 +8056,7 @@ impl RpcService for EngineRpc {
                     .store
                     .save_composer_draft(&self.engine_info.device_id, &p.draft)
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
-                if outcome == zeron_proto::ComposerDraftSaveOutcome::Saved
+                if outcome == luna_proto::ComposerDraftSaveOutcome::Saved
                     && let Some(task_id) = p.draft.task_id.as_deref()
                 {
                     match self.store.has_appshot_activity_for_task(task_id) {
@@ -8196,7 +8196,7 @@ impl RpcService for EngineRpc {
                     &self.registry,
                     p.harness,
                     p.enabled,
-                    zeron_harness::AcpHarness::antigravity().sign_out(),
+                    luna_harness::AcpHarness::antigravity().sign_out(),
                 )
                 .await?;
                 // Fresh catalog in the reply: the page repaints from it in one
@@ -8547,7 +8547,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&serde_json::json!({}))
             }
             methods::SYNC_STATUS => {
-                fn room_json(s: &zeron_sync::RoomStatsSnapshot) -> serde_json::Value {
+                fn room_json(s: &luna_sync::RoomStatsSnapshot) -> serde_json::Value {
                     serde_json::json!({
                         "connected": s.connected,
                         "synced": s.synced,
@@ -8560,7 +8560,7 @@ impl RpcService for EngineRpc {
                         "rejected": s.rejected,
                     })
                 }
-                fn chat2_json(s: &zeron_sync::ChatStatsSnapshot) -> serde_json::Value {
+                fn chat2_json(s: &luna_sync::ChatStatsSnapshot) -> serde_json::Value {
                     serde_json::json!({
                         "connected": s.connected,
                         "cursor": s.cursor,
@@ -8603,7 +8603,7 @@ impl RpcService for EngineRpc {
                 self.doc_host.watch_transfers(),
             ))),
             methods::WATCH_PREVIEWS => {
-                let p: zeron_proto::WatchPreviewsParams = parse_params(params)?;
+                let p: luna_proto::WatchPreviewsParams = parse_params(params)?;
                 if self
                     .workspace
                     .chat(&p.chat_id)
@@ -8763,7 +8763,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&preview)
             }
             methods::EXECUTE_GIT_ACTION => {
-                let request: zeron_proto::GitActionRequest = parse_params(params)?;
+                let request: luna_proto::GitActionRequest = parse_params(params)?;
                 let receipt = self
                     .git_actions
                     .execute(request)
@@ -8772,7 +8772,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&receipt)
             }
             methods::GENERATE_GIT_COMMIT_MESSAGE => {
-                let request: zeron_proto::GitMessageRequest = parse_params(params)?;
+                let request: luna_proto::GitMessageRequest = parse_params(params)?;
                 let preferred_harness = request.harness;
                 let diff = self
                     .git_actions
@@ -8792,7 +8792,7 @@ impl RpcService for EngineRpc {
             }
             methods::GET_GIT_PR_STATUS => {
                 Box::pin(async move {
-                    let mut request: zeron_proto::GitPrStatusRequest = parse_params(params)?;
+                    let mut request: luna_proto::GitPrStatusRequest = parse_params(params)?;
                     let root = self.change_request_root(&request.cwd).await?;
                     request.cwd = root.to_string_lossy().into_owned();
                     let status = self
@@ -8858,7 +8858,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&preview)
             }
             methods::RESTORE_GIT_CHECKPOINT => {
-                let request: zeron_proto::GitCheckpointRestoreRequest = parse_params(params)?;
+                let request: luna_proto::GitCheckpointRestoreRequest = parse_params(params)?;
                 let _task_lane = self.doc_host.task_command_gate(&request.chat_id).await;
                 self.validate_checkpoint_task(&request.chat_id, &request.cwd)?;
                 let busy = self
@@ -8947,7 +8947,7 @@ impl RpcService for EngineRpc {
                         _ => crate::diff_sync::capture_diff(&self.repos, root).await,
                     }
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
-                    RpcReply::value(&zeron_proto::CheckoutDiff {
+                    RpcReply::value(&luna_proto::CheckoutDiff {
                         checkout_id: identity.id,
                         device_id: self.doc_host.device_id().to_string(),
                         cwd: identity.root.to_string_lossy().to_string(),
@@ -8967,7 +8967,7 @@ impl RpcService for EngineRpc {
                 // behind an allocation so every unrelated RPC does not carry that
                 // state in `EngineRpc::handle`'s stack frame.
                 Box::pin(async move {
-                    let p: zeron_proto::GetCheckoutFileDiffTextRequest = parse_params(params)?;
+                    let p: luna_proto::GetCheckoutFileDiffTextRequest = parse_params(params)?;
                     let identity =
                         Box::pin(self.repos.checkout_identity(std::path::Path::new(&p.cwd)))
                             .await
@@ -9040,7 +9040,7 @@ impl RpcService for EngineRpc {
                             (snapshot, base, None)
                         }
                     };
-                    let stale = || zeron_proto::CheckoutFileDiffText {
+                    let stale = || luna_proto::CheckoutFileDiffText {
                         diff_checksum: p.diff_checksum.clone(),
                         old_text: None,
                         new_text: None,
@@ -9103,7 +9103,7 @@ impl RpcService for EngineRpc {
                     if current.checksum != p.diff_checksum {
                         return RpcReply::value(&stale());
                     }
-                    RpcReply::value(&zeron_proto::CheckoutFileDiffText {
+                    RpcReply::value(&luna_proto::CheckoutFileDiffText {
                         diff_checksum: p.diff_checksum,
                         old_text: pair.old_text,
                         new_text: pair.new_text,
@@ -9295,7 +9295,7 @@ impl RpcService for EngineRpc {
                     .list_drives()
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(&zeron_proto::DriveListing { drives })
+                RpcReply::value(&luna_proto::DriveListing { drives })
             }
             methods::SEARCH_FILES => {
                 let p: FileSearchParams = parse_params(params)?;
@@ -9322,7 +9322,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&matches)
             }
             methods::LIST_WORKSPACE_DIRECTORY => {
-                let request: zeron_proto::ListWorkspaceDirectoryRequest = parse_params(params)?;
+                let request: luna_proto::ListWorkspaceDirectoryRequest = parse_params(params)?;
                 let page = tokio::time::timeout(
                     crate::workspace_files::WORKSPACE_FILE_RPC_TIMEOUT,
                     self.workspace_files.list_directory(request),
@@ -9333,7 +9333,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&page)
             }
             methods::SEARCH_WORKSPACE_FILES => {
-                let request: zeron_proto::SearchWorkspaceFilesRequest = parse_params(params)?;
+                let request: luna_proto::SearchWorkspaceFilesRequest = parse_params(params)?;
                 let matches = tokio::time::timeout(
                     crate::workspace_files::WORKSPACE_FILE_RPC_TIMEOUT,
                     self.workspace_files.search(request),
@@ -9344,7 +9344,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&matches)
             }
             methods::READ_WORKSPACE_IMAGE => {
-                let request: zeron_proto::ReadWorkspaceImageRequest = parse_params(params)?;
+                let request: luna_proto::ReadWorkspaceImageRequest = parse_params(params)?;
                 let chunk = tokio::time::timeout(
                     crate::workspace_files::WORKSPACE_FILE_RPC_TIMEOUT,
                     self.workspace_files.read_image(request),
@@ -9355,7 +9355,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&chunk)
             }
             methods::READ_WORKSPACE_FILE => {
-                let request: zeron_proto::ReadWorkspaceFileRequest = parse_params(params)?;
+                let request: luna_proto::ReadWorkspaceFileRequest = parse_params(params)?;
                 let file = tokio::time::timeout(
                     crate::workspace_files::WORKSPACE_FILE_RPC_TIMEOUT,
                     self.workspace_files.read_file(request),
@@ -9366,7 +9366,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&file)
             }
             methods::WRITE_WORKSPACE_FILE => {
-                let request: zeron_proto::WriteWorkspaceFileRequest = parse_params(params)?;
+                let request: luna_proto::WriteWorkspaceFileRequest = parse_params(params)?;
                 let outcome = tokio::time::timeout(
                     crate::workspace_files::WORKSPACE_FILE_RPC_TIMEOUT,
                     self.workspace_files.write_file(request),
@@ -9377,7 +9377,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&outcome)
             }
             methods::WATCH_WORKSPACE_FILES => {
-                let request: zeron_proto::WatchWorkspaceFilesRequest = parse_params(params)?;
+                let request: luna_proto::WatchWorkspaceFilesRequest = parse_params(params)?;
                 let subscription = self
                     .workspace_files
                     .watch_files(request)
@@ -9726,7 +9726,7 @@ mod tests {
             let probes = AtomicUsize::new(0);
             let error = service
                 .restore(
-                    zeron_proto::GitCheckpointRestoreRequest {
+                    luna_proto::GitCheckpointRestoreRequest {
                         chat_id: "task".into(),
                         cwd: cwd.clone(),
                         turn_id,
@@ -9847,7 +9847,7 @@ mod tests {
     fn disabled_agent_usage_is_removed_from_all_snapshot_sections() {
         assert_eq!(
             EngineRpc::usage_providers_for(&[HarnessId::Codex, HarnessId::Hermes]),
-            vec![zeron_proto::UsageProvider::Codex]
+            vec![luna_proto::UsageProvider::Codex]
         );
         let mut snapshot = crate::usage::snapshot(UsageRequest {
             days: 7,
@@ -9855,31 +9855,31 @@ mod tests {
         });
         assert_eq!(snapshot.summary.sources.len(), 3);
         assert_eq!(snapshot.limits.len(), 3);
-        snapshot.summary.buckets.push(zeron_proto::UsageBucket {
+        snapshot.summary.buckets.push(luna_proto::UsageBucket {
             start_ms: 0,
-            provider: zeron_proto::UsageProvider::Claude,
+            provider: luna_proto::UsageProvider::Claude,
             model: "synthetic-model".into(),
-            tokens: zeron_proto::UsageTokens::default(),
+            tokens: luna_proto::UsageTokens::default(),
             records: 1,
             sessions: 1,
             api_equivalent_cost_usd: None,
             cache_savings_usd: None,
-            cost_quality: zeron_proto::CostQuality::Unpriced,
+            cost_quality: luna_proto::CostQuality::Unpriced,
         });
-        EngineRpc::retain_enabled_usage(&mut snapshot, &[zeron_proto::UsageProvider::Codex]);
+        EngineRpc::retain_enabled_usage(&mut snapshot, &[luna_proto::UsageProvider::Codex]);
         assert!(
             snapshot
                 .summary
                 .sources
                 .iter()
-                .all(|source| source.provider == zeron_proto::UsageProvider::Codex)
+                .all(|source| source.provider == luna_proto::UsageProvider::Codex)
         );
         assert!(snapshot.summary.buckets.is_empty());
         assert!(
             snapshot
                 .limits
                 .iter()
-                .all(|limit| limit.provider == zeron_proto::UsageProvider::Codex)
+                .all(|limit| limit.provider == luna_proto::UsageProvider::Codex)
         );
     }
 
@@ -9948,7 +9948,7 @@ mod tests {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into()]),
             explicit_user_request: false,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
         };
         let snapshot =
             CrossTaskBackend::control_target_snapshot(rpc.as_ref(), &target_id, &authority)
@@ -10006,10 +10006,10 @@ mod tests {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into()]),
             explicit_user_request: false,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
         };
         let summary = |task_id: &str, project: Option<&str>, environment: &str| {
-            zeron_proto::CrossTaskSummary {
+            luna_proto::CrossTaskSummary {
                 task_id: task_id.into(),
                 project_id: project.map(str::to_owned),
                 environment_id: environment.into(),
@@ -10064,7 +10064,7 @@ mod tests {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into()]),
             explicit_user_request: false,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
         };
         let receipt = CommandReceipt {
             command_id: "command-a".into(),
@@ -10122,12 +10122,12 @@ mod tests {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.send".into()]),
             explicit_user_request: true,
-            delivery: zeron_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
         };
-        let request = zeron_proto::CrossTaskSendRequest {
+        let request = luna_proto::CrossTaskSendRequest {
             task_id: "target-task".into(),
             message: "synthetic follow-up".into(),
-            mode: zeron_proto::CrossTaskSendMode::Queue,
+            mode: luna_proto::CrossTaskSendMode::Queue,
             idempotency_key: "command-a".into(),
         };
         let command = cross_task_queue_command(&request, &authority);
@@ -10158,8 +10158,8 @@ mod tests {
         assert!(refresh.probe_provider);
     }
 
-    fn move_test_space(path: &str) -> zeron_proto::Space {
-        zeron_proto::Space {
+    fn move_test_space(path: &str) -> luna_proto::Space {
+        luna_proto::Space {
             id: "destination".into(),
             device_id: "device".into(),
             path: path.into(),
@@ -10223,15 +10223,15 @@ mod tests {
         let registry = HarnessRegistry::new();
         let executable = std::env::current_exe().unwrap();
         registry.register(std::sync::Arc::new(
-            zeron_harness::AcpHarness::grok().with_executable(executable.clone()),
+            luna_harness::AcpHarness::grok().with_executable(executable.clone()),
         ));
         registry.register(std::sync::Arc::new(
-            zeron_harness::AcpHarness::antigravity().with_executable(executable),
+            luna_harness::AcpHarness::antigravity().with_executable(executable),
         ));
         registry.set_enabled(HarnessId::Antigravity, true).unwrap();
 
         let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async {
-            Err(zeron_harness::HarnessError::Protocol(
+            Err(luna_harness::HarnessError::Protocol(
                 "logout rejected".into(),
             ))
         })
@@ -10244,7 +10244,7 @@ mod tests {
         assert!(registry.enabled_set().contains(&HarnessId::Antigravity));
 
         update_harness_enabled(&registry, HarnessId::Antigravity, false, async {
-            Ok::<(), zeron_harness::HarnessError>(())
+            Ok::<(), luna_harness::HarnessError>(())
         })
         .await
         .unwrap();
@@ -10268,17 +10268,13 @@ mod tests {
                     id,
                     name: format!("synthetic-{id:?}"),
                     supports_steering: false,
-                    steering_mode: zeron_proto::SteeringMode::TurnBoundary,
+                    steering_mode: luna_proto::SteeringMode::TurnBoundary,
                     reasoning_levels: vec![],
                     installed: true,
                     enabled: None,
                 },
                 Box::new(|| true),
-                Box::new(|| {
-                    Err(zeron_harness::HarnessError::NotInstalled(
-                        "synthetic".into(),
-                    ))
-                }),
+                Box::new(|| Err(luna_harness::HarnessError::NotInstalled("synthetic".into()))),
             );
         }
         registry
@@ -10299,7 +10295,7 @@ mod tests {
         let count = polled.clone();
         let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
             count.fetch_add(1, Ordering::SeqCst);
-            Ok::<(), zeron_harness::HarnessError>(())
+            Ok::<(), luna_harness::HarnessError>(())
         })
         .await
         .unwrap_err();
@@ -10314,7 +10310,7 @@ mod tests {
         let count = polled.clone();
         let error = update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
             count.fetch_add(1, Ordering::SeqCst);
-            Ok::<(), zeron_harness::HarnessError>(())
+            Ok::<(), luna_harness::HarnessError>(())
         })
         .await
         .unwrap_err();
@@ -10329,9 +10325,9 @@ mod tests {
         update_harness_enabled(&registry, HarnessId::Antigravity, false, async move {
             assert!(matches!(
                 epoch.freeze(Duration::from_millis(40)).await,
-                Err(zeron_sync::write_epoch::EpochError::TimedOut)
+                Err(luna_sync::write_epoch::EpochError::TimedOut)
             ));
-            Ok::<(), zeron_harness::HarnessError>(())
+            Ok::<(), luna_harness::HarnessError>(())
         })
         .await
         .unwrap();
@@ -10444,14 +10440,14 @@ mod context_usage_tests {
     #[tokio::test]
     async fn replay_cutoff_travels_with_coalesced_backfill_and_live_content() {
         use crate::doc_host::{DocHost, DocHostConfig};
-        use zeron_sync::chat_client::ChatDocSink;
+        use luna_sync::chat_client::ChatDocSink;
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(zeron_sync::DocsStore::open(dir.path()).unwrap());
+        let store = Arc::new(luna_sync::DocsStore::open(dir.path()).unwrap());
         let host = DocHost::new(
             store.clone(),
             DocHostConfig {
                 device_id: "viewer".into(),
-                default_harness: zeron_proto::HarnessId::Mock,
+                default_harness: luna_proto::HarnessId::Mock,
                 edge: None,
             },
         );
@@ -10459,23 +10455,23 @@ mod context_usage_tests {
         let sink = crate::chat2_host::EngineChatSink::new(&handle.doc_arc(), store, "replay-chat")
             .with_handle(Arc::downgrade(&handle));
         let mut stream = doc_messages_stream(handle.watch_messages(), handle.doc_arc());
-        let first: zeron_doc::TranscriptUpdate =
+        let first: luna_doc::TranscriptUpdate =
             serde_json::from_value(stream.next().await.unwrap()).unwrap();
         assert!(first.replay_baseline.unwrap().entries.is_empty());
 
-        let source = zeron_doc::SessionDoc::init("replay-chat").unwrap();
+        let source = luna_doc::SessionDoc::init("replay-chat").unwrap();
         let append = |id: &str| {
             source
-                .push_message(&zeron_doc::SessionMessageEntry {
+                .push_message(&luna_doc::SessionMessageEntry {
                     id: id.into(),
-                    role: zeron_doc::MessageRole::Assistant,
-                    parts: vec![zeron_doc::MessagePart::Text {
+                    role: luna_doc::MessageRole::Assistant,
+                    parts: vec![luna_doc::MessagePart::Text {
                         id: "text".into(),
                         text: id.into(),
                     }],
                     created_at: 0,
                     device_id: "writer".into(),
-                    status: Some(zeron_doc::MessageStatus::Streaming),
+                    status: Some(luna_doc::MessageStatus::Streaming),
                     continuation_of: None,
                 })
                 .unwrap()
@@ -10483,7 +10479,7 @@ mod context_usage_tests {
         append("cached");
         sink.apply_checkpoint(&source.export_snapshot().unwrap(), 0)
             .unwrap();
-        let checkpoint: zeron_doc::TranscriptUpdate = serde_json::from_value(
+        let checkpoint: luna_doc::TranscriptUpdate = serde_json::from_value(
             tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
                 .await
                 .unwrap()
@@ -10518,7 +10514,7 @@ mod context_usage_tests {
         );
         // Neither the doc worker nor the RPC consumer ran between these
         // imports. They must not flatten their different presentation origins.
-        let update: zeron_doc::TranscriptUpdate = serde_json::from_value(
+        let update: luna_doc::TranscriptUpdate = serde_json::from_value(
             tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
                 .await
                 .unwrap()
@@ -10529,8 +10525,8 @@ mod context_usage_tests {
         assert!(cutoff.entries.contains_key("away"));
         assert!(!cutoff.entries.contains_key("live"));
         let mut entries = vec![];
-        zeron_doc::apply_transcript_frame(&mut entries, checkpoint.frame).unwrap();
-        zeron_doc::apply_transcript_frame(&mut entries, update.frame).unwrap();
+        luna_doc::apply_transcript_frame(&mut entries, checkpoint.frame).unwrap();
+        luna_doc::apply_transcript_frame(&mut entries, update.frame).unwrap();
         assert_eq!(entries.len(), 3);
 
         let version = source.doc().oplog_vv();
@@ -10542,7 +10538,7 @@ mod context_usage_tests {
                 .unwrap(),
             3,
         );
-        let update: zeron_doc::TranscriptUpdate = serde_json::from_value(
+        let update: luna_doc::TranscriptUpdate = serde_json::from_value(
             tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
                 .await
                 .unwrap()
@@ -10554,7 +10550,7 @@ mod context_usage_tests {
             "live updates must not resend the history watermark"
         );
         let mut reopened = doc_messages_stream(handle.watch_messages(), handle.doc_arc());
-        let opening: zeron_doc::TranscriptUpdate =
+        let opening: luna_doc::TranscriptUpdate =
             serde_json::from_value(reopened.next().await.unwrap()).unwrap();
         assert_eq!(
             opening.replay_baseline.unwrap().entries.len(),
@@ -10567,14 +10563,14 @@ mod context_usage_tests {
     #[tokio::test]
     async fn replay_metadata_and_backfill_leave_interleaved_local_content_live() {
         use crate::doc_host::{DocHost, DocHostConfig};
-        use zeron_sync::chat_client::ChatDocSink;
+        use luna_sync::chat_client::ChatDocSink;
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(zeron_sync::DocsStore::open(dir.path()).unwrap());
+        let store = Arc::new(luna_sync::DocsStore::open(dir.path()).unwrap());
         let host = DocHost::new(
             store.clone(),
             DocHostConfig {
                 device_id: "host".into(),
-                default_harness: zeron_proto::HarnessId::Mock,
+                default_harness: luna_proto::HarnessId::Mock,
                 edge: None,
             },
         );
@@ -10583,25 +10579,25 @@ mod context_usage_tests {
             .with_handle(Arc::downgrade(&handle));
         let mut stream = doc_messages_stream(handle.watch_messages(), handle.doc_arc());
         stream.next().await.unwrap();
-        let source = zeron_doc::SessionDoc::init("interleaved").unwrap();
+        let source = luna_doc::SessionDoc::init("interleaved").unwrap();
         sink.apply_checkpoint(&source.export_snapshot().unwrap(), 0)
             .unwrap();
-        let entry = |id: &str| zeron_doc::SessionMessageEntry {
+        let entry = |id: &str| luna_doc::SessionMessageEntry {
             id: id.into(),
-            role: zeron_doc::MessageRole::Assistant,
-            parts: vec![zeron_doc::MessagePart::Text {
+            role: luna_doc::MessageRole::Assistant,
+            parts: vec![luna_doc::MessagePart::Text {
                 id: "text".into(),
                 text: id.into(),
             }],
             created_at: 0,
             device_id: "host".into(),
-            status: Some(zeron_doc::MessageStatus::Streaming),
+            status: Some(luna_doc::MessageStatus::Streaming),
             continuation_of: None,
         };
         handle.doc().push_message(&entry("local-before")).unwrap();
         source.update_context_usage(Some(10), Some(100)).unwrap();
         sink.apply_replay_row(&source.export_snapshot().unwrap(), 1);
-        let update: zeron_doc::TranscriptUpdate = serde_json::from_value(
+        let update: luna_doc::TranscriptUpdate = serde_json::from_value(
             tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
                 .await
                 .unwrap()
@@ -10613,7 +10609,7 @@ mod context_usage_tests {
             "metadata must not reset ongoing live animations"
         );
         let mut entries = vec![];
-        zeron_doc::apply_transcript_frame(&mut entries, update.frame).unwrap();
+        luna_doc::apply_transcript_frame(&mut entries, update.frame).unwrap();
         assert_eq!(entries[0].id, "local-before");
         let version = source.doc().oplog_vv();
         source.push_message(&entry("historical")).unwrap();
@@ -10626,7 +10622,7 @@ mod context_usage_tests {
             2,
         );
         handle.doc().push_message(&entry("local-after")).unwrap();
-        let update: zeron_doc::TranscriptUpdate = serde_json::from_value(
+        let update: luna_doc::TranscriptUpdate = serde_json::from_value(
             tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
                 .await
                 .unwrap()
@@ -10636,7 +10632,7 @@ mod context_usage_tests {
         let baseline = update.replay_baseline.unwrap();
         assert_eq!(baseline.entries.len(), 1);
         assert!(baseline.entries.contains_key("historical"));
-        zeron_doc::apply_transcript_frame(&mut entries, update.frame).unwrap();
+        luna_doc::apply_transcript_frame(&mut entries, update.frame).unwrap();
         assert_eq!(entries.len(), 4);
         host.shutdown_workers().await;
     }
@@ -10644,14 +10640,14 @@ mod context_usage_tests {
     #[tokio::test]
     async fn replay_preserves_each_watchers_opening_cutoff_without_consuming_live_text() {
         use crate::doc_host::{DocHost, DocHostConfig};
-        use zeron_sync::chat_client::ChatDocSink;
+        use luna_sync::chat_client::ChatDocSink;
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(zeron_sync::DocsStore::open(dir.path()).unwrap());
+        let store = Arc::new(luna_sync::DocsStore::open(dir.path()).unwrap());
         let host = DocHost::new(
             store.clone(),
             DocHostConfig {
                 device_id: "viewer".into(),
-                default_harness: zeron_proto::HarnessId::Mock,
+                default_harness: luna_proto::HarnessId::Mock,
                 edge: None,
             },
         );
@@ -10659,9 +10655,9 @@ mod context_usage_tests {
         let sink =
             crate::chat2_host::EngineChatSink::new(&handle.doc_arc(), store, "cached-replay")
                 .with_handle(Arc::downgrade(&handle));
-        let source = zeron_doc::SessionDoc::init("cached-replay").unwrap();
-        let mut writer = zeron_doc::SegmentWriter::begin(&source, "reply", "host", 0).unwrap();
-        let text = |id: &str, value: &str| zeron_doc::MessagePart::Text {
+        let source = luna_doc::SessionDoc::init("cached-replay").unwrap();
+        let mut writer = luna_doc::SegmentWriter::begin(&source, "reply", "host", 0).unwrap();
+        let text = |id: &str, value: &str| luna_doc::MessagePart::Text {
             id: id.into(),
             text: value.into(),
         };
@@ -10672,7 +10668,7 @@ mod context_usage_tests {
         // Cached content exists before the first watcher and never enters
         // the changed-parts tracker. It may not have been painted yet.
         let mut first = doc_messages_stream(handle.watch_messages(), handle.doc_arc());
-        let opening: zeron_doc::TranscriptUpdate =
+        let opening: luna_doc::TranscriptUpdate =
             serde_json::from_value(first.next().await.unwrap()).unwrap();
         assert_eq!(
             opening.replay_baseline.unwrap().entries["reply"]["body"],
@@ -10682,7 +10678,7 @@ mod context_usage_tests {
         let live = text("body", "café histórico y nuevo");
         writer.sync(&[live.clone()]).unwrap();
         sink.apply_row(&source.export_snapshot().unwrap(), 1);
-        let update: zeron_doc::TranscriptUpdate = serde_json::from_value(
+        let update: luna_doc::TranscriptUpdate = serde_json::from_value(
             tokio::time::timeout(std::time::Duration::from_secs(2), first.next())
                 .await
                 .unwrap()
@@ -10693,7 +10689,7 @@ mod context_usage_tests {
         // A later subscriber sees a longer historical prefix, but must not
         // change the first subscriber's ongoing live animation.
         let mut second = doc_messages_stream(handle.watch_messages(), handle.doc_arc());
-        let opening: zeron_doc::TranscriptUpdate =
+        let opening: luna_doc::TranscriptUpdate =
             serde_json::from_value(second.next().await.unwrap()).unwrap();
         assert_eq!(
             opening.replay_baseline.unwrap().entries["reply"]["body"],
@@ -10710,7 +10706,7 @@ mod context_usage_tests {
                 (&mut first, "café histórico".len()),
                 (&mut second, "café histórico y nuevo".len()),
             ] {
-                let update: zeron_doc::TranscriptUpdate = serde_json::from_value(
+                let update: luna_doc::TranscriptUpdate = serde_json::from_value(
                     tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
                         .await
                         .unwrap()
@@ -10736,23 +10732,23 @@ mod context_usage_tests {
     #[tokio::test]
     async fn reopening_rearms_history_for_previously_live_text() {
         use crate::doc_host::{DocHost, DocHostConfig};
-        use zeron_sync::chat_client::ChatDocSink;
+        use luna_sync::chat_client::ChatDocSink;
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(zeron_sync::DocsStore::open(dir.path()).unwrap());
+        let store = Arc::new(luna_sync::DocsStore::open(dir.path()).unwrap());
         let host = DocHost::new(
             store.clone(),
             DocHostConfig {
                 device_id: "viewer".into(),
-                default_harness: zeron_proto::HarnessId::Mock,
+                default_harness: luna_proto::HarnessId::Mock,
                 edge: None,
             },
         );
         let handle = host.open("reopen").unwrap();
         let sink = crate::chat2_host::EngineChatSink::new(&handle.doc_arc(), store, "reopen")
             .with_handle(Arc::downgrade(&handle));
-        let source = zeron_doc::SessionDoc::init("reopen").unwrap();
-        let mut writer = zeron_doc::SegmentWriter::begin(&source, "reply", "host", 0).unwrap();
-        let part = |text: &str| zeron_doc::MessagePart::Text {
+        let source = luna_doc::SessionDoc::init("reopen").unwrap();
+        let mut writer = luna_doc::SegmentWriter::begin(&source, "reply", "host", 0).unwrap();
+        let part = |text: &str| luna_doc::MessagePart::Text {
             id: "body".into(),
             text: text.into(),
         };
@@ -10771,7 +10767,7 @@ mod context_usage_tests {
         stream.next().await.unwrap();
         writer.sync(&[part("live plus recovered")]).unwrap();
         sink.apply_replay_row(&source.export_snapshot().unwrap(), 2);
-        let update: zeron_doc::TranscriptUpdate = serde_json::from_value(
+        let update: luna_doc::TranscriptUpdate = serde_json::from_value(
             tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
                 .await
                 .unwrap()
@@ -10787,11 +10783,11 @@ mod context_usage_tests {
 
     #[tokio::test]
     async fn context_only_commits_reach_remote_watch_and_reconnect() {
-        let host = zeron_doc::SessionDoc::init("context-chat").unwrap();
+        let host = luna_doc::SessionDoc::init("context-chat").unwrap();
         host.update_context_usage(Some(42000), Some(200000))
             .unwrap();
         // The viewing engine reads a replicated document, with no harness process.
-        let remote = Arc::new(zeron_doc::SessionDoc::from_doc(loro::LoroDoc::new()));
+        let remote = Arc::new(luna_doc::SessionDoc::from_doc(loro::LoroDoc::new()));
         remote
             .doc()
             .import(&host.export_snapshot().unwrap())

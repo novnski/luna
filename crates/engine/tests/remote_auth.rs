@@ -5,18 +5,18 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::de::DeserializeOwned;
-use serde_json::json;
-use tempfile::TempDir;
-use zeron_engine::{
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessId, HarnessRegistry,
 };
-use zeron_proto::{EngineInfo, WorkspaceScope};
-use zeron_rpc::remote_auth::{
+use luna_proto::{EngineInfo, WorkspaceScope};
+use luna_rpc::remote_auth::{
     AuthenticateRemote, CreatePairing, IssuedPairing, IssuedSession, RedeemPairing, RemoteScope,
     RemoteTarget, SessionView,
 };
-use zeron_rpc::{RpcClient, methods};
+use luna_rpc::{RpcClient, methods};
+use serde::de::DeserializeOwned;
+use serde_json::json;
+use tempfile::TempDir;
 
 fn synthetic_accounts(root: &Path) -> AgentAccountsConfig {
     AgentAccountsConfig {
@@ -103,13 +103,13 @@ async fn authenticate(client: &RpcClient, target: &RemoteTarget, token: &str) ->
 async fn two_clients_pair_scope_revoke_stream_and_restart() {
     let root = TempDir::new().unwrap();
     let core = open_core(root.path());
-    let local = zeron_rpc::memory_client(core.rpc_service());
-    let remote_a = zeron_rpc::memory_client(core.remote_rpc_service().unwrap());
-    let remote_b = zeron_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let local = luna_rpc::memory_client(core.rpc_service());
+    let remote_a = luna_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let remote_b = luna_rpc::memory_client(core.remote_rpc_service().unwrap());
 
     let info: EngineInfo = call(&local, methods::ENGINE_INFO, json!({})).await;
     assert_eq!(info.workspace_scope, WorkspaceScope::Development);
-    assert!(info.supports(zeron_proto::capabilities::REMOTE_AUTH_V1));
+    assert!(info.supports(luna_proto::capabilities::REMOTE_AUTH_V1));
     assert!(
         remote_a
             .call(methods::ENGINE_INFO, json!({}))
@@ -180,7 +180,7 @@ async fn two_clients_pair_scope_revoke_stream_and_restart() {
     let mut compatible = pair_a.target.clone();
     compatible
         .required_capabilities
-        .push(zeron_proto::capabilities::TASK_IDENTITY_V1.into());
+        .push(luna_proto::capabilities::TASK_IDENTITY_V1.into());
     authenticate(&remote_a, &compatible, &session_a.session_token).await;
     let mut unsupported = pair_a.target.clone();
     unsupported
@@ -321,8 +321,8 @@ async fn two_clients_pair_scope_revoke_stream_and_restart() {
 
     let reopened = open_core(root.path());
     assert_eq!(reopened.device_id, info.device_id);
-    let reconnect_a = zeron_rpc::memory_client(reopened.remote_rpc_service().unwrap());
-    let reconnect_b = zeron_rpc::memory_client(reopened.remote_rpc_service().unwrap());
+    let reconnect_a = luna_rpc::memory_client(reopened.remote_rpc_service().unwrap());
+    let reconnect_b = luna_rpc::memory_client(reopened.remote_rpc_service().unwrap());
     authenticate(&reconnect_a, &pair_a.target, &session_a.session_token).await;
     let _: EngineInfo = call(&reconnect_a, methods::ENGINE_INFO, json!({})).await;
     assert!(
@@ -359,8 +359,8 @@ async fn two_clients_pair_scope_revoke_stream_and_restart() {
 async fn expired_session_and_invalid_reauthentication_cannot_reuse_connection() {
     let root = TempDir::new().unwrap();
     let core = open_core(root.path());
-    let local = zeron_rpc::memory_client(core.rpc_service());
-    let remote = zeron_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let local = luna_rpc::memory_client(core.rpc_service());
+    let remote = luna_rpc::memory_client(core.remote_rpc_service().unwrap());
     let pair = issue(&local, "short", vec![RemoteScope::EnvironmentRead], 1).await;
     let session = redeem(&remote, &pair, "short client").await;
     authenticate(&remote, &pair.target, &session.session_token).await;
@@ -401,10 +401,10 @@ async fn corrupt_remote_authority_disables_remote_without_blocking_local_engine(
     }
     let core = open_core(root.path());
     assert!(core.remote_rpc_service().is_none());
-    let local = zeron_rpc::memory_client(core.rpc_service());
+    let local = luna_rpc::memory_client(core.rpc_service());
     let info: EngineInfo = call(&local, methods::ENGINE_INFO, json!({})).await;
     assert_eq!(info.device_id, core.device_id);
-    assert!(!info.supports(zeron_proto::capabilities::REMOTE_AUTH_V1));
+    assert!(!info.supports(luna_proto::capabilities::REMOTE_AUTH_V1));
     assert!(
         local
             .call(methods::CREATE_REMOTE_PAIRING, json!({}))
@@ -418,7 +418,7 @@ async fn corrupt_remote_authority_disables_remote_without_blocking_local_engine(
 async fn same_machine_different_profile_has_distinct_remote_authority() {
     let root = TempDir::new().unwrap();
     let first = open_core(root.path());
-    let local = zeron_rpc::memory_client(first.rpc_service());
+    let local = luna_rpc::memory_client(first.rpc_service());
     let pairing = issue(
         &local,
         "first profile",
@@ -426,7 +426,7 @@ async fn same_machine_different_profile_has_distinct_remote_authority() {
         300,
     )
     .await;
-    let client = zeron_rpc::memory_client(first.remote_rpc_service().unwrap());
+    let client = luna_rpc::memory_client(first.remote_rpc_service().unwrap());
     let session = redeem(&client, &pairing, "first client").await;
     let device_id = first.device_id.clone();
     first.shutdown().await;
@@ -436,7 +436,7 @@ async fn same_machine_different_profile_has_distinct_remote_authority() {
 
     let second = open_core_profile(root.path(), "other-org", "other-user");
     assert_eq!(second.device_id, device_id);
-    let second_local = zeron_rpc::memory_client(second.rpc_service());
+    let second_local = luna_rpc::memory_client(second.rpc_service());
     let second_pairing = issue(
         &second_local,
         "second profile",
@@ -448,7 +448,7 @@ async fn same_machine_different_profile_has_distinct_remote_authority() {
         pairing.target.environment_id,
         second_pairing.target.environment_id
     );
-    let second_client = zeron_rpc::memory_client(second.remote_rpc_service().unwrap());
+    let second_client = luna_rpc::memory_client(second.remote_rpc_service().unwrap());
     assert!(
         second_client
             .authenticate_remote(AuthenticateRemote {

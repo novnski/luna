@@ -9,8 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio_util::sync::CancellationToken;
-use zeron_proto::{
+use luna_proto::{
     CommandReasonCode, CommandReceipt, CommandReceiptStatus, CrossTaskControlAction,
     CrossTaskControlReceipt, CrossTaskControlRequest, CrossTaskListPage, CrossTaskListRequest,
     CrossTaskReadPage, CrossTaskReadRequest, CrossTaskSendMode, CrossTaskSendReceipt,
@@ -18,6 +17,7 @@ use zeron_proto::{
     CrossTaskWaitResult, OmittedRuntimeTool, RuntimeContext, RuntimeDelivery,
     RuntimeToolDefinition, TaskCommandSnapshot,
 };
+use tokio_util::sync::CancellationToken;
 
 const MAX_PAGE: usize = 20;
 const MAX_WAIT_TARGETS: usize = 8;
@@ -1024,10 +1024,10 @@ fn output_schema(name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use luna_proto::{CommandReceipt, TaskCommandSnapshot};
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
-    use zeron_proto::{CommandReceipt, TaskCommandSnapshot};
 
     #[derive(Clone, Default)]
     struct FakeBackend {
@@ -1159,7 +1159,7 @@ mod tests {
         ) -> Result<CrossTaskReadPage, CrossTaskError> {
             Ok(CrossTaskReadPage {
                 task: task(&request.task_id, "local"),
-                turns: vec![zeron_proto::CrossTaskTurnSummary {
+                turns: vec![luna_proto::CrossTaskTurnSummary {
                     turn_id: "turn-a".into(),
                     status: "completed".into(),
                     summary: "x".repeat(500),
@@ -1469,7 +1469,7 @@ mod tests {
     async fn wait_is_bounded_and_cancellation_aware() {
         let tools = CrossTaskTools::new(FakeBackend::default());
         let request = CrossTaskWaitRequest {
-            targets: vec![zeron_proto::CrossTaskWaitTarget {
+            targets: vec![luna_proto::CrossTaskWaitTarget {
                 task_id: "task-a".into(),
                 after_cursor: None,
             }],
@@ -1579,7 +1579,7 @@ mod tests {
         authority.explicit_user_request = false;
         let (cross_task_tools, cross_task_omissions) =
             CrossTaskTools::new(backend.clone()).catalog(&authority);
-        let context = zeron_proto::RuntimeContext {
+        let context = luna_proto::RuntimeContext {
             app_version: "synthetic".into(),
             protocol_version: 1,
             thread_id: "caller".into(),
@@ -1595,7 +1595,7 @@ mod tests {
             binding_generation: None,
             provider_profile_id: None,
             branch: None,
-            harness: zeron_proto::HarnessId::Codex,
+            harness: luna_proto::HarnessId::Codex,
             model: None,
             reasoning: None,
             execution_route: "local".into(),

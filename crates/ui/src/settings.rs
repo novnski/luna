@@ -1,5 +1,5 @@
 //! UI settings persisted to a small JSON file in the data dir — pane widths and
-//! collapse flags (zeron persisted the same set in localStorage).
+//! collapse flags (luna persisted the same set in localStorage).
 //!
 //! Loaded once at boot and then owned by [`SettingsStore`], the only production
 //! writer. Frequent geometry changes are debounced; durable choices flush
@@ -61,7 +61,7 @@ const NEW_THREAD_BACKGROUND_DIR: &str = "new-thread-backgrounds";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewThreadComposerBackground {
-    /// Managed copy inside Zeron's device-local data directory.
+    /// Managed copy inside Luna's device-local data directory.
     pub path: String,
     /// Original file name shown in Appearance settings.
     pub name: String,
@@ -304,7 +304,7 @@ pub fn current(cx: &App) -> UiSettings {
         .unwrap_or_default()
 }
 
-/// Copy a selected image into Zeron's device-local data directory and make it
+/// Copy a selected image into Luna's device-local data directory and make it
 /// the new-thread canvas background. A unique file name avoids stale image
 /// caches when the background is replaced.
 pub fn install_new_thread_composer_background(source: &Path, cx: &mut App) -> Result<(), String> {
@@ -653,7 +653,7 @@ pub struct UiSettings {
     /// Submit using Enter or the platform modifier plus Enter.
     pub composer_send_behavior: ComposerSendBehavior,
     /// What a primary submit does while the selected task has a live turn.
-    pub follow_up_behavior: zeron_proto::FollowUpBehavior,
+    pub follow_up_behavior: luna_proto::FollowUpBehavior,
     /// Allow the engine's bounded, acceptance-aware recovery policy to arm
     /// automatic retries. Unknown delivery and action-required failures never
     /// retry regardless of this preference.
@@ -677,7 +677,7 @@ pub struct UiSettings {
     pub usage_metric: String,
     pub usage_sidebar_hidden: bool,
     /// Exact-model USD per million token estimates supplied by the user.
-    pub usage_price_overrides: std::collections::HashMap<String, zeron_proto::UsagePriceRate>,
+    pub usage_price_overrides: std::collections::HashMap<String, luna_proto::UsagePriceRate>,
     /// The last selected space — restored on boot when the row still exists;
     /// also the new-tab default when the sidebar filter is "All".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -712,7 +712,7 @@ pub struct UiSettings {
     /// Desktop banner notifications on the same transitions.
     /// `LUNA_DISABLE_NOTIFICATIONS` overrides.
     pub notifications_enabled: bool,
-    /// Suppress the banner while a Zeron window is focused (the chime covers
+    /// Suppress the banner while a Luna window is focused (the chime covers
     /// the foreground case).
     pub notifications_background_only: bool,
     /// Foreground notices for events in another task. The active task never
@@ -725,7 +725,7 @@ pub struct UiSettings {
     pub keep_awake_task_ids: std::collections::HashSet<String>,
     pub right_pane_width: f32,
     /// Legacy: panel *open* flags are session-scoped in-memory state now
-    /// (`shell::SessionPanels`, zeron `sessionPanels` parity). Kept for file
+    /// (`shell::SessionPanels`, luna `sessionPanels` parity). Kept for file
     /// compatibility; no longer read or written by the shell.
     pub right_pane_open: bool,
     pub terminal_height: f32,
@@ -766,7 +766,7 @@ pub struct UiSettings {
     pub code_font_family: crate::typography::UiFontFamily,
     pub code_font_size: f32,
     /// Independently selected light and dark theme variants.
-    pub theme_selection: zeron_theme::ThemeSelection,
+    pub theme_selection: luna_theme::ThemeSelection,
     /// Changes pane: side-by-side diffs instead of the unified stack.
     pub diff_split: bool,
     /// Changes pane: wrap long source lines instead of scrolling horizontally.
@@ -778,7 +778,7 @@ pub struct UiSettings {
     pub transcript_width: f32,
     /// Open a normal web-link activation in the session Browser. Explicit
     /// context-menu actions remain available regardless of this preference.
-    pub open_web_links_in_zeron: bool,
+    pub open_web_links_in_luna: bool,
     /// Save edited workspace files automatically after the configured delay.
     pub files_autosave_enabled: bool,
     /// Idle time before an edited workspace file is saved automatically.
@@ -788,9 +788,9 @@ pub struct UiSettings {
     /// Include hidden and ignored entries in workspace file trees.
     pub files_show_all: bool,
     /// Interactive identity overlay; imported themes default to their own accent.
-    pub accent: zeron_theme::AccentSelection,
+    pub accent: luna_theme::AccentSelection,
     /// Glass policy, independent from the selected appearance, theme, and accent.
-    pub surface: zeron_theme::SurfacePreference,
+    pub surface: luna_theme::SurfacePreference,
     /// Optional device-local artwork behind the blank new-thread composer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_thread_composer_background: Option<NewThreadComposerBackground>,
@@ -839,7 +839,7 @@ impl Default for UiSettings {
             keymap: KeymapConfig::default(),
             escape_stops_active_agent: false,
             composer_send_behavior: ComposerSendBehavior::default(),
-            follow_up_behavior: zeron_proto::FollowUpBehavior::default(),
+            follow_up_behavior: luna_proto::FollowUpBehavior::default(),
             automatic_retries_enabled: true,
             appshots_enabled: false,
             appshot_sound_enabled: true,
@@ -855,18 +855,18 @@ impl Default for UiSettings {
             terminal_font_size: crate::typography::TERMINAL_FONT_SIZE_DEFAULT,
             code_font_family: crate::typography::UiFontFamily::GeistMono,
             code_font_size: crate::typography::CODE_FONT_SIZE_DEFAULT,
-            theme_selection: zeron_theme::ThemeSelection::default(),
+            theme_selection: luna_theme::ThemeSelection::default(),
             diff_split: false,
             diff_wrap: false,
             code_fences_fit_content: false,
             transcript_width: TRANSCRIPT_WIDTH_DEFAULT,
-            open_web_links_in_zeron: true,
+            open_web_links_in_luna: true,
             files_autosave_enabled: false,
             files_autosave_delay_ms: FILES_AUTOSAVE_DELAY_DEFAULT_MS,
             files_word_wrap: false,
             files_show_all: false,
-            accent: zeron_theme::AccentSelection::default(),
-            surface: zeron_theme::SurfacePreference::default(),
+            accent: luna_theme::AccentSelection::default(),
+            surface: luna_theme::SurfacePreference::default(),
             new_thread_composer_background: None,
             new_thread_background_effect: NewThreadBackgroundEffect::None,
             legacy_accent_color: None,
@@ -949,7 +949,7 @@ impl ShortcutId {
         self != Self::CaptureAppshot || crate::appshots::is_desktop()
     }
 
-    /// Row label (zeron lib/shortcuts.ts `SHORTCUT_DEFINITIONS`, verbatim).
+    /// Row label (luna lib/shortcuts.ts `SHORTCUT_DEFINITIONS`, verbatim).
     pub fn label(self) -> &'static str {
         match self {
             ShortcutId::CaptureAppshot => "Capture Appshot",
@@ -1490,10 +1490,10 @@ impl UiSettings {
     }
 
     fn migrated(mut self) -> Self {
-        if self.accent == zeron_theme::AccentSelection::ThemeDefault
+        if self.accent == luna_theme::AccentSelection::ThemeDefault
             && let Some(accent) = self.legacy_accent_color.take()
         {
-            self.accent = zeron_theme::AccentSelection::Preset(accent.into());
+            self.accent = luna_theme::AccentSelection::Preset(accent.into());
         }
         self.legacy_accent_color = None;
         self
@@ -1537,9 +1537,9 @@ mod tests {
         assert_eq!(loaded.composer_send_behavior, ComposerSendBehavior::Enter);
         assert_eq!(
             loaded.follow_up_behavior,
-            zeron_proto::FollowUpBehavior::Queue
+            luna_proto::FollowUpBehavior::Queue
         );
-        assert!(loaded.open_web_links_in_zeron);
+        assert!(loaded.open_web_links_in_luna);
         assert!(loaded.new_thread_composer_background.is_none());
         assert_eq!(
             loaded.new_thread_background_effect,
@@ -2018,7 +2018,7 @@ mod tests {
             usage_sidebar_hidden: true,
             usage_price_overrides: std::collections::HashMap::from([(
                 "gpt-test".into(),
-                zeron_proto::UsagePriceRate {
+                luna_proto::UsagePriceRate {
                     input_per_million: 1.0,
                     cached_per_million: 0.5,
                     creation_per_million: 0.0,
@@ -2055,7 +2055,7 @@ mod tests {
             },
             escape_stops_active_agent: true,
             composer_send_behavior: ComposerSendBehavior::ModEnter,
-            follow_up_behavior: zeron_proto::FollowUpBehavior::Steer,
+            follow_up_behavior: luna_proto::FollowUpBehavior::Steer,
             automatic_retries_enabled: false,
             appshots_enabled: false,
             appshot_sound_enabled: true,
@@ -2086,7 +2086,7 @@ mod tests {
             git_history_author_display: GitHistoryAuthorDisplay::Name,
             ui_font_family: crate::typography::UiFontFamily::Installed("Arial".into()),
             ui_font_size: crate::typography::UiFontSize::ALL[5],
-            theme_selection: zeron_theme::ThemeSelection {
+            theme_selection: luna_theme::ThemeSelection {
                 light: "catppuccin-latte".into(),
                 dark: "catppuccin-mocha".into(),
             },
@@ -2094,7 +2094,7 @@ mod tests {
             diff_wrap: true,
             code_fences_fit_content: true,
             transcript_width: 960.0,
-            open_web_links_in_zeron: false,
+            open_web_links_in_luna: false,
             files_autosave_enabled: true,
             files_autosave_delay_ms: 1_500,
             files_word_wrap: true,
@@ -2103,10 +2103,10 @@ mod tests {
             code_font_family: crate::typography::UiFontFamily::Geist,
             code_font_size: 11.0,
             files_show_all: true,
-            accent: zeron_theme::AccentSelection::Preset(zeron_theme::AccentPreset::Cyan),
-            surface: zeron_theme::SurfacePreference::Frosted,
+            accent: luna_theme::AccentSelection::Preset(luna_theme::AccentPreset::Cyan),
+            surface: luna_theme::SurfacePreference::Frosted,
             new_thread_composer_background: Some(NewThreadComposerBackground {
-                path: "/tmp/zeron/new-thread-background.png".into(),
+                path: "/tmp/luna/new-thread-background.png".into(),
                 name: "background.png".into(),
             }),
             new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
@@ -2117,7 +2117,7 @@ mod tests {
         assert!(json.contains(r#""diffWrap": true"#));
         assert_eq!(UiSettings::load(dir.path()), settings);
         assert!(json.contains(r#""codeFencesFitContent": true"#));
-        assert!(json.contains(r#""openWebLinksInZeron": false"#));
+        assert!(json.contains(r#""openWebLinksInLuna": false"#));
         assert!(json.contains(r#""newThreadBackgroundEffect": "ascii""#));
         assert!(json.contains(r#""terminalFontFamily": "installed:Menlo""#));
         assert!(json.contains(r#""terminalFontSize": 15.0"#));
@@ -2130,7 +2130,7 @@ mod tests {
         let mut settings = UiSettings::default();
         settings.usage_price_overrides.insert(
             "unknown-model".into(),
-            zeron_proto::UsagePriceRate {
+            luna_proto::UsagePriceRate {
                 input_per_million: 0.0,
                 cached_per_million: 0.0,
                 creation_per_million: 0.0,
@@ -2282,8 +2282,8 @@ mod tests {
         .unwrap();
         let loaded = UiSettings::load(dir.path());
         assert_eq!(loaded.appearance, crate::appearance::AppearanceMode::System);
-        assert_eq!(loaded.accent, zeron_theme::AccentSelection::ThemeDefault);
-        assert_eq!(loaded.surface, zeron_theme::SurfacePreference::ThemeDefault);
+        assert_eq!(loaded.accent, luna_theme::AccentSelection::ThemeDefault);
+        assert_eq!(loaded.surface, luna_theme::SurfacePreference::ThemeDefault);
         assert_eq!(loaded.sidebar_width, 300.0);
         assert!(!loaded.sound_enabled, "other keys still parse");
         assert!(loaded.sound_completion_enabled);
@@ -2369,7 +2369,7 @@ mod tests {
         let loaded = UiSettings::load(dir.path());
         assert_eq!(
             loaded.accent,
-            zeron_theme::AccentSelection::Preset(zeron_theme::AccentPreset::Cyan)
+            luna_theme::AccentSelection::Preset(luna_theme::AccentPreset::Cyan)
         );
         loaded.save(dir.path()).unwrap();
         let saved = std::fs::read_to_string(UiSettings::path(dir.path())).unwrap();
@@ -2562,7 +2562,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_zeron() {
+    fn defaults_match_luna() {
         let d = UiSettings::default();
         assert_eq!(d.sidebar_width, 256.0);
         assert_eq!(d.right_pane_width, 520.0);

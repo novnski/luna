@@ -135,7 +135,10 @@ impl BrowserSurface {
             };
             content = content.child(
                 div()
-                    .id(gpui::SharedString::from(format!("preview-row-{}", service.id)))
+                    .id(gpui::SharedString::from(format!(
+                        "preview-row-{}",
+                        service.id
+                    )))
                     .w_full()
                     .h(px(56.0))
                     .px(px(14.0))
@@ -619,7 +622,7 @@ impl Render for BrowserSurface {
                 .and_then(|s| url::Url::parse(s).ok())
                 .is_some_and(|u| {
                     super::model::loopback(&u)
-                        && !(u.port() == Some(zeron_proto::PREVIEW_PROXY_PORT)
+                        && !(u.port() == Some(luna_proto::PREVIEW_PROXY_PORT)
                             && u.host_str()
                                 .is_some_and(|host| host.ends_with(".localhost")))
                 });

@@ -18,7 +18,7 @@ use crate::{
     HarnessError, ProviderForkProgress, ProviderForkProgressReporter, compose_child_path,
     shutdown_child,
 };
-use zeron_proto::{ProviderForkBoundary, ProviderForkRequest, ProviderForkResult};
+use luna_proto::{ProviderForkBoundary, ProviderForkRequest, ProviderForkResult};
 
 pub const VALIDATED_CODEX_CLI_VERSION: &str = "0.154.0";
 pub const NATIVE_CAPABILITIES: &[&str] = &[
@@ -512,7 +512,7 @@ impl CodexNativeClient {
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zeron_harness::codex_native", "stderr: {line}");
+                    tracing::debug!(target: "luna_harness::codex_native", "stderr: {line}");
                 }
             });
         }
@@ -528,7 +528,7 @@ impl CodexNativeClient {
                         &format!("unsupported reconciliation request: {method}"),
                     ),
                     Incoming::Notification { method, params } => {
-                        tracing::trace!(target: "zeron_harness::codex_native", %method, ?params, "notification");
+                        tracing::trace!(target: "luna_harness::codex_native", %method, ?params, "notification");
                         let _ = notification_tx.send((method, params)).await;
                     }
                     Incoming::Eof => break,

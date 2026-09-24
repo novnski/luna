@@ -4,7 +4,7 @@
 //! reconnect with exponential backoff.
 //!
 //! The client owns no row semantics: everything applies through the shared
-//! [`zeron_doc::RegistryDoc`] under a lock. Wire frames are JSON text —
+//! [`luna_doc::RegistryDoc`] under a lock. Wire frames are JSON text —
 //! byte-compatible with `edge/src/registry-room.ts`.
 //!
 //! Liveness discipline is inherited from `room.rs` and its incidents: the
@@ -27,7 +27,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-use zeron_doc::{PendingBatch, RegistryDoc, RegistryRow, StateOutcome};
+use luna_doc::{PendingBatch, RegistryDoc, RegistryRow, StateOutcome};
 
 use crate::types::{RoomStatsSnapshot, StaticUrl, SyncError, UrlProvider};
 use crate::write_epoch::EpochError;
@@ -102,7 +102,7 @@ enum ClientFrame<'a> {
     },
     Push {
         batch: &'a str,
-        ops: &'a [zeron_doc::RowOp],
+        ops: &'a [luna_doc::RowOp],
     },
     Presence {
         at: i64,
@@ -241,7 +241,7 @@ async fn pump(
     }
 }
 
-// ── stats (RoomStatsSnapshot-compatible so SyncStatus/`zeron sync` render it) ─
+// ── stats (RoomStatsSnapshot-compatible so SyncStatus/`luna sync` render it) ─
 
 #[derive(Default)]
 struct Stats {
@@ -1675,7 +1675,7 @@ mod admission_tests {
         let epoch = WriteEpoch::for_device_root(root.path()).unwrap();
         let doc = Arc::new(Mutex::new(RegistryDoc::new("device-a")));
         lock(&doc)
-            .upsert_device(&zeron_proto::Device {
+            .upsert_device(&luna_proto::Device {
                 id: "device-a".into(),
                 name: "Synthetic".into(),
                 platform: "test".into(),

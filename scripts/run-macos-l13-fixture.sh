@@ -124,7 +124,7 @@ build_bundle() {
   cd "$ROOT"
   [[ -s "$REFERENCE_ICNS" ]] || fail "validated LUNA icon ancestor is unavailable at $REFERENCE_ICNS"
   /usr/bin/file "$REFERENCE_ICNS" | /usr/bin/grep -Fq "Mac OS X icon" || fail "reference icon is not an icns container"
-  cargo build --locked -p zeron-ui --example history-operations-fixture --features appshots-fixture
+  cargo build --locked -p luna-ui --example history-operations-fixture --features appshots-fixture
   /bin/mkdir -p "$OUT"
   STAGE_ROOT="$(/usr/bin/mktemp -d "$OUT/.luna-l13-stage.XXXXXX")"
   staged_app="$STAGE_ROOT/LUNA L13 QA.app"

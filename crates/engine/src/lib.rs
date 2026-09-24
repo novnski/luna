@@ -1,4 +1,4 @@
-//! zeron-engine — the headless backend: sessions engine, doc host + command executor,
+//! luna-engine — the headless backend: sessions engine, doc host + command executor,
 //! run journal + crash recovery, and the IPC RPC server.
 //!
 //! Spec: ARCHITECTURE.md §5 and docs/research/feature-inventory.md §3. M2 surface:
@@ -10,20 +10,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+pub use luna_proto::{EngineInfo, HarnessId, WorkspaceScope};
+use luna_rpc::{RpcError, RpcReply, RpcService, methods};
 use sha2::{Digest, Sha256};
-pub use zeron_proto::{EngineInfo, HarnessId, WorkspaceScope};
-use zeron_rpc::{RpcError, RpcReply, RpcService, methods};
 
-use zeron_sync::DocsStore;
+use luna_sync::DocsStore;
 
 /// No owned sync service has been configured for a local LUNA installation.
 pub const OFFLINE_EDGE_URL: &str = "luna-local://offline";
-/// Distinct from Zeron's historical owner IPC port.
+/// Distinct from Luna's historical owner IPC port.
 pub const DEFAULT_LUNA_IPC_PORT: u16 = 59778;
 
-/// Parse an explicitly configured service without accepting Zeron-owned hosts.
+/// Parse an explicitly configured service without accepting placeholder hosts.
 /// `Url` canonicalizes case and IDNA; a trailing DNS root dot is equivalent
-/// for the vendor-domain check. Credentials in URLs are refused entirely.
+/// for the placeholder-domain check. Credentials in URLs are refused entirely.
 pub fn canonical_owned_edge_url(raw: &str) -> anyhow::Result<String> {
     let parsed = url::Url::parse(raw.trim())?;
     anyhow::ensure!(
@@ -37,8 +37,8 @@ pub fn canonical_owned_edge_url(raw: &str) -> anyhow::Result<String> {
     if let Some(url::Host::Domain(domain)) = parsed.host() {
         let host = domain.trim_end_matches('.');
         anyhow::ensure!(
-            host != "zeron.sh" && !host.ends_with(".zeron.sh"),
-            "LUNA cannot use Zeron's service endpoint"
+            host != "luna.invalid" && !host.ends_with(".luna.invalid"),
+            "LUNA cannot use a placeholder service endpoint"
         );
     }
     Ok(parsed.to_string())
@@ -94,8 +94,8 @@ mod local_adoption_url_tests {
     #[test]
     fn canonical_host_guard_rejects_vendor_aliases_and_credentials() {
         for value in [
-            "https://edge.zeron.sh.",
-            "HTTPS://EDGE.ZERON.SH./releases",
+            "https://edge.luna.invalid.",
+            "HTTPS://EDGE.luna.invalid./releases",
             "https://user:password@owned.example",
             "https://",
         ] {
@@ -209,15 +209,15 @@ pub enum EngineError {
     #[error("credential: {0}")]
     Credential(#[from] credentials::CredentialError),
     #[error(transparent)]
-    Token(#[from] zeron_rpc::TokenError),
+    Token(#[from] luna_rpc::TokenError),
     #[error("doc: {0}")]
-    Doc(#[from] zeron_doc::DocError),
+    Doc(#[from] luna_doc::DocError),
     #[error("journal: {0}")]
     Journal(#[from] run_journal::JournalError),
     #[error("store: {0}")]
-    Store(#[from] zeron_sync::StoreError),
+    Store(#[from] luna_sync::StoreError),
     #[error("harness: {0}")]
-    Harness(#[from] zeron_harness::HarnessError),
+    Harness(#[from] luna_harness::HarnessError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
@@ -238,7 +238,7 @@ pub(crate) fn new_id() -> String {
 enum CodexMetadataAssembly {
     Native,
     Disabled,
-    Injected(zeron_harness::codex::native::CodexNativeClient),
+    Injected(luna_harness::codex::native::CodexNativeClient),
 }
 
 #[derive(Clone)]
@@ -254,7 +254,7 @@ pub struct EngineConfig {
     pub ipc_port: u16,
     /// Harness for doc-command runs on chats without a workspace `config` row.
     pub default_harness: HarnessId,
-    /// Workspace-doc org (`ws/{orgId}` room). `None` = `$ZERON_ORG_ID` or the dev default.
+    /// Workspace-doc org (`ws/{orgId}` room). `None` = `$LUNA_ORG_ID` or the dev default.
     /// In WorkOS mode the signed-in session's org wins.
     pub org_id: Option<String>,
     /// WorkOS client id — enables real auth; `None` = dev mode (bearer = `edge_token`).
@@ -290,7 +290,7 @@ pub struct EngineCore {
     pub repos: Repos,
     pub workspace_files: WorkspaceFiles,
     pub terminals: Terminals,
-    pub previews: zeron_preview::PreviewService,
+    pub previews: luna_preview::PreviewService,
     pub change_requests: CheckoutChangeRequests,
     pub diff_sync: CheckoutDiffSync,
     pub spaces_sync: SpacesSync,
@@ -299,17 +299,17 @@ pub struct EngineCore {
     model_cache: Arc<model_cache::ModelCache>,
     pub task_identity: TaskIdentityService,
     pub device_id: String,
-    remote_auth: Option<Arc<zeron_rpc::RemoteAuthStore>>,
+    remote_auth: Option<Arc<luna_rpc::RemoteAuthStore>>,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
     workspace_scope: WorkspaceScope,
     /// Auth service (attached by [`Engine::run`]; a lazy dev-mode instance otherwise).
     auth: std::sync::Mutex<Option<Auth>>,
     /// Peer link cache for `targetDeviceId` routing (attached when edge+auth are ready).
-    links: std::sync::Mutex<Option<Arc<zeron_rpc::LinkCache>>>,
+    links: std::sync::Mutex<Option<Arc<luna_rpc::LinkCache>>>,
     /// Release checker (attached by [`Engine::assemble_runtime`]) — the
     /// UpdateStatus stream + ApplyUpdate.
-    updater: std::sync::Mutex<Option<zeron_update::Updater>>,
+    updater: std::sync::Mutex<Option<luna_update::Updater>>,
     /// The updater's token-change wake forwarder — owned so shutdown can end it.
     updater_wake: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Owns the exclusive data-dir lock and retires future write admission.
@@ -323,7 +323,7 @@ pub struct EngineCore {
 impl EngineCore {
     /// Open stores under `data_dir`, wire sessions ⇄ doc host ⇄ workspace host, and
     /// recover stale journals from a previous crash. Identity comes from
-    /// `$ZERON_ORG_ID` / `$ZERON_USER_ID` (dev defaults `dev-org` / `dev-user`);
+    /// `$LUNA_ORG_ID` / `$LUNA_USER_ID` (dev defaults `dev-org` / `dev-user`);
     /// use [`Self::assemble_with_identity`] to pass one explicitly.
     pub fn assemble(
         data_dir: &Path,
@@ -331,8 +331,8 @@ impl EngineCore {
         default_harness: HarnessId,
         edge: Option<EdgeConfig>,
     ) -> Result<Self, EngineError> {
-        let org_id = env_or("ZERON_ORG_ID", DEFAULT_ORG_ID);
-        let user_id = env_or("ZERON_USER_ID", DEFAULT_USER_ID);
+        let org_id = env_or("LUNA_ORG_ID", DEFAULT_ORG_ID);
+        let user_id = env_or("LUNA_USER_ID", DEFAULT_USER_ID);
         let profile = EngineProfile::development(data_dir, &org_id, &user_id);
         Self::assemble_with_profile(profile, registry, default_harness, edge)
     }
@@ -447,7 +447,7 @@ impl EngineCore {
         default_harness: HarnessId,
         edge: Option<EdgeConfig>,
         agent_accounts_config: AgentAccountsConfig,
-        codex: zeron_harness::codex::native::CodexNativeClient,
+        codex: luna_harness::codex::native::CodexNativeClient,
     ) -> Result<Self, EngineError> {
         let data_dir = profile.device_root();
         std::fs::create_dir_all(data_dir)?;
@@ -488,9 +488,9 @@ impl EngineCore {
                 profile.user_id(),
             ))?)
         );
-        let remote_auth = match zeron_rpc::RemoteAuthStore::open(
+        let remote_auth = match luna_rpc::RemoteAuthStore::open(
             profile.store_root(),
-            zeron_rpc::RemoteEnvironment {
+            luna_rpc::RemoteEnvironment {
                 device_id: device_id.clone(),
                 workspace_scope: profile.scope(),
                 environment_id,
@@ -579,7 +579,7 @@ impl EngineCore {
             WorkspaceFiles::new(repos.clone(), workspace.clone(), device_id.clone());
         let terminals =
             Terminals::open_with_history(&profile.store_root().join("terminals"), &device_id)?;
-        let previews = zeron_preview::PreviewService::new(
+        let previews = luna_preview::PreviewService::new(
             profile.store_root().join("previews.json"),
             device_id.clone(),
             local_device_name(&device_id),
@@ -718,7 +718,7 @@ impl EngineCore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         slot.get_or_insert_with(|| {
-            let dev_user = std::env::var("ZERON_EDGE_TOKEN")
+            let dev_user = std::env::var("LUNA_EDGE_TOKEN")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "dev-user".into());
@@ -731,7 +731,7 @@ impl EngineCore {
 
     /// Attach the peer link cache — enables `targetDeviceId` routing,
     /// [`Self::dial_device`], and the doc host's queued-attachment transfers.
-    pub fn set_links(&self, links: Arc<zeron_rpc::LinkCache>) {
+    pub fn set_links(&self, links: Arc<luna_rpc::LinkCache>) {
         self.doc_host.set_links(links.clone());
         *self
             .links
@@ -739,7 +739,7 @@ impl EngineCore {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(links);
     }
 
-    pub fn links(&self) -> Option<Arc<zeron_rpc::LinkCache>> {
+    pub fn links(&self) -> Option<Arc<luna_rpc::LinkCache>> {
         self.links
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -754,14 +754,14 @@ impl EngineCore {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
     }
 
-    pub fn set_updater(&self, updater: zeron_update::Updater) {
+    pub fn set_updater(&self, updater: luna_update::Updater) {
         *self
             .updater
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(updater);
     }
 
-    pub fn updater(&self) -> Option<zeron_update::Updater> {
+    pub fn updater(&self) -> Option<luna_update::Updater> {
         self.updater
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -773,7 +773,7 @@ impl EngineCore {
     pub async fn dial_device(
         &self,
         device_id: &str,
-    ) -> Result<Arc<zeron_rpc::RpcClient>, EngineError> {
+    ) -> Result<Arc<luna_rpc::RpcClient>, EngineError> {
         let links = self
             .links()
             .ok_or_else(|| EngineError::Other("peer links unavailable (offline)".into()))?;
@@ -786,12 +786,12 @@ impl EngineCore {
     /// Start hosting our device room with per-client authenticated RPC dispatch.
     /// Legacy unauthenticated relay nudges are ignored by the transport.
     /// The token source re-reads edge auth on every (re)dial.
-    pub fn start_host_relay(&self, edge_url: &str) -> Option<zeron_rpc::HostRelay> {
+    pub fn start_host_relay(&self, edge_url: &str) -> Option<luna_rpc::HostRelay> {
         let remote_auth = self.remote_auth.clone()?;
         let auth = self.auth();
         let config =
-            zeron_rpc::HostRelayConfig::new(edge_url, self.device_id.clone(), Arc::new(auth));
-        Some(zeron_rpc::HostRelay::spawn(
+            luna_rpc::HostRelayConfig::new(edge_url, self.device_id.clone(), Arc::new(auth));
+        Some(luna_rpc::HostRelay::spawn(
             config,
             self.rpc_service_without_backup(),
             remote_auth,
@@ -805,8 +805,8 @@ impl EngineCore {
     /// One authenticated remote connection, using the same guard installed
     /// for each device-room virtual connection. Never share this instance
     /// between callers: authentication belongs to a connection.
-    pub fn remote_rpc_service(&self) -> Option<Arc<zeron_rpc::remote_auth::RemoteRpcService>> {
-        Some(Arc::new(zeron_rpc::remote_auth::RemoteRpcService::new(
+    pub fn remote_rpc_service(&self) -> Option<Arc<luna_rpc::remote_auth::RemoteRpcService>> {
+        Some(Arc::new(luna_rpc::remote_auth::RemoteRpcService::new(
             self.rpc_service_without_backup(),
             self.remote_auth.clone()?,
         )))
@@ -818,7 +818,7 @@ impl EngineCore {
         let inner: Arc<dyn RpcService> = self.rpc_service_without_backup();
         let auth = self.remote_auth.clone()?;
         Some(Arc::new(move || {
-            Arc::new(zeron_rpc::remote_auth::RemoteRpcService::new(
+            Arc::new(luna_rpc::remote_auth::RemoteRpcService::new(
                 inner.clone(),
                 auth.clone(),
             ))
@@ -988,10 +988,10 @@ pub struct Engine {
 /// in-process engine so their production authentication paths cannot diverge.
 pub struct EngineRuntime {
     core: EngineCore,
-    host_relay: std::sync::Mutex<Option<zeron_rpc::HostRelay>>,
+    host_relay: std::sync::Mutex<Option<luna_rpc::HostRelay>>,
 }
 
-/// IPC-only lifecycle control owned by `zeron headless`. The regular
+/// IPC-only lifecycle control owned by `luna headless`. The regular
 /// [`EngineRpc`] deliberately does not expose this method, so a viewport
 /// attached to another headed process cannot shut down that process's engine.
 struct HeadlessRpc {
@@ -1151,7 +1151,7 @@ impl Engine {
         Ok(EngineInfo {
             device_id: load_or_create_device_id(&config.data_dir)?,
             workspace_scope,
-            capabilities: zeron_proto::capabilities::current(),
+            capabilities: luna_proto::capabilities::current(),
         })
     }
 
@@ -1201,7 +1201,7 @@ impl Engine {
             }
             // Dev Auth always exposes `dev_user_id` as its synthetic access
             // token, including when WorkOS was merely disabled with
-            // ZERON_WORKOS_CLIENT_ID="". Only an explicitly configured,
+            // LUNA_WORKOS_CLIENT_ID="". Only an explicitly configured,
             // non-empty bearer opts this runtime into Edge rooms and relays.
             WorkspaceScope::Development => config
                 .edge_token
@@ -1213,7 +1213,7 @@ impl Engine {
             // path returns every parked reconnect backoff redials, and while
             // the OS says there is no path the dial loops park instead of
             // burning attempts. No-op on platforms without a monitor.
-            zeron_sync::net_path::spawn_path_monitor();
+            luna_sync::net_path::spawn_path_monitor();
         }
         let device_id = load_or_create_device_id(profile.device_root())?;
         let edge = edge_enabled.then(|| {
@@ -1248,26 +1248,26 @@ impl Engine {
                 .filter_map(|chat| chat.cwd.map(std::path::PathBuf::from))
                 .collect()
         });
-        let preview_signaling = edge_enabled.then(|| zeron_preview::signaling::Config {
+        let preview_signaling = edge_enabled.then(|| luna_preview::signaling::Config {
             edge_url: config.edge_url.clone(),
             org_id: preview_org,
             tokens: Arc::new(auth.clone()),
         });
         core.previews.start(projects, preview_signaling).await;
         // LUNA has no owned, signed release feed yet. Never infer an update
-        // channel from Zeron's edge or a packaging layout: that could download
+        // channel from Luna's edge or a packaging layout: that could download
         // and apply a different product over this fork.
         let check_updates = false;
         if check_updates {
             // Release checker: polls {edge}/releases on a 6h cadence; headless
-            // installs with ZERON_AUTO_UPDATE=1 apply + restart themselves — gated
+            // installs with LUNA_AUTO_UPDATE=1 apply + restart themselves — gated
             // on quiescence so a restart never lands under a live run or open PTY.
-            let quiescent: zeron_update::QuiescentCheck = {
+            let quiescent: luna_update::QuiescentCheck = {
                 let sessions = core.sessions.clone();
                 let terminals = core.terminals.clone();
                 Arc::new(move || !sessions.any_active() && !terminals.any_open())
             };
-            let updater = zeron_update::Updater::spawn(config.edge_url.clone(), Some(quiescent));
+            let updater = luna_update::Updater::spawn(config.edge_url.clone(), Some(quiescent));
             if let Some(mut token_changes) = edge.as_ref().and_then(EdgeConfig::token_changes) {
                 let updater_for_tokens = updater.clone();
                 let wake = tokio::spawn(async move {
@@ -1283,11 +1283,11 @@ impl Engine {
         // Managed ACP adapters install in the background at boot (agents
         // whose CLI is present but whose adapter isn't yet), so a first chat
         // never waits on — or dies inside — an npm run.
-        zeron_harness::acp::prewarm_managed_adapters();
+        luna_harness::acp::prewarm_managed_adapters();
 
         let host_relay = edge.as_ref().and_then(|edge| {
             let mut link_config =
-                zeron_rpc::LinkCacheConfig::new(edge.url.clone(), Arc::new(auth.clone()));
+                luna_rpc::LinkCacheConfig::new(edge.url.clone(), Arc::new(auth.clone()));
             // Registry-dark dial gate: devices with no recent presence fail
             // fast with zero dials; presence returning un-parks them (the
             // peer-alive hook below clears any cooldown at the same moment).
@@ -1295,7 +1295,7 @@ impl Engine {
             link_config.liveness = Some(Arc::new(move |device_id: &str| {
                 workspace_for_liveness.peer_liveness(device_id)
             }));
-            let links = zeron_rpc::LinkCache::new(link_config);
+            let links = luna_rpc::LinkCache::new(link_config);
             let links_for_presence = links.clone();
             core.workspace
                 .set_peer_alive_hook(Arc::new(move |device_id: &str| {
@@ -1426,7 +1426,7 @@ impl Engine {
                 .ok_or_else(|| anyhow::anyhow!("remote authority unavailable"))?;
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
             tracing::info!(port, "authenticated remote RPC listening on loopback");
-            Some(tokio::spawn(zeron_rpc::serve_ws_listener_with_factory(
+            Some(tokio::spawn(luna_rpc::serve_ws_listener_with_factory(
                 listener, factory,
             )))
         } else {
@@ -1516,22 +1516,20 @@ async fn shutdown_signal() -> std::io::Result<()> {
 /// port, not who can reach it.
 pub async fn serve_ipc(
     port: u16,
-    service: std::sync::Arc<dyn zeron_rpc::RpcService>,
+    service: std::sync::Arc<dyn luna_rpc::RpcService>,
     data_root: &Path,
 ) -> std::io::Result<tokio::task::JoinHandle<()>> {
     let service = local_owner_ipc_service(service, data_root)?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     tracing::info!(port, "IPC server listening");
-    Ok(tokio::spawn(zeron_rpc::serve_ws_listener(
-        listener, service,
-    )))
+    Ok(tokio::spawn(luna_rpc::serve_ws_listener(listener, service)))
 }
 
 /// Block until the WorkOS session is signed in AND org-scoped. On a TTY, print the
 /// headless (paste-code) sign-in URL, read the pasted `state.code` from stdin, and
 /// run workspace onboarding (create / auto-join / numbered picker). Off a TTY this
 /// errors immediately — a daemon under systemd/launchd must load the session that
-/// `zeron login` persisted, never wait on a prompt nobody can see.
+/// `luna login` persisted, never wait on a prompt nobody can see.
 pub async fn terminal_sign_in(auth: &Auth) -> Result<(), EngineError> {
     use std::io::IsTerminal;
     let interactive = std::io::stdin().is_terminal();
@@ -1556,7 +1554,7 @@ pub async fn terminal_sign_in(auth: &Auth) -> Result<(), EngineError> {
                     )));
                 }
                 if org_reader.is_none() {
-                    // Workspace onboarding on the TTY (old zeron's
+                    // Workspace onboarding on the TTY (old luna's
                     // `backend login` flow): create if none, auto-join a
                     // single membership, numbered picker otherwise.
                     println!("Signed in as {}.", user.email);
@@ -1619,7 +1617,7 @@ async fn read_stdin_line() -> Option<String> {
     .flatten()
 }
 
-/// TTY workspace onboarding for an org-less session (ports old zeron's
+/// TTY workspace onboarding for an org-less session (ports old luna's
 /// `backend login` flow): no memberships → prompt a name and create; exactly
 /// one → auto-join; several → numbered picker. Success flips the auth state to
 /// `SignedIn`, which ends [`wait_for_sign_in`]'s wait (and aborts this task).
@@ -1690,7 +1688,7 @@ async fn run_org_onboarding(auth: Auth) {
 fn local_device_name(device_id: &str) -> String {
     select_local_device_name(
         [
-            std::env::var("ZERON_DEVICE_NAME").ok(),
+            std::env::var("LUNA_DEVICE_NAME").ok(),
             native_friendly_device_name(),
             std::env::var("HOSTNAME").ok(),
             gethostname::gethostname().into_string().ok(),

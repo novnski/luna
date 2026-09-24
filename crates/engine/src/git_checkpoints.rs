@@ -7,12 +7,12 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
-use zeron_proto::{
+use luna_proto::{
     GitCheckpoint, GitCheckpointDiff, GitCheckpointList, GitCheckpointRestorePreview,
     GitCheckpointRestoreReceipt, GitCheckpointRestoreRequest,
 };
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 
 use crate::git_actions::GitActions;
 use crate::repos::{CheckoutIdentity, Repos};

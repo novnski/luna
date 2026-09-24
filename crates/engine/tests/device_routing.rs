@@ -22,22 +22,22 @@ use tokio_tungstenite::tungstenite::handshake::server::{
     Request as WsRequest, Response as WsResponse,
 };
 
-use zeron_doc::SessionCommandPayload;
-use zeron_engine::{
+use luna_doc::SessionCommandPayload;
+use luna_engine::{
     AgentAccountsConfig, BranchHeadContext, ChangeRequestError, CheckoutChangeRequestLookup,
     CheckoutChangeRequests, CheckoutSourceContext, EngineCore, EngineProfile, HarnessRegistry,
 };
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::WorkspaceScope;
-use zeron_proto::{
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::WorkspaceScope;
+use luna_proto::{
     AgentEvent, ChangeRequestState, ChangeRequestSummary, DoneStatus, HarnessId, Model,
     ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
 };
-use zeron_rpc::remote_auth::{
+use luna_rpc::remote_auth::{
     AuthenticateRemote, CreatePairing, IssuedPairing, RedeemPairing, RemoteAuthStore,
     RemoteEnvironment, RemoteScope,
 };
-use zeron_rpc::{
+use luna_rpc::{
     DeviceFrameHeader, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig, RpcError, RpcReply,
     RpcService, StaticToken, decode_device_frame, encode_device_frame, methods,
 };
@@ -215,12 +215,12 @@ fn assemble(dir: &std::path::Path, device_id: &str) -> EngineCore {
 }
 
 async fn paired_remote_session(core: &EngineCore) -> AuthenticateRemote {
-    let local = zeron_rpc::memory_client(core.rpc_service());
+    let local = luna_rpc::memory_client(core.rpc_service());
     let pairing: IssuedPairing = local.call_as(methods::CREATE_REMOTE_PAIRING, serde_json::json!({
         "label": "synthetic routed client", "scopes": ["environment-read", "tasks-read", "files-read", "terminal-operate"],
         "pairingTtlSecs": 300, "sessionTtlSecs": 3600,
     })).await.unwrap();
-    let remote = zeron_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let remote = luna_rpc::memory_client(core.remote_rpc_service().unwrap());
     let session = remote
         .redeem_remote_pairing(RedeemPairing {
             target: pairing.target,
@@ -352,7 +352,7 @@ fn change_request_lookup(root: &std::path::Path) -> Arc<StaticChangeRequestLooku
                 "feature/status",
                 Some("origin/feature/status"),
                 Some("origin"),
-                Some("https://github.com/acme/zeron.git"),
+                Some("https://github.com/acme/luna.git"),
             ),
             default_branch: Some("main".into()),
         },
@@ -360,7 +360,7 @@ fn change_request_lookup(root: &std::path::Path) -> Arc<StaticChangeRequestLooku
             provider: "github".into(),
             number: 90,
             title: "Stream checkout pull request".into(),
-            url: "https://github.com/acme/zeron/pull/90".into(),
+            url: "https://github.com/acme/luna/pull/90".into(),
             state: ChangeRequestState::Open,
             base_ref: "main".into(),
             head_ref: "feature/status".into(),
@@ -516,7 +516,7 @@ async fn checkout_change_request_stream_matches_locally_and_through_device_routi
     let lookup = change_request_lookup(&checkout);
     core_b.change_requests =
         CheckoutChangeRequests::new(core_b.repos.clone(), "device-b", lookup.clone());
-    let local_client = zeron_rpc::memory_client(core_b.rpc_service());
+    let local_client = luna_rpc::memory_client(core_b.rpc_service());
     let rejected = match local_client
         .subscribe_checked(
             methods::WATCH_CHECKOUT_CHANGE_REQUEST,
@@ -545,7 +545,7 @@ async fn checkout_change_request_stream_matches_locally_and_through_device_routi
     link_config.probe_timeout = Duration::from_secs(5);
     attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
-    let client = zeron_rpc::memory_client(core_a.rpc_service());
+    let client = luna_rpc::memory_client(core_a.rpc_service());
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut remote = loop {
@@ -654,7 +654,7 @@ async fn unsupported_remote_change_request_watch_keeps_the_shared_device_link() 
     link_config.probe_timeout = Duration::from_secs(5);
     attach_remote_session(&mut link_config, legacy_session.clone());
     core.set_links(LinkCache::new(link_config));
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     // The host can take a moment to attach to the room. Once attached, an old
     // host rejects only the capability added by this version.
@@ -727,7 +727,7 @@ async fn target_device_id_routes_over_the_relay() {
         .write_user_message("m-b-1", "hello from B", 1_000)
         .expect("write user message");
 
-    let client = zeron_rpc::memory_client(core_a.rpc_service());
+    let client = luna_rpc::memory_client(core_a.rpc_service());
 
     // Our own id in targetDeviceId: handled locally, no forward.
     let local = client
@@ -772,7 +772,7 @@ async fn target_device_id_routes_over_the_relay() {
         .uploads
         .import_generated_image(&source, &generated_root, "chat-remote\0image")
         .unwrap();
-    let local_b = zeron_rpc::memory_client(core_b.rpc_service());
+    let local_b = luna_rpc::memory_client(core_b.rpc_service());
     let local_image = local_b
         .call(
             methods::READ_ATTACHMENT_CHUNK,
@@ -858,7 +858,7 @@ async fn target_device_id_routes_over_the_relay() {
             cwd: "/tmp".into(),
             sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: true,
-            permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_mode: luna_proto::PermissionMode::Ask,
             parent_permission_ceiling: None,
             environment_permission_ceiling: None,
             permission_policy: None,
@@ -932,7 +932,7 @@ async fn terminal_stream_proxies_over_the_relay() {
     link_config.probe_timeout = Duration::from_secs(5);
     attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
-    let client = zeron_rpc::memory_client(core_a.rpc_service());
+    let client = luna_rpc::memory_client(core_a.rpc_service());
 
     // OpenTerminal forwards to B once the relay session is up.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -1047,7 +1047,7 @@ async fn workspace_file_surface_proxies_over_the_relay() {
     link_config.probe_timeout = Duration::from_secs(5);
     attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
-    let client = zeron_rpc::memory_client(core_a.rpc_service());
+    let client = luna_rpc::memory_client(core_a.rpc_service());
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let listing = loop {
@@ -1143,7 +1143,7 @@ async fn workspace_file_surface_proxies_over_the_relay() {
 
     let large_svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><!--{}--><rect width="20" height="20" fill="red"/></svg>"#,
-        " ".repeat(zeron_proto::WORKSPACE_IMAGE_CHUNK_BYTES)
+        " ".repeat(luna_proto::WORKSPACE_IMAGE_CHUNK_BYTES)
     );
     std::fs::write(repo_b.join("remote-image.svg"), &large_svg).unwrap();
     let image_request = serde_json::json!({
@@ -1261,7 +1261,7 @@ async fn workspace_file_surface_proxies_over_the_relay() {
 async fn remote_target_without_links_fails_clearly() {
     let dirs = tempfile::tempdir().expect("tempdir");
     let core = assemble(&dirs.path().join("solo"), "device-solo");
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let err = client
         .call(
             methods::LIST_HARNESSES,
@@ -1326,8 +1326,8 @@ async fn queue_watch_and_single_consumption_route_to_the_remote_chat_host() {
     link_config.probe_timeout = Duration::from_secs(5);
     attach_remote_session(&mut link_config, remote_session.clone());
     core_a.set_links(LinkCache::new(link_config));
-    let remote_client = zeron_rpc::memory_client(core_a.rpc_service());
-    let local_client = zeron_rpc::memory_client(core_b.rpc_service());
+    let remote_client = luna_rpc::memory_client(core_a.rpc_service());
+    let local_client = luna_rpc::memory_client(core_b.rpc_service());
 
     // The opening stream frame is the authoritative whole-list snapshot a
     // remote Desktop/iOS client uses to repair or initialize its queue.

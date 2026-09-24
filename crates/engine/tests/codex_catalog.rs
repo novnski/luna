@@ -1,8 +1,8 @@
 //! Windows npm Codex must survive the production registry and ListHarnesses RPC.
 #![cfg(windows)]
 
-use zeron_engine::{EngineCore, registry::default_registry};
-use zeron_proto::HarnessId;
+use luna_engine::{EngineCore, registry::default_registry};
+use luna_proto::HarnessId;
 
 #[tokio::test]
 async fn catalog_child() {
@@ -17,9 +17,9 @@ async fn catalog_child() {
         None,
     )
     .expect("assemble isolated engine");
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let catalog = client
-        .call(zeron_rpc::methods::LIST_HARNESSES, serde_json::json!({}))
+        .call(luna_rpc::methods::LIST_HARNESSES, serde_json::json!({}))
         .await
         .unwrap();
     let codex = catalog

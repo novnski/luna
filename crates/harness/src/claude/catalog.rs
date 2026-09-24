@@ -1,4 +1,4 @@
-//! Model catalog + effort mapping for Claude Code, ported from zeron's
+//! Model catalog + effort mapping for Claude Code, ported from luna's
 //! `packages/harness/src/claude.ts` (which itself mirrors Claude Code's own
 //! picker via t3code's catalog).
 //!
@@ -11,8 +11,8 @@
 
 use std::collections::HashSet;
 
+use luna_proto::{Model, ModelOption, ModelOptionChoice, ReasoningLevel};
 use serde_json::Value;
-use zeron_proto::{Model, ModelOption, ModelOptionChoice, ReasoningLevel};
 
 /// The ultrathink directive rides every user message as a prompt prefix — that
 /// is how the mode actually works in Claude Code (a prompt convention, not an

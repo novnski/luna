@@ -201,7 +201,7 @@ build_bundle() {
   /usr/bin/file "$REFERENCE_ICNS" | /usr/bin/grep -Fq "Mac OS X icon" || fail "reference icon is not a macOS icon container"
 
   cd "$ROOT"
-  cargo build --locked -p zeron-ui --example task-organization-fixture --features appshots-fixture
+  cargo build --locked -p luna-ui --example task-organization-fixture --features appshots-fixture
 
   /bin/mkdir -p "$OUT"
   STAGE_ROOT="$(/usr/bin/mktemp -d "$OUT/.luna-l12-stage.XXXXXX")"

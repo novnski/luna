@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::{StreamExt, stream};
+use luna_proto::{HarnessId, Model};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use zeron_proto::{HarnessId, Model};
 
 use crate::agent_accounts::AgentAccounts;
 use crate::device_write::DeviceWriteHandle;
@@ -167,12 +167,12 @@ impl ModelCache {
                 .codex_home
                 .as_deref()
                 .ok_or_else(|| "Codex account has no execution home".to_string())?;
-            zeron_harness::codex::CodexHarness::new()
+            luna_harness::codex::CodexHarness::new()
                 .live_models_for_home(home, execution.codex_file_auth)
                 .await
                 .map_err(|error| error.to_string())
         } else if harness == HarnessId::ClaudeCode {
-            zeron_harness::claude::ClaudeHarness::new()
+            luna_harness::claude::ClaudeHarness::new()
                 .live_models()
                 .await
                 .map_err(|error| error.to_string())
@@ -199,18 +199,18 @@ impl ModelCache {
                 Ok(models)
             }
             Ok(_) if !refresh && harness == HarnessId::Codex => {
-                Ok(zeron_harness::codex::CodexHarness::fallback_models())
+                Ok(luna_harness::codex::CodexHarness::fallback_models())
             }
             Err(error) if !refresh && harness == HarnessId::Codex => {
                 tracing::debug!(%error, "Codex model discovery failed; using bundled fallback");
-                Ok(zeron_harness::codex::CodexHarness::fallback_models())
+                Ok(luna_harness::codex::CodexHarness::fallback_models())
             }
             Ok(_) if !refresh && harness == HarnessId::ClaudeCode => {
-                Ok(zeron_harness::claude::catalog::static_models())
+                Ok(luna_harness::claude::catalog::static_models())
             }
             Err(error) if !refresh && harness == HarnessId::ClaudeCode => {
                 tracing::debug!(%error, "Claude model discovery failed; using bundled fallback");
-                Ok(zeron_harness::claude::catalog::static_models())
+                Ok(luna_harness::claude::catalog::static_models())
             }
             Ok(_) => Err("provider returned an empty model catalog".into()),
             Err(error) => Err(error),

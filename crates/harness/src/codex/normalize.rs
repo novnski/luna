@@ -7,10 +7,10 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use serde_json::Value;
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, ComputerUseStatus, ContextOperationStatus, DoneStatus, TodoItem, ToolCall,
 };
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
@@ -1156,10 +1156,10 @@ impl ChildStream {
         if method == "thread/status/changed" {
             return match params.pointer("/status/type").and_then(Value::as_str) {
                 Some("active") => vec![AgentEvent::ChildStatus {
-                    status: zeron_proto::ChildRuntimeStatus::Active,
+                    status: luna_proto::ChildRuntimeStatus::Active,
                 }],
                 Some("idle") => vec![AgentEvent::ChildStatus {
-                    status: zeron_proto::ChildRuntimeStatus::Idle,
+                    status: luna_proto::ChildRuntimeStatus::Idle,
                 }],
                 _ => Vec::new(),
             };
@@ -1641,8 +1641,8 @@ mod tests {
     fn child_idle_and_active_are_observed_without_settling_a_turn() {
         let mut child = ChildStream::default();
         for (native, expected) in [
-            ("idle", zeron_proto::ChildRuntimeStatus::Idle),
-            ("active", zeron_proto::ChildRuntimeStatus::Active),
+            ("idle", luna_proto::ChildRuntimeStatus::Idle),
+            ("active", luna_proto::ChildRuntimeStatus::Active),
         ] {
             assert_eq!(
                 child.map(

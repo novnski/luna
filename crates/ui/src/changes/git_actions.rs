@@ -1,7 +1,7 @@
 //! Git actions card in the existing Changes surface.
 
 use super::*;
-use zeron_proto::{
+use luna_proto::{
     GitActionKind, GitActionReceipt, GitActionRequest, GitCheckpointDiff, GitCheckpointList,
     GitCheckpointRestorePreview, GitCheckpointRestoreReceipt, GitCheckpointRestoreRequest,
     GitMessageRequest, GitPrStatus, GitPrStatusRequest,
@@ -45,7 +45,7 @@ impl Changes {
                 pane.git_busy = false;
                 match result.and_then(|value| {
                     serde_json::from_value::<GitActionPreview>(value)
-                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                        .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
                 }) {
                     Ok(preview) => {
                         pane.git_selected = preview
@@ -113,7 +113,7 @@ impl Changes {
                 }
                 match result.and_then(|value| {
                     serde_json::from_value::<GitCheckpointList>(value)
-                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                        .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
                 }) {
                     Ok(list) => {
                         pane.checkpoints = Some(list);
@@ -152,7 +152,7 @@ impl Changes {
                 }
                 match result.and_then(|value| {
                     serde_json::from_value::<GitCheckpointDiff>(value)
-                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                        .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
                 }) {
                     Ok(diff) => {
                         pane.checkpoint_diff = Some(diff);
@@ -180,7 +180,7 @@ impl Changes {
             this.update(cx, |pane, cx| {
                 if pane.git_target.as_deref() != Some(&key) { return; }
                 match result.and_then(|value| serde_json::from_value::<GitCheckpointRestorePreview>(value)
-                    .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))) {
+                    .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))) {
                     Ok(preview) => { pane.checkpoint_restore = Some(preview); pane.checkpoint_notice = None; }
                     Err(error) => pane.checkpoint_notice = Some(error.to_string()),
                 }
@@ -220,7 +220,7 @@ impl Changes {
                 }
                 match result.and_then(|value| {
                     serde_json::from_value::<GitCheckpointRestoreReceipt>(value)
-                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                        .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
                 }) {
                     Ok(receipt) => {
                         pane.checkpoint_receipt = Some(format!(
@@ -278,10 +278,10 @@ impl Changes {
                 pane.git_pr_status = Some(
                     match result.and_then(|value| {
                         serde_json::from_value::<GitPrStatus>(value)
-                            .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                            .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
                     }) {
                         Ok(status) => status,
-                        Err(zeron_rpc::RpcError::UnknownMethod(_)) => GitPrStatus::Unavailable {
+                        Err(luna_rpc::RpcError::UnknownMethod(_)) => GitPrStatus::Unavailable {
                             reason: "This device does not support PR status".into(),
                         },
                         Err(_) => GitPrStatus::Unavailable {
@@ -338,7 +338,7 @@ impl Changes {
                 pane.git_busy = false;
                 match result.and_then(|value| {
                     serde_json::from_value::<GitActionReceipt>(value)
-                        .map_err(|error| zeron_rpc::RpcError::Failed(error.to_string()))
+                        .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
                 }) {
                     Ok(receipt) => {
                         pane.git_selected = receipt

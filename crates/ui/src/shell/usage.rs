@@ -7,12 +7,12 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
-use zeron_proto::{
+use luna_proto::{
     CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, USAGE_LIMIT_FRESHNESS_MS, UsageBucket,
     UsageLimitSnapshot, UsagePriceRate, UsageProvider, UsageResetState, UsageSnapshot,
     UsageSourceStatus,
 };
-use zeron_rpc::methods;
+use luna_rpc::methods;
 
 use super::{SettingsSection, Shell};
 use crate::icons::{self, icon};
@@ -153,7 +153,7 @@ fn period_detail(start_ms: i64, hourly: bool, tokens: u64, cost: Option<f64>) ->
 
 fn quota_pace(
     limit: &UsageLimitSnapshot,
-    window: &zeron_proto::UsageLimitWindow,
+    window: &luna_proto::UsageLimitWindow,
     now_ms: i64,
 ) -> Option<String> {
     if limit.availability != LimitAvailability::Ready {
@@ -259,7 +259,7 @@ fn limits_status(limit: &UsageLimitSnapshot, now_ms: i64) -> String {
 
 fn limit_window_row(
     limit: &UsageLimitSnapshot,
-    window: &zeron_proto::UsageLimitWindow,
+    window: &luna_proto::UsageLimitWindow,
     theme: &Theme,
     now_ms: i64,
     compact: bool,
@@ -891,7 +891,7 @@ impl Shell {
                         _ => failures += 1,
                     }
                 }
-                if let Some(mut merged) = zeron_proto::merge_usage_snapshots(snapshots.clone()) {
+                if let Some(mut merged) = luna_proto::merge_usage_snapshots(snapshots.clone()) {
                     if failures > 0 {
                         merged.summary.partial = true;
                         merged
@@ -1188,7 +1188,7 @@ impl Shell {
                             "No historical buckets are available for this provider and window."
                         }));
                 } else {
-                    let mut mix = zeron_proto::UsageTokens::default();
+                    let mut mix = luna_proto::UsageTokens::default();
                     for bucket in &selected {
                         mix.add(bucket.tokens);
                     }
@@ -1771,7 +1771,7 @@ mod tests {
         parse_price_override, quota_pace, reset_label,
     };
     use chrono::{FixedOffset, TimeZone};
-    use zeron_proto::{
+    use luna_proto::{
         CostQuality, LimitAvailability, UsageBucket, UsageLimitSnapshot, UsageLimitWindow,
         UsageProvider, UsageResetState, UsageTokens,
     };

@@ -1,5 +1,5 @@
 //! Cursor harness: drives Cursor's agent runtime through the PINNED
-//! `@cursor/sdk` via a thin zeron-owned Node shim (`shim.mjs`, JSONL over
+//! `@cursor/sdk` via a thin luna-owned Node shim (`shim.mjs`, JSONL over
 //! stdio) — NOT over ACP, and NOT over `cursor-agent`'s print surface.
 //!
 //! Why: Cursor's ACP surface is lossy (subagent transcripts are stripped at
@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
     RunRequest, SteeringMode, TodoItem, ToolCall,
 };
@@ -55,7 +55,7 @@ use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_ch
 /// The pinned SDK (public beta 1.0.x line; inspected against 1.0.28's
 /// typings). Bump deliberately — see the module header.
 const CURSOR_SDK_PIN: &str = "@cursor/sdk@1.0.28";
-const SHIM_NAME: &str = "zeron-cursor-shim.mjs";
+const SHIM_NAME: &str = "luna-cursor-shim.mjs";
 const SHIM_SOURCE: &str = include_str!("shim.mjs");
 
 fn cursor_cli_paths() -> Vec<PathBuf> {
@@ -214,7 +214,7 @@ impl Harness for CursorHarness {
     }
     /// "Installed" means the user's own cursor-agent CLI is present — the
     /// user-visible signal they use Cursor (the SDK itself is a managed
-    /// install zeron performs on demand).
+    /// install luna performs on demand).
     fn installed(&self) -> bool {
         self.executable.is_some()
             || crate::acp::find_on_paths("cursor-agent", cursor_cli_paths()).is_some()
@@ -297,7 +297,7 @@ impl Harness for CursorHarness {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zeron_harness::cursor", "stderr: {line}");
+                    tracing::debug!(target: "luna_harness::cursor", "stderr: {line}");
                     tail.push(&line);
                 }
             });
@@ -451,7 +451,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Str
             stdin.flush().await
         };
         if let Err(e) = write.await {
-            tracing::debug!(target: "zeron_harness::cursor", "stdin write failed (tolerated): {e}");
+            tracing::debug!(target: "luna_harness::cursor", "stdin write failed (tolerated): {e}");
             return;
         }
     }
@@ -521,7 +521,7 @@ async fn run_session(session: Session) {
                         continue;
                     }
                     let Ok(frame) = serde_json::from_str::<Value>(line) else {
-                        tracing::debug!(target: "zeron_harness::cursor", "unparseable shim frame (skipped)");
+                        tracing::debug!(target: "luna_harness::cursor", "unparseable shim frame (skipped)");
                         continue;
                     };
                     match frame.get("ev").and_then(Value::as_str).unwrap_or("") {
@@ -928,7 +928,7 @@ fn map_shim_frame(frame: &Value, interrupted: bool) -> Vec<AgentEvent> {
             session_id: None,
         }],
         other => {
-            tracing::debug!(target: "zeron_harness::cursor", "unknown shim frame (skipped): {other}");
+            tracing::debug!(target: "luna_harness::cursor", "unknown shim frame (skipped): {other}");
             Vec::new()
         }
     }

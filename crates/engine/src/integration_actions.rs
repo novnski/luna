@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use zeron_proto::{
+use luna_proto::{
     HarnessId, IntegrationActionAvailability, IntegrationHelpRoute, IntegrationInventoryItem,
     IntegrationInventoryView, IntegrationOwner,
 };
@@ -417,10 +417,10 @@ fn effective_attachment_from_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use luna_proto::{IntegrationActionFacts, IntegrationKind, IntegrationSkillScope};
     use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::Mutex;
-    use zeron_proto::{IntegrationActionFacts, IntegrationKind, IntegrationSkillScope};
 
     const ID: &str = "intg_v1_0000000000000000000000000000000000000000000000000000000000000001";
     const OTHER_ID: &str =

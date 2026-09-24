@@ -11,25 +11,25 @@
 use super::*;
 use crate::pickers::{breadcrumbs, browser_rows, completion_prefix_len, parent_path};
 use gpui::{FocusHandle, Window};
-use zeron_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing, Space};
+use luna_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing, Space};
 
 struct ActiveChatRow {
     status: ChatIndicator,
-    chat: zeron_proto::Chat,
+    chat: luna_proto::Chat,
     folder: String,
     branch: Option<String>,
-    change_request: Option<zeron_proto::ChangeRequestSummary>,
+    change_request: Option<luna_proto::ChangeRequestSummary>,
     group: Option<(String, String)>,
 }
 
 pub(super) fn compare_sidebar_chats(
     sort: SidebarSort,
-    left: &zeron_proto::Chat,
-    right: &zeron_proto::Chat,
+    left: &luna_proto::Chat,
+    right: &luna_proto::Chat,
 ) -> std::cmp::Ordering {
     match (&left.pinned_order, &right.pinned_order) {
         (Some(left_order), Some(right_order)) => {
-            return zeron_proto::compare_pin_order(left_order, right_order)
+            return luna_proto::compare_pin_order(left_order, right_order)
                 .then_with(|| left.id.cmp(&right.id));
         }
         (Some(_), None) => return std::cmp::Ordering::Less,
@@ -68,9 +68,9 @@ fn activity_sidebar_bucket(status: ChatIndicator, has_attention: bool) -> Option
 }
 
 fn activity_sidebar_chats<'a>(
-    rows: Vec<(ChatIndicator, &'a zeron_proto::Chat)>,
+    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
     attention_task_keys: &std::collections::HashSet<(String, String)>,
-) -> Vec<(ChatIndicator, &'a zeron_proto::Chat)> {
+) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
     let mut rows: Vec<_> = rows
         .into_iter()
         .filter_map(|(status, chat)| {
@@ -1302,7 +1302,7 @@ impl Shell {
     pub(super) fn sidebar_visible_order(&self, cx: &Context<Self>) -> Vec<String> {
         let filter = self.settings.space_filter.clone();
         let state = self.state.read(cx);
-        let mut chats: Vec<zeron_proto::Chat> = if self.activity.view_active {
+        let mut chats: Vec<luna_proto::Chat> = if self.activity.view_active {
             activity_sidebar_chats(
                 state.sidebar_chats(Utc::now(), None),
                 &self.activity_task_keys(),
@@ -1333,7 +1333,7 @@ impl Shell {
             .count();
         let unpinned = chats.split_off(pinned_len);
         let mut ordered: Vec<String> = chats.into_iter().map(|chat| chat.id).collect();
-        let mut groups: Vec<(Option<(String, String)>, Vec<zeron_proto::Chat>)> = Vec::new();
+        let mut groups: Vec<(Option<(String, String)>, Vec<luna_proto::Chat>)> = Vec::new();
         for chat in unpinned {
             let key = Some((chat.device_id.clone(), String::new()));
             if let Some((_, existing)) = groups.iter_mut().find(|(group, _)| group == &key) {
@@ -1609,7 +1609,7 @@ impl Shell {
         const PAGE: usize = 25;
         let now = Utc::now();
         let filter = self.settings.space_filter.clone();
-        let mut rows: Vec<zeron_proto::Chat> = {
+        let mut rows: Vec<luna_proto::Chat> = {
             let state = self.state.read(cx);
             state
                 .chats
@@ -2115,7 +2115,7 @@ impl Shell {
 
     /// The current listing's folder rows filtered by the search query
     /// (prefix matches first — `popover::filter_indices`).
-    fn add_space_filtered(&self, cx: &App) -> Vec<zeron_proto::FolderEntry> {
+    fn add_space_filtered(&self, cx: &App) -> Vec<luna_proto::FolderEntry> {
         let Some(flow) = self.add_space.as_ref() else {
             return Vec::new();
         };
@@ -3375,14 +3375,14 @@ mod tests {
         promote_local_device_group,
     };
     use crate::settings::SidebarSort;
-    use zeron_proto::ChatIndicator;
+    use luna_proto::ChatIndicator;
 
     fn group(device: &str, value: u8) -> (Option<(String, String)>, Vec<u8>) {
         (Some((device.into(), device.into())), vec![value])
     }
 
-    fn chat(id: &str) -> zeron_proto::Chat {
-        zeron_proto::Chat {
+    fn chat(id: &str) -> luna_proto::Chat {
+        luna_proto::Chat {
             id: id.into(),
             device_id: "device".into(),
             title: None,
@@ -3525,7 +3525,7 @@ mod tests {
 #[cfg(feature = "project-palette-fixture")]
 impl Shell {
     pub fn fixture_project_responses(&mut self, cx: &mut Context<Self>) {
-        if std::env::var_os("ZERON_FIXTURE_BACKGROUND").is_some() {
+        if std::env::var_os("LUNA_FIXTURE_BACKGROUND").is_some() {
             self.composer
                 .read(cx)
                 .pickers()
@@ -3587,7 +3587,7 @@ mod project_flow_tests {
                 edge_token: None,
                 org_id: None,
                 workos_client_id: None,
-                default_harness: zeron_proto::HarnessId::Mock,
+                default_harness: luna_proto::HarnessId::Mock,
             },
             cx,
         )
@@ -3697,7 +3697,7 @@ mod project_flow_tests {
                     edge_token: None,
                     org_id: None,
                     workos_client_id: None,
-                    default_harness: zeron_proto::HarnessId::Mock,
+                    default_harness: luna_proto::HarnessId::Mock,
                 },
                 cx,
             )
@@ -3809,7 +3809,7 @@ mod project_flow_tests {
                     edge_token: None,
                     org_id: None,
                     workos_client_id: None,
-                    default_harness: zeron_proto::HarnessId::Mock,
+                    default_harness: luna_proto::HarnessId::Mock,
                 },
                 cx,
             )
@@ -3895,7 +3895,7 @@ mod project_flow_tests {
                     path: "/Users/alex".into(),
                     entries: ["Desktop", "Documents", "Downloads"]
                         .into_iter()
-                        .map(|name| zeron_proto::FolderEntry {
+                        .map(|name| luna_proto::FolderEntry {
                             name: name.into(),
                             is_dir: true,
                             is_repo: false,

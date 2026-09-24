@@ -6,7 +6,7 @@ use std::{
 use gpui::{
     AnyElement, Context, ListSizingBehavior, SharedString, Task, Window, div, list, prelude::*, px,
 };
-use zeron_proto::{
+use luna_proto::{
     ListWorkspaceDirectoryRequest, SearchWorkspaceFilesRequest, WorkspaceEntryKind,
     WorkspaceFileSearchMatch,
 };

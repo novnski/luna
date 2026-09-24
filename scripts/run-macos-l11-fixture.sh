@@ -168,7 +168,7 @@ while IFS= read -r candidate_pid; do
 done < <(/usr/bin/pgrep -f "drafts-fixture" 2>/dev/null || true)
 
 cd "$ROOT"
-cargo build -p zeron-ui --example drafts-fixture --features appshots-fixture
+cargo build -p luna-ui --example drafts-fixture --features appshots-fixture
 
 /bin/mkdir -p "$OUT" "$PROFILE"
 STAGE_ROOT="$(/usr/bin/mktemp -d "$OUT/.luna-l11-stage.XXXXXX")"

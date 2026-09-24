@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use zeron_sync::write_epoch::{EpochError, WriteEpoch, WritePermit};
+use luna_sync::write_epoch::{EpochError, WriteEpoch, WritePermit};
 
 use crate::InstanceLock;
 
@@ -110,7 +110,7 @@ impl DeviceWritePermit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_sync::write_epoch::Phase;
+    use luna_sync::write_epoch::Phase;
 
     #[test]
     fn old_ticket_holds_os_lock_until_released_then_fresh_epoch_starts() {

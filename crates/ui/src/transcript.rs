@@ -39,10 +39,10 @@ use gpui::{
     TextAlign, TextRun, Window, canvas, div, img, list, point, prelude::*, px, quad, size,
 };
 
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentActivity, SubagentStatus,
 };
-use zeron_proto::{ConversationForkBoundaryKind, ToolCall};
+use luna_proto::{ConversationForkBoundaryKind, ToolCall};
 
 use crate::markdown::parser::{
     Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, parse_full,
@@ -54,7 +54,7 @@ use crate::notice::{NoticeChipIcon::Tile, notice_chip};
 use crate::state::AppState;
 use crate::syntax_cache::{DocumentHighlightKey, SyntaxHighlightCache};
 use crate::theme::Theme;
-use zeron_syntax::LanguageId as Lang;
+use luna_syntax::LanguageId as Lang;
 
 // ---------------------------------------------------------------------------
 // Constants (mugen ports)
@@ -769,7 +769,7 @@ pub enum ToolDetail {
     /// (chat2-sync A1). The full diff upgrades this to [`ToolDetail::Diff`]
     /// via the sidecar fetch.
     Stats {
-        stats: Arc<Vec<zeron_doc::ToolDiffStat>>,
+        stats: Arc<Vec<luna_doc::ToolDiffStat>>,
     },
 }
 
@@ -796,8 +796,8 @@ const DETAIL_SEPARATOR: f32 = 1.0;
 /// STATS instead of inline diff text, which win the same way.
 pub fn tool_detail(
     output: Option<&str>,
-    diff: Option<&zeron_proto::ToolDiff>,
-    diff_stats: Option<&[zeron_doc::ToolDiffStat]>,
+    diff: Option<&luna_proto::ToolDiff>,
+    diff_stats: Option<&[luna_doc::ToolDiffStat]>,
 ) -> Option<ToolDetail> {
     if let Some(diff) = diff {
         let mut file = diff_to_file(diff);
@@ -939,10 +939,10 @@ pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
     })
 }
 
-/// Reduce an inline [`zeron_proto::ToolDiff`] to the changes pane's
+/// Reduce an inline [`luna_proto::ToolDiff`] to the changes pane's
 /// [`crate::changes::FileDiff`]: hunks grouped with 3 context lines, dual
 /// 1-based line numbers, unified-diff hunk headers, and add/del counts.
-pub fn diff_to_file(diff: &zeron_proto::ToolDiff) -> crate::changes::FileDiff {
+pub fn diff_to_file(diff: &luna_proto::ToolDiff) -> crate::changes::FileDiff {
     use crate::changes::{DiffLine, FileDiff, FileStatus, Hunk, LineKind};
     let old = diff.old_text.as_deref().unwrap_or("");
     let text_diff = similar::TextDiff::from_lines(old, &diff.new_text);
@@ -1083,7 +1083,7 @@ pub struct Row {
     /// Owning entry role, retained for safe history-action eligibility.
     pub role: MessageRole,
     /// The owning message entry — hover anywhere on the entry's rows reveals
-    /// its timestamp strip (zeron chat-view.tsx `group`/`group-hover`).
+    /// its timestamp strip (luna chat-view.tsx `group`/`group-hover`).
     pub entry_id: SharedString,
     /// Epoch-ms for the 16px hover-timestamp strip UNDER this row: set on the
     /// LAST row of a completed entry (user rows always; assistant rows only
@@ -1597,13 +1597,13 @@ pub fn rows_for_entry(
     rows
 }
 
-/// `ZERON_FRAME_STATS=1` logs live-row render-cost percentiles (p50/p95 µs
+/// `LUNA_FRAME_STATS=1` logs live-row render-cost percentiles (p50/p95 µs
 /// over rolling windows of [`FRAME_STATS_WINDOW`] samples) at `warn` level —
 /// the smoothness measurement knob. Off by default; zero cost when off.
 fn frame_stats_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED
-        .get_or_init(|| std::env::var("ZERON_FRAME_STATS").is_ok_and(|v| !v.is_empty() && v != "0"))
+        .get_or_init(|| std::env::var("LUNA_FRAME_STATS").is_ok_and(|v| !v.is_empty() && v != "0"))
 }
 
 const FRAME_STATS_WINDOW: usize = 240;
@@ -1636,12 +1636,12 @@ pub(crate) fn record_view_frame(view: &'static str) -> bool {
     })
 }
 
-/// `ZERON_NO_RENDER_CACHE=1` bypasses the cross-frame flatten cache — the
+/// `LUNA_NO_RENDER_CACHE=1` bypasses the cross-frame flatten cache — the
 /// A/B knob for the frame-cost measurement above.
 fn render_cache_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DISABLED.get_or_init(|| {
-        std::env::var("ZERON_NO_RENDER_CACHE").is_ok_and(|v| !v.is_empty() && v != "0")
+        std::env::var("LUNA_NO_RENDER_CACHE").is_ok_and(|v| !v.is_empty() && v != "0")
     })
 }
 
@@ -1791,7 +1791,7 @@ pub fn diff_rows(old: &[Row], new: &[Row]) -> Option<(Range<usize>, usize)> {
 
 /// The ToolGroup summary line — "Ran 3 commands · edited 2 files".
 ///
-/// The rule lives in `zeron_proto::view` so the terminal viewport reports the
+/// The rule lives in `luna_proto::view` so the terminal viewport reports the
 /// same summary; this only adapts the row model's [`ToolItem`] to it.
 pub fn tool_group_summary(tools: &[ToolItem]) -> String {
     let pairs: Vec<(ToolCall, bool)> = tools
@@ -1805,7 +1805,7 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
     let base = if pairs.is_empty() {
         String::new()
     } else {
-        zeron_proto::view::tool_group_summary(&pairs)
+        luna_proto::view::tool_group_summary(&pairs)
     };
     // Thought chips ride the group (they are UI-synthesized, so the shared
     // view summary never sees them): name them on the collapsed line.
@@ -1912,11 +1912,11 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
 }
 
 // `single_line` and the per-kind chip label/detail are shared with the terminal
-// viewport (`zeron_proto::view`): a tool must be named identically on every
+// viewport (`luna_proto::view`): a tool must be named identically on every
 // surface, and the one-line collapse is needed for the same reason in both (a
 // literal newline breaks gpui's ellipsis logic and would be a cursor move in a
 // cell grid).
-pub use zeron_proto::view::{single_line, tool_chip_content};
+pub use luna_proto::view::{single_line, tool_chip_content};
 
 /// Analytic expanded-chips height — no measurement needed for the fold tween.
 pub fn chips_height(count: usize) -> f32 {
@@ -1974,7 +1974,7 @@ const FULL_OUTPUT_MAX_LINES: usize = 400;
 /// blobs render (near-)uncapped — fetching past the summary was the point.
 fn blob_detail(text: &str, is_diff: bool) -> Option<ToolDetail> {
     if is_diff {
-        let diff: zeron_proto::ToolDiff = serde_json::from_str(text).ok()?;
+        let diff: luna_proto::ToolDiff = serde_json::from_str(text).ok()?;
         return tool_detail(None, Some(&diff), None);
     }
     let mut lines: Vec<SharedString> = text
@@ -2076,7 +2076,7 @@ pub fn format_elapsed(secs: i64) -> String {
 
 struct HighlightEntry {
     key: DocumentHighlightKey,
-    document: Option<Weak<zeron_syntax::HighlightedDocument>>,
+    document: Option<Weak<luna_syntax::HighlightedDocument>>,
     _task: Option<Task<()>>,
 }
 
@@ -2098,7 +2098,7 @@ impl HighlightStore {
         lang: Lang,
         code: &str,
         cx: &mut Context<Transcript>,
-    ) -> Option<Arc<zeron_syntax::HighlightedDocument>> {
+    ) -> Option<Arc<luna_syntax::HighlightedDocument>> {
         let slot_key = (row_id.clone(), block_ix);
         let document_key = DocumentHighlightKey::new(lang, code);
         if let Some(entry) = self.entries.get(&slot_key)
@@ -2127,7 +2127,7 @@ impl HighlightStore {
             let document = cx
                 .background_executor()
                 .spawn(async move {
-                    zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+                    luna_syntax::highlight(luna_syntax::HighlightRequest {
                         source: &code,
                         path: None,
                         fence_tag: Some(match lang {
@@ -2705,7 +2705,7 @@ pub struct Transcript {
     /// Entrance state follows stable groups through completion so fast calls
     /// finish revealing. Replay rows have no entrance timestamps.
     tool_group_reveals: HashMap<SharedString, ToolGroupReveal>,
-    last_replay_baseline: Option<Arc<zeron_doc::TranscriptBaseline>>,
+    last_replay_baseline: Option<Arc<luna_doc::TranscriptBaseline>>,
     /// Parsed historical prefixes, used to seed text before a coalesced live
     /// suffix is painted. The wire watermark contains lengths, not text.
     historical_markdown: HashMap<SharedString, Row>,
@@ -2809,7 +2809,7 @@ pub struct Transcript {
     /// Hovered rail tick (grows + shows the preview card).
     rail_hover: Option<usize>,
     /// `(row id, entry id)` under the pointer — reveals the entry's timestamp
-    /// strip (zeron chat-view.tsx `group-hover`; the rows report hover
+    /// strip (luna chat-view.tsx `group-hover`; the rows report hover
     /// themselves). Keyed by ROW so a row→row move within one entry can't
     /// clear the reveal when the old row's leave event arrives after the new
     /// row's enter (enter/leave order across rows is not guaranteed).
@@ -4634,7 +4634,7 @@ impl Transcript {
             let reply = crate::attachments::call_with_timeout(
                 &engine,
                 cx.background_executor(),
-                zeron_rpc::methods::FETCH_TOOL_BLOB,
+                luna_rpc::methods::FETCH_TOOL_BLOB,
                 serde_json::json!({ "blobRef": ref_key.as_ref() }),
                 Duration::from_secs(20),
             )
@@ -4847,7 +4847,7 @@ impl Transcript {
     }
 
     /// Devices that may own a user message's attachment files: the chat's host
-    /// device (uploads targeted it) plus this device (zeron's
+    /// device (uploads targeted it) plus this device (luna's
     /// `uniqueIds([attachmentDeviceId, m.device_id])`).
     fn attachment_device_ids(&self, cx: &Context<Self>) -> Vec<String> {
         // `selected_chat_row` belongs to the PRIMARY transcript's chat — an
@@ -5530,7 +5530,7 @@ impl Transcript {
                             // so the overlay stays live even once the trailer's
                             // 30s pending-send bridge has lapsed.
                             let pulse = motion::pulse_wave(motion::pulse_delta(
-                                &motion::ZERON_PULSE,
+                                &motion::LUNA_PULSE,
                                 cx.entity_id(),
                                 cx,
                             ));
@@ -5574,7 +5574,7 @@ impl Transcript {
                     .opacity(
                         0.35 + 0.4
                             * motion::pulse_wave(motion::pulse_delta(
-                                &motion::ZERON_PULSE,
+                                &motion::LUNA_PULSE,
                                 cx.entity_id(),
                                 cx,
                             )),
@@ -5611,7 +5611,7 @@ impl Transcript {
                 let params = serde_json::json!({ "chatId": chat_id });
                 if let Err(err) = engine
                     .client()
-                    .call(zeron_rpc::methods::RETRY_DELIVERY, params)
+                    .call(luna_rpc::methods::RETRY_DELIVERY, params)
                     .await
                 {
                     tracing::warn!(error = %err, "delivery retry RPC failed");
@@ -5658,15 +5658,15 @@ impl Transcript {
             .clone();
         if matches!(
             recovery.status,
-            zeron_proto::RecoveryStatus::Completed
-                | zeron_proto::RecoveryStatus::Cancelled
-                | zeron_proto::RecoveryStatus::Superseded
+            luna_proto::RecoveryStatus::Completed
+                | luna_proto::RecoveryStatus::Cancelled
+                | luna_proto::RecoveryStatus::Superseded
         ) {
             return None;
         }
         let now = chrono::Utc::now().timestamp_millis();
         let headline = match recovery.status {
-            zeron_proto::RecoveryStatus::Scheduled => {
+            luna_proto::RecoveryStatus::Scheduled => {
                 let seconds = recovery
                     .retry_at_ms
                     .map(|at| at.saturating_sub(now).saturating_add(999) / 1_000)
@@ -5678,31 +5678,30 @@ impl Transcript {
                     recovery.max_attempts
                 )
             }
-            zeron_proto::RecoveryStatus::Running => "Recovering safely…".into(),
-            zeron_proto::RecoveryStatus::CheckingDelivery => "Checking delivery".into(),
-            zeron_proto::RecoveryStatus::RecoveryNeeded => "Recovery needed".into(),
-            zeron_proto::RecoveryStatus::WaitingForSignIn => {
+            luna_proto::RecoveryStatus::Running => "Recovering safely…".into(),
+            luna_proto::RecoveryStatus::CheckingDelivery => "Checking delivery".into(),
+            luna_proto::RecoveryStatus::RecoveryNeeded => "Recovery needed".into(),
+            luna_proto::RecoveryStatus::WaitingForSignIn => {
                 format!("Sign in on {}", recovery.environment_id)
             }
-            zeron_proto::RecoveryStatus::Held => "Recovery held".into(),
-            zeron_proto::RecoveryStatus::Exhausted => "Automatic retry limit reached".into(),
+            luna_proto::RecoveryStatus::Held => "Recovery held".into(),
+            luna_proto::RecoveryStatus::Exhausted => "Automatic retry limit reached".into(),
             _ => return None,
         };
         let theme = Theme::of(cx).clone();
         let can_send = recovery.status.active()
             && !matches!(
                 recovery.status,
-                zeron_proto::RecoveryStatus::Running
-                    | zeron_proto::RecoveryStatus::CheckingDelivery
+                luna_proto::RecoveryStatus::Running | luna_proto::RecoveryStatus::CheckingDelivery
             )
             && !matches!(
                 recovery.action,
-                zeron_proto::RecoveryAction::ObserveOnly
-                    | zeron_proto::RecoveryAction::FixConfiguration
+                luna_proto::RecoveryAction::ObserveOnly
+                    | luna_proto::RecoveryAction::FixConfiguration
             );
         let show_accounts = matches!(
             recovery.failure,
-            zeron_proto::RecoveryFailure::AuthenticationExpired
+            luna_proto::RecoveryFailure::AuthenticationExpired
         );
         Some(
             div()
@@ -5719,7 +5718,7 @@ impl Transcript {
                         .gap(px(Theme::SPACE_SM))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(
-                            if recovery.status == zeron_proto::RecoveryStatus::CheckingDelivery {
+                            if recovery.status == luna_proto::RecoveryStatus::CheckingDelivery {
                                 theme.warning
                             } else {
                                 theme.danger
@@ -5750,7 +5749,7 @@ impl Transcript {
                                         }),
                                     )
                                     .child(
-                                        if recovery.status == zeron_proto::RecoveryStatus::Held {
+                                        if recovery.status == luna_proto::RecoveryStatus::Held {
                                             "Continue"
                                         } else {
                                             "Send now"
@@ -5760,7 +5759,7 @@ impl Transcript {
                         })
                         .when(
                             recovery.status.active()
-                                && recovery.status != zeron_proto::RecoveryStatus::Running,
+                                && recovery.status != luna_proto::RecoveryStatus::Running,
                             |row| {
                                 row.child(
                                     div()
@@ -6225,10 +6224,10 @@ impl Transcript {
                 let eligible = matches!(
                     (history_provider, history_role),
                     (
-                        Some(zeron_proto::HarnessId::Codex),
+                        Some(luna_proto::HarnessId::Codex),
                         MessageRole::User | MessageRole::Assistant
                     ) | (
-                        Some(zeron_proto::HarnessId::Opencode),
+                        Some(luna_proto::HarnessId::Opencode),
                         MessageRole::Assistant
                     )
                 );
@@ -6262,7 +6261,7 @@ impl Transcript {
                 })
             });
             let edit = history_task_id.clone().and_then(|task_id| {
-                (history_provider == Some(zeron_proto::HarnessId::Codex)
+                (history_provider == Some(luna_proto::HarnessId::Codex)
                     && history_role == MessageRole::User)
                     .then(|| {
                         let message_id = copy_entry_id.to_string();
@@ -6465,7 +6464,7 @@ impl Transcript {
         tree: &Arc<BlockTree>,
         only: Option<usize>,
         cx: &mut Context<Self>,
-    ) -> HashMap<usize, Option<Arc<zeron_syntax::HighlightedDocument>>> {
+    ) -> HashMap<usize, Option<Arc<luna_syntax::HighlightedDocument>>> {
         let mut out = HashMap::new();
         for (ix, top) in tree.blocks.iter().enumerate() {
             if only.is_some_and(|o| o != ix) {
@@ -6474,7 +6473,7 @@ impl Transcript {
             if let Block::CodeBlock { language, code } = &top.block
                 && let Some(lang) = language
                     .as_deref()
-                    .and_then(zeron_syntax::language_for_alias)
+                    .and_then(luna_syntax::language_for_alias)
             {
                 out.insert(
                     ix,
@@ -6504,7 +6503,7 @@ impl Transcript {
         let old = match old_text {
             Some(source) => {
                 let path = file.old_path.as_deref().unwrap_or(&file.path);
-                let lang = zeron_syntax::language_for_path(path)?;
+                let lang = luna_syntax::language_for_path(path)?;
                 Some(
                     self.highlights
                         .request(cache_row.clone(), 0, lang, source, cx)?,
@@ -6514,7 +6513,7 @@ impl Transcript {
         };
         let new = match new_text {
             Some(source) => {
-                let lang = zeron_syntax::language_for_path(&file.path)?;
+                let lang = luna_syntax::language_for_path(&file.path)?;
                 Some(self.highlights.request(cache_row, 1, lang, source, cx)?)
             }
             None => None,
@@ -6807,7 +6806,7 @@ impl Transcript {
             // Quiet even when children failed: agents routinely have failed
             // probes mid-work, and a red HEADER read as "this whole step
             // broke" (user report). Failures still show on the individual
-            // chips (destructive tint, zeron tool-chip.tsx) and in the
+            // chips (destructive tint, luna tool-chip.tsx) and in the
             // summary's "· N failed" count.
             .text_color(theme.text_muted)
             .hover(|s| s.text_color(theme.text))
@@ -7215,12 +7214,12 @@ fn user_bubble_text(
 }
 
 /// The transcript ErrorChip — the shared [`notice_chip`] in its tile
-/// treatment (a port of zeron chat-view.tsx `ErrorChip`, restacked for long
+/// treatment (a port of luna chat-view.tsx `ErrorChip`, restacked for long
 /// payloads: header row with the red-washed tile and the medium "Error"
 /// label, then the human message below). Unlike the web port, the message
 /// WRAPS instead of truncating: startup-crash errors carry the agent's exit
 /// status and stderr, and a one-line ellipsis was exactly what made
-/// zeronsh/comet#95 undiagnosable from the screenshot.
+/// historical issue #95 undiagnosable from the screenshot.
 fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
     div()
         .py(px(4.0))
@@ -7297,9 +7296,9 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
         .into_any_element()
 }
 
-/// A small glyph standing in for the tool's icon (zeron uses an icon set; a
+/// A small glyph standing in for the tool's icon (luna uses an icon set; a
 /// quiet monochrome character keeps the tile without shipping SVGs).
-/// The glyph for a tool call (zeron tool-chip.tsx `toolIcon`, Solar set).
+/// The glyph for a tool call (luna tool-chip.tsx `toolIcon`, Solar set).
 fn tool_icon_path(call: &ToolCall) -> &'static str {
     match call {
         ToolCall::Exec { .. } => crate::icons::TERMINAL,
@@ -7970,7 +7969,7 @@ fn reveal_tool_row(row: AnyElement, height: f32, progress: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// BoardUI-style task tree with Zeron's tool glyph restored at each branch tip.
+/// BoardUI-style task tree with Luna's tool glyph restored at each branch tip.
 /// The previous row draws the first leg of a new arrival to its lower boundary;
 /// this row then continues down, rounds the elbow, and finally reveals the icon.
 /// One paint owns every segment in a row, avoiding alpha-darkened joints.
@@ -8551,7 +8550,7 @@ mod tests {
             });
         });
     }
-    use zeron_doc::MessagePart;
+    use luna_doc::MessagePart;
 
     fn with_tool_group_navigation(
         cx: &mut gpui::TestAppContext,
@@ -8664,14 +8663,14 @@ mod tests {
     fn tool_group_revisit_skips_batched_history_but_animates_live_arrivals(
         cx: &mut gpui::TestAppContext,
     ) {
-        use zeron_doc::transcript_delta::{TranscriptFrame, diff_transcript};
+        use luna_doc::transcript_delta::{TranscriptFrame, diff_transcript};
 
         with_tool_group_navigation(cx, |state, transcript, cx| {
             let apply_frame = |frame, replay_baseline, cx: &mut gpui::App| {
                 state.update(cx, |state, cx| {
                     state
                         .receive_transcript_update(
-                            zeron_doc::TranscriptUpdate {
+                            luna_doc::TranscriptUpdate {
                                 frame,
                                 replay_baseline,
                                 context_usage: None,
@@ -8690,7 +8689,7 @@ mod tests {
             )];
             apply_frame(
                 TranscriptFrame::reset(&cached),
-                Some(zeron_doc::TranscriptBaseline::capture(&cached)),
+                Some(luna_doc::TranscriptBaseline::capture(&cached)),
                 cx,
             );
             state.update(cx, |state, cx| state.select_chat(Some("chat-b".into()), cx));
@@ -8715,7 +8714,7 @@ mod tests {
             transcript.update(cx, |this, cx| this.sync(cx));
             apply_frame(
                 TranscriptFrame::reset(&cached),
-                Some(zeron_doc::TranscriptBaseline::capture(&cached)),
+                Some(luna_doc::TranscriptBaseline::capture(&cached)),
                 cx,
             );
             let row_id: SharedString = "tools#g0".into();
@@ -8734,11 +8733,7 @@ mod tests {
             for (previous, next) in [(&cached, &first_batch), (&first_batch, &second_batch)] {
                 let frame = diff_transcript(previous, next);
                 assert!(matches!(&frame, TranscriptFrame::Delta { .. }));
-                apply_frame(
-                    frame,
-                    Some(zeron_doc::TranscriptBaseline::capture(next)),
-                    cx,
-                );
+                apply_frame(frame, Some(luna_doc::TranscriptBaseline::capture(next)), cx);
                 let reveal = &transcript.read(cx).tool_group_reveals[&row_id];
                 assert_eq!(reveal.starts.len(), next[0].parts.len());
                 assert!(reveal.header_started_at.is_none());
@@ -8782,14 +8777,14 @@ mod tests {
                 vec![tool_part("new", "git status")],
             ));
             state.update(cx, |state, cx| {
-                let frame = zeron_doc::diff_transcript(&state.transcript, &history);
+                let frame = luna_doc::diff_transcript(&state.transcript, &history);
                 state
                     .receive_transcript_update(
-                        zeron_doc::TranscriptUpdate {
+                        luna_doc::TranscriptUpdate {
                             frame,
                             context_usage: None,
                             context_control: Default::default(),
-                            replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&history)),
+                            replay_baseline: Some(luna_doc::TranscriptBaseline::capture(&history)),
                         },
                         cx,
                     )
@@ -8797,8 +8792,8 @@ mod tests {
                 // Both updates land before the transcript observes/render them.
                 state
                     .receive_transcript_update(
-                        zeron_doc::TranscriptUpdate {
-                            frame: zeron_doc::diff_transcript(&history, &live),
+                        luna_doc::TranscriptUpdate {
+                            frame: luna_doc::diff_transcript(&history, &live),
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: None,
@@ -8830,10 +8825,10 @@ mod tests {
         with_tool_group_navigation(cx, |state, transcript, cx| {
             let apply = |entries: &[SessionMessageEntry], baseline, cx: &mut gpui::App| {
                 state.update(cx, |state, cx| {
-                    let frame = zeron_doc::diff_transcript(&state.transcript, entries);
+                    let frame = luna_doc::diff_transcript(&state.transcript, entries);
                     state
                         .receive_transcript_update(
-                            zeron_doc::TranscriptUpdate {
+                            luna_doc::TranscriptUpdate {
                                 frame,
                                 replay_baseline: baseline,
                                 context_usage: None,
@@ -8863,7 +8858,7 @@ mod tests {
             historical[0].parts.retain(|p| p.id().starts_with("old"));
             apply(
                 &entries,
-                Some(zeron_doc::TranscriptBaseline::capture(&historical)),
+                Some(luna_doc::TranscriptBaseline::capture(&historical)),
                 cx,
             );
             let reveal = &transcript.read(cx).tool_group_reveals[&row];
@@ -8875,7 +8870,7 @@ mod tests {
             entries[0].parts.push(tool_part("live-c", "pwd"));
             apply(
                 &entries,
-                Some(zeron_doc::TranscriptBaseline::capture(&historical)),
+                Some(luna_doc::TranscriptBaseline::capture(&historical)),
                 cx,
             );
             let reveal = &transcript.read(cx).tool_group_reveals[&row];
@@ -8891,8 +8886,8 @@ mod tests {
                 state.select_chat(Some("new-chat".into()), cx);
                 state
                     .receive_transcript_update(
-                        zeron_doc::TranscriptUpdate {
-                            frame: zeron_doc::TranscriptFrame::reset(&[]),
+                        luna_doc::TranscriptUpdate {
+                            frame: luna_doc::TranscriptFrame::reset(&[]),
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: Some(Default::default()),
@@ -8910,8 +8905,8 @@ mod tests {
             state.update(cx, |state, cx| {
                 state
                     .receive_transcript_update(
-                        zeron_doc::TranscriptUpdate {
-                            frame: zeron_doc::diff_transcript(&[], &live),
+                        luna_doc::TranscriptUpdate {
+                            frame: luna_doc::diff_transcript(&[], &live),
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: None,
@@ -8941,11 +8936,11 @@ mod tests {
                 ));
             }
             state.update(cx, |state, cx| {
-                let frame = zeron_doc::diff_transcript(&state.transcript, &live);
-                assert!(matches!(&frame, zeron_doc::TranscriptFrame::Reset { .. }));
+                let frame = luna_doc::diff_transcript(&state.transcript, &live);
+                assert!(matches!(&frame, luna_doc::TranscriptFrame::Reset { .. }));
                 state
                     .receive_transcript_update(
-                        zeron_doc::TranscriptUpdate {
+                        luna_doc::TranscriptUpdate {
                             frame,
                             context_usage: None,
                             context_control: Default::default(),
@@ -9072,7 +9067,7 @@ mod tests {
             (Theme::dark(), crate::theme::grey(48)),
             (Theme::light(), crate::theme::grey(230)),
         ] {
-            theme.surface_treatment = zeron_theme::SurfaceTreatment::Opaque;
+            theme.surface_treatment = luna_theme::SurfaceTreatment::Opaque;
             let badge = crate::theme::flatten(theme.ink(0.06), base);
             let icon_well = crate::theme::flatten(crate::file_icons::well_bg(&theme), badge);
             let contrast = crate::theme::contrast_ratio(icon_well, badge);
@@ -9093,9 +9088,9 @@ mod tests {
     #[test]
     fn file_badge_icon_well_uses_more_coverage_on_frost() {
         for mut theme in [Theme::dark(), Theme::light()] {
-            theme.surface_treatment = zeron_theme::SurfaceTreatment::Opaque;
+            theme.surface_treatment = luna_theme::SurfaceTreatment::Opaque;
             let opaque_alpha = crate::file_icons::well_bg(&theme).a;
-            theme.surface_treatment = zeron_theme::SurfaceTreatment::Frosted;
+            theme.surface_treatment = luna_theme::SurfaceTreatment::Frosted;
             let frosted = crate::file_icons::well_bg(&theme);
             let badge = crate::theme::flatten(theme.ink(0.06), theme.bg);
             let icon_well = crate::theme::flatten(frosted, badge);
@@ -10657,11 +10652,11 @@ mod tests {
                         state.select_chat(Some("chat".into()), cx);
                         state
                             .receive_transcript_update(
-                                zeron_doc::TranscriptUpdate {
-                                    frame: zeron_doc::TranscriptFrame::reset(&history),
+                                luna_doc::TranscriptUpdate {
+                                    frame: luna_doc::TranscriptFrame::reset(&history),
                                     context_usage: None,
                                     context_control: Default::default(),
-                                    replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
+                                    replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &history,
                                     )),
                                 },
@@ -10686,13 +10681,13 @@ mod tests {
                     this.state.update(cx, |state, cx| {
                         state
                             .receive_transcript_update(
-                                zeron_doc::TranscriptUpdate {
-                                    frame: zeron_doc::diff_transcript(&history, &next),
+                                luna_doc::TranscriptUpdate {
+                                    frame: luna_doc::diff_transcript(&history, &next),
                                     context_usage: None,
                                     context_control: Default::default(),
                                     // The RPC must retain its opening cutoff when
                                     // publishing subsequent changed-part history.
-                                    replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
+                                    replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &cutoff,
                                     )),
                                 },
@@ -10742,11 +10737,11 @@ mod tests {
                         state.select_chat(Some("chat".into()), cx);
                         state
                             .receive_transcript_update(
-                                zeron_doc::TranscriptUpdate {
-                                    frame: zeron_doc::TranscriptFrame::reset(&history),
+                                luna_doc::TranscriptUpdate {
+                                    frame: luna_doc::TranscriptFrame::reset(&history),
                                     context_usage: None,
                                     context_control: Default::default(),
-                                    replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
+                                    replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &history,
                                     )),
                                 },
@@ -10755,8 +10750,8 @@ mod tests {
                             .unwrap();
                         state
                             .receive_transcript_update(
-                                zeron_doc::TranscriptUpdate {
-                                    frame: zeron_doc::diff_transcript(&history, &live),
+                                luna_doc::TranscriptUpdate {
+                                    frame: luna_doc::diff_transcript(&history, &live),
                                     context_usage: None,
                                     context_control: Default::default(),
                                     replay_baseline: None,
@@ -10806,11 +10801,11 @@ mod tests {
                     this.state.update(cx, |state, cx| {
                         state
                             .receive_transcript_update(
-                                zeron_doc::TranscriptUpdate {
-                                    frame: zeron_doc::diff_transcript(&live, &next),
+                                luna_doc::TranscriptUpdate {
+                                    frame: luna_doc::diff_transcript(&live, &next),
                                     context_usage: None,
                                     context_control: Default::default(),
-                                    replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
+                                    replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &next_history,
                                     )),
                                 },
@@ -10844,15 +10839,15 @@ mod tests {
                         this.spring_kick = true;
                         updated.push(prompt(&format!("history-{}", updated.len())));
                         this.state.update(cx, |state, cx| {
-                            let frame = zeron_doc::diff_transcript(&state.transcript, &updated);
+                            let frame = luna_doc::diff_transcript(&state.transcript, &updated);
                             state
                                 .receive_transcript_update(
-                                    zeron_doc::TranscriptUpdate {
+                                    luna_doc::TranscriptUpdate {
                                         frame,
                                         context_usage: None,
                                         context_control: Default::default(),
                                         replay_baseline: Some(
-                                            zeron_doc::TranscriptBaseline::capture(&updated),
+                                            luna_doc::TranscriptBaseline::capture(&updated),
                                         ),
                                     },
                                     cx,
@@ -11089,11 +11084,11 @@ mod tests {
                     feed(this, vec![prompt("prompt")], cx);
                     this.rail_enabled = false;
                     this.state.update(cx, |state, _| {
-                        state.sessions.push(zeron_proto::Session {
+                        state.sessions.push(luna_proto::Session {
                             last_completed_turn: None,
                             chat_id: "chat".into(),
                             device_id: "test".into(),
-                            status: zeron_proto::SessionStatus::Working,
+                            status: luna_proto::SessionStatus::Working,
                             started_at: Some(chrono::Utc::now()),
                             updated_at: chrono::Utc::now(),
                             recovery: None,
@@ -12240,7 +12235,7 @@ mod tests {
     /// the RAW text either way, so projection never perturbs the diff key.
     #[test]
     fn user_rows_project_file_mentions_into_chips() {
-        let raw = "look at [composer.rs](zeron-file:crates/ui/src/composer.rs) please";
+        let raw = "look at [composer.rs](luna-file:crates/ui/src/composer.rs) please";
         let mut entry = assistant("u3", MessageStatus::Complete, vec![]);
         entry.role = MessageRole::User;
         entry.status = None;
@@ -12250,7 +12245,7 @@ mod tests {
             panic!("expected a user row");
         };
         assert!(
-            !text.contains("zeron-file:"),
+            !text.contains("luna-file:"),
             "raw link left visible: {text}"
         );
         assert!(text.contains("composer.rs"));
@@ -12318,7 +12313,7 @@ mod tests {
         let old = (1..=20).map(|i| format!("line {i}")).collect::<Vec<_>>();
         let mut new = old.clone();
         new[9] = "LINE 10".into();
-        let diff = zeron_proto::ToolDiff {
+        let diff = luna_proto::ToolDiff {
             path: "/w/a.rs".into(),
             old_text: Some(old.join("\n") + "\n"),
             new_text: new.join("\n") + "\n",
@@ -12355,7 +12350,7 @@ mod tests {
         assert_eq!(old_text.as_deref(), diff.old_text.as_deref());
         assert_eq!(new_text.as_deref(), Some(diff.new_text.as_str()));
         // New files carry Added status (and no old numbers).
-        let created = zeron_proto::ToolDiff {
+        let created = luna_proto::ToolDiff {
             path: "/w/new.txt".into(),
             old_text: None,
             new_text: "only\n".into(),
@@ -12563,7 +12558,7 @@ mod tests {
             task_id: Some("task-1".into()),
             thread_id: "provider-1".into(),
             turn_id: "turn-1".into(),
-            status: zeron_proto::ComputerUseStatus::Unknown,
+            status: luna_proto::ComputerUseStatus::Unknown,
             screenshot_observed: true,
         };
         let (label, detail) = tool_chip_content(&computer);
@@ -12607,11 +12602,11 @@ mod tests {
         );
         let todo = ToolCall::Todo {
             items: vec![
-                zeron_proto::TodoItem {
+                luna_proto::TodoItem {
                     text: "a".into(),
                     done: true,
                 },
-                zeron_proto::TodoItem {
+                luna_proto::TodoItem {
                     text: "b".into(),
                     done: false,
                 },
@@ -12684,21 +12679,21 @@ mod tests {
         let Some(ToolDetail::Output { lines, .. }) = call_block(&ToolCall::Mcp {
             server: "gh".into(),
             tool: "issues".into(),
-            input: Some(serde_json::json!({"repo": "zeron"})),
+            input: Some(serde_json::json!({"repo": "luna"})),
         }) else {
             panic!("expected an output block")
         };
         assert_eq!(lines[0].as_ref(), "gh · issues");
-        assert!(lines.iter().any(|l| l.contains("\"repo\": \"zeron\"")));
+        assert!(lines.iter().any(|l| l.contains("\"repo\": \"luna\"")));
 
         // Todos list one item per line with checkbox state.
         let Some(ToolDetail::Output { lines, .. }) = call_block(&ToolCall::Todo {
             items: vec![
-                zeron_proto::TodoItem {
+                luna_proto::TodoItem {
                     text: "a".into(),
                     done: true,
                 },
-                zeron_proto::TodoItem {
+                luna_proto::TodoItem {
                     text: "b".into(),
                     done: false,
                 },

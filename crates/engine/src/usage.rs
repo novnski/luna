@@ -9,15 +9,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
-use zeron_harness::codex::native::CodexQuotaRead;
-use zeron_proto::{
+use luna_harness::codex::native::CodexQuotaRead;
+use luna_proto::{
     CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, UsageBucket, UsageLimitSnapshot,
     UsagePriceRate, UsageProvider, UsageRequest, UsageSnapshot, UsageSource, UsageSourceStatus,
     UsageSummary, UsageTokens,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const CACHE_VERSION: u32 = 2;
 const MAX_FILES: usize = 10_000;
@@ -70,7 +70,7 @@ pub fn live_codex_limit(read: CodexQuotaRead) -> UsageLimitSnapshot {
                     window.limit_name.as_deref().unwrap_or(&window.limit_id)
                 )
             };
-            zeron_proto::UsageLimitWindow {
+            luna_proto::UsageLimitWindow {
                 id: format!("{}/{}", window.limit_id, window.position),
                 label,
                 used_percent: window.used_percent,
@@ -111,7 +111,7 @@ pub fn live_claude_limit(
         if !percent.is_finite() || percent < 0.0 {
             return;
         }
-        windows.push(zeron_proto::UsageLimitWindow {
+        windows.push(luna_proto::UsageLimitWindow {
             id,
             label,
             used_percent: percent.min(100.0) as f32,
@@ -1440,7 +1440,7 @@ mod tests {
             plan: Some("pro".into()),
             checked_at_ms: 500_000,
             windows: vec![
-                zeron_harness::codex::native::CodexQuotaWindow {
+                luna_harness::codex::native::CodexQuotaWindow {
                     limit_id: "codex".into(),
                     limit_name: None,
                     position: "secondary",
@@ -1448,7 +1448,7 @@ mod tests {
                     duration_minutes: Some(10_080),
                     resets_at_seconds: None,
                 },
-                zeron_harness::codex::native::CodexQuotaWindow {
+                luna_harness::codex::native::CodexQuotaWindow {
                     limit_id: "codex_other".into(),
                     limit_name: Some("Other model".into()),
                     position: "primary",
@@ -1912,7 +1912,7 @@ mod tests {
             availability: LimitAvailability::Ready,
             windows: ["session", "weekly", "monthly"]
                 .into_iter()
-                .map(|id| zeron_proto::UsageLimitWindow {
+                .map(|id| luna_proto::UsageLimitWindow {
                     id: id.into(),
                     label: "fixture label".into(),
                     used_percent: 25.0,

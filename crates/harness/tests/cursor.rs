@@ -9,8 +9,8 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
-use zeron_harness::{CancellationToken, CursorHarness, Harness, RunControls, SteerMessage};
-use zeron_proto::{AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel, ToolCall};
+use luna_harness::{CancellationToken, CursorHarness, Harness, RunControls, SteerMessage};
+use luna_proto::{AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel, ToolCall};
 
 fn fixture_path() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -40,7 +40,7 @@ fn request(prompt: &str) -> RunRequest {
         cwd: String::new(),
         sandbox: SandboxLevel::DangerFullAccess,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -191,7 +191,7 @@ async fn steer_after_done_becomes_the_next_turn() {
                         .send(SteerMessage {
                             prompt: "follow up".into(),
                             message_id: None,
-                            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+                            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                             acceptance: None,
                         })
                         .await

@@ -14,12 +14,12 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use zeron_doc::{
+use luna_doc::{
     MessageRole, MessageStatus, SessionCommandPayload, SessionCommandStatus, SessionMessageEntry,
 };
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_engine::{EngineCore, HarnessRegistry};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode,
 };
@@ -129,7 +129,7 @@ fn run_payload(message_id: &str, pending_ref: &str) -> SessionCommandPayload {
             cwd: "~".into(),
             sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: true,
-            permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_mode: luna_proto::PermissionMode::Ask,
             parent_permission_ceiling: None,
             environment_permission_ceiling: None,
             permission_policy: None,
@@ -154,10 +154,10 @@ async fn run_defers_until_attachment_bytes_land_then_executes_rewritten() {
     )
     .expect("engine core assembles");
 
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
-            zeron_rpc::methods::MUTATE,
+            luna_rpc::methods::MUTATE,
             serde_json::json!({ "op": "createChat", "chatId": CHAT, "deviceId": core.device_id }),
         )
         .await
@@ -198,7 +198,7 @@ async fn run_defers_until_attachment_bytes_land_then_executes_rewritten() {
     // The commit handler kicks the drains — no timers involved.
     client
         .call(
-            zeron_rpc::methods::UPLOAD_CHUNK,
+            luna_rpc::methods::UPLOAD_CHUNK,
             serde_json::json!({
                 "uploadId": "att-1", "seq": 0, "data": BASE64.encode(b"png-bytes"),
             }),
@@ -207,7 +207,7 @@ async fn run_defers_until_attachment_bytes_land_then_executes_rewritten() {
         .expect("upload chunk");
     client
         .call(
-            zeron_rpc::methods::UPLOAD_COMMIT,
+            luna_rpc::methods::UPLOAD_COMMIT,
             serde_json::json!({ "uploadId": "att-1", "fileName": "photo one.png" }),
         )
         .await
@@ -226,7 +226,7 @@ async fn run_defers_until_attachment_bytes_land_then_executes_rewritten() {
         .find(|e| e.role == MessageRole::User)
         .and_then(|e| {
             e.parts.iter().find_map(|p| match p {
-                zeron_doc::MessagePart::Text { text, .. } => Some(text.clone()),
+                luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
                 _ => None,
             })
         })

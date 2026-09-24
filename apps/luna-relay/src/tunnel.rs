@@ -411,9 +411,9 @@ async fn connect_guarded_local(port: u16) -> Result<Outbound> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use luna_proto::WorkspaceScope;
     use tokio::io::AsyncWriteExt;
     use tokio_tungstenite::tungstenite::protocol::Role as WsRole;
-    use zeron_proto::WorkspaceScope;
 
     fn fixture_target() -> Target {
         Target {

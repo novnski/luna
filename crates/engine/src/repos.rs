@@ -1,5 +1,5 @@
 //! Repos — this device's git repositories, branches, worktrees, and the folder
-//! browser (feature-inventory §3.5; port of zeron's `repos.ts` + `folder-lister.ts`).
+//! browser (feature-inventory §3.5; port of luna's `repos.ts` + `folder-lister.ts`).
 //!
 //! Repos are device-local (paths differ per machine), so the known set is a plain
 //! JSON list (`{data_dir}/repos.json`) — no sync. Existing repos can live anywhere
@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures::{StreamExt, stream};
 use sha2::{Digest, Sha256};
 
-use zeron_proto::{
+use luna_proto::{
     DriveEntry, FileSearchMatch, FolderEntry, FolderListing, GitHistoryCommit,
     GitHistoryComparison, GitHistoryPage, GitHistoryRef, GitHistoryRefKind, Repo, RepoRef,
     Worktree,
@@ -54,7 +54,7 @@ const ADJECTIVES: &[&str] = &[
     "sharp", "gentle", "vivid", "amber", "cobalt",
 ];
 const NOUNS: &[&str] = &[
-    "otter", "harbor", "falcon", "cedar", "meadow", "zeron", "delta", "ember", "lynx", "maple",
+    "otter", "harbor", "falcon", "cedar", "meadow", "luna", "delta", "ember", "lynx", "maple",
     "onyx", "quartz", "raven", "summit", "willow", "aspen",
 ];
 
@@ -595,7 +595,7 @@ impl Repos {
     }
 
     /// Public commit history in topological order. Only user-facing branches,
-    /// remotes, and tags seed the walk, so Zeron's internal refs never leak
+    /// remotes, and tags seed the walk, so Luna's internal refs never leak
     /// into the graph or keep otherwise-unreachable checkpoints visible.
     pub async fn history(
         &self,
@@ -1220,8 +1220,8 @@ impl Repos {
         .is_ok()
     }
 
-    /// Rename a zeron-created worktree branch after its chat's generated title
-    /// (port of zeron's `renameWorktreeBranch`). Guards:
+    /// Rename a luna-created worktree branch after its chat's generated title
+    /// (port of luna's `renameWorktreeBranch`). Guards:
     /// - respect an external checkout/rename: only act while the worktree is still
     ///   on `expected_branch` AND that branch is the original `luna/<folderName>`;
     /// - a title-slug collision gets a stable 6-hex suffix (hash of the worktree
@@ -1374,7 +1374,7 @@ impl Repos {
     /// The walk runs on a DETACHED OS thread (not the tokio blocking pool): a
     /// readdir wedged in the kernel can't be cancelled, and a poisoned blocking
     /// pool — or a runtime shutdown waiting on it — must never be possible. On
-    /// timeout the thread is simply abandoned (the zeron backend's disposable
+    /// timeout the thread is simply abandoned (the luna backend's disposable
     /// worker, minus the terminate()).
     #[doc(hidden)]
     pub async fn list_folders_with(
@@ -1455,7 +1455,7 @@ async fn disposable_worker<T: Send + 'static>(
 fn list_folders_blocking(target: &Path) -> Result<FolderListing, EngineError> {
     let read = std::fs::read_dir(target).map_err(|e| match e.kind() {
         std::io::ErrorKind::PermissionDenied => {
-            EngineError::Other("Zeron doesn't have access to this folder on the device.".into())
+            EngineError::Other("Luna doesn't have access to this folder on the device.".into())
         }
         _ => EngineError::Other(format!("could not read that folder: {e}")),
     })?;
@@ -2058,8 +2058,8 @@ fn rank_file_matches(
         .collect()
 }
 
-/// Turn a generated chat title into the semantic portion of a Zeron branch
-/// (port of zeron's `worktreeBranchFromTitle`). Zeron NFKD-normalizes accented
+/// Turn a generated chat title into the semantic portion of a Luna branch
+/// (port of luna's `worktreeBranchFromTitle`). Luna NFKD-normalizes accented
 /// letters first; native keeps it ASCII-only (generated titles are Title Case
 /// English), so non-ASCII characters collapse into the `-` separator.
 pub fn worktree_branch_from_title(title: &str) -> String {
@@ -2243,7 +2243,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::{InstanceLock, device_write::DeviceWriteOwner};
-    use zeron_sync::write_epoch::Phase;
+    use luna_sync::write_epoch::Phase;
 
     fn guarded_repos(root: &tempfile::TempDir) -> (DeviceWriteOwner, Repos) {
         let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())

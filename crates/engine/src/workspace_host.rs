@@ -28,13 +28,13 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use zeron_doc::{DeletedSpace, DocError, REGISTRY_DOC_ID, RegistryDoc, WorkspaceDoc};
-use zeron_proto::{
+use luna_doc::{DeletedSpace, DocError, REGISTRY_DOC_ID, RegistryDoc, WorkspaceDoc};
+use luna_proto::{
     Chat, ChatConfig, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, Device, Session,
     Space,
 };
-use zeron_sync::registry::{RegistryAdmission, RegistryWritePermit};
-use zeron_sync::{
+use luna_sync::registry::{RegistryAdmission, RegistryWritePermit};
+use luna_sync::{
     DocsStore, LocalExecutableChange, RegistryClient, RegistryTuning, TaskRecoveryTransition,
 };
 
@@ -102,9 +102,9 @@ pub(crate) async fn token_changed(changes: &mut Option<tokio::sync::watch::Recei
     }
 }
 
-async fn token_revoked(token: &Option<Arc<dyn zeron_rpc::TokenSource>>) -> bool {
+async fn token_revoked(token: &Option<Arc<dyn luna_rpc::TokenSource>>) -> bool {
     match token {
-        Some(token) => matches!(token.token().await, Err(zeron_rpc::TokenError::SignedOut)),
+        Some(token) => matches!(token.token().await, Err(luna_rpc::TokenError::SignedOut)),
         // Fixed test/dev URLs have no revocable credential source.
         None => false,
     }
@@ -390,7 +390,7 @@ impl WorkspaceHost {
             // Every boot restamps the running binary's version (fleet staleness
             // on the Devices page; workspace version — same for every crate).
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            capabilities: zeron_proto::capabilities::current(),
+            capabilities: luna_proto::capabilities::current(),
         })?;
 
         let state = doc.read_all()?;
@@ -473,14 +473,14 @@ impl WorkspaceHost {
     /// server through this. Production always goes through [`Self::join_room`].
     #[doc(hidden)]
     pub fn connect_registry_url(&self, url: &str) {
-        self.spawn_join(Arc::new(zeron_sync::StaticUrl(url.to_string())), None, None);
+        self.spawn_join(Arc::new(luna_sync::StaticUrl(url.to_string())), None, None);
     }
 
     fn spawn_join(
         &self,
-        url: Arc<dyn zeron_sync::UrlProvider>,
+        url: Arc<dyn luna_sync::UrlProvider>,
         mut token_changes: Option<tokio::sync::watch::Receiver<u64>>,
-        token: Option<Arc<dyn zeron_rpc::TokenSource>>,
+        token: Option<Arc<dyn luna_rpc::TokenSource>>,
     ) {
         let org_id = self.inner.config.org_id.clone();
         let reg = self.inner.reg.clone();
@@ -506,8 +506,8 @@ impl WorkspaceHost {
             let previous = self.inner.take_room_for_stop(&mut lifecycle);
             let outer_stop = join_stop.clone();
             let task = async move {
-                let mut wake = zeron_sync::wake::subscribe();
-                let mut online = zeron_sync::wake::subscribe_online();
+                let mut wake = luna_sync::wake::subscribe();
+                let mut online = luna_sync::wake::subscribe_online();
                 // `RegistryClient` only self-reconnects AFTER a first successful
                 // join; an INITIAL failure (a 500 from an overloaded DO, a token
                 // racing a refresh, an edge deploy) must not end this task and
@@ -625,7 +625,7 @@ impl WorkspaceHost {
                                     biased;
                                     _ = join_stop.cancelled() => break,
                                     event = events.recv() => match event {
-                                        Ok(zeron_sync::RegistryEvent::Connected) => {
+                                        Ok(luna_sync::RegistryEvent::Connected) => {
                                             let Some(inner) = weak.upgrade() else { return };
                                             // Re-join: restart the dial gate's
                                             // warm-up clock (presence map is empty
@@ -635,15 +635,15 @@ impl WorkspaceHost {
                                                 .store(now_ms(), std::sync::atomic::Ordering::Relaxed);
                                             inner.bump_changed();
                                         }
-                                        Ok(zeron_sync::RegistryEvent::Applied) => {
+                                        Ok(luna_sync::RegistryEvent::Applied) => {
                                             let Some(inner) = weak.upgrade() else { return };
                                             inner.bump_changed();
                                         }
-                                        Ok(zeron_sync::RegistryEvent::Presence) => {
+                                        Ok(luna_sync::RegistryEvent::Presence) => {
                                             let Some(inner) = weak.upgrade() else { return };
                                             inner.publish();
                                         }
-                                        Ok(zeron_sync::RegistryEvent::Disconnected) => {}
+                                        Ok(luna_sync::RegistryEvent::Disconnected) => {}
                                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                                     },
@@ -765,8 +765,8 @@ impl WorkspaceHost {
     /// down, relay fine: the 2026-08-18 03:45 incident shape) must never
     /// park the relay. Un-park is presence-driven: heartbeats resume → the
     /// verdict flips and the peer-alive hook clears any dial cooldown.
-    pub fn peer_liveness(&self, device_id: &str) -> zeron_rpc::PeerLiveness {
-        use zeron_rpc::PeerLiveness::{Dark, Live, Unknown};
+    pub fn peer_liveness(&self, device_id: &str) -> luna_rpc::PeerLiveness {
+        use luna_rpc::PeerLiveness::{Dark, Live, Unknown};
         if device_id == self.inner.config.device_id {
             return Live;
         }
@@ -853,15 +853,15 @@ impl WorkspaceHost {
         }
     }
 
-    /// Registry room introspection for SyncStatus / `zeron sync`.
+    /// Registry room introspection for SyncStatus / `luna sync`.
     /// `None` = no room yet (edge-less, or the initial join is still retrying).
-    pub fn sync_status(&self) -> Option<zeron_sync::RoomStatsSnapshot> {
+    pub fn sync_status(&self) -> Option<luna_sync::RoomStatsSnapshot> {
         lock(&self.inner.room).as_ref().map(|room| room.stats())
     }
 
     /// The registry room's reconnect posture (next-dial deadline + sticky
     /// last failure) for the connectivity stream. `None` = no room yet.
-    pub fn reconnect_state(&self) -> Option<zeron_sync::ReconnectState> {
+    pub fn reconnect_state(&self) -> Option<luna_sync::ReconnectState> {
         lock(&self.inner.room)
             .as_ref()
             .map(|room| room.reconnect_state())
@@ -1582,7 +1582,7 @@ impl WorkspaceHost {
                 .collect();
             actual.sort();
             if actual != expected_chat_ids {
-                return Err(zeron_doc::DocError::Schema(
+                return Err(luna_doc::DocError::Schema(
                     "project sessions changed after deletion preview".into(),
                 ));
             }
@@ -1704,7 +1704,7 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.set_chat_archived(chat_id, archived))?)
     }
 
-    /// LWW full-config replace on the chat row (zeron `SetChatConfig` — the
+    /// LWW full-config replace on the chat row (luna `SetChatConfig` — the
     /// composer's mid-session model/reasoning/options changes). Returns false
     /// when the chat doesn't exist.
     pub fn set_chat_config(&self, chat_id: &str, config: &ChatConfig) -> Result<bool, EngineError> {
@@ -1731,7 +1731,7 @@ impl WorkspaceHost {
     pub fn set_chat_source_context(
         &self,
         chat_id: &str,
-        context: &zeron_proto::ConversationSourceContext,
+        context: &luna_proto::ConversationSourceContext,
     ) -> Result<bool, EngineError> {
         Ok(self.mutate(|doc| doc.set_chat_source_context(chat_id, context))?)
     }
@@ -2264,12 +2264,12 @@ fn device_name_on_boot(existing_name: Option<&str>, detected_name: &str) -> Stri
 /// auth path to maintain, and the `?beat=1` keeps presence alive for a
 /// device that can only reach the edge over HTTPS.
 struct WsDerivedRegistryTransport {
-    url: Arc<dyn zeron_sync::UrlProvider>,
+    url: Arc<dyn luna_sync::UrlProvider>,
     client: reqwest::Client,
 }
 
 impl WsDerivedRegistryTransport {
-    fn new(url: Arc<dyn zeron_sync::UrlProvider>) -> Self {
+    fn new(url: Arc<dyn luna_sync::UrlProvider>) -> Self {
         Self {
             url,
             client: reqwest::Client::new(),
@@ -2277,17 +2277,17 @@ impl WsDerivedRegistryTransport {
     }
 
     async fn leaf_url(
-        provider: &Arc<dyn zeron_sync::UrlProvider>,
+        provider: &Arc<dyn luna_sync::UrlProvider>,
         leaf: &str,
-    ) -> Result<(reqwest::Url, Option<String>), zeron_sync::SyncError> {
+    ) -> Result<(reqwest::Url, Option<String>), luna_sync::SyncError> {
         let ws = provider.url().await?;
         let mut u = reqwest::Url::parse(&ws)
-            .map_err(|e| zeron_sync::SyncError::Protocol(format!("bad ws url: {e}")))?;
+            .map_err(|e| luna_sync::SyncError::Protocol(format!("bad ws url: {e}")))?;
         let scheme = if u.scheme() == "wss" { "https" } else { "http" };
         let _ = u.set_scheme(scheme);
         let path = u.path().to_string();
         let Some(base) = path.strip_suffix("/ws") else {
-            return Err(zeron_sync::SyncError::Protocol(
+            return Err(luna_sync::SyncError::Protocol(
                 "ws url without /ws leaf".into(),
             ));
         };
@@ -2313,11 +2313,11 @@ impl WsDerivedRegistryTransport {
     }
 }
 
-impl zeron_sync::RegistryTransport for WsDerivedRegistryTransport {
+impl luna_sync::RegistryTransport for WsDerivedRegistryTransport {
     fn fetch(
         &self,
         since: u64,
-    ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>> {
+    ) -> futures::future::BoxFuture<'static, Result<String, luna_sync::SyncError>> {
         let provider = self.url.clone();
         let client = self.client.clone();
         Box::pin(async move {
@@ -2332,23 +2332,23 @@ impl zeron_sync::RegistryTransport for WsDerivedRegistryTransport {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| zeron_sync::SyncError::WebSocket(describe_http_error(e)))?;
+                .map_err(|e| luna_sync::SyncError::WebSocket(describe_http_error(e)))?;
             if !resp.status().is_success() {
-                return Err(zeron_sync::SyncError::Protocol(format!(
+                return Err(luna_sync::SyncError::Protocol(format!(
                     "registry pull http {}",
                     resp.status()
                 )));
             }
             resp.text()
                 .await
-                .map_err(|e| zeron_sync::SyncError::WebSocket(describe_http_error(e)))
+                .map_err(|e| luna_sync::SyncError::WebSocket(describe_http_error(e)))
         })
     }
 
     fn push(
         &self,
         body: String,
-    ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>> {
+    ) -> futures::future::BoxFuture<'static, Result<String, luna_sync::SyncError>> {
         let provider = self.url.clone();
         let client = self.client.clone();
         Box::pin(async move {
@@ -2363,16 +2363,16 @@ impl zeron_sync::RegistryTransport for WsDerivedRegistryTransport {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| zeron_sync::SyncError::WebSocket(describe_http_error(e)))?;
+                .map_err(|e| luna_sync::SyncError::WebSocket(describe_http_error(e)))?;
             if !resp.status().is_success() {
-                return Err(zeron_sync::SyncError::Protocol(format!(
+                return Err(luna_sync::SyncError::Protocol(format!(
                     "registry push http {}",
                     resp.status()
                 )));
             }
             resp.text()
                 .await
-                .map_err(|e| zeron_sync::SyncError::WebSocket(describe_http_error(e)))
+                .map_err(|e| luna_sync::SyncError::WebSocket(describe_http_error(e)))
         })
     }
 }
@@ -2396,7 +2396,7 @@ mod tests {
         root: &std::path::Path,
     ) -> (
         crate::device_write::DeviceWriteOwner,
-        std::sync::Arc<zeron_sync::DocsStore>,
+        std::sync::Arc<luna_sync::DocsStore>,
         super::WorkspaceHost,
     ) {
         use super::*;
@@ -2489,8 +2489,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn admitted_mutation_drains_before_freeze_and_reopens_latest_row() {
+        use luna_sync::write_epoch::Phase;
         use std::time::Duration;
-        use zeron_sync::write_epoch::Phase;
 
         let root = tempfile::tempdir().unwrap();
         let (owner, store, host) = guarded_host(root.path());
@@ -2940,10 +2940,10 @@ mod tests {
             started: Mutex<Option<oneshot::Sender<()>>>,
             dropped: Mutex<Option<oneshot::Sender<()>>>,
         }
-        impl zeron_sync::UrlProvider for PendingUrl {
+        impl luna_sync::UrlProvider for PendingUrl {
             fn url(
                 &self,
-            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            ) -> futures::future::BoxFuture<'static, Result<String, luna_sync::SyncError>>
             {
                 let started = lock(&self.started).take();
                 let dropped = lock(&self.dropped).take();
@@ -2957,10 +2957,10 @@ mod tests {
             }
         }
         struct NeverCalledUrl;
-        impl zeron_sync::UrlProvider for NeverCalledUrl {
+        impl luna_sync::UrlProvider for NeverCalledUrl {
             fn url(
                 &self,
-            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            ) -> futures::future::BoxFuture<'static, Result<String, luna_sync::SyncError>>
             {
                 panic!("join spawned after edge revocation")
             }
@@ -3011,9 +3011,9 @@ mod tests {
         use super::*;
         use crate::InstanceLock;
         use crate::device_write::DeviceWriteOwner;
+        use luna_sync::write_epoch::EpochError;
         use std::time::Duration;
         use tokio::sync::oneshot;
-        use zeron_sync::write_epoch::EpochError;
 
         struct DropSignal(Option<oneshot::Sender<()>>);
         impl Drop for DropSignal {
@@ -3027,10 +3027,10 @@ mod tests {
             started: Mutex<Option<oneshot::Sender<()>>>,
             dropped: Mutex<Option<oneshot::Sender<()>>>,
         }
-        impl zeron_sync::UrlProvider for PendingUrl {
+        impl luna_sync::UrlProvider for PendingUrl {
             fn url(
                 &self,
-            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            ) -> futures::future::BoxFuture<'static, Result<String, luna_sync::SyncError>>
             {
                 let started = lock(&self.started).take();
                 let dropped = lock(&self.dropped).take();
@@ -3045,10 +3045,10 @@ mod tests {
         }
 
         struct NeverCalledUrl;
-        impl zeron_sync::UrlProvider for NeverCalledUrl {
+        impl luna_sync::UrlProvider for NeverCalledUrl {
             fn url(
                 &self,
-            ) -> futures::future::BoxFuture<'static, Result<String, zeron_sync::SyncError>>
+            ) -> futures::future::BoxFuture<'static, Result<String, luna_sync::SyncError>>
             {
                 panic!("guarded join spawned after edge revocation")
             }
@@ -3116,8 +3116,8 @@ mod tests {
         use crate::{
             AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, InstanceLock,
         };
-        use zeron_proto::HarnessId;
-        use zeron_sync::write_epoch::EpochError;
+        use luna_proto::HarnessId;
+        use luna_sync::write_epoch::EpochError;
 
         let root = tempfile::tempdir().unwrap();
         let engine_root = root.path().join("synthetic-engine");
@@ -3195,8 +3195,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn guarded_snapshot_ticket_drains_before_freeze_and_denies_flush_phase() {
         use super::*;
+        use luna_sync::write_epoch::Phase;
         use std::time::Duration;
-        use zeron_sync::write_epoch::Phase;
 
         let root = tempfile::tempdir().unwrap();
         let (owner, store, host) = guarded_host(root.path());
@@ -3417,11 +3417,11 @@ mod tests {
     async fn registry_http_sync_retains_dns_cause() {
         use super::*;
         use crate::http_error::test_support::FailingDns;
-        use zeron_sync::RegistryTransport;
+        use luna_sync::RegistryTransport;
 
         let dns = Arc::new(FailingDns::default());
         let transport = WsDerivedRegistryTransport {
-            url: Arc::new(zeron_sync::StaticUrl(
+            url: Arc::new(luna_sync::StaticUrl(
                 "wss://edge.invalid/registry/org/ws?token=token-secret".into(),
             )),
             client: dns.client(),

@@ -1,6 +1,6 @@
-# Zeron for iOS
+# Luna for iOS
 
-A native SwiftUI viewport onto the zeron mesh. The phone is a **peer
+A native SwiftUI viewport onto the luna mesh. The phone is a **peer
 device**: it joins the same Loro CRDT rooms as every other device (workspace
 doc + per-chat session docs over the edge's Durable Objects), renders the
 mirrors, and drives remote engines through the durable command queue. No
@@ -12,15 +12,20 @@ Requires Xcode 26+ (iOS 26 SDK — Liquid Glass APIs).
 
 ```sh
 cd apps/ios
-xcodebuild -project Zeron.xcodeproj -scheme Zeron \
+xcodebuild -project Luna.xcodeproj -scheme Luna \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
 
-Or open `Zeron.xcodeproj` in Xcode and run. Dependencies (SPM, resolved
+Or open `Luna.xcodeproj` in Xcode and run. Dependencies (SPM, resolved
 automatically): [loro-swift 1.13.x](https://github.com/loro-dev/loro-swift)
 (matches the engine's loro 1.13), [swift-markdown](https://github.com/swiftlang/swift-markdown)
 (cmark-gfm: tables/strikethrough/tasklists — the same feature set as the
 desktop's pulldown-cmark config).
+
+The app has no hosted sync endpoint by default. For a Luna-owned service,
+provide `LUNA_EDGE_URL` and `LUNA_WORKOS_CLIENT_ID` in the app bundle's
+`Info.plist`. Without both values, sign-in explains that sync is unconfigured.
+Demo mode works without either value.
 
 ## TestFlight release
 
@@ -29,14 +34,14 @@ iOS app and tests, selects the next numeric build number from App Store
 Connect, archives with automatic signing, uploads an internal-only TestFlight
 build, and waits for Apple processing to report `VALID`.
 
-The workflow uses the `AC_API_KEY_P8`, `AC_API_KEY_ID`, and
+The workflow requires an App Store Connect app registered as
+`com.novnski.luna.ios`, plus the `AC_API_KEY_P8`, `AC_API_KEY_ID`, and
 `AC_API_ISSUER_ID` repository secrets.
 
 ### Connecting
 
-- **WorkOS**: enter the edge URL, open the sign-in page on any device, paste
-  the code it shows (`/auth/exchange`), pick an org (`/auth/refresh` re-scopes
-  the token with the `org_id` claim).
+- **WorkOS**: configure the owned edge URL and client ID in the bundle, then
+  sign in (`/auth/exchange` and `/auth/refresh` use that edge).
 - **Dev**: against an `AUTH_MODE=dev` edge (e.g. `wrangler dev`), enter a user
   id + org id; the bearer is `userId@orgId`.
 - **Demo mode**: fully offline dataset with a scripted streaming reply —
@@ -65,10 +70,10 @@ project filters and the existing project flow). Run on an Xcode 26+ Mac:
 
 ```sh
 cd apps/ios
-xcodebuild -project Zeron.xcodeproj -scheme Zeron \
+xcodebuild -project Luna.xcodeproj -scheme Luna \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  -only-testing:ZeronTests/ProjectlessSessionTests \
-  -only-testing:ZeronUITests/ProjectlessSessionUITests test
+  -only-testing:LunaTests/ProjectlessSessionTests \
+  -only-testing:LunaUITests/ProjectlessSessionUITests test
 ```
 
 Demo fixtures accept `-no-projects` (empty spaces/chats), `-ios-only` (no

@@ -1,5 +1,5 @@
 /**
- * Zeron-native edge Worker (design §2, ARCHITECTURE §6): JWT auth at the
+ * Luna-native edge Worker (design §2, ARCHITECTURE §6): JWT auth at the
  * edge, then forwarding into per-session, per-workspace, and per-device
  * Durable Objects. Also serves content-addressed R2 attachments (§1.2) and
  * the absorbed WorkOS auth routes (formerly apps/server).
@@ -119,7 +119,7 @@ export default {
       return json({ ok: true, auth: env.AUTH_MODE === "dev" ? "dev" : "workos" });
     }
 
-    // ── public install surface (also routed from zeron.sh): the
+    // ── public install surface on the configured Luna worker: the
     //    `curl | sh` installer and the release artifacts it downloads ───────
     if (url.pathname === "/install.sh" && (request.method === "GET" || request.method === "HEAD")) {
       return new Response(request.method === "HEAD" ? null : installSh, {

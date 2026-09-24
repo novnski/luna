@@ -5,9 +5,7 @@ use super::model::{PageState, Presentation, allowed_navigation};
 use gpui::{Bounds, Pixels, Window};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send, sel,
-};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSView, NSWindowOrderingMode,
 };
@@ -61,7 +59,7 @@ impl BrowserData {
             return;
         };
         if url.scheme() != "http"
-            || url.port() != Some(zeron_proto::PREVIEW_PROXY_PORT)
+            || url.port() != Some(luna_proto::PREVIEW_PROXY_PORT)
             || !host.ends_with(".localhost")
         {
             return;
@@ -161,7 +159,7 @@ struct ObserverState {
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "ZeronBrowserObserver"]
+    #[name = "LunaBrowserObserver"]
     #[ivars = ObserverState]
     struct Observer;
     unsafe impl NSObjectProtocol for Observer {}
@@ -253,7 +251,7 @@ struct ClipState {
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "ZeronBrowserClipView"]
+    #[name = "LunaBrowserClipView"]
     #[ivars = ClipState]
     struct BrowserClipView;
     impl BrowserClipView {

@@ -46,7 +46,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
     RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
@@ -213,7 +213,7 @@ fn grok_spec() -> AcpAgentSpec {
         // the `agent` subcommand and starts a fresh agent even when
         // `[cli] use_leader` is set — leader mode ATTACHES `agent stdio` to a
         // shared process via ~/.grok/leader.sock, so a wedged/stale leader
-        // (the user's TUI) reads as total silent non-response in zeron.
+        // (the user's TUI) reads as total silent non-response in luna.
         args: &["--no-auto-update", "agent", "--no-leader", "stdio"],
         npm_package: Some("@xai-official/grok@1.0.4"),
         archive: None,
@@ -255,7 +255,7 @@ fn grok_spec() -> AcpAgentSpec {
         prompt_complete_extension: true,
         prompt_stall: Some(Duration::from_secs(30)),
         stall_hint: "The agent process is likely wedged — a stale shared leader \
-             process or a hung startup check; zeron launches it with --no-leader \
+             process or a hung startup check; luna launches it with --no-leader \
              and --no-auto-update to avoid both.",
         effort_in_model_id: false,
         auth_method: None,
@@ -423,7 +423,7 @@ fn pi_spec() -> AcpAgentSpec {
         cli_executable: "pi",
         cli_extra_paths: || npm_global_bins("pi"),
         install_hint: "pi-acp (searched PATH, the login shell's PATH, npm global bins, \
-             and fnm/nvm/volta/pnpm/bun install dirs; zeron installs the pinned \
+             and fnm/nvm/volta/pnpm/bun install dirs; luna installs the pinned \
              pi-acp automatically when npm is available — the pi CLI itself is \
              still required, `npm install -g --ignore-scripts \
              @earendil-works/pi-coding-agent`; set PI_ACP_EXECUTABLE to override)",
@@ -448,7 +448,7 @@ fn pi_spec() -> AcpAgentSpec {
         },
         // The adapter has no `_session/steering` extension: turn boundaries.
         steering_mode: SteeringMode::TurnBoundary,
-        // pi's thinking ladder (minimal→max; its extra "off" tier has no zeron
+        // pi's thinking ladder (minimal→max; its extra "off" tier has no luna
         // equivalent and is left to the agent default).
         reasoning_levels: &[
             ReasoningLevel::Minimal,
@@ -712,7 +712,7 @@ fn antigravity_spec() -> AcpAgentSpec {
         extra_paths: Vec::new,
         cli_executable: "agy_acp_server",
         cli_extra_paths: Vec::new,
-        install_hint: "agy_acp_server (zeron downloads Google's pinned Antigravity ACP \
+        install_hint: "agy_acp_server (luna downloads Google's pinned Antigravity ACP \
              server 1.1.1 on first use, but this platform has no published build; set \
              ANTIGRAVITY_ACP_EXECUTABLE to a server binary to override)",
         models: || {
@@ -807,12 +807,12 @@ pub fn prewarm_managed_adapters() {
         handle.spawn(async move {
             match crate::adapter_install::ensure_installed(pin, bin_name, display_name).await {
                 Ok(entry) => tracing::info!(
-                    target: "zeron_harness::adapter_install",
+                    target: "luna_harness::adapter_install",
                     adapter = %entry.display(),
                     "prewarmed {display_name} ACP adapter"
                 ),
                 Err(e) => tracing::warn!(
-                    target: "zeron_harness::adapter_install",
+                    target: "luna_harness::adapter_install",
                     "prewarm of the {display_name} ACP adapter failed: {e}"
                 ),
             }
@@ -998,7 +998,7 @@ impl AcpHarness {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 let mut announced = false;
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zeron_harness::acp", "sign-in stderr: {line}");
+                    tracing::debug!(target: "luna_harness::acp", "sign-in stderr: {line}");
                     if !announced && let Some(url) = sign_in_url(&line) {
                         announced = true;
                         on_progress(SignInProgress::OpenBrowser(url));
@@ -1168,7 +1168,7 @@ impl AcpHarness {
                             .await
                             {
                                 tracing::warn!(
-                                    target: "zeron_harness::adapter_install",
+                                    target: "luna_harness::adapter_install",
                                     "background adapter install failed: {e}"
                                 );
                             }
@@ -1197,7 +1197,7 @@ impl AcpHarness {
                         crate::archive_install::ensure_installed(pin, display_name).await
                     {
                         tracing::warn!(
-                            target: "zeron_harness::adapter_install",
+                            target: "luna_harness::adapter_install",
                             "background ACP server install failed: {e}"
                         );
                     }
@@ -1243,7 +1243,7 @@ impl AcpHarness {
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zeron_harness::acp", "stderr: {line}");
+                    tracing::debug!(target: "luna_harness::acp", "stderr: {line}");
                     tail.push(&line);
                 }
             });
@@ -1374,7 +1374,7 @@ impl AcpHarness {
     }
 }
 
-/// Map an advertised `thought_level` value id onto zeron's ladder.
+/// Map an advertised `thought_level` value id onto luna's ladder.
 fn reasoning_from_value(value: &str) -> Option<ReasoningLevel> {
     match norm_id(value).as_str() {
         "minimal" => Some(ReasoningLevel::Minimal),
@@ -1549,12 +1549,12 @@ fn models_from_session(session_response: &Value, catalog: &[Model]) -> Vec<Model
 }
 
 /// A session config option surfaced as a Traits-dropdown section. Mode is
-/// zeron's own (forced to the no-prompts choice), model rides the model rows,
+/// luna's own (forced to the no-prompts choice), model rides the model rows,
 /// and thought_level is the Reasoning ladder — everything else the agent
 /// advertises (fast mode, collaboration mode, agent persona, …) passes
 /// through. `currentValue` doubles as the default: it is the state the
 /// session opens in. Booleans render as an off/on select, mirroring the
-/// catalogs (zeron never declares the boolean config capability, so adapters
+/// catalogs (luna never declares the boolean config capability, so adapters
 /// send selects, but handle the shape defensively).
 fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
     if matches!(
@@ -1819,18 +1819,18 @@ fn initialize_params(harness: HarnessId) -> Value {
         // Devin otherwise exposes only the parent's run_subagent call. This
         // unlocks lifecycle tags plus every nested message, thought, and tool
         // update, all of which DevinTracker can route. Do not advertise the
-        // separate subagentControl extension: Zeron has no matching UI yet.
+        // separate subagentControl extension: Luna has no matching UI yet.
         capabilities["_meta"] = json!({ "cognition.ai/subagentSupport": true });
     }
     json!({
         "protocolVersion": 1,
         "clientInfo": {
-            "name": "zeron",
-            "title": "Zeron",
+            "name": "luna",
+            "title": "Luna",
             "version": env!("CARGO_PKG_VERSION"),
         },
         // Declined: agents fall back to their own fs/terminal access, which
-        // is what zeron wants — the working tree is the source of truth for
+        // is what luna wants — the working tree is the source of truth for
         // the diff pane, and commands belong to the agent's own sandbox.
         "clientCapabilities": capabilities,
     })
@@ -2279,7 +2279,7 @@ fn handle_server_request(
             Vec::new()
         }
         _ => {
-            tracing::debug!(target: "zeron_harness::acp", "unhandled server request: {method}");
+            tracing::debug!(target: "luna_harness::acp", "unhandled server request: {method}");
             client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
             Vec::new()
         }
@@ -2319,7 +2319,7 @@ fn handle_server_request_live(
     params: &Value,
     request_input: &std::sync::Arc<RequestInputFn>,
     harness: HarnessId,
-    permission_policy: &zeron_proto::PermissionPolicy,
+    permission_policy: &luna_proto::PermissionPolicy,
 ) -> Vec<AgentEvent> {
     if method != "session/request_permission" {
         return handle_server_request(client, id, method, params);
@@ -2363,12 +2363,12 @@ fn handle_server_request_live(
         },
         options: names.clone(),
         multi_select: false,
-        approval: (!user_question).then(|| zeron_proto::ApprovalRequest {
+        approval: (!user_question).then(|| luna_proto::ApprovalRequest {
             provider_request_id: id.to_string(),
             provider: harness,
             turn_id: None,
             machine_name: permission_policy.machine_name.clone(),
-            action_kind: zeron_proto::ApprovalActionKind::Tool,
+            action_kind: luna_proto::ApprovalActionKind::Tool,
             summary: summary.clone(),
             requested_scope: permission_policy.scope,
             expires_at_ms: std::time::SystemTime::now()
@@ -2798,7 +2798,7 @@ async fn run_session(session: Session) {
                 // A missing/foreign session falls back to a fresh one.
                 Err(e) => {
                     tracing::debug!(
-                        target: "zeron_harness::acp",
+                        target: "luna_harness::acp",
                         "session/load failed (starting fresh): {e}"
                     );
                     let new = new_session(
@@ -2928,7 +2928,7 @@ async fn run_session(session: Session) {
                     )));
                 }
                 tracing::debug!(
-                    target: "zeron_harness::acp",
+                    target: "luna_harness::acp",
                     "session/set_config_option {config_id}={payload} rejected (agent default runs): {e}"
                 );
             }
@@ -2977,7 +2977,7 @@ async fn run_session(session: Session) {
                             None => e.to_string(),
                         },
                     };
-                    tracing::warn!(target: "zeron_harness::acp", %error, "agent setup failed");
+                    tracing::warn!(target: "luna_harness::acp", %error, "agent setup failed");
                     let _ = event_tx
                         .send(Ok(AgentEvent::Done {
                             status: DoneStatus::Errored,
@@ -3056,8 +3056,8 @@ async fn run_session(session: Session) {
     let mut prompt_seq: u64 = 0;
     let mut current_prompt_id: Option<String> = None;
     let mut completed_prompts: VecDeque<String> = VecDeque::new();
-    // `ZERON_ACP_PROMPT_STALL_MS` overrides the spec's bound; 0 disables.
-    let prompt_stall: Option<Duration> = match std::env::var("ZERON_ACP_PROMPT_STALL_MS")
+    // `LUNA_ACP_PROMPT_STALL_MS` overrides the spec's bound; 0 disables.
+    let prompt_stall: Option<Duration> = match std::env::var("LUNA_ACP_PROMPT_STALL_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
     {
@@ -3069,7 +3069,7 @@ async fn run_session(session: Session) {
         prompt_stall.map(|d| tokio::time::Instant::now() + d);
     let mut turn: Option<BoxFuture<'static, Result<Value, HarnessError>>> = Some({
         prompt_seq += 1;
-        current_prompt_id = prompt_complete_extension.then(|| format!("zeron-p{prompt_seq}"));
+        current_prompt_id = prompt_complete_extension.then(|| format!("luna-p{prompt_seq}"));
         prompt_turn(
             client.clone(),
             session_id.clone(),
@@ -3111,7 +3111,7 @@ async fn run_session(session: Session) {
     // Silence is not a turn boundary: completed tools, text, and usage may
     // all precede a slow model request. Keep the prompt future alive until
     // its response (or an authoritative completion extension) arrives.
-    // ZERON_ACP_QUIET_SETTLE_MS is intentionally no longer honored (#296).
+    // LUNA_ACP_QUIET_SETTLE_MS is intentionally no longer honored (#296).
     let mut last_update_at = tokio::time::Instant::now();
     let mut open_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
     // PREVENTION, ahead of all the recovery above: never send a
@@ -3313,7 +3313,7 @@ async fn run_session(session: Session) {
                     last_update_at = tokio::time::Instant::now();
                     prompt_seq += 1;
                     current_prompt_id =
-                        prompt_complete_extension.then(|| format!("zeron-p{prompt_seq}"));
+                        prompt_complete_extension.then(|| format!("luna-p{prompt_seq}"));
                     prompt_stall_deadline =
                         prompt_stall.map(|d| tokio::time::Instant::now() + d);
                     turn = Some(prompt_turn(
@@ -3581,7 +3581,7 @@ async fn run_session(session: Session) {
                         }
                     ) {
                         tracing::warn!(
-                            target: "zeron_harness::acp",
+                            target: "luna_harness::acp",
                             "steering answered noRunningTurn with a prompt \
                              outstanding; arming starved-turn recovery"
                         );
@@ -3610,7 +3610,7 @@ async fn run_session(session: Session) {
                     last_update_at = tokio::time::Instant::now();
                     prompt_seq += 1;
                     current_prompt_id =
-                        prompt_complete_extension.then(|| format!("zeron-p{prompt_seq}"));
+                        prompt_complete_extension.then(|| format!("luna-p{prompt_seq}"));
                     prompt_stall_deadline =
                         prompt_stall.map(|d| tokio::time::Instant::now() + d);
                     turn = Some(prompt_turn(
@@ -3659,7 +3659,7 @@ async fn run_session(session: Session) {
                     last_update_at = tokio::time::Instant::now();
                     prompt_seq += 1;
                     current_prompt_id =
-                        prompt_complete_extension.then(|| format!("zeron-p{prompt_seq}"));
+                        prompt_complete_extension.then(|| format!("luna-p{prompt_seq}"));
                     prompt_stall_deadline =
                         prompt_stall.map(|d| tokio::time::Instant::now() + d);
                     turn = Some(prompt_turn(
@@ -3683,7 +3683,7 @@ async fn run_session(session: Session) {
             ), if starve_deadline.is_some() && turn.is_some() && !interrupted => {
                 starve_deadline = None;
                 tracing::warn!(
-                    target: "zeron_harness::acp",
+                    target: "luna_harness::acp",
                     "prompt response missing past turn-end evidence; settling \
                      the dead turn (and promoting any queued steer)"
                 );
@@ -3731,7 +3731,7 @@ async fn run_session(session: Session) {
                     last_update_at = tokio::time::Instant::now();
                     prompt_seq += 1;
                     current_prompt_id =
-                        prompt_complete_extension.then(|| format!("zeron-p{prompt_seq}"));
+                        prompt_complete_extension.then(|| format!("luna-p{prompt_seq}"));
                     prompt_stall_deadline =
                         prompt_stall.map(|d| tokio::time::Instant::now() + d);
                     turn = Some(prompt_turn(
@@ -3772,7 +3772,7 @@ async fn run_session(session: Session) {
                         // cancel it rather than prompt into the starve.
                         //
                         tracing::info!(
-                            target: "zeron_harness::acp",
+                            target: "luna_harness::acp",
                             "steer into a self-continuing session; cancelling \
                              the unowned turn before prompting"
                         );
@@ -3816,7 +3816,7 @@ async fn run_session(session: Session) {
                         last_update_at = tokio::time::Instant::now();
                         prompt_seq += 1;
                     current_prompt_id =
-                        prompt_complete_extension.then(|| format!("zeron-p{prompt_seq}"));
+                        prompt_complete_extension.then(|| format!("luna-p{prompt_seq}"));
                     prompt_stall_deadline =
                         prompt_stall.map(|d| tokio::time::Instant::now() + d);
                     turn = Some(prompt_turn(
@@ -4239,7 +4239,7 @@ mod tests {
     #[test]
     fn antigravity_unknown_named_home_fails_before_auth_selection() {
         let cwd = tempfile::tempdir().unwrap();
-        let path = PathBuf::from(format!("~zeron-missing-{}", uuid::Uuid::new_v4()));
+        let path = PathBuf::from(format!("~luna-missing-{}", uuid::Uuid::new_v4()));
         assert!(
             antigravity_paths::resolve_home(Some(&path), Some(cwd.path()), cwd.path()).is_err()
         );

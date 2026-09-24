@@ -9,18 +9,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tokio::sync::Mutex as AsyncMutex;
-use zeron_harness::codex::native::{
-    CodexNativeClient, CodexThreadObservation, NATIVE_CAPABILITIES,
-};
-use zeron_proto::{
+use luna_harness::codex::native::{CodexNativeClient, CodexThreadObservation, NATIVE_CAPABILITIES};
+use luna_proto::{
     BindingOrigin, ChatConfig, ExecutionBinding, HarnessId, ImportOwnership, LunaTaskIdentity,
     ProviderImportPreview, ProviderTaskObservation, ReconciliationRecord, ReconciliationState,
     TASK_IDENTITY_SCHEMA_VERSION, TaskIdentityView, TaskLineage, TaskOrigin, WorkspaceIdentity,
 };
-use zeron_sync::DocsStore;
+use luna_sync::DocsStore;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 use crate::workspace_host::{TaskProjectionError, WorkspaceHost};
@@ -2468,8 +2466,8 @@ mod tests {
     use super::*;
     use crate::device_write::DeviceWriteOwner;
     use crate::{InstanceLock, WorkspaceHostConfig};
+    use luna_sync::write_epoch::Phase;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use zeron_sync::write_epoch::Phase;
 
     fn guarded_fixture(
         root: &Path,

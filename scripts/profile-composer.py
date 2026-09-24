@@ -20,7 +20,7 @@ binary = out / 'profiled-luna'
 shutil.copy2(args.binary, binary)
 settings = json.loads(args.settings.read_text())
 (out / 'ui-settings.json').write_text(json.dumps(settings))
-env = os.environ | {'DISPLAY': args.display, 'WAYLAND_DISPLAY': '', 'LUNA_IPC_PORT': args.ipc_port, 'ZERON_HARNESS': 'mock', 'ZERON_WORKOS_CLIENT_ID': '', 'ZERON_EDGE_URL': 'http://127.0.0.1:1', 'LUNA_DATA_DIR': str(out), 'RUST_LOG': 'warn', 'LP_NUM_THREADS': '4'}
+env = os.environ | {'DISPLAY': args.display, 'WAYLAND_DISPLAY': '', 'LUNA_IPC_PORT': args.ipc_port, 'LUNA_HARNESS': 'mock', 'LUNA_WORKOS_CLIENT_ID': '', 'LUNA_EDGE_URL': 'http://127.0.0.1:1', 'LUNA_DATA_DIR': str(out), 'RUST_LOG': 'warn', 'LP_NUM_THREADS': '4'}
 p = subprocess.Popen([str(binary)], env=env, stdout=open(out / 'ui.log', 'w'), stderr=subprocess.STDOUT, start_new_session=True)
 hz = os.sysconf('SC_CLK_TCK')
 

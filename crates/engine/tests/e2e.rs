@@ -9,18 +9,18 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, SegmentWriter, SessionCommandEntry,
     SessionCommandPayload, SessionCommandStatus, SessionDoc, SessionMessageEntry,
 };
-use zeron_engine::{EngineCore, HarnessRegistry, RunJournal};
-use zeron_harness::mock::MockHarness;
-use zeron_harness::{Harness, HarnessError, RunControls, SteerAcceptance};
-use zeron_proto::{
+use luna_engine::{EngineCore, HarnessRegistry, RunJournal};
+use luna_harness::mock::MockHarness;
+use luna_harness::{Harness, HarnessError, RunControls, SteerAcceptance};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SessionStatus, SteeringMode, ToolCall,
 };
-use zeron_sync::DocsStore;
+use luna_sync::DocsStore;
 
 const CHAT: &str = "chat-e2e";
 const VIEWER: &str = "viewer-device";
@@ -36,7 +36,7 @@ fn run_request(prompt: &str) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -231,7 +231,7 @@ fn queue_as_viewer(doc: &SessionDoc, id: &str, payload: SessionCommandPayload) {
         doc.read_entries()
             .expect("read entries")
             .last()
-            .map(|m| zeron_doc::CommandBasedOn {
+            .map(|m| luna_doc::CommandBasedOn {
                 turn_id: Some(m.id.clone()),
                 frontier: None,
             });
@@ -651,7 +651,7 @@ async fn steer_with_no_live_run_falls_back_to_new_turn() {
     .await;
 
     // No live run anymore (mock finishes instantly): a steer command must fall back to
-    // dispatch-as-next-turn, per zeron's executor.
+    // dispatch-as-next-turn, per luna's executor.
     queue_as_viewer(
         handle.doc(),
         "cmd-steer-1",
@@ -750,9 +750,9 @@ async fn processed_commands_are_skipped_on_redelivery() {
     let entry = commands.iter().find(|c| c.id == "cmd-crashed").unwrap();
     let is_processed = |id: &str| store.is_processed(id).unwrap_or(false);
     let never_past = |_: &str| false;
-    let verdict = zeron_doc::evaluate_command(
+    let verdict = luna_doc::evaluate_command(
         entry,
-        &zeron_doc::EvaluationContext {
+        &luna_doc::EvaluationContext {
             is_processed: &is_processed,
             now_ms: chrono::Utc::now().timestamp_millis(),
             entries: &commands,
@@ -760,7 +760,7 @@ async fn processed_commands_are_skipped_on_redelivery() {
             turn_is_past: &never_past,
         },
     );
-    assert_eq!(verdict, zeron_doc::CommandDisposition::Skip);
+    assert_eq!(verdict, luna_doc::CommandDisposition::Skip);
 }
 
 /// The v0.2.12 field report: a send whose command was consumed by the ledger
@@ -936,17 +936,17 @@ async fn rpc_surface_over_in_memory_transport() {
             script: mock_script(),
         }),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     // ListHarnesses + ListModels.
     let harnesses = client
-        .call(zeron_rpc::methods::LIST_HARNESSES, serde_json::Value::Null)
+        .call(luna_rpc::methods::LIST_HARNESSES, serde_json::Value::Null)
         .await
         .unwrap();
     assert_eq!(harnesses[0]["id"], "mock");
     let models = client
         .call(
-            zeron_rpc::methods::LIST_MODELS,
+            luna_rpc::methods::LIST_MODELS,
             serde_json::json!({"harness": "mock"}),
         )
         .await
@@ -955,7 +955,7 @@ async fn rpc_surface_over_in_memory_transport() {
 
     // WatchSessions + WatchDocMessages streams.
     let mut sessions_stream = client
-        .subscribe(zeron_rpc::methods::WATCH_SESSIONS, serde_json::Value::Null)
+        .subscribe(luna_rpc::methods::WATCH_SESSIONS, serde_json::Value::Null)
         .await
         .unwrap();
     let first_sessions = tokio::time::timeout(Duration::from_secs(5), sessions_stream.recv())
@@ -966,7 +966,7 @@ async fn rpc_surface_over_in_memory_transport() {
 
     let mut messages_stream = client
         .subscribe(
-            zeron_rpc::methods::WATCH_DOC_MESSAGES,
+            luna_rpc::methods::WATCH_DOC_MESSAGES,
             serde_json::json!({"chatId": CHAT}),
         )
         .await
@@ -989,7 +989,7 @@ async fn rpc_surface_over_in_memory_transport() {
     .unwrap();
     let queued = client
         .call(
-            zeron_rpc::methods::QUEUE_COMMAND,
+            luna_rpc::methods::QUEUE_COMMAND,
             serde_json::json!({"chatId": CHAT, "command": command}),
         )
         .await
@@ -1006,8 +1006,8 @@ async fn rpc_surface_over_in_memory_transport() {
             .await
             .expect("doc messages before timeout")
             .expect("stream alive");
-        let frame: zeron_doc::TranscriptFrame = serde_json::from_value(item).unwrap();
-        zeron_doc::apply_transcript_frame(&mut materialized, frame).unwrap();
+        let frame: luna_doc::TranscriptFrame = serde_json::from_value(item).unwrap();
+        luna_doc::apply_transcript_frame(&mut materialized, frame).unwrap();
         if materialized.len() == 2 && materialized[1].status == Some(MessageStatus::Complete) {
             break materialized;
         }
@@ -1098,11 +1098,11 @@ async fn model_catalog_cache_survives_refresh_failure_and_engine_reopen() {
         })
     };
     let core = assemble(root.path(), provider());
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     let list = |refresh: bool| serde_json::json!({"harness": "mock", "refresh": refresh});
 
     let first = client
-        .call(zeron_rpc::methods::LIST_MODELS, list(false))
+        .call(luna_rpc::methods::LIST_MODELS, list(false))
         .await
         .unwrap();
     assert_eq!(first[0]["id"], "first");
@@ -1116,27 +1116,27 @@ async fn model_catalog_cache_survives_refresh_failure_and_engine_reopen() {
 
     *answer.lock().unwrap() = Ok(vec![model("second")]);
     let cached = client
-        .call(zeron_rpc::methods::LIST_MODELS, list(false))
+        .call(luna_rpc::methods::LIST_MODELS, list(false))
         .await
         .unwrap();
     assert_eq!(cached[0]["id"], "first");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     let refreshed = client
-        .call(zeron_rpc::methods::LIST_MODELS, list(true))
+        .call(luna_rpc::methods::LIST_MODELS, list(true))
         .await
         .unwrap();
     assert_eq!(refreshed[0]["id"], "second");
     *answer.lock().unwrap() = Err("offline".into());
     assert!(
         client
-            .call(zeron_rpc::methods::LIST_MODELS, list(true))
+            .call(luna_rpc::methods::LIST_MODELS, list(true))
             .await
             .is_err()
     );
     assert_eq!(
         client
-            .call(zeron_rpc::methods::LIST_MODELS, list(false))
+            .call(luna_rpc::methods::LIST_MODELS, list(false))
             .await
             .unwrap()[0]["id"],
         "second"
@@ -1145,10 +1145,10 @@ async fn model_catalog_cache_survives_refresh_failure_and_engine_reopen() {
     drop(client);
     drop(core);
     let reopened = assemble(root.path(), provider());
-    let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
+    let reopened_client = luna_rpc::memory_client(reopened.rpc_service());
     assert_eq!(
         reopened_client
-            .call(zeron_rpc::methods::LIST_MODELS, list(false))
+            .call(luna_rpc::methods::LIST_MODELS, list(false))
             .await
             .unwrap()[0]["id"],
         "second"
@@ -1186,7 +1186,7 @@ async fn respond_input_resolves_pending_question() {
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, HarnessError>>(16);
             tokio::spawn(async move {
-                let answers = (controls.request_input)(vec![zeron_proto::UserInputQuestion {
+                let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
                     id: "q1".into(),
                     header: "Pick".into(),
                     question: "Which one?".into(),
@@ -1268,7 +1268,7 @@ async fn respond_input_resolves_pending_question() {
         "cmd-answer-1",
         SessionCommandPayload::RespondInput {
             request_id,
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "q1".into(),
                 labels: vec!["b".into()],
             }],
@@ -1336,20 +1336,20 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
             let (tx, rx) = tokio::sync::mpsc::channel(16);
             tokio::spawn(async move {
-                let answers = (controls.request_input)(vec![zeron_proto::UserInputQuestion {
+                let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
                     id: "approval-question".into(),
                     header: "Approve command".into(),
                     question: "Allow echo safe?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
-                    approval: Some(zeron_proto::ApprovalRequest {
+                    approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-approval".into(),
                         provider: HarnessId::Mock,
                         turn_id: None,
                         machine_name: "test-machine".into(),
-                        action_kind: zeron_proto::ApprovalActionKind::Command,
+                        action_kind: luna_proto::ApprovalActionKind::Command,
                         summary: "echo safe".into(),
-                        requested_scope: zeron_proto::PermissionScope::Workspace,
+                        requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
                     }),
@@ -1430,7 +1430,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
         "cmd-approval-bypass",
         SessionCommandPayload::RespondInput {
             request_id: request_id.clone(),
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "approval-question".into(),
                 labels: vec!["Allow once".into()],
             }],
@@ -1472,7 +1472,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
         "cmd-approval-right",
         SessionCommandPayload::RespondApproval {
             request_id,
-            decision: zeron_proto::ApprovalDecision::AllowOnce,
+            decision: luna_proto::ApprovalDecision::AllowOnce,
         },
     );
     wait_for(
@@ -1524,7 +1524,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
             parts: vec![MessagePart::Input {
                 id: "ordinary-part".into(),
                 request_id: "ordinary-request".into(),
-                questions: vec![zeron_proto::UserInputQuestion {
+                questions: vec![luna_proto::UserInputQuestion {
                     id: "ordinary-question".into(),
                     header: "Pick".into(),
                     question: "Which one?".into(),
@@ -1545,7 +1545,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
         "cmd-recovered-ordinary",
         SessionCommandPayload::RespondInput {
             request_id: "ordinary-request".into(),
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "ordinary-question".into(),
                 labels: vec!["b".into()],
             }],
@@ -1580,20 +1580,20 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
             parts: vec![MessagePart::Input {
                 id: "approval-part".into(),
                 request_id: "approval-request".into(),
-                questions: vec![zeron_proto::UserInputQuestion {
+                questions: vec![luna_proto::UserInputQuestion {
                     id: "approval-question".into(),
                     header: "Approval".into(),
                     question: "Allow?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
-                    approval: Some(zeron_proto::ApprovalRequest {
+                    approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-request".into(),
                         provider: HarnessId::Mock,
                         turn_id: None,
                         machine_name: "test-machine".into(),
-                        action_kind: zeron_proto::ApprovalActionKind::Command,
+                        action_kind: luna_proto::ApprovalActionKind::Command,
                         summary: "echo safe".into(),
-                        requested_scope: zeron_proto::PermissionScope::Workspace,
+                        requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
                     }),
@@ -1611,7 +1611,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
         "cmd-recovered-bypass",
         SessionCommandPayload::RespondInput {
             request_id: "approval-request".into(),
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "approval-question".into(),
                 labels: vec!["Allow once".into()],
             }],
@@ -1650,7 +1650,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
         "cmd-recovered-deny",
         SessionCommandPayload::RespondApproval {
             request_id: "approval-request".into(),
-            decision: zeron_proto::ApprovalDecision::AllowOnce,
+            decision: luna_proto::ApprovalDecision::AllowOnce,
         },
     );
     wait_for(
@@ -1741,13 +1741,13 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
     for (case, initial, requested) in [
         (
             "restrict",
-            zeron_proto::PermissionMode::Full,
-            zeron_proto::PermissionMode::Ask,
+            luna_proto::PermissionMode::Full,
+            luna_proto::PermissionMode::Ask,
         ),
         (
             "escalate",
-            zeron_proto::PermissionMode::Ask,
-            zeron_proto::PermissionMode::Full,
+            luna_proto::PermissionMode::Ask,
+            luna_proto::PermissionMode::Full,
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -1767,13 +1767,13 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
                 CHAT,
                 None,
                 Some(&core.device_id),
-                Some(zeron_proto::ChatConfig {
+                Some(luna_proto::ChatConfig {
                     harness: HarnessId::Mock,
                     provider_account_id: None,
                     model: None,
                     reasoning: None,
                     model_options: Default::default(),
-                    sandbox: if initial == zeron_proto::PermissionMode::Full {
+                    sandbox: if initial == luna_proto::PermissionMode::Full {
                         SandboxLevel::DangerFullAccess
                     } else {
                         SandboxLevel::WorkspaceWrite
@@ -1788,7 +1788,7 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
             )
             .unwrap();
         core.workspace.rename_chat(CHAT, "Pre-titled").unwrap();
-        let client = zeron_rpc::memory_client(core.rpc_service());
+        let client = luna_rpc::memory_client(core.rpc_service());
 
         let mut first = run_request(&format!("{case}-first"));
         first.permission_mode = initial;
@@ -1814,7 +1814,7 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
 
         client
             .call(
-                zeron_rpc::methods::MUTATE,
+                luna_rpc::methods::MUTATE,
                 serde_json::json!({
                     "op": "setThreadPermissionMode",
                     "chatId": CHAT,
@@ -1906,7 +1906,7 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
         // may publish immediately: no provider is left enforcing the old mode.
         client
             .call(
-                zeron_rpc::methods::MUTATE,
+                luna_rpc::methods::MUTATE,
                 serde_json::json!({
                     "op": "setThreadPermissionMode",
                     "chatId": CHAT,
@@ -1937,7 +1937,7 @@ async fn unsupported_auto_never_runs_as_hidden_ask() {
     );
     let mut request = run_request("must not run");
     request.harness = Some(HarnessId::Opencode);
-    request.permission_mode = zeron_proto::PermissionMode::Auto;
+    request.permission_mode = luna_proto::PermissionMode::Auto;
     let error = core
         .sessions
         .dispatch(CHAT, HarnessId::Opencode, request, None)
@@ -1969,7 +1969,7 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
                 },
                 AgentEvent::AsyncQuestions {
                     message_id: "call-1".into(),
-                    questions: vec![zeron_proto::AsyncUserInputQuestion {
+                    questions: vec![luna_proto::AsyncUserInputQuestion {
                         title: "Which option?".into(),
                         options: Some(vec!["A".into(), "B".into()]),
                     }],
@@ -2055,7 +2055,7 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
             role: MessageRole::Assistant,
             parts: vec![MessagePart::AsyncQuestion {
                 id: "aq-call-2".into(),
-                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Choose a later option".into(),
                     options: Some(vec!["A".into(), "B".into()]),
                 }],
@@ -2072,7 +2072,7 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
         "answer-call-2",
         SessionCommandPayload::RespondAsyncQuestion {
             message_id: "aq-call-2".into(),
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "0".into(),
                 labels: vec!["B".into()],
             }],
@@ -2101,7 +2101,7 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
         "duplicate-answer-call-2",
         SessionCommandPayload::RespondAsyncQuestion {
             message_id: "aq-call-2".into(),
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "0".into(),
                 labels: vec!["B".into()],
             }],
@@ -2166,7 +2166,7 @@ async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
                 let _ = tx
                     .send(Ok(AgentEvent::AsyncQuestions {
                         message_id: "boundary-call".into(),
-                        questions: vec![zeron_proto::AsyncUserInputQuestion {
+                        questions: vec![luna_proto::AsyncUserInputQuestion {
                             title: "Which option?".into(),
                             options: Some(vec!["A".into(), "B".into()]),
                         }],
@@ -2255,7 +2255,7 @@ async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
         "boundary-answer",
         SessionCommandPayload::RespondAsyncQuestion {
             message_id: "aq-boundary-call".into(),
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "0".into(),
                 labels: vec!["B".into()],
             }],
@@ -2328,7 +2328,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, HarnessError>>(16);
             tokio::spawn(async move {
-                let answers = (controls.request_input)(vec![zeron_proto::UserInputQuestion {
+                let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
                     id: "q1".into(),
                     header: "Pick".into(),
                     question: "Which one?".into(),
@@ -2399,7 +2399,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
         "cmd-answer-bogus",
         SessionCommandPayload::RespondInput {
             request_id: "bogus-id".into(),
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "q1".into(),
                 labels: vec!["a".into()],
             }],
@@ -2446,7 +2446,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
         "cmd-answer-right",
         SessionCommandPayload::RespondInput {
             request_id,
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "q1".into(),
                 labels: vec!["b".into()],
             }],
@@ -2520,7 +2520,7 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
                     // Blocks on the question; an interrupt fails the resolver
                     // (empty answers) and cancels the token — like a real CLI
                     // being torn down, the stream then ends WITHOUT a Done.
-                    let _ = (controls.request_input)(vec![zeron_proto::UserInputQuestion {
+                    let _ = (controls.request_input)(vec![luna_proto::UserInputQuestion {
                         id: "q1".into(),
                         header: "Pick".into(),
                         question: "Which one?".into(),
@@ -2668,7 +2668,7 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentEvent, HarnessError>>(16);
             tokio::spawn(async move {
-                let question = zeron_proto::UserInputQuestion {
+                let question = luna_proto::UserInputQuestion {
                     id: "q1".into(),
                     header: "Pick".into(),
                     question: "Which one?".into(),
@@ -2776,7 +2776,7 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
         "cmd-answer-twin",
         SessionCommandPayload::RespondInput {
             request_id,
-            answers: vec![zeron_proto::UserInputAnswer {
+            answers: vec![luna_proto::UserInputAnswer {
                 question_id: "q1".into(),
                 labels: vec!["a".into()],
             }],
@@ -2874,7 +2874,7 @@ async fn attachment_upload_then_run_threads_refs_and_paths() {
             seen: seen.clone(),
         }),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     // Chunked upload exactly as the composer sends it: base64 split across
     // positional UploadChunk slots, then UploadCommit → the durable path.
@@ -2884,7 +2884,7 @@ async fn attachment_upload_then_run_threads_refs_and_paths() {
     for (seq, data) in [(0, first), (1, second)] {
         client
             .call(
-                zeron_rpc::methods::UPLOAD_CHUNK,
+                luna_rpc::methods::UPLOAD_CHUNK,
                 serde_json::json!({ "uploadId": "e2e-att", "seq": seq, "data": data }),
             )
             .await
@@ -2892,7 +2892,7 @@ async fn attachment_upload_then_run_threads_refs_and_paths() {
     }
     let committed = client
         .call(
-            zeron_rpc::methods::UPLOAD_COMMIT,
+            luna_rpc::methods::UPLOAD_COMMIT,
             serde_json::json!({ "uploadId": "e2e-att", "fileName": "red.png" }),
         )
         .await
@@ -2904,7 +2904,7 @@ async fn attachment_upload_then_run_threads_refs_and_paths() {
         "committed file holds the exact reassembled bytes"
     );
 
-    // Run with the zeron `withAttachments` transport: refs embedded in the
+    // Run with the luna `withAttachments` transport: refs embedded in the
     // prompt text (this is what persists), paths on the additive field.
     let prompt = format!(
         "what color is this?\n\nAttached images (local files — open them to view):\n- {path}"
@@ -2957,7 +2957,7 @@ async fn attachment_upload_then_run_threads_refs_and_paths() {
     // Read-back over the same RPC surface the transcript uses.
     let chunk = client
         .call(
-            zeron_rpc::methods::READ_ATTACHMENT_CHUNK,
+            luna_rpc::methods::READ_ATTACHMENT_CHUNK,
             serde_json::json!({ "path": path, "offset": 0 }),
         )
         .await
@@ -2972,7 +2972,7 @@ async fn attachment_upload_then_run_threads_refs_and_paths() {
 /// color — it can only know it by SEEING the inline image block (the sandbox
 /// prompt forbids opening the file). Ignored by default: needs an installed,
 /// authenticated `claude` CLI and spends real tokens.
-/// Run with: `cargo test -p zeron-engine --test e2e -- --ignored`
+/// Run with: `cargo test -p luna-engine --test e2e -- --ignored`
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires installed+authenticated claude CLI; spends tokens"]
 async fn real_claude_sees_uploaded_image_inline() {
@@ -2985,7 +2985,7 @@ async fn real_claude_sees_uploaded_image_inline() {
 
     let core = EngineCore::assemble(
         &dir,
-        Arc::new(zeron_engine::default_registry()),
+        Arc::new(luna_engine::default_registry()),
         HarnessId::ClaudeCode,
         None,
     )
@@ -3000,17 +3000,17 @@ async fn real_claude_sees_uploaded_image_inline() {
 
     // 8×8 solid-red PNG, uploaded exactly as the composer does.
     const RED_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAB+GTG2wAAJP0GeGuMDBnAAAAAElFTkSuQmCC";
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
-            zeron_rpc::methods::UPLOAD_CHUNK,
+            luna_rpc::methods::UPLOAD_CHUNK,
             serde_json::json!({ "uploadId": "real-img", "seq": 0, "data": RED_PNG_B64 }),
         )
         .await
         .expect("UploadChunk");
     let committed = client
         .call(
-            zeron_rpc::methods::UPLOAD_COMMIT,
+            luna_rpc::methods::UPLOAD_COMMIT,
             serde_json::json!({ "uploadId": "real-img", "fileName": "swatch.png" }),
         )
         .await
@@ -3036,7 +3036,7 @@ async fn real_claude_sees_uploaded_image_inline() {
         cwd: cwd.to_string_lossy().to_string(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: false,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -3478,7 +3478,7 @@ async fn context_usage_settles_after_done_without_reopening_the_turn() {
     .await;
     assert_eq!(
         handle.doc().context_usage(),
-        Some(zeron_proto::ContextUsage {
+        Some(luna_proto::ContextUsage {
             tokens: Some(0),
             window: Some(200000)
         })
@@ -3574,7 +3574,7 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
                     .steer(CHAT, "redirect", Some("user-steer".into()))
                     .await
                     .unwrap(),
-                zeron_engine::sessions::SteerOutcome::Accepted
+                luna_engine::sessions::SteerOutcome::Accepted
             );
         }
         tx.send(done(DoneStatus::Completed)).unwrap();
@@ -3637,7 +3637,7 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
 /// Real drive_run + journal + Loro, with an isolated Codex source root.
 #[tokio::test]
 async fn generated_image_is_materialized_before_publication_and_survives_reopen() {
-    use zeron_engine::{DocHost, DocHostConfig, SessionsEngine, Uploads};
+    use luna_engine::{DocHost, DocHostConfig, SessionsEngine, Uploads};
     let dir = tempfile::tempdir().unwrap();
     let source_root = dir.path().join("codex/generated_images");
     std::fs::create_dir_all(&source_root).unwrap();
@@ -3771,7 +3771,7 @@ async fn real_image_generation_profile_smoke() {
     let dir = tempfile::tempdir().unwrap();
     let core = EngineCore::assemble(
         dir.path(),
-        registry_with(Arc::new(zeron_harness::CodexHarness::new())),
+        registry_with(Arc::new(luna_harness::CodexHarness::new())),
         HarnessId::Codex,
         None,
     )

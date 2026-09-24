@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentActivity, SubagentStatus,
 };
-use zeron_engine::{
+use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, HarnessRegistry,
 };
-use zeron_proto::{
+use luna_proto::{
     ChatConfig, HarnessId, PermissionMode, SandboxLevel, Session, SessionStatus, ToolCall,
 };
-use zeron_ui::*;
+use luna_ui::*;
 
 const TASK: &str = "22222222-2222-4222-8222-222222222222";
 const PROJECT: &str = "l22-synthetic-project";
@@ -458,7 +458,7 @@ fn main() -> anyhow::Result<()> {
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
         .port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,

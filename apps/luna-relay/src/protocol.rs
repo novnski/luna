@@ -3,9 +3,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use getrandom::fill;
+use luna_rpc::remote_auth::{PROTOCOL_VERSION as RPC_VERSION, RemoteTarget};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use zeron_rpc::remote_auth::{PROTOCOL_VERSION as RPC_VERSION, RemoteTarget};
 
 pub const VERSION: u16 = 1;
 pub const MAX_ROUTES: usize = 32;

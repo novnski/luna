@@ -6,7 +6,7 @@
 //! fallback when a diff would approach transcript size) or the changed
 //! entries only — during streaming that is one entry per tick.
 //!
-//! Both viewports share this module (the `zeron_proto::view` rule: derivations
+//! Both viewports share this module (the `luna_proto::view` rule: derivations
 //! that must not diverge per surface live in one place).
 
 use serde::{Deserialize, Serialize};
@@ -23,10 +23,10 @@ pub struct TranscriptUpdate {
     #[serde(flatten)]
     pub frame: TranscriptFrame,
     #[serde(default)]
-    pub context_usage: Option<zeron_proto::ContextUsage>,
+    pub context_usage: Option<luna_proto::ContextUsage>,
     /// Durable harness-owned compaction and explicit context-boundary state.
     #[serde(default)]
-    pub context_control: zeron_proto::ContextControlState,
+    pub context_control: luna_proto::ContextControlState,
     /// Historical content included in this update, independent of reset/delta
     /// encoding. Omitted on ordinary live updates and by older engines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -513,17 +513,17 @@ mod context_update_tests {
         assert_eq!(update.context_usage, None);
         assert_eq!(
             update.context_control,
-            zeron_proto::ContextControlState::default()
+            luna_proto::ContextControlState::default()
         );
         assert!(update.replay_baseline.is_none());
         let value = serde_json::to_value(TranscriptUpdate {
             frame: TranscriptFrame::reset(&[]),
             replay_baseline: Some(TranscriptBaseline::default()),
-            context_usage: Some(zeron_proto::ContextUsage {
+            context_usage: Some(luna_proto::ContextUsage {
                 tokens: Some(0),
                 window: Some(200000),
             }),
-            context_control: zeron_proto::ContextControlState::default(),
+            context_control: luna_proto::ContextControlState::default(),
         })
         .unwrap();
         assert_eq!(value["contextUsage"]["tokens"], 0);

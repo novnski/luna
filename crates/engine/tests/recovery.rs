@@ -8,18 +8,18 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, SessionCommandEntry, SessionCommandPayload, SessionCommandStatus,
 };
-use zeron_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, RunJournal};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry, RunJournal};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, ChatConfig, CommandReceipt, CommandReceiptStatus, DoneStatus, HarnessId, Model,
     PermissionMode, ReasoningLevel, RecoveryAcceptance, RecoveryAction, RecoveryStatus, RunRequest,
     SandboxLevel, SteeringMode, TaskCommandRead,
 };
-use zeron_rpc::{RpcClient, methods};
-use zeron_sync::{DocsStore, TaskRecoveryExpectation, TaskRecoveryTransition};
+use luna_rpc::{RpcClient, methods};
+use luna_sync::{DocsStore, TaskRecoveryExpectation, TaskRecoveryTransition};
 
 const TASK: &str = "l10-recovery-task";
 const MESSAGE: &str = "l10-original-message";
@@ -165,7 +165,7 @@ impl Harness for RecoveryHarness {
             events.extend([
                 Ok(AgentEvent::ToolCall {
                     id: "completed-effect".into(),
-                    call: zeron_proto::ToolCall::Exec {
+                    call: luna_proto::ToolCall::Exec {
                         command: "synthetic-effect".into(),
                     },
                 }),
@@ -333,7 +333,7 @@ async fn send_original(client: &RpcClient, request: RunRequest) -> CommandReceip
     .await
 }
 
-async fn wait_for_recovery(core: &EngineCore, status: RecoveryStatus) -> zeron_proto::TaskRecovery {
+async fn wait_for_recovery(core: &EngineCore, status: RecoveryStatus) -> luna_proto::TaskRecovery {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(recovery) = core
@@ -397,7 +397,7 @@ fn claim_recovery_without_dispatch(root: &std::path::Path) {
     value["view"]["updatedAtMs"] = 1_789_860_000_000_i64.into();
     value["attemptAcceptance"] = serde_json::Value::Null;
     value["attemptStartedAtMs"] = 1_789_860_000_000_i64.into();
-    let next = zeron_sync::StoredTaskRecovery {
+    let next = luna_sync::StoredTaskRecovery {
         task_id: current.task_id.clone(),
         chain_id: current.chain_id.clone(),
         attempt_count: 1,
@@ -426,7 +426,7 @@ fn set_recovery_retry_at(root: &std::path::Path, retry_at_ms: i64) {
     let mut value: serde_json::Value = serde_json::from_slice(&current.record_json).unwrap();
     value["view"]["retryAtMs"] = retry_at_ms.into();
     value["view"]["updatedAtMs"] = retry_at_ms.into();
-    let next = zeron_sync::StoredTaskRecovery {
+    let next = luna_sync::StoredTaskRecovery {
         task_id: current.task_id.clone(),
         chain_id: current.chain_id.clone(),
         attempt_count: current.attempt_count,
@@ -473,7 +473,7 @@ fn changed_config() -> ChatConfig {
 
 fn mutate_recovery_record(
     root: &std::path::Path,
-    mutate: impl FnOnce(&mut serde_json::Value, &mut zeron_sync::StoredTaskRecovery),
+    mutate: impl FnOnce(&mut serde_json::Value, &mut luna_sync::StoredTaskRecovery),
 ) {
     let store = DocsStore::open(store_root(root)).unwrap();
     let current = store.task_recovery(TASK).unwrap().unwrap();
@@ -582,7 +582,7 @@ async fn confirmed_rejection_resends_the_frozen_request_once() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     assert_eq!(
@@ -634,7 +634,7 @@ async fn accepted_failure_continues_same_session_without_repeating_effects() {
         runs,
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     assert_eq!(recovery.acceptance, RecoveryAcceptance::Accepted);
@@ -699,7 +699,7 @@ async fn explicit_stop_survives_restart_without_recovery_or_queue_release() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     wait_for_active_turn(&core).await;
     wait_for_receipt(&core, "l10-original-command", CommandReceiptStatus::Applied).await;
@@ -759,7 +759,7 @@ async fn explicit_stop_survives_restart_without_recovery_or_queue_release() {
             .read_queue()
             .unwrap()[0]
             .status,
-        zeron_doc::QueueMessageStatus::Held
+        luna_doc::QueueMessageStatus::Held
     ));
     core.shutdown().await;
     drop(client);
@@ -789,7 +789,7 @@ async fn explicit_stop_survives_restart_without_recovery_or_queue_release() {
     assert_eq!(queue.len(), 1);
     assert!(matches!(
         queue[0].status,
-        zeron_doc::QueueMessageStatus::Held
+        luna_doc::QueueMessageStatus::Held
     ));
     let entries = handle.doc().read_entries().unwrap();
     assert!(entries.iter().flat_map(|entry| &entry.parts).any(
@@ -811,7 +811,7 @@ async fn explicit_new_original_after_stop_is_not_suppressed() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     wait_for_active_turn(&core).await;
     command(
@@ -893,7 +893,7 @@ async fn accepted_original_is_never_downgraded_when_continuation_is_rejected() {
         runs,
         requests,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let first = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     command(
@@ -938,7 +938,7 @@ async fn ambiguous_continuation_start_checks_delivery_and_cannot_resend_original
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let first = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     command(
@@ -975,7 +975,7 @@ async fn unknown_delivery_is_visible_and_never_replayed() {
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::CheckingDelivery).await;
     assert_eq!(recovery.acceptance, RecoveryAcceptance::Unknown);
@@ -1011,7 +1011,7 @@ async fn cancellation_and_chain_identity_survive_restart_without_replay() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::CheckingDelivery).await;
     command(
@@ -1060,7 +1060,7 @@ async fn terminal_old_chain_does_not_mask_a_newer_interrupted_original_on_restar
             runs.clone(),
             requests.clone(),
         );
-        let client = zeron_rpc::memory_client(core.rpc_service());
+        let client = luna_rpc::memory_client(core.rpc_service());
         send_original(&client, request(old_attachment.to_str().unwrap())).await;
         let old = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
         command(
@@ -1377,7 +1377,7 @@ async fn restart_after_earliest_attempt_claim_preserves_chain_budget_and_does_no
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let original = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let chain_id = original.chain_id.clone();
@@ -1438,7 +1438,7 @@ async fn restart_during_accepted_attempt_continues_same_chain_without_replaying_
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let original = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let chain_id = original.chain_id.clone();
@@ -1497,7 +1497,7 @@ async fn newer_user_activity_supersedes_the_scheduled_chain() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let mut newer = request(attachment.to_str().unwrap());
@@ -1552,8 +1552,8 @@ async fn two_clients_cannot_claim_the_same_recovery_attempt() {
         runs.clone(),
         requests,
     );
-    let first = zeron_rpc::memory_client(core.rpc_service());
-    let second = zeron_rpc::memory_client(core.rpc_service());
+    let first = luna_rpc::memory_client(core.rpc_service());
+    let second = luna_rpc::memory_client(core.rpc_service());
     send_original(&first, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let (a, b) = tokio::join!(
@@ -1605,7 +1605,7 @@ async fn duplicate_retry_after_lost_response_returns_the_receipt_without_another
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let chain_id = recovery.chain_id.clone();
@@ -1650,7 +1650,7 @@ async fn timer_claim_fences_a_late_cancellation_without_a_second_retry() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let chain_id = scheduled.chain_id.clone();
@@ -1665,7 +1665,7 @@ async fn timer_claim_fences_a_late_cancellation_without_a_second_retry() {
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let running = wait_for_recovery(&reopened, RecoveryStatus::Running).await;
     assert_eq!(running.chain_id, chain_id);
     assert_eq!(running.attempt_count, 1);
@@ -1701,7 +1701,7 @@ async fn configuration_commit_supersedes_a_pending_timer_before_dispatch() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let chain_id = scheduled.chain_id.clone();
@@ -1716,7 +1716,7 @@ async fn configuration_commit_supersedes_a_pending_timer_before_dispatch() {
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let changed = changed_config();
     let receipt = command(
         &client,
@@ -1761,7 +1761,7 @@ async fn permission_grant_supersedes_a_pending_timer_before_dispatch() {
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let chain_id = scheduled.chain_id.clone();
@@ -1776,7 +1776,7 @@ async fn permission_grant_supersedes_a_pending_timer_before_dispatch() {
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(reopened.rpc_service());
+    let client = luna_rpc::memory_client(reopened.rpc_service());
     let receipt = command(
         &client,
         "l10-permission-before-timer",
@@ -1817,7 +1817,7 @@ async fn overdue_in_process_timer_expires_without_dispatching() {
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     assert_eq!(scheduled.attempt_count, 0);
@@ -1863,7 +1863,7 @@ async fn stale_timer_snapshot_cannot_claim_a_rescheduled_attempt() {
         runs.clone(),
         requests,
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let old_retry_at = scheduled.retry_at_ms.unwrap();
@@ -1904,7 +1904,7 @@ async fn recovery_transition_storage_failure_rolls_back_receipt_and_reopens_safe
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let db_path = store_root(root.path()).join("docs.sqlite3");
@@ -1982,7 +1982,7 @@ async fn stop_recovery_storage_failure_never_acknowledges_without_a_durable_hold
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     command(
@@ -2101,7 +2101,7 @@ async fn recovery_storage_failure_rolls_back_registry_projection_and_receipt_tog
         runs.clone(),
         requests.clone(),
     );
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     send_original(&client, request(attachment.to_str().unwrap())).await;
     let recovery = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
     let before_config = core.workspace.chat(TASK).unwrap().unwrap().config;

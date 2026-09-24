@@ -1,12 +1,12 @@
 //! Round 17 probe: RunRequest.attachments must survive the command ledger's
 //! loro round trip.
 
-use zeron_doc::{SessionCommandEntry, SessionCommandPayload, SessionCommandStatus, SessionDoc};
+use luna_doc::{SessionCommandEntry, SessionCommandPayload, SessionCommandStatus, SessionDoc};
 
 #[test]
 fn run_request_attachments_survive_command_round_trip() {
     let doc = SessionDoc::init("chat-1").unwrap();
-    let request = zeron_proto::RunRequest {
+    let request = luna_proto::RunRequest {
         prompt: "p".into(),
         harness: None,
         provider_account_id: None,
@@ -14,9 +14,9 @@ fn run_request_attachments_survive_command_round_trip() {
         reasoning: None,
         model_options: Default::default(),
         cwd: "/tmp".into(),
-        sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+        sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,

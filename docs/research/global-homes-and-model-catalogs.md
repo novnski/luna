@@ -28,6 +28,6 @@ Other useful patterns from the comparison are visible cache age/source in Settin
 
 ## Repeatable verification
 
-Run `CARGO_INCREMENTAL=0 cargo test --locked -p zeron-engine --test e2e model_catalog_cache_survives_refresh_failure_and_engine_reopen -- --exact`. The RPC-level scenario verifies disk creation, cached reads, forced refresh, retention after provider failure, and reuse after an engine reopen.
+Run `CARGO_INCREMENTAL=0 cargo test --locked -p luna-engine --test e2e model_catalog_cache_survives_refresh_failure_and_engine_reopen -- --exact`. The RPC-level scenario verifies disk creation, cached reads, forced refresh, retention after provider failure, and reuse after an engine reopen.
 
-Run `CARGO_INCREMENTAL=0 cargo test --locked -p zeron-harness --test claude models_come_from_the_initialize_control_request -- --exact` for the CLI-to-picker catalog path using the repeatable fake provider. On a machine with Claude Code installed, `CARGO_INCREMENTAL=0 cargo test --locked -p zeron-harness --test claude live_models_discovery -- --exact --ignored` performs a read-only live catalog check without sending a model turn.
+Run `CARGO_INCREMENTAL=0 cargo test --locked -p luna-harness --test claude models_come_from_the_initialize_control_request -- --exact` for the CLI-to-picker catalog path using the repeatable fake provider. On a machine with Claude Code installed, `CARGO_INCREMENTAL=0 cargo test --locked -p luna-harness --test claude live_models_discovery -- --exact --ignored` performs a read-only live catalog check without sending a model turn.

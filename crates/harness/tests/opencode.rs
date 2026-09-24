@@ -10,15 +10,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
+use luna_harness::{
+    CancellationToken, Harness, HarnessError, OpencodeHarness, RunControls, SteerMessage,
+};
+use luna_proto::{
+    AgentEvent, DoneStatus, ReasoningLevel, RunRequest, SandboxLevel, ToolCall, UserInputAnswer,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
-use zeron_harness::{
-    CancellationToken, Harness, HarnessError, OpencodeHarness, RunControls, SteerMessage,
-};
-use zeron_proto::{
-    AgentEvent, DoneStatus, ReasoningLevel, RunRequest, SandboxLevel, ToolCall, UserInputAnswer,
-};
 
 // ---------------------------------------------------------------------------
 // Fake server
@@ -248,7 +248,7 @@ fn request(prompt: &str) -> RunRequest {
         cwd: "/tmp".into(),
         sandbox: SandboxLevel::DangerFullAccess,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -557,7 +557,7 @@ async fn steer_queues_mid_turn_and_delivers_at_idle() {
         .send(SteerMessage {
             prompt: "also do this".into(),
             message_id: None,
-            delivery: zeron_harness::SteerDelivery::AllowFollowUpTurn,
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
         })
         .await

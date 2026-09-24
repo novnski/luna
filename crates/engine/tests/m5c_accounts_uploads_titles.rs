@@ -13,16 +13,16 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL;
 
-use zeron_engine::{
+use luna_engine::{
     AgentAccounts, AgentAccountsConfig, CLAUDE_NATIVE_ACCOUNT_ID, CODEX_NATIVE_ACCOUNT_ID,
     EngineCore, HarnessRegistry, Repos, Uploads, worktree_branch_from_title,
 };
-use zeron_harness::mock::MockHarness;
-use zeron_proto::{
+use luna_harness::mock::MockHarness;
+use luna_proto::{
     AgentAccountsSnapshot, AgentEvent, AgentLoginMode, AgentLoginStatus, DoneStatus, HarnessId,
     SandboxLevel,
 };
-use zeron_rpc::methods;
+use luna_rpc::methods;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -580,7 +580,7 @@ async fn uploads_chunk_commit_readback_and_jail() {
         .read_chunk(&outside.to_string_lossy(), 0, &[tmp.path().to_path_buf()])
         .expect("cwd-rooted read");
     assert_eq!(BASE64.decode(&ok.data).expect("data"), b"nope");
-    // Non-image extensions are refused even inside the jail (zeron parity).
+    // Non-image extensions are refused even inside the jail (luna parity).
     let text = PathBuf::from(uploads.dir()).join("notes.txt");
     std::fs::create_dir_all(uploads.dir()).expect("uploads dir");
     std::fs::write(&text, b"text").expect("txt");
@@ -649,7 +649,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         .set_chat_branch(chat_id, &worktree.branch)
         .expect("set branch");
 
-    let request = zeron_proto::RunRequest {
+    let request = luna_proto::RunRequest {
         prompt: "please fix the login flow".into(),
         harness: None,
         provider_account_id: None,
@@ -659,7 +659,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         cwd: worktree.path.clone(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -699,7 +699,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
     core.workspace
         .rename_chat(chat_id, "My Custom Name")
         .expect("rename");
-    let request = zeron_proto::RunRequest {
+    let request = luna_proto::RunRequest {
         prompt: "another request".into(),
         harness: None,
         provider_account_id: None,
@@ -709,7 +709,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         cwd: worktree.path.clone(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,
@@ -801,7 +801,7 @@ async fn rename_worktree_branch_guards_and_collisions() {
 async fn rpc_dispatch_for_m5c_methods() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let core = assemble_with_mock(&tmp.path().join("data"), Vec::new());
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
 
     // Uploads: chunk → commit → readback over the wire.
     let payload = b"fake png bytes".to_vec();

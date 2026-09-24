@@ -26,9 +26,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use luna_doc::{REGISTRY_DOC_ID, RegistryDoc};
+use luna_sync::DocsStore;
 use serde::{Deserialize, Serialize};
-use zeron_doc::{REGISTRY_DOC_ID, RegistryDoc};
-use zeron_sync::DocsStore;
 
 use crate::EngineError;
 use crate::chat2_host::CHAT2_DOC_EPOCH;
@@ -373,7 +373,7 @@ impl LocalImporter {
             .map(DeviceWriteHandle::try_admit)
             .transpose()
             .map_err(|error| {
-                use zeron_sync::write_epoch::EpochError;
+                use luna_sync::write_epoch::EpochError;
                 let detail = match error {
                     EpochError::Busy => "backup snapshot in progress; retry after it finishes",
                     EpochError::Retired => "engine writer retired; retry after engine restart",
@@ -425,7 +425,7 @@ impl LocalImporter {
             .map(DeviceWriteHandle::try_admit)
             .transpose()
             .map_err(|error| {
-                use zeron_sync::write_epoch::EpochError;
+                use luna_sync::write_epoch::EpochError;
                 let detail = match error {
                     EpochError::Busy => "backup snapshot in progress; retry after it finishes",
                     EpochError::Retired => "engine writer retired; retry after engine restart",
@@ -584,7 +584,7 @@ impl LocalImporter {
     fn import_chat(
         &self,
         source_store: &DocsStore,
-        chat: &zeron_proto::Chat,
+        chat: &luna_proto::Chat,
         source_journals: &Path,
         permit: Option<&DeviceWritePermit>,
     ) -> Result<bool, EngineError> {
@@ -650,11 +650,11 @@ mod tests {
         uploads::Uploads,
         workspace_host::{WorkspaceHost, WorkspaceHostConfig},
     };
+    use luna_doc::REGISTRY_DOC_ID;
+    use luna_sync::DocsStore;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
-    use zeron_doc::REGISTRY_DOC_ID;
-    use zeron_sync::DocsStore;
 
     fn synthetic_target(
         root: &Path,
@@ -738,7 +738,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn admitted_import_finishes_rows_marker_and_summary_while_freeze_quiesces() {
-        use zeron_sync::write_epoch::Phase;
+        use luna_sync::write_epoch::Phase;
 
         let root = tempfile::tempdir().unwrap();
         seed_synthetic_source(root.path());
@@ -889,7 +889,7 @@ mod tests {
         let owner = DeviceWriteOwner::new(root.path(), InstanceLock::acquire(root.path()).unwrap())
             .unwrap();
         let (store, _, importer) = synthetic_target(root.path(), &owner);
-        let target_before = store.load_snapshot(zeron_doc::REGISTRY_DOC_ID).unwrap();
+        let target_before = store.load_snapshot(luna_doc::REGISTRY_DOC_ID).unwrap();
         let target_journals = root
             .path()
             .join("orgs/synthetic-org/synthetic-user/journals");
@@ -899,7 +899,7 @@ mod tests {
             assert_eq!(std::fs::read(&marker).unwrap(), corrupt_marker);
             assert!(!marker.with_extension("json.corrupt").exists());
             assert_eq!(
-                store.load_snapshot(zeron_doc::REGISTRY_DOC_ID).unwrap(),
+                store.load_snapshot(luna_doc::REGISTRY_DOC_ID).unwrap(),
                 target_before
             );
             assert!(!target_journals.exists());
@@ -937,7 +937,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn admitted_run_finishes_all_copies_and_flush_before_freeze_snapshot() {
-        use zeron_sync::write_epoch::Phase;
+        use luna_sync::write_epoch::Phase;
 
         let root = tempfile::tempdir().unwrap();
         let (source_journal, source_resume, source_receipt) = seed_synthetic_source(root.path());
@@ -995,10 +995,10 @@ mod tests {
         assert!(workspace.chat("chat-1").unwrap().is_some());
         assert!(workspace.space("space-1").unwrap().is_some());
         let saved = store
-            .load_snapshot(zeron_doc::REGISTRY_DOC_ID)
+            .load_snapshot(luna_doc::REGISTRY_DOC_ID)
             .unwrap()
             .unwrap();
-        let saved = zeron_doc::RegistryDoc::from_bytes(&saved, "synthetic-device").unwrap();
+        let saved = luna_doc::RegistryDoc::from_bytes(&saved, "synthetic-device").unwrap();
         assert!(saved.chat("chat-1").unwrap().is_some());
         assert_eq!(
             super::marker_grants_read_root(root.path(), "synthetic-org", "synthetic-user"),
@@ -1075,10 +1075,10 @@ mod tests {
         assert!(store.is_processed("command-1").unwrap());
         assert!(workspace.chat("chat-1").unwrap().is_some());
         let persisted = store
-            .load_snapshot(zeron_doc::REGISTRY_DOC_ID)
+            .load_snapshot(luna_doc::REGISTRY_DOC_ID)
             .unwrap()
             .unwrap();
-        let persisted = zeron_doc::RegistryDoc::from_bytes(&persisted, "synthetic-device").unwrap();
+        let persisted = luna_doc::RegistryDoc::from_bytes(&persisted, "synthetic-device").unwrap();
         assert!(persisted.chat("chat-1").unwrap().is_none());
 
         owner.retire();

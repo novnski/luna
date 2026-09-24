@@ -1,9 +1,9 @@
 //! Uploads — attachment staging on the chat's host device
-//! (feature-inventory §3.7 "Uploads"; port of zeron's `uploads.ts`).
+//! (feature-inventory §3.7 "Uploads"; port of luna's `uploads.ts`).
 //!
 //! The UI streams a file as base64 chunks (~60KB, sized for the relay when the
 //! target device is remote); chunks stage on disk under `{uploads_root}/tmp/
-//! {uploadId}/{seq}.b64` (surviving an engine restart mid-upload, unlike zeron's
+//! {uploadId}/{seq}.b64` (surviving an engine restart mid-upload, unlike luna's
 //! in-memory buffers), and `commit` assembles them into
 //! `{uploads_root}/{id8}-{name}` and returns the absolute path, which the
 //! composer appends to the prompt so the agent can read the file from disk.
@@ -13,7 +13,7 @@
 //! `read_chunk` serves transcript images back in 45KB base64 chunks. Path jail:
 //! only files under the uploads dir or a workspace-known chat cwd are readable
 //! (the RPC layer supplies the cwd roots) — and only supported image types, as
-//! in zeron.
+//! in luna.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -543,7 +543,7 @@ fn mime_by_ext(path: &Path) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::{InstanceLock, device_write::DeviceWriteOwner};
-    use zeron_sync::write_epoch::Phase;
+    use luna_sync::write_epoch::Phase;
 
     #[test]
     fn sanitize_names() {

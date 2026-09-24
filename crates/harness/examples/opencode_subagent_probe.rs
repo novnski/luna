@@ -6,16 +6,16 @@
 //! the rig recipe uses a mock OpenAI-compatible provider in the workspace's
 //! opencode.json, so no real login is required:
 //!
-//!     cargo run -p zeron-harness --example opencode_subagent_probe -- /tmp/oc-probe/workspace
+//!     cargo run -p luna-harness --example opencode_subagent_probe -- /tmp/oc-probe/workspace
 //!
 //! Prompt content is irrelevant with the mock provider (it scripts a task
 //! spawn on the first parent round); against a real provider, ask for one
 //! `task` explicitly.
 
 use futures::StreamExt;
+use luna_harness::{CancellationToken, Harness, OpencodeHarness, RunControls};
+use luna_proto::{AgentEvent, RunRequest, SandboxLevel, UserInputAnswer};
 use tokio::sync::{mpsc, oneshot};
-use zeron_harness::{CancellationToken, Harness, OpencodeHarness, RunControls};
-use zeron_proto::{AgentEvent, RunRequest, SandboxLevel, UserInputAnswer};
 
 #[tokio::main]
 async fn main() {
@@ -59,7 +59,7 @@ async fn main() {
         cwd,
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
-        permission_mode: zeron_proto::PermissionMode::Ask,
+        permission_mode: luna_proto::PermissionMode::Ask,
         parent_permission_ceiling: None,
         environment_permission_ceiling: None,
         permission_policy: None,

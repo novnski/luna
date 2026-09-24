@@ -2,15 +2,13 @@
 //! background checker + `ApplyUpdate`), the CLI (`luna update`), and the UI
 //! (the sidebar update strip + macOS bundle swap).
 //!
-//! Release layout (see `.github/workflows/release.yml` and `edge/src/install.sh`):
-//! artifacts live in the `comet-native-releases` R2 bucket, served pre-auth at
-//! `{edge}/releases/*`. `manifest.json` carries the latest version plus a
-//! sha256 per artifact; `latest.txt` (version only) remains as the fallback for
-//! releases published before the manifest existed.
+//! The updater remains disabled until this project owns a signed release feed.
+//! The intended feed serves artifacts at `{edge}/releases/*` and a
+//! `manifest.json` with a version and sha256 per artifact.
 //!
 //! Install kinds and their update paths:
-//! - **Managed** (`~/.luna/app/<ver>` + `current` symlink — a future installer
-//!   installer): download the headless tarball into a new versioned dir, flip
+//! - **Managed** (`~/.luna/app/<ver>` + `current` symlink — a future installer):
+//!   download the headless tarball into a new versioned dir, flip
 //!   the symlink, restart the service. Same flow the installer script performs,
 //!   natively.
 //! - **MacApp** (running out of an app bundle): download the app tarball, swap the

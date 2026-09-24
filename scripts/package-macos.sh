@@ -22,7 +22,7 @@ DMG="$OUT_DIR/luna-$VERSION-macos-$ARCH.dmg"
 APP_TARBALL="$OUT_DIR/luna-$VERSION-macos-$ARCH-app.tar.gz"
 
 cd "$ROOT"
-cargo build --release -p zeron
+cargo build --release -p luna
 
 rm -rf "$APP" "$DMG" "$APP_TARBALL"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -62,7 +62,7 @@ if $NOTARIZE; then
   # Staple the bundle BEFORE tarring it: the auto-updater swaps the .app with
   # no dmg involved, so the tarball copy must carry its own ticket to pass
   # Gatekeeper offline.
-  ZIP="$OUT_DIR/zeron-notarize.zip"
+  ZIP="$OUT_DIR/luna-notarize.zip"
   ditto -c -k --keepParent "$APP" "$ZIP"
   notarize "$ZIP"
   rm -f "$ZIP"

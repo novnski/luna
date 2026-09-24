@@ -4,7 +4,7 @@
 //! tested, not asserted.
 
 use super::*;
-use zeron_proto::{HarnessId, SandboxLevel, SessionStatus};
+use luna_proto::{HarnessId, SandboxLevel, SessionStatus};
 
 fn ts(ms: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(ms).unwrap_or(DateTime::UNIX_EPOCH)
@@ -267,8 +267,8 @@ fn chat(id: &str, device_id: &str) -> Chat {
             reasoning: None,
             model_options: Default::default(),
             sandbox: SandboxLevel::WorkspaceWrite,
-            permission_mode: zeron_proto::PermissionMode::Ask,
-            effective_permission_mode: zeron_proto::PermissionMode::Ask,
+            permission_mode: luna_proto::PermissionMode::Ask,
+            effective_permission_mode: luna_proto::PermissionMode::Ask,
             permission_ceiling_source: None,
             permission_degradation_reason: None,
             permission_audit: Vec::new(),
@@ -356,7 +356,7 @@ fn server_round(
 fn rows_round_trip_and_upsert_refreshes() {
     let mut doc = RegistryDoc::new("dev-a");
     let mut device = device("dev-a", "laptop");
-    device.capabilities = vec![zeron_proto::capabilities::MESSAGE_QUEUE_V1.into()];
+    device.capabilities = vec![luna_proto::capabilities::MESSAGE_QUEUE_V1.into()];
     doc.upsert_device(&device).unwrap();
     doc.upsert_chat(&chat("chat-1", "dev-a")).unwrap();
     doc.upsert_session(&session("chat-1", "dev-a", SessionStatus::Working))

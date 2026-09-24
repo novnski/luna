@@ -202,8 +202,7 @@ impl Drop for TempSoundFile {
 fn create_temp_file() -> std::io::Result<(std::fs::File, TempSoundFile)> {
     for _ in 0..128 {
         let id = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("zeron-sound-{}-{id}.wav", std::process::id()));
+        let path = std::env::temp_dir().join(format!("luna-sound-{}-{id}.wav", std::process::id()));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -308,7 +307,7 @@ fn run_checked(program: &str, args: &[&str], path: &Path) -> Result<(), String> 
 // Notification decision (shared by sound and desktop banners)
 // ---------------------------------------------------------------------------
 
-use zeron_proto::{
+use luna_proto::{
     Session,
     view::{Indicator, effective_indicator},
 };
@@ -330,7 +329,7 @@ impl SessionNotificationState {
             fresh: now
                 .signed_duration_since(session.updated_at)
                 .num_milliseconds()
-                <= zeron_proto::view::SESSION_STALE_MS,
+                <= luna_proto::view::SESSION_STALE_MS,
         }
     }
 
@@ -362,10 +361,10 @@ impl SessionNotificationState {
 /// exposing `Offline` or `Reconnecting`. Notify once when that durable state is
 /// first crossed; booting into an outage is seeded silently by the shell.
 pub(crate) fn connectivity_sound_since(
-    current: zeron_proto::ConnectivityState,
-    previous: zeron_proto::ConnectivityState,
+    current: luna_proto::ConnectivityState,
+    previous: luna_proto::ConnectivityState,
 ) -> Option<Sound> {
-    use zeron_proto::ConnectivityState as State;
+    use luna_proto::ConnectivityState as State;
     let degraded = matches!(current, State::Offline | State::Reconnecting);
     let was_degraded = matches!(previous, State::Offline | State::Reconnecting);
     (degraded && !was_degraded).then_some(Sound::Attention)
@@ -377,7 +376,7 @@ pub(crate) fn connectivity_sound_since(
 /// boot-time outage. Runtime replacement resets the observation flag.
 #[derive(Debug, Default)]
 pub(crate) struct ConnectivityNotificationState {
-    previous: Option<zeron_proto::ConnectivityState>,
+    previous: Option<luna_proto::ConnectivityState>,
     first_observed_at: Option<Instant>,
     armed: bool,
 }
@@ -387,7 +386,7 @@ impl ConnectivityNotificationState {
 
     pub(crate) fn update(
         &mut self,
-        current: zeron_proto::ConnectivityState,
+        current: luna_proto::ConnectivityState,
         observed: bool,
         now: Instant,
     ) -> Option<Sound> {
@@ -465,7 +464,7 @@ mod tests {
 
     #[test]
     fn durable_connectivity_degradation_chimes_once_per_outage() {
-        use zeron_proto::ConnectivityState as State;
+        use luna_proto::ConnectivityState as State;
 
         assert_eq!(
             connectivity_sound_since(State::Connected, State::Disabled),
@@ -555,7 +554,7 @@ mod tests {
 
     #[test]
     fn connectivity_boot_outages_seed_silently_then_later_outages_alert() {
-        use zeron_proto::ConnectivityState as State;
+        use luna_proto::ConnectivityState as State;
         let t0 = Instant::now();
 
         // Warm daemon: the first authoritative snapshot is already degraded.

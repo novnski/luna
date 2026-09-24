@@ -54,7 +54,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice,
     ProviderForkCapability, ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest,
     SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
@@ -221,8 +221,8 @@ impl CodexHarness {
                     "initialize",
                     json!({
                         "clientInfo": {
-                            "name": "zeron-native",
-                            "title": "Zeron",
+                            "name": "luna-native",
+                            "title": "Luna",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
                         "capabilities": { "experimentalApi": true },
@@ -297,8 +297,8 @@ impl CodexHarness {
                     "initialize",
                     json!({
                         "clientInfo": {
-                            "name": "zeron-native",
-                            "title": "Zeron",
+                            "name": "luna-native",
+                            "title": "Luna",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
                         "capabilities": { "experimentalApi": true },
@@ -369,7 +369,7 @@ fn reasoning_level(value: &str) -> Option<ReasoningLevel> {
     })
 }
 
-/// Codex accepts both names, but Zeron has historically persisted `fast`.
+/// Codex accepts both names, but Luna has historically persisted `fast`.
 /// Normalize the app server's `priority` id so live and fallback catalogs do
 /// not produce two different settings for the same tier.
 fn normalized_service_tier(value: &str) -> &str {
@@ -645,8 +645,8 @@ fn parse_skill_commands(result: &Value) -> Vec<SlashCommand> {
 
 #[async_trait]
 impl Harness for CodexHarness {
-    fn luna_runtime_delivery(&self) -> zeron_proto::RuntimeDelivery {
-        zeron_proto::RuntimeDelivery::CodexDynamicTools
+    fn luna_runtime_delivery(&self) -> luna_proto::RuntimeDelivery {
+        luna_proto::RuntimeDelivery::CodexDynamicTools
     }
     fn id(&self) -> HarnessId {
         HarnessId::Codex
@@ -724,7 +724,7 @@ impl Harness for CodexHarness {
             Ok(_) => Ok(static_models()),
             Err(error) => {
                 tracing::debug!(
-                    target: "zeron_harness::codex",
+                    target: "luna_harness::codex",
                     "model/list discovery failed; using fallback catalog: {error}"
                 );
                 Ok(static_models())
@@ -792,7 +792,7 @@ impl CodexHarness {
             Ok(_) => Ok(static_models()),
             Err(error) => {
                 tracing::debug!(
-                    target: "zeron_harness::codex",
+                    target: "luna_harness::codex",
                     "account-scoped model/list discovery failed; using fallback catalog: {error}"
                 );
                 Ok(static_models())
@@ -825,19 +825,19 @@ impl CodexHarness {
         if !title_only
             && let Some(value) = request
                 .model_options
-                .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+                .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
         {
-            let contract: zeron_proto::LunaAgentRuntimeContract =
+            let contract: luna_proto::LunaAgentRuntimeContract =
                 serde_json::from_value(value.clone()).map_err(|error| {
                     HarnessError::Protocol(format!("invalid LUNA runtime contract: {error}"))
                 })?;
             if contract.context.harness != HarnessId::Codex
                 || !matches!(
                     contract.delivery,
-                    zeron_proto::RuntimeDelivery::CodexDynamicTools
-                        | zeron_proto::RuntimeDelivery::CodexInstructionsOnly
+                    luna_proto::RuntimeDelivery::CodexDynamicTools
+                        | luna_proto::RuntimeDelivery::CodexInstructionsOnly
                 )
-                || (contract.delivery == zeron_proto::RuntimeDelivery::CodexInstructionsOnly
+                || (contract.delivery == luna_proto::RuntimeDelivery::CodexInstructionsOnly
                     && !contract.tools.is_empty())
                 || (!contract.tools.is_empty() && controls.invoke_luna_tool.is_none())
             {
@@ -850,14 +850,14 @@ impl CodexHarness {
         // Title generation has no tools and remains read-only. Ordinary runs
         // keep the engine-resolved sandbox; never broaden it in the adapter.
         if title_only {
-            request.sandbox = zeron_proto::SandboxLevel::ReadOnly;
+            request.sandbox = luna_proto::SandboxLevel::ReadOnly;
         }
         let mut cmd = Command::new(&exe);
         if let Some(contract) = request
             .model_options
-            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
             .and_then(|value| {
-                serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+                serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
             })
         {
             for (name, value) in contract.environment {
@@ -921,7 +921,7 @@ impl CodexHarness {
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zeron_harness::codex", "stderr: {line}");
+                    tracing::debug!(target: "luna_harness::codex", "stderr: {line}");
                     tail.push(&line);
                 }
             });
@@ -1098,9 +1098,9 @@ async fn run_session(session: Session) {
     let request_input = Arc::new(request_input);
     let runtime_contract = request
         .model_options
-        .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+        .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
         .and_then(|value| {
-            serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+            serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
         })
         .filter(|contract| contract.context.harness == HarnessId::Codex);
 
@@ -1109,7 +1109,7 @@ async fn run_session(session: Session) {
         .permission_policy
         .as_ref()
         .map(|policy| policy.effective_mode)
-        .unwrap_or(zeron_proto::PermissionMode::Ask);
+        .unwrap_or(luna_proto::PermissionMode::Ask);
     let (approval_policy, approvals_reviewer) =
         codex_permission_settings(effective_mode, title_only);
     let effort = to_effort(request.reasoning);
@@ -1159,7 +1159,7 @@ async fn run_session(session: Session) {
                         render_luna_instructions(contract).into(),
                     );
                 }
-                if contract.delivery == zeron_proto::RuntimeDelivery::CodexDynamicTools
+                if contract.delivery == luna_proto::RuntimeDelivery::CodexDynamicTools
                     && invoke_luna_tool.is_some()
                 {
                     p.insert(
@@ -1202,8 +1202,8 @@ async fn run_session(session: Session) {
                 "initialize",
                 json!({
                     "clientInfo": {
-                        "name": "zeron-native",
-                        "title": "Zeron",
+                        "name": "luna-native",
+                        "title": "Luna",
                         "version": env!("CARGO_PKG_VERSION"),
                     },
                     "capabilities": { "experimentalApi": true },
@@ -1245,7 +1245,7 @@ async fn run_session(session: Session) {
                 // A missing/foreign rollout falls back to a fresh thread.
                 Err(e) if !strict_resume => {
                     tracing::debug!(
-                        target: "zeron_harness::codex",
+                        target: "luna_harness::codex",
                         "thread/resume failed (starting fresh): {e}"
                     );
                     client
@@ -1275,7 +1275,7 @@ async fn run_session(session: Session) {
         {
             // The durable thread still exists and must be surfaced to the
             // engine so it can bind/reconcile it instead of orphaning it.
-            tracing::warn!(target: "zeron_harness::codex", %thread_id, %error, "native thread name set failed");
+            tracing::warn!(target: "luna_harness::codex", %thread_id, %error, "native thread name set failed");
         }
         let mut children = subagents::Subagents::new(thread_id.clone());
         children.restore(&thread["thread"]);
@@ -1895,7 +1895,7 @@ async fn run_session(session: Session) {
                                     continue 'main;
                                 }
                                 tracing::debug!(
-                                    target: "zeron_harness::codex",
+                                    target: "luna_harness::codex",
                                     "turn/steer did not settle (queued as next turn): {}",
                                     failure.message()
                                 );
@@ -1965,7 +1965,7 @@ async fn run_session(session: Session) {
                             .await
                         {
                             tracing::debug!(
-                                target: "zeron_harness::codex",
+                                target: "luna_harness::codex",
                                 "turn/interrupt failed (escalation will reap): {e}"
                             );
                         }
@@ -2047,7 +2047,7 @@ fn async_questions_from_item(item: &Value) -> Option<AgentEvent> {
     if message_id.is_empty() {
         return None;
     }
-    let questions: Vec<zeron_proto::AsyncUserInputQuestion> =
+    let questions: Vec<luna_proto::AsyncUserInputQuestion> =
         serde_json::from_value(item.get("questions")?.clone()).ok()?;
     if questions.is_empty() || questions.iter().any(|q| q.title.trim().is_empty()) {
         return None;
@@ -2059,16 +2059,16 @@ fn async_questions_from_item(item: &Value) -> Option<AgentEvent> {
 }
 
 fn codex_permission_settings(
-    mode: zeron_proto::PermissionMode,
+    mode: luna_proto::PermissionMode,
     title_only: bool,
 ) -> (&'static str, &'static str) {
     if title_only {
         return ("never", "user");
     }
     match mode {
-        zeron_proto::PermissionMode::Ask => ("on-request", "user"),
-        zeron_proto::PermissionMode::Auto => ("on-request", "auto_review"),
-        zeron_proto::PermissionMode::Full => ("never", "user"),
+        luna_proto::PermissionMode::Ask => ("on-request", "user"),
+        luna_proto::PermissionMode::Auto => ("on-request", "auto_review"),
+        luna_proto::PermissionMode::Full => ("never", "user"),
     }
 }
 
@@ -2124,7 +2124,7 @@ async fn steer_as_new_turn(
 }
 
 // ---------------------------------------------------------------------------
-// Approvals (approval-as-input parity with zeron's UX)
+// Approvals (approval-as-input parity with luna's UX)
 // ---------------------------------------------------------------------------
 
 type RequestInputFn = Box<
@@ -2133,7 +2133,7 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
-fn render_luna_instructions(contract: &zeron_proto::LunaAgentRuntimeContract) -> String {
+fn render_luna_instructions(contract: &luna_proto::LunaAgentRuntimeContract) -> String {
     let mut text = String::new();
     for section in &contract.instructions {
         text.push_str(&format!(
@@ -2147,11 +2147,11 @@ fn render_luna_instructions(contract: &zeron_proto::LunaAgentRuntimeContract) ->
 /// Immutable authority and routing context for one provider request.
 struct ServerRequestContext<'a> {
     auto_approve: bool,
-    permission_policy: zeron_proto::PermissionPolicy,
+    permission_policy: luna_proto::PermissionPolicy,
     request_input: &'a Arc<RequestInputFn>,
     thread_id: &'a str,
     active_turn_id: Option<&'a str>,
-    runtime_contract: Option<&'a zeron_proto::LunaAgentRuntimeContract>,
+    runtime_contract: Option<&'a luna_proto::LunaAgentRuntimeContract>,
     invoke_luna_tool: Option<&'a crate::LunaToolExecutor>,
     call_ids: &'a mut LunaCallIds,
     interrupt: &'a CancellationToken,
@@ -2219,12 +2219,12 @@ fn handle_server_request(
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
-            approval: Some(zeron_proto::ApprovalRequest {
+            approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: id.to_string(),
                 provider: HarnessId::Codex,
                 turn_id: active_turn_id.map(str::to_owned),
                 machine_name: permission_policy.machine_name.clone(),
-                action_kind: zeron_proto::ApprovalActionKind::Tool,
+                action_kind: luna_proto::ApprovalActionKind::Tool,
                 summary: "Provider permission request".into(),
                 requested_scope: permission_policy.scope,
                 expires_at_ms: std::time::SystemTime::now()
@@ -2299,12 +2299,12 @@ fn handle_server_request(
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
-            approval: Some(zeron_proto::ApprovalRequest {
+            approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: id.to_string(),
                 provider: HarnessId::Codex,
                 turn_id: active_turn_id.map(str::to_owned),
                 machine_name: permission_policy.machine_name.clone(),
-                action_kind: zeron_proto::ApprovalActionKind::Tool,
+                action_kind: luna_proto::ApprovalActionKind::Tool,
                 summary: format!("Computer use: {app}"),
                 requested_scope: permission_policy.scope,
                 expires_at_ms: std::time::SystemTime::now()
@@ -2431,7 +2431,7 @@ fn handle_server_request(
     );
     if !is_approval {
         tracing::debug!(
-            target: "zeron_harness::codex",
+            target: "luna_harness::codex",
             "unhandled server request: {method}"
         );
         client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
@@ -2653,7 +2653,7 @@ fn approval_question(
     method: &str,
     params: &Value,
     provider_request_id: &Value,
-    policy: &zeron_proto::PermissionPolicy,
+    policy: &luna_proto::PermissionPolicy,
 ) -> UserInputQuestion {
     let (header, question) = if method.contains("commandExecution") {
         let command = match params.get("command") {
@@ -2692,9 +2692,9 @@ fn approval_question(
         )
     };
     let action_kind = if method.contains("commandExecution") {
-        zeron_proto::ApprovalActionKind::Command
+        luna_proto::ApprovalActionKind::Command
     } else {
-        zeron_proto::ApprovalActionKind::FileChange
+        luna_proto::ApprovalActionKind::FileChange
     };
     UserInputQuestion {
         id: new_message_id(),
@@ -2707,7 +2707,7 @@ fn approval_question(
             "Cancel".into(),
         ],
         multi_select: false,
-        approval: Some(zeron_proto::ApprovalRequest {
+        approval: Some(luna_proto::ApprovalRequest {
             provider_request_id: provider_request_id.to_string(),
             provider: HarnessId::Codex,
             turn_id: params
@@ -2748,7 +2748,7 @@ mod tests {
             async_questions_from_item(&item),
             Some(AgentEvent::AsyncQuestions {
                 message_id: "call-42".into(),
-                questions: vec![zeron_proto::AsyncUserInputQuestion {
+                questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Which sample should I use?".into(),
                     options: Some(vec!["A".into(), "B".into()]),
                 }],
@@ -2809,7 +2809,7 @@ mod tests {
 
     #[test]
     fn approval_questions_are_typed_and_machine_scoped() {
-        let policy = zeron_proto::PermissionPolicy {
+        let policy = luna_proto::PermissionPolicy {
             machine_name: "test-machine".into(),
             ..Default::default()
         };
@@ -2849,7 +2849,7 @@ mod tests {
 
     #[test]
     fn permission_modes_map_to_exact_app_server_settings() {
-        use zeron_proto::PermissionMode::{Ask, Auto, Full};
+        use luna_proto::PermissionMode::{Ask, Auto, Full};
         assert_eq!(
             codex_permission_settings(Ask, false),
             ("on-request", "user")
@@ -2860,11 +2860,11 @@ mod tests {
         );
         assert_eq!(codex_permission_settings(Full, false), ("never", "user"));
         assert_eq!(
-            sandbox_mode(zeron_proto::SandboxLevel::WorkspaceWrite),
+            sandbox_mode(luna_proto::SandboxLevel::WorkspaceWrite),
             "workspace-write"
         );
         assert_eq!(
-            sandbox_mode(zeron_proto::SandboxLevel::DangerFullAccess),
+            sandbox_mode(luna_proto::SandboxLevel::DangerFullAccess),
             "danger-full-access"
         );
     }

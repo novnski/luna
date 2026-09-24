@@ -45,7 +45,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-use zeron_proto::{
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand,
     SteeringMode, UserInputAnswer, UserInputQuestion,
 };
@@ -188,13 +188,13 @@ impl ClaudeHarness {
         }
         if let Some(contract) = request
             .model_options
-            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
             .and_then(|value| {
-                serde_json::from_value::<zeron_proto::LunaAgentRuntimeContract>(value.clone()).ok()
+                serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
             })
             .filter(|contract| {
                 contract.context.harness == HarnessId::ClaudeCode
-                    && contract.delivery == zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly
+                    && contract.delivery == luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
             })
         {
             for (name, value) in &contract.environment {
@@ -226,7 +226,7 @@ impl ClaudeHarness {
             .permission_policy
             .as_ref()
             .map(|policy| policy.effective_mode)
-            .unwrap_or(zeron_proto::PermissionMode::Ask);
+            .unwrap_or(luna_proto::PermissionMode::Ask);
         cmd.args(claude_permission_args(effective_mode));
         if let Some(resume) = &request.resume {
             cmd.arg(format!("--resume={resume}"));
@@ -289,7 +289,7 @@ impl ClaudeHarness {
             shutdown_child(&mut child, self.kill_grace).await;
             return Err(HarnessError::Protocol("claude child has no stdio".into()));
         };
-        const PROBE_ID: &str = "zeron-command-probe";
+        const PROBE_ID: &str = "luna-command-probe";
         let discovery = async {
             let request = serde_json::json!({
                 "type": "control_request",
@@ -350,11 +350,11 @@ impl ClaudeHarness {
     }
 }
 
-fn claude_permission_args(mode: zeron_proto::PermissionMode) -> &'static [&'static str] {
+fn claude_permission_args(mode: luna_proto::PermissionMode) -> &'static [&'static str] {
     match mode {
-        zeron_proto::PermissionMode::Ask => &["--restricted", "--permission-mode", "acceptEdits"],
-        zeron_proto::PermissionMode::Auto => &["--restricted", "--permission-mode", "auto"],
-        zeron_proto::PermissionMode::Full => &[
+        luna_proto::PermissionMode::Ask => &["--restricted", "--permission-mode", "acceptEdits"],
+        luna_proto::PermissionMode::Auto => &["--restricted", "--permission-mode", "auto"],
+        luna_proto::PermissionMode::Full => &[
             "--permission-mode",
             "bypassPermissions",
             "--dangerously-skip-permissions",
@@ -397,8 +397,8 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
 
 #[async_trait]
 impl Harness for ClaudeHarness {
-    fn luna_runtime_delivery(&self) -> zeron_proto::RuntimeDelivery {
-        zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly
+    fn luna_runtime_delivery(&self) -> luna_proto::RuntimeDelivery {
+        luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
     }
     fn id(&self) -> HarnessId {
         HarnessId::ClaudeCode
@@ -488,18 +488,18 @@ impl ClaudeHarness {
         if title_only {
             request
                 .model_options
-                .remove(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION);
+                .remove(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION);
         }
         if let Some(value) = request
             .model_options
-            .get(zeron_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
         {
-            let contract: zeron_proto::LunaAgentRuntimeContract =
+            let contract: luna_proto::LunaAgentRuntimeContract =
                 serde_json::from_value(value.clone()).map_err(|error| {
                     HarnessError::Protocol(format!("invalid LUNA runtime contract: {error}"))
                 })?;
             if contract.context.harness != HarnessId::ClaudeCode
-                || contract.delivery != zeron_proto::RuntimeDelivery::ClaudeInstructionsOnly
+                || contract.delivery != luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
                 || !contract.tools.is_empty()
             {
                 return Err(HarnessError::Protocol(
@@ -547,7 +547,7 @@ impl ClaudeHarness {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zeron_harness::claude", "stderr: {line}");
+                    tracing::debug!(target: "luna_harness::claude", "stderr: {line}");
                     tail.push(&line);
                 }
             });
@@ -582,7 +582,7 @@ impl ClaudeHarness {
                 .permission_policy
                 .as_ref()
                 .map(|policy| policy.effective_mode)
-                .unwrap_or(zeron_proto::PermissionMode::Ask),
+                .unwrap_or(luna_proto::PermissionMode::Ask),
             permission_policy: request.permission_policy.clone().unwrap_or_default(),
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
@@ -668,16 +668,16 @@ async fn load_image_blocks(paths: &[String]) -> Vec<wire::ImageBlock> {
         let bytes = match tokio::fs::read(path).await {
             Ok(bytes) => bytes,
             Err(err) => {
-                tracing::warn!(target: "zeron_harness::claude", %path, error = %err, "attachment unreadable; path ref only");
+                tracing::warn!(target: "luna_harness::claude", %path, error = %err, "attachment unreadable; path ref only");
                 continue;
             }
         };
         if bytes.len() as u64 > MAX_INLINE_IMAGE_BYTES {
-            tracing::debug!(target: "zeron_harness::claude", %path, "attachment over inline cap; path ref only");
+            tracing::debug!(target: "luna_harness::claude", %path, "attachment over inline cap; path ref only");
             continue;
         }
         let Some(media_type) = image_media_type(std::path::Path::new(path), &bytes) else {
-            tracing::debug!(target: "zeron_harness::claude", %path, "attachment not an inline-supported image; path ref only");
+            tracing::debug!(target: "luna_harness::claude", %path, "attachment not an inline-supported image; path ref only");
             continue;
         };
         blocks.push(wire::ImageBlock {
@@ -709,7 +709,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Std
                         if let Some(written) = written {
                             let _ = written.send(Err(e.to_string()));
                         }
-                        tracing::debug!(target: "zeron_harness::claude", "stdin write failed (tolerated): {e}");
+                        tracing::debug!(target: "luna_harness::claude", "stdin write failed (tolerated): {e}");
                         return;
                     }
                 }
@@ -730,8 +730,8 @@ struct Session {
     event_tx: mpsc::Sender<Result<AgentEvent, HarnessError>>,
     controls: RunControls,
     reasoning: Option<ReasoningLevel>,
-    permission_mode: zeron_proto::PermissionMode,
-    permission_policy: zeron_proto::PermissionPolicy,
+    permission_mode: luna_proto::PermissionMode,
+    permission_policy: luna_proto::PermissionPolicy,
     interrupt_grace: Duration,
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
@@ -786,7 +786,7 @@ async fn run_session(session: Session) {
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
                         Err(e) => {
-                            tracing::debug!(target: "zeron_harness::claude", "unparseable frame (skipped): {e}");
+                            tracing::debug!(target: "luna_harness::claude", "unparseable frame (skipped): {e}");
                             continue;
                         }
                     };
@@ -975,20 +975,20 @@ type RequestInputFn = Box<
 /// by question text, as the tool expects.
 fn handle_control_request(
     req: ControlRequestFrame,
-    permission_mode: zeron_proto::PermissionMode,
-    permission_policy: &zeron_proto::PermissionPolicy,
+    permission_mode: luna_proto::PermissionMode,
+    permission_policy: &luna_proto::PermissionPolicy,
     request_input: &Arc<RequestInputFn>,
     stdin_tx: &mpsc::UnboundedSender<StdinMsg>,
 ) {
     if req.request.subtype != "can_use_tool" {
         tracing::debug!(
-            target: "zeron_harness::claude",
+            target: "luna_harness::claude",
             "unhandled control_request subtype: {}", req.request.subtype
         );
         return;
     }
     if req.request.tool_name != "AskUserQuestion" {
-        if permission_mode == zeron_proto::PermissionMode::Full {
+        if permission_mode == luna_proto::PermissionMode::Full {
             let line = control_response_line(&req.request_id, allow_response(req.request.input));
             let _ = stdin_tx.send(StdinMsg::line(line));
             return;
@@ -1004,15 +1004,15 @@ fn handle_control_request(
                 question: format!("{summary}. Target: {}.", permission_policy.machine_name),
                 options: vec!["Deny".into(), "Allow once".into(), "Cancel".into()],
                 multi_select: false,
-                approval: Some(zeron_proto::ApprovalRequest {
+                approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: req.request_id.clone(),
                     provider: HarnessId::ClaudeCode,
                     turn_id: None,
                     machine_name: permission_policy.machine_name.clone(),
                     action_kind: if req.request.tool_name == "Bash" {
-                        zeron_proto::ApprovalActionKind::Command
+                        luna_proto::ApprovalActionKind::Command
                     } else {
-                        zeron_proto::ApprovalActionKind::Tool
+                        luna_proto::ApprovalActionKind::Tool
                     },
                     summary,
                     requested_scope: permission_policy.scope,
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn permission_modes_map_to_exact_cli_arguments() {
-        use zeron_proto::PermissionMode::{Ask, Auto, Full};
+        use luna_proto::PermissionMode::{Ask, Auto, Full};
         assert_eq!(
             claude_permission_args(Ask),
             ["--restricted", "--permission-mode", "acceptEdits"]

@@ -14,7 +14,7 @@
 //! - **Cursor** — `~/.cursor/sdk/auth.json`: the Cursor SDK's credential store
 //!   (`StoredSdkCredentials`) holding the named, expiring user API key its
 //!   browser login mints. Deliberately SEPARATE from `cursor-agent login`'s
-//!   whole-account session tokens, which zeron never reads.
+//!   whole-account session tokens, which luna never reads.
 //!
 //! LUNA persists only lifecycle metadata (Claude enabled/disabled, Codex named
 //! account labels and the selected default). It never puts provider tokens in
@@ -25,7 +25,7 @@
 //! Usage probes: all three providers expose the rate-limit view their own CLIs render
 //! (`/usage` in Claude Code, `/status` in Codex; Cursor's key has no quota view,
 //! so the probe exchanges it for a dashboard session and reads the
-//! `GetCurrentPeriodUsage` call the Cursor app itself makes). Unlike zeron (fetch on every
+//! `GetCurrentPeriodUsage` call the Cursor app itself makes). Unlike luna (fetch on every
 //! list, 60s cache), native only hits the network when `force_usage` is set —
 //! the default list stays offline-fast and deterministic; the UI passes
 //! `forceUsage` on page mount/refresh. Cached results (60s TTL) are served to
@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-use zeron_proto::{
+use luna_proto::{
     AgentAccount, AgentAccountWarning, AgentAccountsSnapshot, AgentAuthKind,
     AgentAuthenticationState, AgentLoginMode, AgentLoginPoll, AgentLoginStart, AgentLoginStatus,
     AgentUsageWindow, HarnessId,
@@ -313,7 +313,7 @@ enum LoginFlow {
         /// have LUNA-owned account metadata.
         account_id: Option<String>,
         /// The login child; monitored (try_wait) + killable from cancel.
-        child: Arc<Mutex<Option<zeron_harness::process::Child>>>,
+        child: Arc<Mutex<Option<luna_harness::process::Child>>>,
         /// Provider credential dir watched for completion.
         home: PathBuf,
         /// Digest of the provider-native auth file before explicit sign-in.
@@ -1072,11 +1072,11 @@ impl AgentAccounts {
         // login-shell snapshot, install dirs — the Windows npm payload
         // included) and compose the same child PATH a chat run gets, so
         // account login never diverges from what the harness can launch.
-        let mut command = match zeron_harness::codex::login_command(&home) {
+        let mut command = match luna_harness::codex::login_command(&home) {
             Ok(command) => command,
             Err(err) => {
                 return Err(EngineError::Other(match err {
-                    zeron_harness::HarnessError::NotInstalled(hint) => {
+                    luna_harness::HarnessError::NotInstalled(hint) => {
                         format!(
                             "The `codex` CLI was not found on this device — install it first. ({hint})"
                         )
@@ -1086,9 +1086,9 @@ impl AgentAccounts {
             }
         };
         command
-            .stdin(zeron_harness::process::Stdio::null())
-            .stdout(zeron_harness::process::Stdio::piped())
-            .stderr(zeron_harness::process::Stdio::piped());
+            .stdin(luna_harness::process::Stdio::null())
+            .stdout(luna_harness::process::Stdio::piped())
+            .stderr(luna_harness::process::Stdio::piped());
         // The CLI opens the authorization tab itself (via the `webbrowser`
         // crate) AND the app opens the page when this start reply lands —
         // users got TWO identical auth.openai.com tabs. `webbrowser` prefers
@@ -1157,14 +1157,14 @@ impl AgentAccounts {
         let task_state = state.clone();
         let handle = tokio::spawn(async move {
             let progress_state = task_state.clone();
-            let outcome = zeron_harness::AcpHarness::antigravity()
+            let outcome = luna_harness::AcpHarness::antigravity()
                 .sign_in(browser, move |progress| {
                     let mut state = lock(&progress_state);
                     match progress {
-                        zeron_harness::acp::SignInProgress::Installing => {
+                        luna_harness::acp::SignInProgress::Installing => {
                             state.message = Some("Downloading Antigravity…".into());
                         }
-                        zeron_harness::acp::SignInProgress::OpenBrowser(url) => {
+                        luna_harness::acp::SignInProgress::OpenBrowser(url) => {
                             state.message = Some("Finish signing in in your browser.".into());
                             state.url = Some(url);
                         }
@@ -1203,12 +1203,12 @@ impl AgentAccounts {
             .to_path_buf();
         std::fs::create_dir_all(&home)?;
         let baseline_fingerprint = file_fingerprint(&home.join("auth.json"));
-        let mut cmd = zeron_harness::cursor::login_command(&home.join("auth.json"))
+        let mut cmd = luna_harness::cursor::login_command(&home.join("auth.json"))
             .await
             .map_err(|e| EngineError::Other(format!("Could not start the Cursor login: {e}")))?;
-        cmd.stdin(zeron_harness::process::Stdio::null())
-            .stdout(zeron_harness::process::Stdio::piped())
-            .stderr(zeron_harness::process::Stdio::piped());
+        cmd.stdin(luna_harness::process::Stdio::null())
+            .stdout(luna_harness::process::Stdio::piped())
+            .stderr(luna_harness::process::Stdio::piped());
         let child = match cmd.spawn() {
             Ok(child) => child,
             Err(err) => {
@@ -1559,7 +1559,7 @@ impl AgentAccounts {
         }
     }
 
-    /// Lazy TTL sweep (zeron uses a background fiber; native reaps on the next
+    /// Lazy TTL sweep (luna uses a background fiber; native reaps on the next
     /// accounts call — same bound, no standing task).
     fn sweep_flows(&self) {
         let stale: Vec<String> = lock(&self.inner.flows)
@@ -1692,8 +1692,8 @@ impl AgentAccounts {
     /// Read-only Claude subscription limits for the full Usage page. Reuses
     /// the existing provider usage endpoint, but intentionally reads only the
     /// credentials file. Usage never queries macOS Keychain or opens auth UI.
-    pub async fn read_claude_usage_limit(&self) -> zeron_proto::UsageLimitSnapshot {
-        use zeron_proto::{LimitAvailability, UsageLimitSnapshot, UsageProvider};
+    pub async fn read_claude_usage_limit(&self) -> luna_proto::UsageLimitSnapshot {
+        use luna_proto::{LimitAvailability, UsageLimitSnapshot, UsageProvider};
         let unavailable = |availability, detail: String, verified_account_id| UsageLimitSnapshot {
             provider: UsageProvider::Claude,
             verified_account_id,
@@ -2643,7 +2643,7 @@ fn scan_cursor_url(output: &str) -> Option<String> {
 }
 
 type LoginChildHandles = (
-    Arc<Mutex<Option<zeron_harness::process::Child>>>,
+    Arc<Mutex<Option<luna_harness::process::Child>>>,
     Arc<Mutex<String>>,
     Arc<Mutex<Option<Option<i32>>>>,
 );
@@ -2652,7 +2652,7 @@ type LoginChildHandles = (
 /// (the URL can land on either stream), and a monitor polls `try_wait` so the
 /// child is reaped without owning it — the cancel path needs concurrent kill
 /// access.
-fn wire_login_child(mut child: zeron_harness::process::Child) -> LoginChildHandles {
+fn wire_login_child(mut child: luna_harness::process::Child) -> LoginChildHandles {
     let output = Arc::new(Mutex::new(String::new()));
     for pipe in [
         child
@@ -3495,10 +3495,10 @@ mod tests {
         assert!(!config.claude_creds_file().exists());
         assert!(!config.claude_keychain_fallback_disabled());
         let observed = AgentAccounts::new(config).read_claude_usage_limit().await;
-        assert_eq!(observed.provider, zeron_proto::UsageProvider::Claude);
+        assert_eq!(observed.provider, luna_proto::UsageProvider::Claude);
         assert_eq!(
             observed.availability,
-            zeron_proto::LimitAvailability::Unsupported
+            luna_proto::LimitAvailability::Unsupported
         );
         assert!(observed.windows.is_empty());
         assert!(

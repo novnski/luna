@@ -5,13 +5,13 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionDoc, SessionMessageEntry};
-use zeron_proto::{
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionDoc, SessionMessageEntry};
+use luna_proto::{
     ConversationForkBoundaryKind, HarnessId, HistoryRecoveryView, ProviderForkBoundary,
     ProviderForkCapability, ProviderForkResult,
 };
-use zeron_sync::DocsStore;
+use luna_sync::DocsStore;
+use serde::{Deserialize, Serialize};
 
 use crate::EngineError;
 
@@ -343,7 +343,7 @@ pub fn load_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_doc::{MessagePart, MessageRole, MessageStatus};
+    use luna_doc::{MessagePart, MessageRole, MessageStatus};
 
     fn entry(id: &str, role: MessageRole, text: &str) -> SessionMessageEntry {
         SessionMessageEntry {

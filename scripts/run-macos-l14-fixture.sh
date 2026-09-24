@@ -122,7 +122,7 @@ build_bundle() {
   local stage stage_app contents old_app
   cd "$REPO_ROOT"
   [[ -s "$REFERENCE_ICNS" ]] || fail "validated L13 icon ancestor is unavailable at $REFERENCE_ICNS"
-  cargo build --locked -p zeron-ui --example session-history-fixture --features appshots-fixture
+  cargo build --locked -p luna-ui --example session-history-fixture --features appshots-fixture
   /bin/mkdir -p "$OUT"
   stage="$(/usr/bin/mktemp -d "$OUT/.luna-l14-stage.XXXXXX")"
   stage_app="$stage/LUNA L14 QA.app"

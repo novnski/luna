@@ -2,11 +2,11 @@
 //! redacted status and requests explicitly marked copy-isolated operations.
 
 use gpui::{Context, Entity, Render, SharedString, Task, Window, div, prelude::*, px};
-use zeron_proto::{
+use luna_proto::{
     BackupArchiveRequest, BackupAvailability, BackupPreview, BackupStageStatus, BackupStatus,
     BackupSummary,
 };
-use zeron_rpc::methods;
+use luna_rpc::methods;
 
 use super::widgets;
 use crate::popover::{self, Loadable};

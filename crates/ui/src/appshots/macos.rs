@@ -811,7 +811,7 @@ fn capture_with_screen_capture_kit(
 fn load_screen_capture_kit() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| unsafe {
-        // Load dynamically so Zeron's macOS 12.0 minimum remains valid. The
+        // Load dynamically so Luna's macOS 12.0 minimum remains valid. The
         // screenshot manager arrived in macOS 14; older systems use fallback.
         let path = b"/System/Library/Frameworks/ScreenCaptureKit.framework/ScreenCaptureKit\0";
         !dlopen(path.as_ptr().cast(), 1).is_null() // RTLD_LAZY

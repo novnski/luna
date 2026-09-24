@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
-use zeron_proto::{
+use luna_proto::{
     GitActionKind, GitActionPreview, GitActionReceipt, GitActionRequest, GitFileState,
     GitMessageRequest, GitPrStatus, GitPrStatusRequest,
 };
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 
 use crate::Repos;
 use crate::source_control::{
@@ -83,7 +83,7 @@ impl GitActions {
         Ok(String::from_utf8(diff).map_err(|_| "Staged diff is not UTF-8".to_string())?)
     }
 
-    /// Resolve a link/status through Zeron's existing GitHub provider. The
+    /// Resolve a link/status through Luna's existing GitHub provider. The
     /// selected push remote owns this card's PR context; an unrelated tracking
     /// remote must not silently supply a different repository's PR.
     pub async fn pr_status(&self, request: GitPrStatusRequest) -> Result<GitPrStatus, String> {

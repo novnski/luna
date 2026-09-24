@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use zeron_doc::{MessageRole, MessageStatus, SessionCommandPayload, SessionMessageEntry};
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use luna_doc::{MessageRole, MessageStatus, SessionCommandPayload, SessionMessageEntry};
+use luna_engine::{EngineCore, HarnessRegistry};
+use luna_harness::{Harness, HarnessError, RunControls};
+use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode,
 };
@@ -136,11 +136,11 @@ async fn exercise_projectless(command_first: bool) {
 
     // The composer's exact wire shape for "Don't work in a project": a
     // deviceId, no spaceId, no cwd.
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = luna_rpc::memory_client(core.rpc_service());
     if !command_first {
         client
             .call(
-                zeron_rpc::methods::MUTATE,
+                luna_rpc::methods::MUTATE,
                 serde_json::json!({
                     "op": "createChat",
                     "chatId": CHAT,
@@ -181,7 +181,7 @@ async fn exercise_projectless(command_first: bool) {
                         cwd: "~".into(),
                         sandbox: SandboxLevel::WorkspaceWrite,
                         auto_approve: true,
-                        permission_mode: zeron_proto::PermissionMode::Ask,
+                        permission_mode: luna_proto::PermissionMode::Ask,
                         parent_permission_ceiling: None,
                         environment_permission_ceiling: None,
                         permission_policy: None,
@@ -205,7 +205,7 @@ async fn exercise_projectless(command_first: bool) {
     for _ in 0..2 {
         client
             .call(
-                zeron_rpc::methods::MUTATE,
+                luna_rpc::methods::MUTATE,
                 serde_json::json!({
                     "op": "createChat", "chatId": CHAT, "deviceId": core.device_id,
                 }),

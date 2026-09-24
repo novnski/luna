@@ -12,16 +12,16 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use chrono::{Datelike, Utc};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use getrandom::fill as random_fill;
+use luna_doc::{
+    KIND_CHATS, KIND_SPACES, PendingBatch, REGISTRY_DOC_ID, RegistryDoc, RegistryRow, SessionDoc,
+    apply_op,
+};
+use luna_proto::{ActivityEnvelope, AgentEvent, TaskCommandEvent};
 use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, TempDir};
 use zeroize::Zeroize;
-use zeron_doc::{
-    KIND_CHATS, KIND_SPACES, PendingBatch, REGISTRY_DOC_ID, RegistryDoc, RegistryRow, SessionDoc,
-    apply_op,
-};
-use zeron_proto::{ActivityEnvelope, AgentEvent, TaskCommandEvent};
 
 use crate::instance_lock::InstanceLock;
 use crate::run_journal::journal_paths;
@@ -1216,7 +1216,7 @@ fn derive_profile(
     journal_profile: &Path,
     local_device_id: Option<&str>,
 ) -> Result<ProfileProjection> {
-    let store = zeron_sync::DocsStore::open(database_profile)
+    let store = luna_sync::DocsStore::open(database_profile)
         .map_err(|e| BackupError::Invalid(format!("staged database open failed: {e}")))?;
     let registry_bytes = store
         .load_snapshot(REGISTRY_DOC_ID)
@@ -1507,7 +1507,7 @@ fn read_journal_metadata(
 }
 
 fn staged_command_history(
-    store: &zeron_sync::DocsStore,
+    store: &luna_sync::DocsStore,
     task_id: &str,
 ) -> Result<(Vec<TaskCommandEvent>, bool)> {
     let mut cursor = 0;
@@ -2879,7 +2879,7 @@ fn verify_stage_base(stage: &Path, manifest: &BackupManifest, migrate: bool) -> 
         // Migrate only during first extraction. Subsequent readback must not
         // rewrite the checkpoint whose fingerprint it is proving.
         let conn = if migrate {
-            let store = zeron_sync::DocsStore::open(profile)
+            let store = luna_sync::DocsStore::open(profile)
                 .map_err(|e| BackupError::Invalid(format!("staged migration failed: {e}")))?;
             drop(store);
             let conn = Connection::open(&path)?;
@@ -2982,7 +2982,7 @@ fn rebuild_stage_activity(stage: &Path, manifest: &BackupManifest) -> Result<()>
                 expected.path
             )));
         }
-        let store = zeron_sync::DocsStore::open(&profile)
+        let store = luna_sync::DocsStore::open(&profile)
             .map_err(|e| BackupError::Invalid(format!("staged index open failed: {e}")))?;
         store
             .rebuild_activity_events(&projection.activity)

@@ -52,7 +52,7 @@ struct Route {
 
 fn helper_path() -> Result<std::path::PathBuf, String> {
     use sha2::{Digest, Sha256};
-    const HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zeron-webkit"));
+    const HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/luna-webkit"));
     let hash = format!("{:x}", Sha256::digest(HELPER));
     let root = std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)

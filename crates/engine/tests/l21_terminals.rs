@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use zeron_engine::Terminals;
-use zeron_proto::{TerminalEvent, TerminalProcessState};
+use luna_engine::Terminals;
+use luna_proto::{TerminalEvent, TerminalProcessState};
 
 async fn until_output(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<TerminalEvent>,

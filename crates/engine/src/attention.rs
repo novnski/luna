@@ -4,16 +4,16 @@
 //! paths, and provider error text stay in their owning transcript or settings
 //! surface and never enter a system notification through this projection.
 
-use sha2::{Digest, Sha256};
-use zeron_doc::{
+use luna_doc::{
     MessagePart, MessageRole, QueueDeliveryGate, QueueHoldReason, QueueMessageStatus,
     QueuedMessage, SessionMessageEntry,
 };
-use zeron_proto::{
+use luna_proto::{
     ATTENTION_CONTRACT_VERSION, AttentionItem, AttentionKind, AttentionLifecycle,
     AttentionSeverity, AttentionSourcePointer, AttentionTarget, Chat, ConnectivityState,
     RecoveryFailure, RecoveryStatus, Session, SessionStatus,
 };
+use sha2::{Digest, Sha256};
 
 pub(crate) const MANAGED_KINDS: &[AttentionKind] = &[
     AttentionKind::ApprovalRequired,
@@ -390,7 +390,7 @@ pub(crate) fn project_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_proto::{RecoveryAcceptance, RecoveryAction, TaskRecovery};
+    use luna_proto::{RecoveryAcceptance, RecoveryAction, TaskRecovery};
 
     #[test]
     fn recovery_projection_tracks_authoritative_phase_without_detail_leakage() {

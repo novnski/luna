@@ -3,15 +3,15 @@
 //! This module accepts only engine-resolved context and instruction sources.
 //! Client-supplied `model_options` never grant scopes or supply a contract.
 
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
-use zeron_proto::{
+use luna_proto::{
     LUNA_RUNTIME_CONTRACT_VERSION, LunaAgentRuntimeContract, OmittedRuntimeTool, RuntimeContext,
     RuntimeContractDiagnostics, RuntimeDelivery, RuntimeInstructionSection,
     RuntimeInstructionSource, RuntimeToolDefinition, RuntimeToolSummary,
 };
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::EngineError;
 use crate::cross_task_tools::{CrossTaskAuthority, CrossTaskBackend, CrossTaskTools};
@@ -402,7 +402,7 @@ pub async fn invoke_with_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_proto::HarnessId;
+    use luna_proto::HarnessId;
 
     fn context(harness: HarnessId) -> RuntimeContext {
         RuntimeContext {
