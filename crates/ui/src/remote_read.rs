@@ -36,6 +36,13 @@ pub enum RemoteReadCommand {
 struct RemoteReadWindow {
     state: RemoteReadState,
     commands: tokio::sync::mpsc::UnboundedSender<RemoteReadCommand>,
+    first_render_reported: bool,
+}
+
+fn qa_startup_event(event: &str) {
+    if std::env::var_os("LUNA_L30_QA_ROOT").is_some() {
+        eprintln!("{event} pid={}", std::process::id());
+    }
 }
 
 impl RemoteReadWindow {
@@ -63,6 +70,7 @@ impl RemoteReadWindow {
         Self {
             state: initial,
             commands,
+            first_render_reported: false,
         }
     }
 
@@ -97,6 +105,10 @@ impl RemoteReadWindow {
 
 impl Render for RemoteReadWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        if !self.first_render_reported {
+            self.first_render_reported = true;
+            qa_startup_event("L30_VIEW_FIRST_RENDER");
+        }
         let (status, details) = match &self.state {
             RemoteReadState::Connecting => (
                 "Connecting",
@@ -150,6 +162,7 @@ pub fn run_remote_read_view(
 ) {
     let app = gpui_platform::application().with_assets(crate::icons::Assets);
     app.run(move |cx: &mut App| {
+        qa_startup_event("L30_VIEW_APP_RUN_ENTERED");
         gpui_tokio::init(cx);
         let exit_on_quit = commands.clone();
         cx.on_app_quit(move |_| {
@@ -179,5 +192,6 @@ pub fn run_remote_read_view(
             },
         )
         .expect("open LUNA remote read window");
+        qa_startup_event("L30_VIEW_WINDOW_OPENED");
     });
 }

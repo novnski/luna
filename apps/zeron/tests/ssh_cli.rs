@@ -3,6 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1231,24 +1232,113 @@ async fn l30_native_qa_fixture_server() {
     let contents = app.join("Contents");
     let executable = contents.join("MacOS/launch");
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
-    fs::write(contents.join("Info.plist"), r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.iulian.luna.remote-read-qa</string>
-<key>CFBundleName</key><string>LUNA Remote Read QA</string>
-<key>CFBundleExecutable</key><string>launch</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-</dict></plist>
+    let resources = contents.join("Resources");
+    fs::create_dir_all(&resources).unwrap();
+    let staged_luna = contents.join("MacOS/luna");
+    fs::copy(&client_bin, &staged_luna).unwrap();
+    assert!(
+        Command::new("/usr/bin/cmp")
+            .arg("-s")
+            .arg(&client_bin)
+            .arg(&staged_luna)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let reference_icon = repository
+        .join("target/luna-settings-fixture-v1/LUNA Settings QA.app/Contents/Resources/luna.icns");
+    assert!(
+        reference_icon.is_file(),
+        "validated read-only QA icon is required"
+    );
+    fs::copy(reference_icon, resources.join("luna.icns")).unwrap();
+    let plist = contents.join("Info.plist");
+    fs::copy(repository.join("dist/macos/Info-dev.plist"), &plist).unwrap();
+    for (key, value) in [
+        ("CFBundleDisplayName", "LUNA Remote Read QA"),
+        ("CFBundleExecutable", "launch"),
+        ("CFBundleIdentifier", "com.iulian.luna.remote-read-qa"),
+        ("CFBundleName", "LUNA Remote Read QA"),
+        (
+            "CFBundleShortVersionString",
+            concat!(env!("CARGO_PKG_VERSION"), "-l30-qa"),
+        ),
+        ("CFBundleVersion", "1"),
+    ] {
+        assert!(
+            Command::new("/usr/bin/plutil")
+                .args(["-replace", key, "-string", value])
+                .arg(&plist)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    for key in ["CFBundleURLTypes", "LSEnvironment"] {
+        assert!(
+            Command::new("/usr/bin/plutil")
+                .args(["-remove", key])
+                .arg(&plist)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    // LaunchServices starts an actual Mach-O inside this bundle. The wrapper
+    // runs only the synthetic launch script, which execs the copied LUNA binary.
+    let wrapper_source = root.join("launcher.c");
+    fs::write(&wrapper_source, r#"#include <limits.h>
+#include <mach-o/dyld.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+int main(void) {
+    char executable_path[PATH_MAX];
+    char script_path[PATH_MAX];
+    uint32_t size = sizeof(executable_path);
+    if (_NSGetExecutablePath(executable_path, &size) != 0) return 70;
+    char *slash = strrchr(executable_path, '/');
+    if (slash == NULL) return 70;
+    *slash = '\0';
+    if (snprintf(script_path, sizeof(script_path), "%s/../Resources/launch.sh", executable_path) >= sizeof(script_path)) return 70;
+    execl("/bin/sh", "sh", script_path, (char *)NULL);
+    return 70;
+}
 "#).unwrap();
+    let xcode = Command::new("/usr/bin/xcode-select")
+        .arg("-p")
+        .output()
+        .unwrap();
+    assert!(xcode.status.success());
+    let sdk = PathBuf::from(String::from_utf8(xcode.stdout).unwrap().trim())
+        .join("Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk");
+    assert!(
+        sdk.is_dir(),
+        "the native QA fixture needs the Xcode macOS SDK"
+    );
+    assert!(
+        Command::new("/usr/bin/cc")
+            .arg("-isysroot")
+            .arg(&sdk)
+            .args(["-o"])
+            .arg(&executable)
+            .arg(&wrapper_source)
+            .status()
+            .unwrap()
+            .success()
+    );
     let script = format!(
-        "#!/bin/sh\nset -eu\nexport LUNA_DATA_DIR={}\nexport LUNA_SSH_BIN={}\nexport FAKE_SSH_ROOT={}\nexport CODEX_HOME={}\nexport CLAUDE_CONFIG_DIR={}\nexport ZERON_WORKOS_CLIENT_ID=''\nexport ZERON_EDGE_URL='http://127.0.0.1:1'\nunset ZERON_EDGE_TOKEN\nprintf '%s\\n' \"$$\" > {}\nexec {} ssh view --host fixture-host --machine {} --environment {} --workspace-scope development --remote-port {} --ipc-port {} --artifact {} --session-file {} --project {} --task {}\n",
+        "#!/bin/sh\nset -eu\nexport LUNA_DATA_DIR={}\nexport LUNA_SSH_BIN={}\nexport FAKE_SSH_ROOT={}\nexport CODEX_HOME={}\nexport CLAUDE_CONFIG_DIR={}\nexport LUNA_L30_QA_ROOT={}\nexport ZERON_WORKOS_CLIENT_ID=''\nexport ZERON_EDGE_URL='http://127.0.0.1:1'\nunset ZERON_EDGE_TOKEN\nprintf '%s\\n' \"$$\" > {}\nexec {} ssh view --host fixture-host --machine {} --environment {} --workspace-scope development --remote-port {} --ipc-port {} --artifact {} --session-file {} --project {} --task {} > {} 2>&1\n",
         shell_quote(&root.join("client").display().to_string()),
         shell_quote(&ssh.display().to_string()),
         shell_quote(&root.display().to_string()),
         shell_quote(&root.join("synthetic-codex").display().to_string()),
         shell_quote(&root.join("synthetic-claude").display().to_string()),
+        shell_quote(&root.display().to_string()),
         shell_quote(&root.join("view.pid").display().to_string()),
-        shell_quote(&client_bin.display().to_string()),
+        shell_quote(&staged_luna.display().to_string()),
         shell_quote(&core.device_id),
         shell_quote(&issued.target.environment_id),
         remote_port,
@@ -1257,9 +1347,33 @@ async fn l30_native_qa_fixture_server() {
         shell_quote(&token_path.display().to_string()),
         shell_quote(project),
         shell_quote(task),
+        shell_quote(&root.join("view.log").display().to_string()),
     );
-    fs::write(&executable, script).unwrap();
-    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let launcher = resources.join("launch.sh");
+    fs::write(&launcher, script).unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        Command::new("/usr/bin/codesign")
+            .args([
+                "--force",
+                "--sign",
+                "-",
+                "--identifier",
+                "com.iulian.luna.remote-read-qa"
+            ])
+            .arg(&app)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(&app)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     let manifest = serde_json::json!({
         "ready": true, "pid": std::process::id(), "root": root,
@@ -1267,7 +1381,8 @@ async fn l30_native_qa_fixture_server() {
         "workspaceScope": "development", "project": project, "task": task,
         "localOwnerPort": local_port, "guardedPort": remote_port,
         "sessionFile": token_path, "fakeSsh": ssh, "artifact": artifact,
-        "app": app, "launcher": executable,
+        "app": app, "launcher": executable, "stagedLuna": staged_luna,
+        "viewLog": root.join("view.log"),
         "dropForward": root.join("drop-forward"), "failForward": root.join("fail-forward"),
         "stallRpc": root.join("stall-rpc"), "stop": root.join("stop"),
         "viewPid": root.join("view.pid"), "tunnelPid": root.join("tunnel-pid"),
