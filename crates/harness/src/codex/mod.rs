@@ -100,6 +100,52 @@ pub fn resolve_codex_executable() -> Option<PathBuf> {
     crate::executable::find_on_paths("codex", extra)
 }
 
+/// The desktop app can ship a newer app-server than the installed CLI. Its
+/// account-scoped model catalog is more complete during a staggered CLI
+/// rollout, while task execution still follows the user's configured CLI.
+#[cfg(target_os = "macos")]
+async fn newer_desktop_catalog_executable(current: &std::path::Path) -> Option<PathBuf> {
+    let mut candidates = vec![PathBuf::from(
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+    )];
+    if let Some(home) = crate::executable::home_dir() {
+        candidates.push(home.join("Applications/ChatGPT.app/Contents/Resources/codex"));
+    }
+    let candidate = candidates.into_iter().find(|path| path.is_file())?;
+    let current_version = codex_cli_version(current).await?;
+    let candidate_version = codex_cli_version(&candidate).await?;
+    (candidate_version > current_version).then_some(candidate)
+}
+
+#[cfg(target_os = "macos")]
+async fn codex_cli_version(path: &std::path::Path) -> Option<(u32, u32, u32, bool)> {
+    let mut command = tokio::process::Command::new(path);
+    command.arg("--version").kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(2), command.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let output = std::str::from_utf8(&output.stdout).ok()?;
+    let version = output.split_whitespace().find(|part| {
+        part.as_bytes()
+            .first()
+            .is_some_and(|first| first.is_ascii_digit())
+    })?;
+    let (core, prerelease) = version
+        .split_once('-')
+        .map_or((version, false), |(core, _)| (core, true));
+    let mut parts = core.split('.').map(str::parse::<u32>);
+    Some((
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        !prerelease,
+    ))
+}
+
 /// A ready-to-spawn `codex login` command for the engine's account flow.
 ///
 /// Shares the harness's full resolution (`CODEX_EXECUTABLE`, PATH, login-shell
@@ -265,7 +311,14 @@ impl CodexHarness {
         codex_home: Option<&std::path::Path>,
         force_file_auth: bool,
     ) -> Result<Vec<Model>, HarnessError> {
-        let exe = self.resolve_executable()?;
+        let mut exe = self.resolve_executable()?;
+        #[cfg(target_os = "macos")]
+        if self.executable.is_none()
+            && std::env::var_os("CODEX_EXECUTABLE").is_none()
+            && let Some(newer) = newer_desktop_catalog_executable(&exe).await
+        {
+            exe = newer;
+        }
         let mut cmd = Command::new(&exe);
         if force_file_auth {
             apply_file_auth_override(&mut cmd);

@@ -1240,15 +1240,16 @@ impl HarnessesPage {
             .ready()
             .into_iter()
             .flat_map(|items| items.iter())
-            .filter(|item| item.installed && item.id != HarnessId::Mock)
+            .filter(|item| item.installed && descriptor_enabled(item) && item.id != HarnessId::Mock)
             .map(|item| item.id)
             .collect();
         if harnesses.is_empty() {
-            self.model_refresh_result = Some("No installed agents on the selected device.".into());
+            self.model_refresh_result = Some("No enabled agents on the selected device.".into());
             cx.notify();
             return;
         }
         let target = self.target_device.clone();
+        let executor = cx.background_executor().clone();
         self.model_refresh_running = true;
         self.model_refresh_result = None;
         self.model_refresh_task = Some(cx.spawn(async move |this, cx| {
@@ -1264,10 +1265,14 @@ impl HarnessesPage {
                 if let Some(target) = &target {
                     params["targetDeviceId"] = target.clone().into();
                 }
-                match engine
-                    .client()
-                    .call(methods::LIST_AGENT_ACCOUNTS, params)
-                    .await
+                match crate::attachments::call_with_timeout(
+                    &engine,
+                    &executor,
+                    methods::LIST_AGENT_ACCOUNTS,
+                    params,
+                    Duration::from_secs(20),
+                )
+                .await
                 {
                     Ok(value) => match serde_json::from_value::<AgentAccountsSnapshot>(value) {
                         Ok(snapshot) => {
@@ -1297,6 +1302,7 @@ impl HarnessesPage {
                 .map(|(harness, account_id)| {
                     let engine = engine.clone();
                     let target = target.clone();
+                    let executor = executor.clone();
                     async move {
                         let mut params = serde_json::json!({"harness": harness, "refresh": true});
                         if let Some(account_id) = account_id {
@@ -1305,15 +1311,23 @@ impl HarnessesPage {
                         if let Some(target) = target {
                             params["targetDeviceId"] = target.into();
                         }
-                        let result = engine
-                            .client()
-                            .call(methods::LIST_MODELS, params)
-                            .await
-                            .map_err(|error| error.to_string())
-                            .and_then(|value| {
-                                serde_json::from_value::<Vec<Model>>(value)
-                                    .map_err(|error| error.to_string())
-                            });
+                        let timeout = if harness == HarnessId::Opencode {
+                            Duration::from_secs(60)
+                        } else {
+                            Duration::from_secs(25)
+                        };
+                        let result = crate::attachments::call_with_timeout(
+                            &engine,
+                            &executor,
+                            methods::LIST_MODELS,
+                            params,
+                            timeout,
+                        )
+                        .await
+                        .and_then(|value| {
+                            serde_json::from_value::<Vec<Model>>(value)
+                                .map_err(|error| error.to_string())
+                        });
                         (harness, result)
                     }
                 })

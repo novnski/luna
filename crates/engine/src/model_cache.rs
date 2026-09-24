@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::agent_accounts::AgentAccounts;
 use crate::device_write::DeviceWriteHandle;
-use crate::registry::HarnessRegistry;
+use crate::registry::{HarnessRegistry, descriptor_enabled};
 
 const CACHE_VERSION: u32 = 1;
 const MAX_CACHE_BYTES: u64 = 1024 * 1024;
@@ -231,7 +231,10 @@ impl ModelCache {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             let mut targets = Vec::new();
             for descriptor in cache.registry.descriptors() {
-                if !descriptor.installed || descriptor.id == HarnessId::Mock {
+                if !descriptor.installed
+                    || !descriptor_enabled(&descriptor)
+                    || descriptor.id == HarnessId::Mock
+                {
                     continue;
                 }
                 if descriptor.id == HarnessId::Codex {
