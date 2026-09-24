@@ -2,8 +2,8 @@
 //! readback as the CLI and never mounts the full workspace watch/UI surface.
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    App, AppContext as _, Bounds, Context, Render, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, rgb, size,
 };
 use serde::{Deserialize, Serialize};
 
@@ -82,6 +82,8 @@ impl RemoteReadWindow {
     ) -> impl gpui::IntoElement {
         div()
             .id(label)
+            .role(gpui::Role::Button)
+            .aria_label(label)
             .px_4()
             .py_2()
             .rounded_md()
@@ -129,6 +131,8 @@ impl Render for RemoteReadWindow {
             ),
         };
         div()
+            .id("remote-read-root")
+            .role(gpui::Role::Document)
             .size_full()
             .p_6()
             .flex()
@@ -136,14 +140,38 @@ impl Render for RemoteReadWindow {
             .gap_4()
             .bg(rgb(0x11151b))
             .text_color(rgb(0xf4f6f8))
-            .child(div().text_size(px(20.)).child("LUNA · Remote task read"))
             .child(
                 div()
+                    .id("remote-read-title")
+                    .role(gpui::Role::Heading)
+                    .aria_label("LUNA Remote task read")
+                    .text_size(px(20.))
+                    .child("LUNA · Remote task read"),
+            )
+            .child(
+                div()
+                    .id("remote-read-description")
+                    .role(gpui::Role::Label)
+                    .aria_label("Read-only identity and bounded receipt page")
                     .text_color(rgb(0x9fb3c8))
                     .child("Read-only identity and bounded receipt page"),
             )
-            .child(div().text_color(rgb(0x9fb3c8)).child(status))
-            .child(div().flex_1().child(details))
+            .child(
+                div()
+                    .id("remote-read-status")
+                    .role(gpui::Role::Label)
+                    .aria_label(status)
+                    .text_color(rgb(0x9fb3c8))
+                    .child(status),
+            )
+            .child(
+                div()
+                    .id("remote-read-details")
+                    .role(gpui::Role::Label)
+                    .aria_label(details.clone())
+                    .flex_1()
+                    .child(details),
+            )
             .child(
                 div()
                     .flex()
@@ -172,6 +200,10 @@ pub fn run_remote_read_view(
         .detach();
         cx.open_window(
             WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: Some("LUNA Remote Task Read".into()),
+                    ..Default::default()
+                }),
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
                     size(px(700.), px(420.)),
