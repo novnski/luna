@@ -1729,6 +1729,7 @@ pub struct Shell {
     usage_card_open: bool,
     usage_provider_filter: Option<UsageProvider>,
     usage_request_epoch: u64,
+    usage_last_refresh_attempt_ms: Option<i64>,
     usage_task: Option<Task<()>>,
     provider_updates: Vec<ProviderUpdateStatus>,
     _provider_update_poll: Task<()>,
@@ -2023,6 +2024,7 @@ impl Shell {
                     if minute_changed {
                         shell.refresh_deletion_cleanup_summary(cx);
                     }
+                    shell.maybe_auto_refresh_usage(cx);
                 });
                 if alive.is_err() {
                     break;
@@ -2169,6 +2171,7 @@ impl Shell {
             usage_card_open: true,
             usage_provider_filter: None,
             usage_request_epoch: 0,
+            usage_last_refresh_attempt_ms: None,
             usage_task: None,
             provider_updates: Vec::new(),
             _provider_update_poll: provider_update_poll,
@@ -2398,6 +2401,7 @@ impl Shell {
             self.cleanup_summary_generation = None;
             self.cleanup_summary_last = None;
             self.usage_request_epoch = self.usage_request_epoch.wrapping_add(1);
+            self.usage_last_refresh_attempt_ms = None;
             self.usage_task = None;
             self.usage_refreshing = false;
             self.usage_snapshot = None;
@@ -7698,6 +7702,7 @@ impl Shell {
         };
         let user_menu =
             self.render_user_menu(user_line.clone(), trigger_subline, menu_identity, theme, cx);
+        let compact_usage_footer = self.usage_card_open && !self.settings.usage_sidebar_hidden;
 
         // The normal project filter and Activity toggle share the existing
         // fixed header row above the sidebar's scrolling task list.
@@ -7813,12 +7818,13 @@ impl Shell {
                     .mx(px(Theme::SPACE_SM))
                     .mt(px(4.0))
                     .mb(px(Theme::SPACE_SM))
-                    .pt(px(8.0))
-                    .border_t_1()
-                    .border_color(theme.border)
+                    .when(!compact_usage_footer, |el| {
+                        el.pt(px(8.0)).border_t_1().border_color(theme.border)
+                    })
+                    .when(compact_usage_footer, |el| el.pl(px(3.0)))
                     .flex()
                     .items_center()
-                    .justify_between()
+                    .when(!compact_usage_footer, |el| el.justify_between())
                     .child(
                         div()
                             .id("sidebar-settings-action")
@@ -7865,6 +7871,7 @@ impl Shell {
                         el.child(self.render_usage_action(theme, cx))
                     })
                     .child(user_menu)
+                    .when(compact_usage_footer, |el| el.child(div().flex_1()))
                     .when_some(self.render_provider_update_badge(theme, cx), |el, badge| {
                         el.child(badge)
                     }),
@@ -7877,6 +7884,7 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let compact = self.usage_card_open && !self.settings.usage_sidebar_hidden;
         let statuses = self
             .accounts_page
             .as_ref()
@@ -7902,10 +7910,14 @@ impl Shell {
                     pending.len(),
                     if pending.len() == 1 { "" } else { "s" }
                 ))
-                .size(px(48.0))
-                .rounded(px(Theme::CONTROL_RADIUS))
+                .w(px(48.0))
+                .h(px(if compact { 24.0 } else { 48.0 }))
+                .rounded(px(if compact { 12.0 } else { Theme::CONTROL_RADIUS }))
                 .border_1()
                 .border_color(theme.border)
+                .when(compact, |el| {
+                    el.border_color(gpui::rgb(0x3a3a3a)).bg(gpui::rgb(0x242424))
+                })
                 .cursor_pointer()
                 .hover(|el| el.bg(theme.glass_hover()))
                 .flex()
@@ -7919,10 +7931,14 @@ impl Shell {
                 )
                 .child(
                     icon(icons::ARROW_DOWN)
-                        .size(px(15.0))
+                        .size(px(if compact { 12.0 } else { 15.0 }))
                         .text_color(theme.accent),
                 )
-                .child(icon(mark).size(px(16.0)).text_color(theme.text))
+                .child(
+                    icon(mark)
+                        .size(px(if compact { 13.0 } else { 16.0 }))
+                        .text_color(theme.text),
+                )
                 .into_any_element(),
         )
     }
@@ -17614,6 +17630,12 @@ mod shortcut_focus_regressions {
 impl Shell {
     pub fn fixture_provider_usage(&mut self, cx: &mut Context<Self>) {
         let now = chrono::Utc::now().timestamp_millis();
+        let environment_id = self
+            .state
+            .read(cx)
+            .local_device_id
+            .clone()
+            .unwrap_or_else(|| "fixture-mac".into());
         let snapshot = luna_proto::UsageSnapshot {
             summary: luna_proto::UsageSummary {
                 contract_version: luna_proto::USAGE_CONTRACT_VERSION,
@@ -17624,7 +17646,7 @@ impl Shell {
                 buckets: vec![],
                 sources: vec![luna_proto::UsageSource {
                     provider: luna_proto::UsageProvider::Codex,
-                    environment_id: "fixture-mac".into(),
+                    environment_id: environment_id.clone(),
                     fingerprint: "fixture-only".into(),
                     status: luna_proto::UsageSourceStatus::Ready,
                     distinct_sessions: 0,
@@ -17641,14 +17663,14 @@ impl Shell {
                 provider: luna_proto::UsageProvider::Codex,
                 verified_account_id: Some("fixture-codex".into()),
                 account_label: Some("iulian@example.test".into()),
-                plan: Some("Pro".into()),
+                plan: Some("pro".into()),
                 checked_at_ms: Some(now),
                 availability: luna_proto::LimitAvailability::Ready,
                 windows: vec![luna_proto::UsageLimitWindow {
                     id: "weekly".into(),
-                    label: "7d".into(),
-                    used_percent: 73.0,
-                    resets_at_ms: Some(now + 4 * 24 * 60 * 60_000),
+                    label: "Weekly".into(),
+                    used_percent: 100.0,
+                    resets_at_ms: Some(now + (4 * 24 + 23) * 60 * 60_000 + 45 * 60_000),
                     duration_minutes: Some(7 * 24 * 60),
                 }],
                 reset_credits: None,
@@ -17657,7 +17679,108 @@ impl Shell {
         };
         self.usage_snapshot = Some(snapshot.clone());
         self.usage_environment_snapshots = vec![snapshot];
+        self.usage_environment_filter = Some(environment_id);
         self.usage_provider_filter = Some(luna_proto::UsageProvider::Codex);
+        self.provider_updates = vec![ProviderUpdateStatus {
+            harness: HarnessId::Codex,
+            installed_version: None,
+            latest_version: None,
+            update_available: true,
+            update_command: None,
+            detail: None,
+        }];
+        cx.notify();
+    }
+
+    pub fn fixture_add_compact_usage_providers(&mut self, cx: &mut Context<Self>) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let Some(environment_id) = self.usage_environment_filter.clone() else {
+            return;
+        };
+        let source = luna_proto::UsageSource {
+            provider: luna_proto::UsageProvider::OpenCodeGo,
+            environment_id,
+            fingerprint: "fixture-opencode".into(),
+            status: luna_proto::UsageSourceStatus::Ready,
+            distinct_sessions: 0,
+            files_scanned: 0,
+            files_cached: 0,
+            failed_files: 0,
+            detail: None,
+        };
+        let limit = luna_proto::UsageLimitSnapshot {
+            provider: luna_proto::UsageProvider::OpenCodeGo,
+            verified_account_id: Some("fixture-opencode".into()),
+            account_label: None,
+            plan: Some("OpenCode Go".into()),
+            checked_at_ms: Some(now),
+            availability: luna_proto::LimitAvailability::Ready,
+            windows: vec![
+                luna_proto::UsageLimitWindow {
+                    id: "five-hour".into(),
+                    label: "5h".into(),
+                    used_percent: 0.0,
+                    resets_at_ms: Some(now + 22 * 60_000),
+                    duration_minutes: Some(5 * 60),
+                },
+                luna_proto::UsageLimitWindow {
+                    id: "weekly".into(),
+                    label: "7d".into(),
+                    used_percent: 0.0,
+                    resets_at_ms: Some(now + (3 * 24 + 2) * 60 * 60_000 + 60_000),
+                    duration_minutes: Some(7 * 24 * 60),
+                },
+                luna_proto::UsageLimitWindow {
+                    id: "monthly".into(),
+                    label: "Monthly".into(),
+                    used_percent: 37.0,
+                    resets_at_ms: Some(now + (17 * 24 + 11) * 60 * 60_000 + 60_000),
+                    duration_minutes: Some(30 * 24 * 60),
+                },
+            ],
+            reset_credits: None,
+            detail: None,
+        };
+        let claude_source = luna_proto::UsageSource {
+            provider: luna_proto::UsageProvider::Claude,
+            environment_id: source.environment_id.clone(),
+            fingerprint: "fixture-claude".into(),
+            status: luna_proto::UsageSourceStatus::Ready,
+            distinct_sessions: 0,
+            files_scanned: 0,
+            files_cached: 0,
+            failed_files: 0,
+            detail: None,
+        };
+        let claude_limit = luna_proto::UsageLimitSnapshot {
+            provider: luna_proto::UsageProvider::Claude,
+            verified_account_id: Some("fixture-claude".into()),
+            account_label: None,
+            plan: Some("Max".into()),
+            checked_at_ms: Some(now),
+            availability: luna_proto::LimitAvailability::Ready,
+            windows: vec![luna_proto::UsageLimitWindow {
+                id: "seven_day".into(),
+                label: "Weekly".into(),
+                used_percent: 10.0,
+                resets_at_ms: Some(now + 2 * 24 * 60 * 60_000),
+                duration_minutes: Some(7 * 24 * 60),
+            }],
+            reset_credits: None,
+            detail: None,
+        };
+        if let Some(snapshot) = &mut self.usage_snapshot {
+            snapshot.summary.sources.push(source.clone());
+            snapshot.summary.sources.push(claude_source.clone());
+            snapshot.limits.push(limit.clone());
+            snapshot.limits.push(claude_limit.clone());
+        }
+        if let Some(snapshot) = self.usage_environment_snapshots.first_mut() {
+            snapshot.summary.sources.push(source);
+            snapshot.summary.sources.push(claude_source);
+            snapshot.limits.push(limit);
+            snapshot.limits.push(claude_limit);
+        }
         cx.notify();
     }
 

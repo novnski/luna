@@ -448,149 +448,185 @@ fn compact_limit_status(limit: &UsageLimitSnapshot, now_ms: i64) -> Option<&'sta
     }
 }
 
-fn compact_limit_row(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64) -> AnyElement {
-    let mark = provider_mark(limit.provider);
+fn compact_reset_time(window: &luna_proto::UsageLimitWindow, now_ms: i64) -> String {
+    let Some(reset_ms) = window.resets_at_ms else {
+        return "—".into();
+    };
+    let minutes = reset_ms.saturating_sub(now_ms).div_euclid(60_000);
+    if minutes <= 0 {
+        "0m".into()
+    } else if minutes < 60 {
+        format!("{minutes}m")
+    } else if minutes < 24 * 60 {
+        if minutes % 60 == 0 {
+            format!("{}h", minutes / 60)
+        } else {
+            format!("{}h {}m", minutes / 60, minutes % 60)
+        }
+    } else {
+        let days = minutes / (24 * 60);
+        let hours = (minutes % (24 * 60)) / 60;
+        if hours == 0 {
+            format!("{days}d")
+        } else {
+            format!("{days}d {hours}h")
+        }
+    }
+}
+
+fn compact_window_label(
+    limit: &UsageLimitSnapshot,
+    window: &luna_proto::UsageLimitWindow,
+) -> String {
+    if limit.provider == UsageProvider::Codex {
+        match window.duration_minutes {
+            Some(300) => return "5h".into(),
+            Some(10_080) => return "7d".into(),
+            _ => {}
+        }
+    }
+    window.label.clone()
+}
+
+fn compact_plan_label(limit: &UsageLimitSnapshot, plan: &str) -> String {
+    if limit.provider == UsageProvider::Codex && plan.eq_ignore_ascii_case("pro") {
+        "Pro".into()
+    } else {
+        plan.into()
+    }
+}
+
+fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
     let mut row = div()
         .w_full()
         .min_w_0()
-        .p(px(7.0))
-        .rounded(px(Theme::CONTROL_RADIUS))
-        .bg(theme.glass_hover().opacity(0.18))
+        .px(px(10.0))
+        .py(px(7.0))
         .flex()
         .flex_col()
-        .gap(px(5.0))
+        .gap(px(2.0))
         .child(
             div()
-                .min_w_0()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
-                .child(
-                    icon(mark)
-                        .size(px(13.0))
-                        .flex_none()
-                        .text_color(theme.text_muted),
-                )
+                .justify_between()
+                .gap(px(5.0))
                 .child(
                     div()
                         .min_w_0()
-                        .flex_1()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(limit.provider.label()),
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .line_height(px(15.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(gpui::rgb(0xd1d1d3))
+                        .child(match limit.provider {
+                            UsageProvider::OpenCodeGo => "opencode",
+                            provider => provider.label(),
+                        }),
                 )
                 .when_some(limit.plan.clone(), |el, plan| {
                     el.child(
                         div()
                             .flex_none()
                             .px(px(5.0))
-                            .py(px(2.0))
-                            .rounded(px(Theme::CONTROL_RADIUS))
-                            .bg(theme.glass_hover().opacity(0.4))
-                            .text_size(crate::typography::ui_rems(9.0))
-                            .text_color(theme.text_muted)
-                            .child(plan),
+                            .py(px(1.0))
+                            .rounded(px(5.0))
+                            .bg(gpui::rgb(0x303030))
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .line_height(px(12.0))
+                            .text_color(gpui::rgb(0xa8a8ab))
+                            .child(compact_plan_label(limit, &plan)),
                     )
                 }),
         );
-    if let Some(account) = limit
-        .account_label
-        .as_deref()
-        .filter(|label| !label.is_empty())
-    {
+    if let Some(account) = limit.account_label.as_deref().filter(|s| !s.is_empty()) {
         row = row.child(
             div()
                 .min_w_0()
                 .truncate()
                 .text_size(crate::typography::ui_rems(10.0))
-                .text_color(theme.text_muted)
+                .line_height(px(14.0))
+                .text_color(gpui::rgb(0xa7a7aa))
                 .child(account.to_owned()),
         );
     }
-    if let Some(window) = limit.windows.first() {
-        let used = window.used_percent.clamp(0.0, 100.0);
-        let tone = if used >= 95.0 {
-            theme.danger
-        } else if used >= 80.0 {
-            theme.warning
-        } else {
-            theme.accent
-        };
-        row = row
-            .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_size(crate::typography::ui_rems(10.0))
-                            .text_color(theme.text_muted)
-                            .child(window.label.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(crate::typography::ui_rems(10.0))
-                            .text_color(tone)
-                            .child(format!("{used:.0}%")),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(3.0))
-                    .rounded(px(2.0))
-                    .bg(theme.border)
-                    .child(
-                        div()
-                            .h_full()
-                            .w(gpui::relative(used / 100.0))
-                            .rounded(px(2.0))
-                            .bg(tone),
-                    ),
-            )
-            .when(window.resets_at_ms.is_some(), |row| {
-                row.child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(crate::typography::ui_rems(9.0))
-                        .text_color(theme.text_muted)
-                        .child(reset_label(limit.reset_state(window, now_ms), now_ms)),
-                )
-            });
-    } else {
+    if limit.windows.is_empty() {
         row = row.child(
             div()
                 .text_size(crate::typography::ui_rems(10.0))
-                .text_color(theme.text_muted)
+                .text_color(gpui::rgb(0xa7a7aa))
                 .child("Quota unavailable"),
+        );
+    }
+    for window in &limit.windows {
+        let used = window.used_percent.clamp(0.0, 100.0);
+        let (label_width, reset_width) = if limit.provider == UsageProvider::Codex {
+            (24.0, 45.0)
+        } else {
+            (50.0, 43.0)
+        };
+        let fill = if limit.provider == UsageProvider::Codex {
+            gpui::rgb(0xd34351)
+        } else {
+            gpui::rgb(0xc9c9ca)
+        };
+        row = row.child(
+            div()
+                .mt(px(3.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .text_size(crate::typography::ui_rems(10.0))
+                .line_height(px(14.0))
+                .text_color(gpui::rgb(0xb5b5b8))
+                .child(
+                    div()
+                        .w(px(label_width))
+                        .flex_none()
+                        .truncate()
+                        .child(compact_window_label(limit, window)),
+                )
+                .child(
+                    div()
+                        .h(px(4.0))
+                        .flex_1()
+                        .min_w_0()
+                        .rounded(px(2.0))
+                        .bg(gpui::rgb(0x393939))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(gpui::relative((used / 100.0).max(0.012)))
+                                .rounded(px(2.0))
+                                .bg(fill),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(26.0))
+                        .flex_none()
+                        .text_align(gpui::TextAlign::Right)
+                        .child(format!("{used:.0}%")),
+                )
+                .child(
+                    div()
+                        .w(px(reset_width))
+                        .flex_none()
+                        .text_align(gpui::TextAlign::Right)
+                        .child(if limit.is_fresh(now_ms) {
+                            compact_reset_time(window, now_ms)
+                        } else {
+                            "—".into()
+                        }),
+                ),
         );
     }
     if let Some(status) = compact_limit_status(limit, now_ms) {
         row = row.child(
             div()
-                .w_full()
-                .min_w_0()
                 .truncate()
-                .text_size(crate::typography::ui_rems(10.0))
-                .text_color(
-                    if matches!(limit.availability, LimitAvailability::ProbeFailed)
-                        || status.starts_with("Stale")
-                    {
-                        theme.warning
-                    } else {
-                        theme.text_muted
-                    },
-                )
+                .text_size(crate::typography::ui_rems(9.0))
+                .text_color(gpui::rgb(0xffce46))
                 .child(status),
         );
     }
@@ -865,6 +901,7 @@ impl Shell {
             cx.notify();
             return;
         };
+        self.usage_last_refresh_attempt_ms = Some(Utc::now().timestamp_millis());
         self.usage_request_epoch += 1;
         let epoch = self.usage_request_epoch;
         let engine_generation = self.state.read(cx).engine_generation();
@@ -967,6 +1004,37 @@ impl Shell {
             .ok();
         }));
         cx.notify();
+    }
+
+    pub(super) fn maybe_auto_refresh_usage(&mut self, cx: &mut Context<Self>) {
+        let visible = (!self.settings.usage_sidebar_hidden && self.usage_card_open)
+            || matches!(&self.route, super::Route::Settings(SettingsSection::Usage));
+        if !visible || self.usage_refreshing || self.state.read(cx).engine().is_none() {
+            return;
+        }
+        if self.usage_card_open
+            && self.usage_environment_filter.is_none()
+            && self.usage_last_refresh_attempt_ms.is_none()
+        {
+            let state = self.state.read(cx);
+            self.usage_environment_filter = state
+                .selected_chat
+                .as_ref()
+                .and_then(|id| state.chats.iter().find(|chat| &chat.id == id))
+                .map(|chat| chat.device_id.clone())
+                .or_else(|| {
+                    state
+                        .engine()
+                        .map(|engine| engine.engine_info().device_id.clone())
+                });
+        }
+        let now_ms = Utc::now().timestamp_millis();
+        if self
+            .usage_last_refresh_attempt_ms
+            .is_none_or(|last| now_ms.saturating_sub(last) >= USAGE_LIMIT_FRESHNESS_MS)
+        {
+            self.refresh_usage(cx);
+        }
     }
 
     fn set_usage_metric(&mut self, metric: &'static str, cx: &mut Context<Self>) {
@@ -1650,117 +1718,316 @@ impl Shell {
 
     pub(super) fn render_usage_card(
         &mut self,
-        theme: &Theme,
+        _theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let open = self.usage_card_open;
-        let provider_tabs = self.render_usage_provider_tabs(theme, true, cx);
+        if !self.usage_card_open {
+            return div().into_any_element();
+        }
         let environment_label = self.compact_usage_environment_label(cx);
-        let mut summaries = div()
-            .id("usage-card-summaries")
-            .min_w_0()
-            .max_h(px((self.viewport_height * 0.21).clamp(100.0, 180.0)))
-            .overflow_y_scroll()
+        let snapshot = self.selected_usage_snapshot();
+        let mut providers: Vec<_> = [UsageProvider::Codex, UsageProvider::OpenCodeGo]
+            .into_iter()
+            .filter(|provider| {
+                snapshot.as_ref().is_none_or(|snapshot| {
+                    snapshot
+                        .limits
+                        .iter()
+                        .any(|limit| limit.provider == *provider)
+                        || snapshot
+                            .summary
+                            .sources
+                            .iter()
+                            .any(|source| source.provider == *provider)
+                })
+            })
+            .collect();
+        if providers.is_empty()
+            && snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot
+                    .limits
+                    .iter()
+                    .any(|limit| limit.provider == UsageProvider::Claude)
+                    || snapshot
+                        .summary
+                        .sources
+                        .iter()
+                        .any(|source| source.provider == UsageProvider::Claude)
+            })
+        {
+            providers.push(UsageProvider::Claude);
+        }
+        let active = self
+            .usage_provider_filter
+            .filter(|provider| providers.contains(provider))
+            .or_else(|| providers.first().copied());
+        let tabs = div()
             .flex()
-            .flex_col()
-            .gap(px(5.0));
-        let card = div()
-            .id("usage-sidebar-card")
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .mx(px(Theme::SPACE_SM))
-            .mb(px(4.0))
-            .p(px(8.0))
-            .min_w_0()
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.glass_hover().opacity(0.5))
-            .child(
+            .items_center()
+            .gap(px(2.0))
+            .children(providers.into_iter().map(|provider| {
+                let selected = active == Some(provider);
+                let update_available = self.provider_updates.iter().any(|status| {
+                    status.update_available
+                        && status.harness
+                            == match provider {
+                                UsageProvider::Codex => luna_proto::HarnessId::Codex,
+                                UsageProvider::OpenCodeGo => luna_proto::HarnessId::Opencode,
+                                UsageProvider::Claude => luna_proto::HarnessId::ClaudeCode,
+                            }
+                }) || snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.limits.iter().any(|limit| {
+                        limit.provider == provider
+                            && limit.is_fresh(Utc::now().timestamp_millis())
+                            && limit
+                                .windows
+                                .iter()
+                                .any(|window| window.used_percent >= 95.0)
+                    })
+                });
                 div()
-                    .id("usage-card-environment")
-                    .w_full()
-                    .min_w_0()
+                    .id(SharedString::from(format!(
+                        "usage-compact-provider-{provider:?}"
+                    )))
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("Show {} usage", provider.label()))
+                    .aria_selected(selected)
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .w(px(32.0))
+                    .h(px(36.0))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
-                    .cursor_pointer()
-                    .text_size(crate::typography::ui_rems(10.0))
-                    .text_color(theme.text_muted)
-                    .on_click(cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)))
+                    .justify_center()
+                    .border_b_2()
+                    .border_color(if selected {
+                        gpui::rgb(0xcacacc)
+                    } else {
+                        gpui::rgb(0x242424)
+                    })
+                    .hover(|el| el.bg(gpui::rgb(0x303030)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.usage_provider_filter = Some(provider);
+                        cx.notify();
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(
+                            event.keystroke.key.to_ascii_lowercase().as_str(),
+                            "enter" | "space"
+                        ) {
+                            cx.stop_propagation();
+                            this.usage_provider_filter = Some(provider);
+                            cx.notify();
+                        }
+                    }))
                     .child(
                         div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .child(format!("Machine: {environment_label}")),
+                            .relative()
+                            .size(px(18.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                icon(provider_mark(provider))
+                                    .size(px(if provider == UsageProvider::OpenCodeGo {
+                                        14.0
+                                    } else {
+                                        18.0
+                                    }))
+                                    .text_color(if provider == UsageProvider::OpenCodeGo {
+                                        gpui::rgb(0x3976f6)
+                                    } else if selected {
+                                        gpui::rgb(0xd1d1d3)
+                                    } else {
+                                        gpui::rgb(0xa5a5a8)
+                                    }),
+                            )
+                            .when(update_available, |el| {
+                                el.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(-2.0))
+                                        .right(px(-3.0))
+                                        .size(px(6.0))
+                                        .rounded(px(3.0))
+                                        .bg(gpui::rgb(0xd34351)),
+                                )
+                            }),
                     )
-                    .child(div().flex_none().child("Change")),
-            )
-            .child(provider_tabs);
-        if let Some(snapshot) = self.selected_usage_snapshot() {
+            }));
+        let mut content = div()
+            .id("usage-card-summaries")
+            .min_w_0()
+            .pb(px(4.0))
+            .max_h(px((self.viewport_height * 0.25).clamp(130.0, 230.0)))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        if let Some(snapshot) = snapshot {
             let now = Utc::now().timestamp_millis();
-            for limit in &snapshot.limits {
-                if self
-                    .usage_provider_filter
-                    .is_none_or(|provider| provider == limit.provider)
-                {
-                    summaries = summaries.child(compact_limit_row(limit, theme, now));
-                }
+            let limits: Vec<_> = snapshot
+                .limits
+                .iter()
+                .filter(|limit| Some(limit.provider) == active)
+                .collect();
+            if limits.is_empty() {
+                content = content.child(
+                    div()
+                        .p(px(10.0))
+                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_color(gpui::rgb(0xa7a7aa))
+                        .child("No verified account limits available"),
+                );
+            }
+            for limit in limits {
+                content = content.child(compact_limit_row(limit, now));
             }
         } else {
-            summaries = summaries.child(
+            content = content.child(
                 div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .child("No verified account limits available"),
+                    .p(px(10.0))
+                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_color(gpui::rgb(0xa7a7aa))
+                    .child(if self.usage_refreshing {
+                        "Refreshing usage…"
+                    } else {
+                        "No verified account limits available"
+                    }),
             );
         }
-        let card = card
-            .child(summaries)
-            .when_some(self.usage_error.clone(), |el, error| {
-                el.child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(theme.warning)
-                        .child(error),
-                )
-            })
+        div()
+            .id("usage-sidebar-card")
+            .mx(px(Theme::SPACE_SM))
+            .mb(px(0.0))
+            .min_w_0()
+            .rounded(px(9.0))
+            .border_1()
+            .border_color(gpui::rgb(0x3a3a3a))
+            .bg(gpui::rgb(0x242424))
+            .flex()
+            .flex_col()
             .child(
                 div()
+                    .h(px(40.0))
+                    .px(px(4.0))
                     .flex()
-                    .justify_between()
-                    .gap(px(8.0))
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(tabs)
+                    .child(
+                        div()
+                            .id("usage-card-environment")
+                            .role(gpui::Role::Button)
+                            .aria_label("Change usage machine")
+                            .tab_index(0)
+                            .min_w_0()
+                            .flex_1()
+                            .ml(px(6.0))
+                            .truncate()
+                            .px(px(5.0))
+                            .py(px(4.0))
+                            .rounded(px(5.0))
+                            .bg(gpui::rgb(0x292929))
+                            .cursor_pointer()
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(gpui::rgb(0xc7c7ca))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)),
+                            )
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(
+                                    event.keystroke.key.to_ascii_lowercase().as_str(),
+                                    "enter" | "space"
+                                ) {
+                                    cx.stop_propagation();
+                                    this.cycle_usage_environment(cx);
+                                }
+                            }))
+                            .child(environment_label),
+                    )
                     .child(
                         div()
                             .id("usage-card-refresh")
-                            .cursor_pointer()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted)
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
-                            .child(if self.usage_refreshing {
-                                "Refreshing…"
+                            .role(gpui::Role::Button)
+                            .aria_label(if self.usage_refreshing {
+                                "Refreshing usage"
                             } else {
-                                "Refresh"
-                            }),
+                                "Refresh usage"
+                            })
+                            .tab_index(0)
+                            .size(px(26.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|el| el.bg(gpui::rgb(0x303030)))
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(
+                                    event.keystroke.key.to_ascii_lowercase().as_str(),
+                                    "enter" | "space"
+                                ) {
+                                    cx.stop_propagation();
+                                    this.refresh_usage(cx);
+                                }
+                            }))
+                            .child(icon(icons::REFRESH).size(px(15.0)).text_color(
+                                if self.usage_refreshing {
+                                    gpui::rgb(0xe0e0e2)
+                                } else {
+                                    gpui::rgb(0xbdbdc0)
+                                },
+                            )),
                     )
                     .child(
                         div()
-                            .id("usage-view-all")
+                            .id("usage-card-collapse")
+                            .role(gpui::Role::Button)
+                            .aria_label("Collapse usage")
+                            .tab_index(0)
+                            .size(px(24.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .cursor_pointer()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.accent)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_settings(SettingsSection::Usage, cx)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(
+                                    event.keystroke.key.to_ascii_lowercase().as_str(),
+                                    "enter" | "space"
+                                ) {
+                                    cx.stop_propagation();
+                                    this.toggle_usage_card(cx);
+                                }
                             }))
-                            .child("View all usage"),
+                            .child(
+                                icon(icons::ALT_ARROW_DOWN)
+                                    .size(px(13.0))
+                                    .text_color(gpui::rgb(0xbdbdc0)),
+                            ),
                     ),
-            );
-        div().when(open, |el| el.child(card)).into_any_element()
+            )
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(gpui::rgb(0x363636))
+                    .child(content),
+            )
+            .when_some(self.usage_error.clone(), |el, error| {
+                el.child(
+                    div()
+                        .px(px(10.0))
+                        .pb(px(7.0))
+                        .text_size(crate::typography::ui_rems(9.0))
+                        .text_color(gpui::rgb(0xffce46))
+                        .child(error),
+                )
+            })
+            .into_any_element()
     }
 
     pub(super) fn render_usage_action(
@@ -1769,12 +2036,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let open = self.usage_card_open;
-        div()
+        let action = div()
             .id("usage-sidebar-action")
             .role(gpui::Role::Button)
             .aria_label("Toggle usage")
             .aria_expanded(open)
-            .size(px(36.0))
+            .size(px(if open { 32.0 } else { 36.0 }))
             .track_focus(&self.usage_action_focus)
             .cursor_pointer()
             .rounded(px(Theme::CONTROL_RADIUS))
@@ -1798,7 +2065,13 @@ impl Shell {
                     this.toggle_usage_card(cx);
                 }
             }))
-            .child(icon(icons::CHART).size(px(18.0)).text_color(theme.text))
+            .child(icon(icons::CHART).size(px(18.0)).text_color(theme.text));
+        div()
+            .size(px(36.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(action)
             .into_any_element()
     }
 }
