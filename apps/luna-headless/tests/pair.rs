@@ -56,7 +56,7 @@ async fn minimal_binary_issues_one_time_pairing_for_exact_engine() {
         .env("LUNA_DATA_DIR", root.join("child-profile"))
         .env("CODEX_HOME", root.join("synthetic-codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))
-        .env("ZERON_WORKOS_CLIENT_ID", "")
+        .env("LUNA_WORKOS_CLIENT_ID", "")
         .output()
         .await
         .unwrap();

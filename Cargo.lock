@@ -11824,6 +11824,7 @@ dependencies = [
  "zeron-engine",
  "zeron-proto",
  "zeron-rpc",
+ "zeron-sync",
  "zeron-ui",
  "zeron-update",
 ]
@@ -11877,6 +11878,7 @@ dependencies = [
  "tokio-util",
  "toml 0.8.23",
  "tracing",
+ "url",
  "uuid",
  "windows-sys 0.61.2",
  "zeroize",

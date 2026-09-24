@@ -27,8 +27,8 @@ async fn cli(root: &Path, port: u16, args: &[&str]) -> (i32, serde_json::Value) 
         .env("LUNA_DATA_DIR", root.join("child-data"))
         .env("CODEX_HOME", root.join("synthetic-codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))
-        .env("ZERON_WORKOS_CLIENT_ID", "")
-        .env("ZERON_EDGE_URL", "http://127.0.0.1:1")
+        .env("LUNA_WORKOS_CLIENT_ID", "")
+        .env("LUNA_EDGE_URL", "http://127.0.0.1:1")
         .output()
         .await
         .unwrap();
@@ -540,7 +540,7 @@ impl RpcService for FailureService {
         match method {
             methods::ENGINE_INFO => Ok(RpcReply::Value(serde_json::json!({
                 "deviceId": "fixture-machine", "workspaceScope": "development",
-                "capabilities": []
+                "capabilities": [zeron_proto::capabilities::LUNA_OWNER_IPC_V1]
             }))),
             methods::ENGINE_READY => match self.ready {
                 FailureKind::Unavailable => Err(RpcError::UnknownMethod(method.into())),

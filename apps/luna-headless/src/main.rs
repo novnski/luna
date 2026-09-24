@@ -104,6 +104,13 @@ async fn main() -> anyhow::Result<()> {
             ),
         };
         let client = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{ipc_port}")).await?;
+        let info: zeron_proto::EngineInfo = client
+            .call_as(methods::ENGINE_INFO, serde_json::json!({}))
+            .await?;
+        anyhow::ensure!(
+            info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1),
+            "local listener is not a compatible LUNA engine"
+        );
         let _: serde_json::Value = client
             .call_as(methods::ENGINE_READY, serde_json::json!({}))
             .await?;
@@ -185,19 +192,31 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").expect("HOME must be set")).join(".luna")
         });
-    let edge_token = std::env::var("ZERON_EDGE_TOKEN").ok();
-    let workos_client_id = match std::env::var("ZERON_WORKOS_CLIENT_ID") {
-        Ok(value) if value.trim().is_empty() => None,
-        Ok(value) => Some(value),
-        Err(_) if edge_token.is_some() => None,
-        Err(_) => Some("client_01KWD0EAKZKD50YCQJNYSRE4BY".into()),
-    };
+    let edge_url = std::env::var("LUNA_EDGE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| zeron_engine::OFFLINE_EDGE_URL.into());
+    if edge_url == zeron_engine::OFFLINE_EDGE_URL {
+        anyhow::ensure!(
+            std::env::var_os("LUNA_WORKOS_CLIENT_ID").is_none()
+                && std::env::var_os("LUNA_EDGE_TOKEN").is_none(),
+            "LUNA auth requires an explicit owned LUNA_EDGE_URL"
+        );
+    } else {
+        zeron_engine::canonical_owned_edge_url(&edge_url)?;
+    }
+    let configured = edge_url != zeron_engine::OFFLINE_EDGE_URL;
+    let edge_token = configured
+        .then(|| std::env::var("LUNA_EDGE_TOKEN").ok())
+        .flatten()
+        .filter(|value| !value.trim().is_empty());
+    let workos_client_id = configured
+        .then(|| std::env::var("LUNA_WORKOS_CLIENT_ID").ok())
+        .flatten()
+        .filter(|value| !value.trim().is_empty());
     let config = EngineConfig {
         data_dir,
-        edge_url: std::env::var("ZERON_EDGE_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "https://edge.zeron.sh".into()),
+        edge_url,
         edge_token,
         ipc_port,
         default_harness: match std::env::var("ZERON_HARNESS").as_deref() {
@@ -211,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
             Ok("antigravity") => HarnessId::Antigravity,
             _ => HarnessId::ClaudeCode,
         },
-        org_id: std::env::var("ZERON_ORG_ID").ok(),
+        org_id: std::env::var("LUNA_ORG_ID").ok(),
         workos_client_id,
     };
     Engine::new(config)

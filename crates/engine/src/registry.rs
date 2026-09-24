@@ -909,6 +909,26 @@ pub fn default_registry() -> HarnessRegistry {
     registry
 }
 
+/// No shell prewarm or native provider slots: only the deterministic mock.
+#[doc(hidden)]
+pub fn local_adoption_mock_registry() -> HarnessRegistry {
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(MockHarness {
+        script: vec![
+            AgentEvent::TextDelta {
+                text: "Synthetic LUNA fixture response.".into(),
+            },
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: None,
+            },
+        ],
+    }));
+    registry
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

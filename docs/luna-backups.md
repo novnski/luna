@@ -8,6 +8,7 @@ produce a new archive. You can quit LUNA and make one explicitly:
 ```text
 luna backup status
 luna backup now
+luna backup preview /absolute/path/to/luna-....tar.gz
 ```
 
 Archives are unencrypted. LUNA writes them as mode `0600` files in a mode `0700`
@@ -29,6 +30,10 @@ kept in a private `.luna-l17-managed-rollback-*` sibling directory. A failed
 readback rolls the changed files back. If a process dies during replacement,
 LUNA refuses to start until `luna backup recover` restores the previous files.
 Do not delete the rollback directory until you have checked the restored app.
+Preview is read-only and requires LUNA to be stopped. It reports counts,
+estimated staging and rollback space, existing owned-file conflicts, and exact
+unsupported reasons. Current schema 12 archives retain LUNA cleanup checkpoints
+and local executable-authority rows; unreviewed newer schemas are refused.
 
 The archive deliberately excludes LUNA credentials, sign-in sessions, device
 identity, provider-native stores, remote grants, logs, caches, pending uploads,

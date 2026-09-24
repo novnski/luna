@@ -12,7 +12,7 @@ use zeron_rpc::{RpcClient, methods};
 
 #[derive(Debug, Args)]
 pub struct RemoteArgs {
-    /// Local engine IPC port (defaults to LUNA_IPC_PORT or 37654).
+    /// Local engine IPC port (defaults to LUNA_IPC_PORT or 59778).
     #[arg(long, global = true)]
     port: Option<u16>,
     #[command(subcommand)]
@@ -69,6 +69,12 @@ pub async fn run(args: RemoteArgs, default_port: u16) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("local LUNA engine timed out at {url}"))??;
     let _: serde_json::Value = call(&client, methods::ENGINE_READY, json!({})).await?;
     let info: EngineInfo = call(&client, methods::ENGINE_INFO, json!({})).await?;
+    if !info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1) {
+        anyhow::bail!("local listener is not a compatible LUNA engine");
+    }
+    if args.port.is_none() {
+        crate::paths::verify_local_owner(&client, &crate::paths::data_dir()).await?;
+    }
     if !info.supports(zeron_proto::capabilities::REMOTE_AUTH_V1) {
         anyhow::bail!("connected engine does not support L29 remote authority");
     }

@@ -21,12 +21,13 @@ const SYSTEMD_UNIT: &str = "luna.service";
 const CAPTURED_ENV: &[&str] = &[
     "PATH",
     "LUNA_DATA_DIR",
-    "ZERON_EDGE_URL",
-    "ZERON_ORG_ID",
-    "ZERON_WORKOS_CLIENT_ID",
-    "ZERON_WORKOS_API_BASE",
+    "LUNA_EDGE_URL",
+    "LUNA_ORG_ID",
+    "LUNA_USER_ID",
+    "LUNA_WORKOS_CLIENT_ID",
+    "LUNA_WORKOS_API_BASE",
     "LUNA_IPC_PORT",
-    "ZERON_CALLBACK_PORT",
+    "LUNA_CALLBACK_PORT",
     "ZERON_HARNESS",
     "ZERON_DEVICE_NAME",
     "RUST_LOG",
@@ -380,13 +381,13 @@ mod tests {
             Path::new("/usr/local/bin/luna"),
             &[
                 ("PATH".into(), "/usr/bin:/bin".into()),
-                ("ZERON_EDGE_URL".into(), "https://edge.example".into()),
+                ("LUNA_EDGE_URL".into(), "https://edge.example".into()),
                 ("RUST_LOG".into(), "info,zeron=\"debug\"".into()),
             ],
         );
         assert!(unit.contains("ExecStart=/usr/local/bin/luna headless\n"));
         assert!(unit.contains("Environment=\"PATH=/usr/bin:/bin\"\n"));
-        assert!(unit.contains("Environment=\"ZERON_EDGE_URL=https://edge.example\"\n"));
+        assert!(unit.contains("Environment=\"LUNA_EDGE_URL=https://edge.example\"\n"));
         // Inner quotes escaped so systemd re-parses the value verbatim.
         assert!(unit.contains("Environment=\"RUST_LOG=info,zeron=\\\"debug\\\"\"\n"));
         assert!(unit.contains("StartLimitIntervalSec=60\n"));
@@ -404,6 +405,9 @@ mod tests {
         assert!(CAPTURED_ENV.contains(&"LUNA_IPC_PORT"));
         assert!(!CAPTURED_ENV.contains(&"ZERON_DATA_DIR"));
         assert!(!CAPTURED_ENV.contains(&"ZERON_IPC_PORT"));
+        assert!(!CAPTURED_ENV.contains(&"ZERON_EDGE_URL"));
+        assert!(CAPTURED_ENV.contains(&"LUNA_EDGE_URL"));
+        assert!(!CAPTURED_ENV.contains(&"LUNA_EDGE_TOKEN"));
         assert!(
             !CAPTURED_ENV.contains(&"ZERON_EDGE_TOKEN"),
             "daemon installation must never copy a bearer into plist/unit metadata"
@@ -435,7 +439,7 @@ mod tests {
     fn launchd_plist_shape() {
         let plist = render_launchd_plist(
             Path::new("/Users/x/luna & co/luna"),
-            &[("ZERON_EDGE_URL".into(), "https://e?a=1&b=2".into())],
+            &[("LUNA_EDGE_URL".into(), "https://e?a=1&b=2".into())],
             Path::new("/Users/x/.luna/daemon.log"),
         );
         assert!(plist.contains("<key>Label</key><string>com.novnski.luna</string>"));

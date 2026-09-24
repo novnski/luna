@@ -128,6 +128,9 @@ pub mod methods {
     pub const LOCAL_DEVICE: &str = "LocalDevice";
     /// This engine runtime's fixed device and workspace identity.
     pub const ENGINE_INFO: &str = "EngineInfo";
+    /// Canonical data-root claim, served only by the local-owner IPC wrapper.
+    /// Never register this on guarded remote transports.
+    pub const LOCAL_OWNER_ROOT_CLAIM: &str = "LocalOwnerRootClaim";
     /// Readiness barrier for the engine runtime. The call completes once stores
     /// and journals are assembled, or fails with the assembly error.
     pub const ENGINE_READY: &str = "EngineReady";
@@ -319,6 +322,7 @@ pub mod methods {
         MUTATE,
         LOCAL_DEVICE,
         ENGINE_INFO,
+        LOCAL_OWNER_ROOT_CLAIM,
         ENGINE_READY,
         GET_TASK_IDENTITY,
         GET_RUNTIME_CONTRACT,

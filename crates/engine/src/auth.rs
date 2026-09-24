@@ -232,8 +232,10 @@ pub struct AuthConfig {
     pub edge_url: String,
     /// Data dir for the persisted session (`session.json`, 0600).
     pub data_dir: PathBuf,
-    /// WorkOS client id; `None` = dev mode.
+    /// WorkOS client id; `None` means development or explicit offline mode.
     pub workos_client_id: Option<String>,
+    /// Local-only adoption: do not load a saved sync session or create a dev identity.
+    pub offline_only: bool,
     /// WorkOS API base (authorize URL host).
     pub workos_api_base: String,
     /// Dev-mode bearer/user id (mirrors the old `ZERON_EDGE_TOKEN` behavior).
@@ -249,6 +251,7 @@ impl std::fmt::Debug for AuthConfig {
             .field("edge_url", &self.edge_url)
             .field("data_dir", &self.data_dir)
             .field("workos_client_id", &self.workos_client_id)
+            .field("offline_only", &self.offline_only)
             .field("workos_api_base", &self.workos_api_base)
             .field("dev_user_id", &"[REDACTED]")
             .field("callback_port", &self.callback_port)
@@ -265,6 +268,7 @@ impl AuthConfig {
             credential_broker: CredentialBroker::for_data_dir(&data_dir),
             data_dir,
             workos_client_id: None,
+            offline_only: false,
             workos_api_base: "https://api.workos.com".into(),
             dev_user_id: "dev-user".into(),
             callback_port: None,
@@ -405,14 +409,18 @@ impl Auth {
     /// Build from config: dev mode unless a WorkOS client id is configured.
     pub fn new(config: AuthConfig) -> Self {
         let credentials = config.credential_broker.clone();
-        let workos = config
-            .workos_client_id
-            .clone()
+        let workos = (!config.offline_only)
+            .then(|| config.workos_client_id.clone())
+            .flatten()
             .filter(|s| !s.trim().is_empty());
         let session_file = config.data_dir.join("session.json");
-        let (stored, session_credential_id, startup_credential_error) =
-            load_stored_session(&session_file, &config.credential_broker, workos.is_some());
+        let (stored, session_credential_id, startup_credential_error) = if config.offline_only {
+            (None, None, None)
+        } else {
+            load_stored_session(&session_file, &config.credential_broker, workos.is_some())
+        };
         let initial = match (&workos, &stored) {
+            _ if config.offline_only => AuthState::SignedOut,
             (None, _) => {
                 let identity = config
                     .dev_user_id
@@ -499,6 +507,10 @@ impl Auth {
         self.inner.workos.is_some()
     }
 
+    pub fn offline_only(&self) -> bool {
+        self.inner.config.offline_only
+    }
+
     /// True when construction loaded a parseable persisted WorkOS session.
     /// The value stays true even if a later refresh revokes that session.
     pub fn loaded_workos_session(&self) -> bool {
@@ -546,6 +558,9 @@ impl Auth {
     /// Dev mode: the configured user id. WorkOS: cached access token, refreshed when
     /// it has under 30s left.
     pub async fn access_token(&self) -> Result<String, TokenError> {
+        if self.inner.config.offline_only {
+            return Err(TokenError::SignedOut);
+        }
         if self.inner.workos.is_none() {
             return Ok(self.inner.config.dev_user_id.clone());
         }

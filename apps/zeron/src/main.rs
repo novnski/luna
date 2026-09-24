@@ -7,6 +7,8 @@
 mod auth_cli;
 mod daemon;
 mod inspect_cli;
+#[cfg(target_os = "macos")]
+mod native_fixture;
 mod paths;
 mod remote_cli;
 mod ssh_cli;
@@ -35,6 +37,15 @@ struct Cli {
 enum Command {
     /// Run the engine without a UI (local-only unless a saved session enables sync).
     Headless,
+    /// Explicit, temporary, mock-only native QA using this packaged executable.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    NativeFixture {
+        #[arg(long)]
+        root: std::path::PathBuf,
+        #[arg(long)]
+        check_only: bool,
+    },
     /// Sign in and enable sync on the next engine start.
     Login,
     /// Remove the saved session and return to local-only on the next start.
@@ -92,40 +103,48 @@ enum BackupCommand {
     Now,
     /// Show the newest verified automatic or manual archive.
     Status,
+    /// Preview counts, storage and compatibility without restoring an archive.
+    Preview { archive: std::path::PathBuf },
     /// Restore a verified archive while LUNA is stopped; keep previous files.
     Restore { archive: std::path::PathBuf },
     /// Roll back an interrupted offline restore before starting LUNA.
     Recover,
 }
 
-/// Production edge (Cloudflare Worker + Durable Objects on the zeron.sh zone).
-/// `ZERON_EDGE_URL` overrides (local dev / self-hosting).
-const DEFAULT_EDGE_URL: &str = "https://edge.zeron.sh";
-
-/// Production WorkOS AuthKit client id — public knowledge (it appears in every
-/// authorize URL), so baking it in is safe. Overridden by `ZERON_WORKOS_CLIENT_ID`;
-/// set it to the empty string — or set a dev bearer via `ZERON_EDGE_TOKEN` — to
-/// force dev-mode auth instead.
-const DEFAULT_WORKOS_CLIENT_ID: &str = "client_01KWD0EAKZKD50YCQJNYSRE4BY";
-
 fn edge_url_from_env() -> String {
-    std::env::var("ZERON_EDGE_URL")
+    std::env::var("LUNA_EDGE_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_EDGE_URL.into())
+        .unwrap_or_else(|| zeron_engine::OFFLINE_EDGE_URL.into())
 }
 
-/// WorkOS client id resolution: explicit env wins (empty string = dev mode);
-/// otherwise a `ZERON_EDGE_TOKEN` dev bearer keeps dev mode (smoke tests,
-/// local wrangler); otherwise the baked production client id makes optional
-/// sync available while a bare start remains local-only.
-fn workos_client_id_from_env(edge_token: &Option<String>) -> Option<String> {
-    match std::env::var("ZERON_WORKOS_CLIENT_ID") {
-        Ok(v) if v.trim().is_empty() => None,
-        Ok(v) => Some(v),
-        Err(_) if edge_token.is_some() => None,
-        Err(_) => Some(DEFAULT_WORKOS_CLIENT_ID.into()),
+/// An owned endpoint is required before auth or a dev bearer can opt in.
+fn workos_client_id_from_env(edge_url: &str) -> Option<String> {
+    (edge_url != zeron_engine::OFFLINE_EDGE_URL)
+        .then(|| std::env::var("LUNA_WORKOS_CLIENT_ID").ok())
+        .flatten()
+        .filter(|id| !id.trim().is_empty())
+}
+
+fn edge_token_from_env(edge_url: &str) -> Option<String> {
+    (edge_url != zeron_engine::OFFLINE_EDGE_URL)
+        .then(|| std::env::var("LUNA_EDGE_TOKEN").ok())
+        .flatten()
+        .filter(|token| !token.trim().is_empty())
+}
+
+fn validate_owned_service_config() -> anyhow::Result<()> {
+    let edge = std::env::var("LUNA_EDGE_URL").unwrap_or_default();
+    if edge.trim().is_empty() || edge.trim() == zeron_engine::OFFLINE_EDGE_URL {
+        anyhow::ensure!(
+            std::env::var_os("LUNA_WORKOS_CLIENT_ID").is_none()
+                && std::env::var_os("LUNA_EDGE_TOKEN").is_none(),
+            "LUNA auth requires an explicit owned LUNA_EDGE_URL"
+        );
+        return Ok(());
     }
+    zeron_engine::canonical_owned_edge_url(&edge)?;
+    Ok(())
 }
 
 /// mimalloc, macOS only: libmalloc never returns the streaming churn's
@@ -144,20 +163,34 @@ fn main() -> anyhow::Result<()> {
     let argv: Vec<_> = std::env::args_os().collect();
     let inspect_json = argv.get(1).is_some_and(|arg| arg == "inspect")
         && argv.iter().skip(2).any(|arg| arg == "--json");
-    let cli = match Cli::try_parse_from(argv) {
-        Ok(cli) => cli,
-        Err(error) => {
-            if inspect_json
-                && !matches!(
-                    error.kind(),
-                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
-                )
-            {
-                std::process::exit(inspect_cli::print_parse_error(&error));
-            }
-            error.exit();
+    #[cfg(target_os = "macos")]
+    let qa_root = native_fixture::qa_root_from_executable(&std::env::current_exe()?)?;
+    #[cfg(target_os = "macos")]
+    let cli = if let Some(root) = qa_root {
+        anyhow::ensure!(argv.len() == 1, "QA bundle accepts no launch arguments");
+        Cli {
+            command: Some(Command::NativeFixture {
+                root,
+                check_only: false,
+            }),
+            open_url: None,
         }
+    } else {
+        parse_cli(argv, inspect_json)
     };
+    #[cfg(not(target_os = "macos"))]
+    let cli = parse_cli(argv, inspect_json);
+    #[cfg(target_os = "macos")]
+    let native_root = match &cli.command {
+        Some(Command::NativeFixture { root, .. }) => Some(native_fixture::validate_root(root)?),
+        _ => None,
+    };
+    #[cfg(target_os = "macos")]
+    if native_root.is_none() {
+        validate_owned_service_config()?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    validate_owned_service_config()?;
     #[cfg(windows)]
     if let Some(pid) = cli.wait_for_exit {
         zeron_update::windows::wait_for_exit(pid)?;
@@ -168,7 +201,22 @@ fn main() -> anyhow::Result<()> {
     // journald on every snapshot export — enough to fill a disk on a
     // long-running headless host. Quiet them by default (RUST_LOG still
     // overrides the whole filter).
-    let long_running = matches!(&cli.command, None | Some(Command::Headless));
+    let long_running = matches!(&cli.command, None | Some(Command::Headless)) || {
+        #[cfg(target_os = "macos")]
+        {
+            matches!(
+                &cli.command,
+                Some(Command::NativeFixture {
+                    check_only: false,
+                    ..
+                })
+            )
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    };
     let default_filter = if long_running {
         "info,loro_internal=warn,loro=warn"
     } else {
@@ -181,13 +229,36 @@ fn main() -> anyhow::Result<()> {
     // wedge report ("stale until restart") with zero diagnostics even though
     // the engine logs the exact failure line. One file per launch, previous
     // launch kept as `.old`.
+    #[cfg(target_os = "macos")]
+    let fixture_log = native_root
+        .as_ref()
+        .filter(|_| long_running)
+        .map(|root| {
+            open_log_file_in(&root.join("logs"), "native-fixture")
+                .ok_or_else(|| anyhow::anyhow!("cannot open synthetic native fixture log"))
+        })
+        .transpose()?;
     let log_file = if long_running {
-        let mode = if cli.command.is_some() {
-            "headless"
+        #[cfg(target_os = "macos")]
+        if native_root.is_some() {
+            fixture_log
         } else {
-            "headed"
-        };
-        open_log_file(mode)
+            let mode = if cli.command.is_some() {
+                "headless"
+            } else {
+                "headed"
+            };
+            open_log_file(mode)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mode = if cli.command.is_some() {
+                "headless"
+            } else {
+                "headed"
+            };
+            open_log_file(mode)
+        }
     } else {
         None
     };
@@ -222,6 +293,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
+        #[cfg(target_os = "macos")]
+        Some(Command::NativeFixture { check_only, .. }) => {
+            native_fixture::run(native_root.expect("validated fixture root"), check_only)
+        }
         Some(Command::Headless) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(async {
@@ -279,6 +354,37 @@ fn main() -> anyhow::Result<()> {
                         println!("no verified backup");
                     }
                 }
+                BackupCommand::Preview { archive } => {
+                    let preview = zeron_engine::backup::BackupService::preview_managed_offline(
+                        &root, &archive,
+                    )?;
+                    println!("archive {}", archive.display());
+                    println!("source {}", preview.manifest.source_root);
+                    println!("destination {}", root.display());
+                    println!("entries {}", preview.manifest.entries.len());
+                    println!("databases {}", preview.manifest.databases.len());
+                    println!(
+                        "attachments {}",
+                        preview
+                            .manifest
+                            .entries
+                            .iter()
+                            .filter(|entry| entry.category == "attachment")
+                            .count()
+                    );
+                    println!("required bytes {}", preview.required_bytes);
+                    println!("conflicts {}", preview.conflicts.len());
+                    for conflict in &preview.conflicts {
+                        println!("conflict {conflict}");
+                    }
+                    println!("unsupported {}", preview.unsupported.len());
+                    for reason in &preview.unsupported {
+                        println!("unsupported: {reason}");
+                    }
+                    for category in &preview.manifest.excluded_categories {
+                        println!("excluded: {category}");
+                    }
+                }
                 BackupCommand::Restore { archive } => {
                     let receipt = zeron_engine::backup::BackupService::restore_managed_offline(
                         &root, &archive,
@@ -314,7 +420,8 @@ fn main() -> anyhow::Result<()> {
             DaemonCommand::Status => daemon::status(),
         },
         None => {
-            let edge_token = std::env::var("ZERON_EDGE_TOKEN").ok();
+            let edge_url = edge_url_from_env();
+            let edge_token = edge_token_from_env(&edge_url);
             // Headed: the UI probes LUNA_IPC_PORT and connects to a running
             // daemon, or embeds the engine in-process (ARCHITECTURE §1).
             zeron_ui::run_app(zeron_ui::UiConfig {
@@ -322,15 +429,33 @@ fn main() -> anyhow::Result<()> {
                 ipc_port: std::env::var("LUNA_IPC_PORT")
                     .ok()
                     .and_then(|p| p.parse().ok())
-                    .unwrap_or(37654),
-                edge_url: edge_url_from_env(),
-                workos_client_id: workos_client_id_from_env(&edge_token),
+                    .unwrap_or(zeron_engine::DEFAULT_LUNA_IPC_PORT),
+                edge_url: edge_url.clone(),
+                workos_client_id: workos_client_id_from_env(&edge_url),
                 edge_token,
-                org_id: std::env::var("ZERON_ORG_ID").ok(),
+                org_id: std::env::var("LUNA_ORG_ID").ok(),
                 default_harness: zeron_ui::HarnessId::ClaudeCode,
                 initial_url: cli.open_url,
+                synthetic_core: None,
             });
             Ok(())
+        }
+    }
+}
+
+fn parse_cli(argv: Vec<std::ffi::OsString>, inspect_json: bool) -> Cli {
+    match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) => {
+            if inspect_json
+                && !matches!(
+                    error.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                )
+            {
+                std::process::exit(inspect_cli::print_parse_error(&error));
+            }
+            error.exit();
         }
     }
 }
@@ -364,22 +489,18 @@ fn attach_parent_console() {
 /// `logout`, and `status` — one resolution so the CLI auth commands always
 /// operate on the exact session the daemon will load.
 fn engine_config_from_env() -> zeron_engine::EngineConfig {
-    // Dev-mode bearer (no WorkOS): an explicit token enables sync.
-    let edge_token = std::env::var("ZERON_EDGE_TOKEN").ok();
+    let edge_url = edge_url_from_env();
+    let edge_token = edge_token_from_env(&edge_url);
     zeron_engine::EngineConfig {
         data_dir: paths::data_dir(),
-        edge_url: edge_url_from_env(),
+        edge_url: edge_url.clone(),
         ipc_port: std::env::var("LUNA_IPC_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
-            .unwrap_or(37654),
+            .unwrap_or(zeron_engine::DEFAULT_LUNA_IPC_PORT),
         default_harness: harness_from_env(),
-        // WorkOS mode: the signed-in session's org wins; ZERON_ORG_ID (dev
-        // default "dev-org") scopes the workspace room otherwise.
-        org_id: std::env::var("ZERON_ORG_ID").ok(),
-        // Real auth against production by default; see
-        // `workos_client_id_from_env` for the dev-mode escape hatches.
-        workos_client_id: workos_client_id_from_env(&edge_token),
+        org_id: std::env::var("LUNA_ORG_ID").ok(),
+        workos_client_id: workos_client_id_from_env(&edge_url),
         edge_token,
     }
 }
@@ -409,6 +530,14 @@ async fn sync_cli(ipc_port: u16) -> anyhow::Result<()> {
         .map_err(|e| {
             anyhow::anyhow!("no engine listening on 127.0.0.1:{ipc_port} ({e}) — is LUNA running?")
         })?;
+    let info: zeron_proto::EngineInfo = client
+        .call_as(zeron_rpc::methods::ENGINE_INFO, serde_json::json!({}))
+        .await?;
+    anyhow::ensure!(
+        info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1),
+        "local listener is not a compatible LUNA engine"
+    );
+    paths::verify_local_owner(&client, &paths::data_dir()).await?;
     let status = client
         .call(zeron_rpc::methods::SYNC_STATUS, serde_json::json!({}))
         .await

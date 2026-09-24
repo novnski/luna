@@ -79,6 +79,11 @@ fn account_status(scope: WorkspaceScope, auth: &AuthState) -> AccountStatus {
 /// `luna login`: authenticate via the paste-code flow (and workspace
 /// onboarding), persist the encrypted credential plus session metadata, and exit.
 pub async fn login(config: EngineConfig) -> anyhow::Result<()> {
+    if config.edge_url == zeron_engine::OFFLINE_EDGE_URL {
+        anyhow::bail!(
+            "LUNA sync is unconfigured; set an owned LUNA_EDGE_URL and LUNA_WORKOS_CLIENT_ID first"
+        );
+    }
     std::fs::create_dir_all(&config.data_dir)?;
     let _lock = engine_lock(&config, "sign in")?;
     let auth = Engine::build_auth(&config).await;
@@ -99,7 +104,7 @@ pub async fn login(config: EngineConfig) -> anyhow::Result<()> {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        anyhow::bail!("zeron login needs an interactive terminal");
+        anyhow::bail!("luna login needs an interactive terminal");
     }
     zeron_engine::terminal_sign_in(&auth).await?;
     match auth.state() {
@@ -126,6 +131,11 @@ pub async fn logout(config: EngineConfig) -> anyhow::Result<()> {
     std::fs::create_dir_all(&config.data_dir)?;
     let _lock = engine_lock(&config, "sign out")?;
     let auth = Engine::build_auth(&config).await;
+    if auth.offline_only() {
+        auth.sign_out()?;
+        println!("LUNA is local only — cleared any stale saved sync session.");
+        return Ok(());
+    }
     if !auth.workos_enabled() {
         // Dev mode has no live session, but clear any stale session.json from a
         // previous WorkOS-mode run so the next real run starts signed out.
@@ -160,12 +170,15 @@ pub async fn logout(config: EngineConfig) -> anyhow::Result<()> {
 pub async fn status(config: EngineConfig) -> anyhow::Result<()> {
     let auth = Engine::build_auth(&config).await;
     let next_scope = Engine::initial_workspace_scope(&auth);
-    let scope = live_engine_scope(config.ipc_port)
-        .await
-        .unwrap_or(next_scope);
+    let live_scope = live_engine_scope(config.ipc_port, &config.data_dir).await;
+    let scope = live_scope.unwrap_or(next_scope);
     let account = account_status(scope, &auth.state());
     println!("Data dir: {}", config.data_dir.display());
-    println!("Edge:     {}", config.edge_url);
+    if auth.offline_only() {
+        println!("Edge:     disabled (local only)");
+    } else {
+        println!("Edge:     {}", config.edge_url);
+    }
     println!("Mode:     {}", account.mode);
     println!("Auth:     {}", account.auth);
     if let Some(problem) = auth.startup_credential_error() {
@@ -179,8 +192,10 @@ pub async fn status(config: EngineConfig) -> anyhow::Result<()> {
     let ipc = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500));
     println!(
         "IPC:      {} 127.0.0.1:{}",
-        if ipc.is_ok() {
+        if live_scope.is_some() {
             "listening on"
+        } else if ipc.is_ok() {
+            "incompatible listener on"
         } else {
             "not listening on"
         },
@@ -192,10 +207,8 @@ pub async fn status(config: EngineConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Prefer the immutable scope of a live runtime. Falling back to the next-boot
-/// derivation is correct when no engine is listening and tolerant of old
-/// daemons that predate EngineInfo.
-async fn live_engine_scope(ipc_port: u16) -> Option<WorkspaceScope> {
+/// Use only a compatible LUNA owner as live scope evidence.
+async fn live_engine_scope(ipc_port: u16, data_root: &std::path::Path) -> Option<WorkspaceScope> {
     let client = zeron_rpc::connect_ws(&format!("ws://127.0.0.1:{ipc_port}"))
         .await
         .ok()?;
@@ -203,9 +216,13 @@ async fn live_engine_scope(ipc_port: u16) -> Option<WorkspaceScope> {
         .call(zeron_rpc::methods::ENGINE_INFO, serde_json::json!({}))
         .await
         .ok()?;
-    serde_json::from_value::<zeron_engine::EngineInfo>(value)
+    let info = serde_json::from_value::<zeron_engine::EngineInfo>(value)
         .ok()
-        .map(|info| info.workspace_scope)
+        .filter(|info| info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1))?;
+    crate::paths::verify_local_owner(&client, data_root)
+        .await
+        .ok()?;
+    Some(info.workspace_scope)
 }
 
 /// The same exclusive data-dir lock the engine holds for its lifetime: taken for

@@ -27,8 +27,8 @@ async fn cli(root: &Path, port: u16, arguments: &[&str]) -> std::process::Output
         .env("LUNA_DATA_DIR", root.join("child-data"))
         .env("CODEX_HOME", root.join("synthetic-codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))
-        .env("ZERON_WORKOS_CLIENT_ID", "")
-        .env("ZERON_EDGE_URL", "http://127.0.0.1:1")
+        .env("LUNA_WORKOS_CLIENT_ID", "")
+        .env("LUNA_EDGE_URL", "http://127.0.0.1:1")
         .output()
         .await
         .unwrap()

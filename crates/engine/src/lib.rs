@@ -16,6 +16,102 @@ use zeron_rpc::{RpcError, RpcReply, RpcService, methods};
 
 use zeron_sync::DocsStore;
 
+/// No owned sync service has been configured for a local LUNA installation.
+pub const OFFLINE_EDGE_URL: &str = "luna-local://offline";
+/// Distinct from Zeron's historical owner IPC port.
+pub const DEFAULT_LUNA_IPC_PORT: u16 = 59778;
+
+/// Parse an explicitly configured service without accepting Zeron-owned hosts.
+/// `Url` canonicalizes case and IDNA; a trailing DNS root dot is equivalent
+/// for the vendor-domain check. Credentials in URLs are refused entirely.
+pub fn canonical_owned_edge_url(raw: &str) -> anyhow::Result<String> {
+    let parsed = url::Url::parse(raw.trim())?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "http" | "https") && parsed.has_host(),
+        "LUNA_EDGE_URL requires an HTTP(S) URL with a host"
+    );
+    anyhow::ensure!(
+        parsed.username().is_empty() && parsed.password().is_none(),
+        "LUNA_EDGE_URL must not contain credentials"
+    );
+    if let Some(url::Host::Domain(domain)) = parsed.host() {
+        let host = domain.trim_end_matches('.');
+        anyhow::ensure!(
+            host != "zeron.sh" && !host.ends_with(".zeron.sh"),
+            "LUNA cannot use Zeron's service endpoint"
+        );
+    }
+    Ok(parsed.to_string())
+}
+
+/// Stable, path-free claim for one canonical local data root. Only the
+/// loopback owner IPC wrapper returns this value to a client.
+pub fn local_root_claim(root: &Path) -> std::io::Result<String> {
+    let canonical = root.canonicalize()?;
+    if !canonical.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "LUNA data root is not a directory",
+        ));
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"LUNA local root v1\0");
+    hash.update(canonical.as_os_str().as_encoded_bytes());
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+struct LocalOwnerRpc {
+    inner: Arc<dyn RpcService>,
+    claim: String,
+}
+
+#[async_trait]
+impl RpcService for LocalOwnerRpc {
+    async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if method == methods::LOCAL_OWNER_ROOT_CLAIM {
+            return RpcReply::value(&serde_json::json!({ "claim": self.claim }));
+        }
+        self.inner.handle(method, params).await
+    }
+}
+
+/// Add the root proof to a local loopback IPC service only. The remote RPC
+/// factory keeps the unwrapped service and cannot answer this method.
+pub fn local_owner_ipc_service(
+    inner: Arc<dyn RpcService>,
+    root: &Path,
+) -> std::io::Result<Arc<dyn RpcService>> {
+    Ok(Arc::new(LocalOwnerRpc {
+        inner,
+        claim: local_root_claim(root)?,
+    }))
+}
+
+#[cfg(test)]
+mod local_adoption_url_tests {
+    use super::canonical_owned_edge_url;
+
+    #[test]
+    fn canonical_host_guard_rejects_vendor_aliases_and_credentials() {
+        for value in [
+            "https://edge.zeron.sh.",
+            "HTTPS://EDGE.ZERON.SH./releases",
+            "https://user:password@owned.example",
+            "https://",
+        ] {
+            assert!(canonical_owned_edge_url(value).is_err(), "{value}");
+        }
+        assert_eq!(
+            canonical_owned_edge_url("HTTP://[::1]:7777").unwrap(),
+            "http://[::1]:7777/"
+        );
+        assert_eq!(
+            canonical_owned_edge_url("https://owned.example/api").unwrap(),
+            "https://owned.example/api"
+        );
+    }
+}
+
 mod activity_history;
 pub mod agent_accounts;
 mod attention;
@@ -83,7 +179,9 @@ pub use instance_lock::InstanceLock;
 pub use permissions::{provider_capabilities, provider_capabilities_for, resolve_run_policy};
 pub use profile::EngineProfile;
 pub use recovery::{RecoveryDecision, classify_failure, recovery_decision};
-pub use registry::{HarnessDescriptor, HarnessRegistry, default_registry};
+pub use registry::{
+    HarnessDescriptor, HarnessRegistry, default_registry, local_adoption_mock_registry,
+};
 pub use repos::{CheckoutIdentity, Repos, worktree_branch_from_title};
 pub use rpc::EngineRpc;
 pub use run_journal::{JournalError, RunJournal};
@@ -954,14 +1052,15 @@ impl Engine {
     /// installations must be able to start locally without network access.
     pub async fn build_auth(config: &EngineConfig) -> Auth {
         let mut auth_config = AuthConfig::new(config.edge_url.clone(), config.data_dir.clone());
+        auth_config.offline_only = config.edge_url == OFFLINE_EDGE_URL;
         auth_config.workos_client_id = config.workos_client_id.clone();
-        if let Ok(base) = std::env::var("ZERON_WORKOS_API_BASE")
+        if let Ok(base) = std::env::var("LUNA_WORKOS_API_BASE")
             && !base.trim().is_empty()
         {
             auth_config.workos_api_base = base;
         }
         auth_config.callback_port = Some(
-            std::env::var("ZERON_CALLBACK_PORT")
+            std::env::var("LUNA_CALLBACK_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(27641),
@@ -974,7 +1073,9 @@ impl Engine {
 
     /// Capture the workspace boundary once, before refresh or sign-in can mutate auth.
     pub fn initial_workspace_scope(auth: &Auth) -> WorkspaceScope {
-        if !auth.workos_enabled() {
+        if auth.offline_only() {
+            WorkspaceScope::Local
+        } else if !auth.workos_enabled() {
             WorkspaceScope::Development
         } else if auth.loaded_workos_session() {
             WorkspaceScope::Synced
@@ -1002,10 +1103,10 @@ impl Engine {
                     .filter(|org| !org.is_empty());
                 let org_id = dev_token_org
                     .or(config.org_id.clone())
-                    .unwrap_or_else(|| env_or("ZERON_ORG_ID", DEFAULT_ORG_ID));
+                    .unwrap_or_else(|| env_or("LUNA_ORG_ID", DEFAULT_ORG_ID));
                 let user_id = auth
                     .user_id()
-                    .unwrap_or_else(|| env_or("ZERON_USER_ID", DEFAULT_USER_ID));
+                    .unwrap_or_else(|| env_or("LUNA_USER_ID", DEFAULT_USER_ID));
                 Ok(Some(EngineProfile::development(
                     &config.data_dir,
                     &org_id,
@@ -1303,7 +1404,7 @@ impl Engine {
             inner: runtime.core().rpc_service(),
             stop_tx,
         });
-        let server = serve_ipc(config.ipc_port, service).await?;
+        let server = serve_ipc(config.ipc_port, service, &config.data_dir).await?;
 
         let remote_server = if let Some(port) = remote_port {
             if port == config.ipc_port {
@@ -1406,7 +1507,9 @@ async fn shutdown_signal() -> std::io::Result<()> {
 pub async fn serve_ipc(
     port: u16,
     service: std::sync::Arc<dyn zeron_rpc::RpcService>,
+    data_root: &Path,
 ) -> std::io::Result<tokio::task::JoinHandle<()>> {
+    let service = local_owner_ipc_service(service, data_root)?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     tracing::info!(port, "IPC server listening");
     Ok(tokio::spawn(zeron_rpc::serve_ws_listener(

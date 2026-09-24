@@ -36,9 +36,10 @@ const MANAGED_RESTORE_JOURNAL: &str = ".luna-l17-managed-restore.json";
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 100_000;
 const CHUNK: usize = 64 * 1024;
-// Keep this in step with the append-only DocsStore migrations. The v9
-// Appshot source records must be replayed into the derived activity index.
-const CURRENT_SCHEMA: i64 = 9;
+// Review new DocsStore migrations before raising this ceiling. v10/v11 keep
+// owned cleanup checkpoints; v12 keeps exact local executable authority in
+// the copied SQLite snapshot. v9 Appshot sources still rebuild the activity index.
+const CURRENT_SCHEMA: i64 = 12;
 
 const EXCLUDED: &[&str] = &[
     "OS Keychain and LUNA credential vault",
@@ -154,6 +155,14 @@ pub struct DatabaseCounts {
     pub task_events: i64,
     pub draft_records: i64,
     pub attachment_owners: i64,
+    #[serde(default)]
+    pub cleanup_tasks: Option<i64>,
+    #[serde(default)]
+    pub cleanup_projects: Option<i64>,
+    #[serde(default)]
+    pub cleanup_paths: Option<i64>,
+    #[serde(default)]
+    pub local_executable_authority: Option<i64>,
     pub derived_events_discarded: i64,
     #[serde(default)]
     pub projects: Option<i64>,
@@ -402,6 +411,54 @@ impl BackupService {
             now_ms,
             last.map(|receipt| receipt.archive_sha256),
         )
+    }
+
+    /// Read-only, stopped-root compatibility report for a local LUNA archive.
+    /// A copied root or foreign archive remains unsupported; this never activates data.
+    pub fn preview_managed_offline(root: &Path, archive: &Path) -> Result<RestorePreview> {
+        let service = Self::new_bb_style_managed_offline(root)?;
+        let _lock = service.root.lock()?;
+        ensure_no_pending_managed_restore(service.root.path())?;
+        let manifest = service.inspect(archive)?;
+        let root = service.root.path();
+        let mut unsupported = Vec::new();
+        if manifest.source_root != root.display().to_string() {
+            unsupported
+                .push("absolute attachment references require the original data-root path".into());
+        }
+        if manifest.source_environment_id != read_device_id(root)? {
+            unsupported.push("source and target device identities differ".into());
+        }
+        for db in &manifest.databases {
+            if let Some(reason) = &db.derived_rebuild_blocker {
+                unsupported.push(format!("{}: {reason}", db.path));
+            } else if db.activity_events_expected.is_none() {
+                unsupported.push(format!("{}: activity event count is unavailable", db.path));
+            }
+            if let Some(reason) = &db.activation_blocker {
+                unsupported.push(format!("{}: {reason}", db.path));
+            }
+        }
+        let mut conflicts = Vec::new();
+        for entry in &manifest.entries {
+            validate_managed_restore_path(&entry.path)?;
+            verify_existing_parent_chain(root, &entry.path)?;
+            let target = root.join(&entry.path);
+            match fs::symlink_metadata(&target) {
+                Ok(metadata) if metadata.file_type().is_file() => {
+                    conflicts.push(entry.path.clone())
+                }
+                Ok(_) => unsupported.push(format!("unsafe restore target: {}", entry.path)),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(RestorePreview {
+            required_bytes: manifest.total_bytes.saturating_mul(2),
+            manifest,
+            conflicts,
+            unsupported,
+        })
     }
 
     /// Read-only status for the running app. Archives are atomically published
@@ -1070,6 +1127,15 @@ fn count_table(conn: &Connection, table: &str) -> Result<i64> {
     Ok(conn.query_row(&sql, [], |r| r.get(0))?)
 }
 
+fn count_required_table(conn: &Connection, table: &str) -> Result<i64> {
+    if !has_table(conn, table)? {
+        return Err(BackupError::Invalid(format!(
+            "database schema requires missing table {table}"
+        )));
+    }
+    count_table(conn, table)
+}
+
 fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
     let schema_version = if has_table(conn, "schema_migrations")? {
         conn.query_row(
@@ -1092,6 +1158,18 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         task_events: count_table(conn, "task_command_events")?,
         draft_records: count_table(conn, "composer_drafts")?,
         attachment_owners: count_table(conn, "attachment_owners")?,
+        cleanup_tasks: (schema_version >= 10)
+            .then(|| count_required_table(conn, "task_cleanup"))
+            .transpose()?,
+        cleanup_projects: (schema_version >= 10)
+            .then(|| count_required_table(conn, "project_cleanup"))
+            .transpose()?,
+        cleanup_paths: (schema_version >= 10)
+            .then(|| count_required_table(conn, "task_cleanup_paths"))
+            .transpose()?,
+        local_executable_authority: (schema_version >= 12)
+            .then(|| count_required_table(conn, "local_executable_authority"))
+            .transpose()?,
         derived_events_discarded: 0,
         projects: None,
         tasks: None,
@@ -1563,8 +1641,17 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
             || db.task_events < 0
             || db.draft_records < 0
             || db.attachment_owners < 0
+            || (db.schema_version >= 10
+                && (db.cleanup_tasks.is_none()
+                    || db.cleanup_projects.is_none()
+                    || db.cleanup_paths.is_none()))
+            || (db.schema_version >= 12 && db.local_executable_authority.is_none())
             || db.derived_events_discarded < 0
             || [
+                db.cleanup_tasks,
+                db.cleanup_projects,
+                db.cleanup_paths,
+                db.local_executable_authority,
                 db.projects,
                 db.tasks,
                 db.attachment_blobs,
@@ -2808,6 +2895,18 @@ fn verify_stage_base(stage: &Path, manifest: &BackupManifest, migrate: bool) -> 
             || actual.task_events != expected.task_events
             || actual.draft_records != expected.draft_records
             || actual.attachment_owners != expected.attachment_owners
+            || expected
+                .cleanup_tasks
+                .is_some_and(|count| actual.cleanup_tasks != Some(count))
+            || expected
+                .cleanup_projects
+                .is_some_and(|count| actual.cleanup_projects != Some(count))
+            || expected
+                .cleanup_paths
+                .is_some_and(|count| actual.cleanup_paths != Some(count))
+            || expected
+                .local_executable_authority
+                .is_some_and(|count| actual.local_executable_authority != Some(count))
         {
             return Err(BackupError::Invalid(format!(
                 "authoritative database counts differ: {}",

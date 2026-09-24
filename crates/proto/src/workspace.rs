@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 /// builds may share a semver with upstream while exposing a different RPC and
 /// document surface.
 pub mod capabilities {
+    /// Refuses an older Zeron or unrelated listener on LUNA's local IPC port.
+    pub const LUNA_OWNER_IPC_V1: &str = "luna-owner-ipc-v1";
     pub const MESSAGE_QUEUE_V1: &str = "message-queue-v1";
     pub const MESSAGE_QUEUE_ACTIONS_V1: &str = "message-queue-actions-v1";
     pub const MESSAGE_QUEUE_ATTACHMENTS_V1: &str = "message-queue-attachments-v1";
@@ -17,6 +19,7 @@ pub mod capabilities {
     pub const REMOTE_AUTH_V1: &str = "remote-auth-v1";
 
     pub const CURRENT: &[&str] = &[
+        LUNA_OWNER_IPC_V1,
         MESSAGE_QUEUE_V1,
         MESSAGE_QUEUE_ACTIONS_V1,
         MESSAGE_QUEUE_ATTACHMENTS_V1,

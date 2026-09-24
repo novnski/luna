@@ -75,7 +75,7 @@ struct TargetArgs {
     workspace_scope: ScopeArg,
     #[arg(long, default_value_t = 37655)]
     remote_port: u16,
-    #[arg(long, default_value_t = 37654)]
+    #[arg(long, default_value_t = zeron_engine::DEFAULT_LUNA_IPC_PORT)]
     ipc_port: u16,
 }
 
