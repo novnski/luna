@@ -548,9 +548,9 @@ pub fn segment_target(names: &[&str], query: &str) -> Option<usize> {
 /// until the first listing lands, when `~` can't expand yet. A query like
 /// `~foo` is a folder name, not a path.
 pub fn typed_path_target(query: &str, home: Option<&str>) -> Option<String> {
-    let query = query.trim();
     if let Some(rest) = query.strip_prefix('~') {
         let home = home?.trim_end_matches('/');
+        let home = if home.is_empty() { "/" } else { home };
         if rest.is_empty() {
             return Some(home.to_string());
         }
@@ -558,7 +558,7 @@ pub fn typed_path_target(query: &str, home: Option<&str>) -> Option<String> {
         return Some(if rest.is_empty() {
             home.to_string()
         } else {
-            format!("{home}/{rest}")
+            format!("{}/{rest}", home.trim_end_matches('/'))
         });
     }
     if query.starts_with('/') {
@@ -7428,9 +7428,19 @@ mod tests {
             typed_path_target("/disk2/projects", home),
             Some("/disk2/projects".into())
         );
+        assert_eq!(
+            typed_path_target("/Volumes/Work/naïve project/", home),
+            Some("/Volumes/Work/naïve project".into())
+        );
         assert_eq!(typed_path_target("/", home), Some("/".into()));
         assert_eq!(typed_path_target("~", home), Some("/home/wing".into()));
         assert_eq!(typed_path_target("~/", home), Some("/home/wing".into()));
+        assert_eq!(typed_path_target("~", Some("/")), Some("/".into()));
+        assert_eq!(typed_path_target("~/work", Some("/")), Some("/work".into()));
+        assert_eq!(
+            typed_path_target("~/work space/éva", home),
+            Some("/home/wing/work space/éva".into())
+        );
         assert_eq!(
             typed_path_target("~/github/", home),
             Some("/home/wing/github".into())
@@ -7441,6 +7451,10 @@ mod tests {
         // `~` can't expand before the device's home is known.
         assert_eq!(typed_path_target("~/github", None), None);
         assert_eq!(typed_path_target("/disk2", None), Some("/disk2".into()));
+        assert_eq!(
+            typed_path_target("/work/space ", None),
+            Some("/work/space ".into())
+        );
     }
 
     #[test]

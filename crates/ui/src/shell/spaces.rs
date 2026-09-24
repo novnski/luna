@@ -263,9 +263,8 @@ pub(super) struct AddSpaceFlow {
     location: Option<(String, Option<String>)>,
     /// The selected device.
     device: Option<Device>,
-    /// Filter input; Enter descends into the highlighted folder. Carries the
-    /// tab-completion ghost (the faint suffix ⇥ accepts), and a trailing `/`
-    /// on a folder-naming query descends immediately.
+    /// Filter input; Enter opens a highlighted folder or a typed path. Carries
+    /// the tab-completion ghost (the faint suffix ⇥ accepts).
     search: Entity<ComposerInput>,
     browser: Loadable<FolderListing>,
     /// The selected device's mounted drives/volumes.
@@ -295,6 +294,9 @@ pub(super) struct AddSpaceFlow {
     load_task: Option<Task<()>>,
     drives_task: Option<Task<()>>,
     submit_task: Option<Task<()>>,
+    folder_request: u64,
+    drives_request: u64,
+    pending_home_path: Option<String>,
     _search_events: Subscription,
 }
 
@@ -303,6 +305,17 @@ pub(super) struct AddSpaceFlow {
 fn path_under(path: &str, base: &str) -> bool {
     let base = base.trim_end_matches('/');
     base.is_empty() || path == base || path.starts_with(&format!("{base}/"))
+}
+
+fn is_project_path_query(query: &str) -> bool {
+    query.starts_with('/') || query == "~" || query.starts_with("~/")
+}
+
+fn existing_project_id(spaces: &[Space], device_id: &str, path: &str) -> Option<String> {
+    spaces
+        .iter()
+        .find(|space| space.device_id == device_id && space.path == path)
+        .map(|space| space.id.clone())
 }
 
 /// The space-row Rename dialog (same shape as [`RenameChatDialog`]).
@@ -1851,14 +1864,10 @@ impl Shell {
             cx.new(|cx| ComposerInput::with_context("Search devices…", "PaletteSearch", cx));
         let search_events = cx.subscribe(&search, |this: &mut Shell, _, event, cx| {
             if matches!(event, ComposerInputEvent::Edited) {
-                // Typing `/` after a query that names a folder descends into
-                // it — the query reads as a path segment, so the slash IS the
-                // pick (shell-style). Otherwise the slash stays in the query
-                // (it matches nothing, which is honest feedback).
-                if this.add_space_slash_descend(cx) {
-                    return;
-                }
                 if let Some(flow) = this.add_space.as_mut() {
+                    if !flow.search.read(cx).is_empty() {
+                        flow.pending_home_path = None;
+                    }
                     flow.active = 0;
                     flow.list_scroll.set_offset(gpui::Point::default());
                 }
@@ -1886,8 +1895,27 @@ impl Shell {
             load_task: None,
             drives_task: None,
             submit_task: None,
+            folder_request: 0,
+            drives_request: 0,
+            pending_home_path: None,
             _search_events: search_events,
         });
+        // A standalone project normally belongs to this Mac. Start at its
+        // Home folder, with the device breadcrumb still available to switch.
+        if matches!(
+            self.add_space.as_ref().map(|f| &f.origin),
+            Some(AddSpaceOrigin::Standalone)
+        ) {
+            let state = self.state.read(cx);
+            let local = state
+                .local_device_id
+                .as_deref()
+                .and_then(|id| state.devices.iter().find(|device| device.id == id).cloned());
+            if let Some(local) = local {
+                self.add_space_pick_device(local, cx);
+                self.add_space_goto_location("Home".into(), None, cx);
+            }
+        }
         cx.notify();
     }
 
@@ -1906,6 +1934,8 @@ impl Shell {
         flow.location = None;
         flow.load_task = None;
         flow.drives_task = None;
+        flow.folder_request = flow.folder_request.wrapping_add(1);
+        flow.drives_request = flow.drives_request.wrapping_add(1);
         flow.list_scroll.set_offset(gpui::Point::default());
         flow.device = Some(device);
         flow.browser = Loadable::Idle;
@@ -1915,9 +1945,10 @@ impl Shell {
         flow.browser_repo = false;
         flow.active = 0;
         flow.error = None;
+        flow.pending_home_path = None;
         let search = flow.search.clone();
         search.update(cx, |input, cx| {
-            input.set_placeholder("Search locations…", cx);
+            input.set_placeholder("Search locations or paste a path…", cx);
             input.set_text("", cx);
         });
         self.load_space_drives(cx);
@@ -1937,9 +1968,10 @@ impl Shell {
         flow.step = ProjectStep::Folders;
         flow.location = Some((name, path.clone()));
         flow.browser_repo = false;
+        flow.pending_home_path = None;
         let search = flow.search.clone();
         search.update(cx, |input, cx| {
-            input.set_placeholder("Search folders…", cx);
+            input.set_placeholder("Search folders or paste a path…", cx);
             input.set_text("", cx);
         });
         self.load_space_folders(path, cx);
@@ -1952,15 +1984,18 @@ impl Shell {
         flow.focus_pending = true;
         flow.step = step;
         flow.load_task = None;
+        flow.folder_request = flow.folder_request.wrapping_add(1);
         flow.browser = Loadable::Idle;
         flow.browser_path = None;
         flow.location = None;
         flow.browser_repo = false;
         flow.active = 0;
         flow.error = None;
+        flow.pending_home_path = None;
         flow.list_scroll.set_offset(gpui::Point::default());
         if step == ProjectStep::Devices {
             flow.drives_task = None;
+            flow.drives_request = flow.drives_request.wrapping_add(1);
             flow.device = None;
             flow.drives = Loadable::Idle;
             flow.home = None;
@@ -1971,7 +2006,7 @@ impl Shell {
                 if step == ProjectStep::Devices {
                     "Search devices…"
                 } else {
-                    "Search locations…"
+                    "Search locations or paste a path…"
                 },
                 cx,
             );
@@ -2024,6 +2059,9 @@ impl Shell {
             return;
         };
         let device_id = flow.device.as_ref().map(|d| d.id.clone());
+        let flow_id = flow.id;
+        flow.drives_request = flow.drives_request.wrapping_add(1);
+        let request = flow.drives_request;
         flow.drives = Loadable::Loading;
         flow.drives_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::Map::new();
@@ -2039,21 +2077,40 @@ impl Shell {
             let result = engine
                 .client()
                 .call(methods::LIST_DRIVES, serde_json::Value::Object(params))
-                .await;
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<DriveListing>(value).map_err(|error| error.to_string())
+                });
             this.update(cx, |shell, cx| {
-                if let Some(flow) = shell.add_space.as_mut() {
-                    flow.drives = match result {
-                        Ok(value) => match serde_json::from_value::<DriveListing>(value) {
-                            Ok(listing) => Loadable::Ready(listing.drives),
-                            Err(err) => Loadable::Error(err.to_string()),
-                        },
-                        Err(err) => Loadable::Error(err.to_string()),
-                    };
-                }
-                cx.notify();
+                shell.finish_space_drives_load(flow_id, request, device_id, result, cx);
             })
             .ok();
         }));
+    }
+
+    fn finish_space_drives_load(
+        &mut self,
+        flow_id: u64,
+        request: u64,
+        device_id: Option<String>,
+        result: Result<DriveListing, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(flow) = self.add_space.as_mut() else {
+            return;
+        };
+        if flow.id != flow_id
+            || flow.drives_request != request
+            || flow.device.as_ref().map(|d| d.id.as_str()) != device_id.as_deref()
+        {
+            return;
+        }
+        flow.drives = match result {
+            Ok(listing) => Loadable::Ready(listing.drives),
+            Err(error) => Loadable::Error(error),
+        };
+        cx.notify();
     }
 
     /// The current listing's folder rows filtered by the search query
@@ -2070,21 +2127,46 @@ impl Shell {
         };
         let dirs = browser_rows(listing);
         let query = flow.search.read(cx).text().to_string();
+        // A trailing slash on one folder name is still an ordinary folder
+        // search; Return opens it. Slashes never cause a request while typing.
+        let query = if let Some(folder) = query.strip_suffix('/')
+            && !folder.contains('/')
+            && !folder.starts_with('~')
+        {
+            folder
+        } else {
+            &query
+        };
         let names: Vec<&str> = dirs.iter().map(|e| e.name.as_str()).collect();
-        popover::filter_indices(&query, &names)
+        popover::filter_indices(query, &names)
             .into_iter()
             .map(|ix| dirs[ix].clone())
             .collect()
     }
 
-    /// Descend into the highlighted (filtered) folder; clears the query.
-    /// A path-shaped query with no matching rows browses the typed path
-    /// instead — `/disk2⏎` must work, not sit on "No folders match" (an
-    /// absolute query can never match a folder name anyway).
+    /// A path wins over the highlighted folder; otherwise open that folder.
     fn add_space_open_active(&mut self, cx: &mut Context<Self>) {
         let Some(flow) = self.add_space.as_ref() else {
             return;
         };
+        if flow.step != ProjectStep::Devices {
+            let query = flow.search.read(cx).text().to_string();
+            if is_project_path_query(&query) {
+                if let Some(target) =
+                    crate::pickers::typed_path_target(&query, flow.home.as_deref())
+                {
+                    self.add_space_open_path(target, query.starts_with('~'), cx);
+                } else if query.starts_with('~') {
+                    // Resolve ~ on the selected device, even if the user
+                    // pasted before its first Home listing completed.
+                    self.add_space_goto_location("Home".into(), None, cx);
+                    if let Some(flow) = self.add_space.as_mut() {
+                        flow.pending_home_path = Some(query);
+                    }
+                }
+                return;
+            }
+        }
         match flow.step {
             ProjectStep::Devices => {
                 if let Some(device) = self.add_space_devices(cx).get(flow.active).cloned() {
@@ -2105,13 +2187,6 @@ impl Shell {
             return;
         };
         if rows.is_empty() {
-            let text = flow.search.read(cx).text().to_string();
-            if text.starts_with('/') || text.starts_with('~') {
-                if let Some(target) = crate::pickers::typed_path_target(&text, flow.home.as_deref())
-                {
-                    self.add_space_descend(target, false, cx);
-                }
-            }
             return;
         }
         let Some(listing) = flow.browser.ready() else {
@@ -2130,68 +2205,31 @@ impl Shell {
         self.load_space_folders(Some(full), cx);
     }
 
-    /// Slash-descend: when the query ends in `/` and the part before it names
-    /// a folder of the current listing (exact name — matching casing wins
-    /// over a case-colliding sibling — else a unique prefix), descend into it
-    /// as though it were picked. Returns whether it fired —
-    /// descending clears the query, so the caller must not keep acting on the
-    /// old text.
-    fn add_space_slash_descend(&mut self, cx: &mut Context<Self>) -> bool {
-        if self
-            .add_space
-            .as_ref()
-            .is_none_or(|f| f.step != ProjectStep::Folders)
-        {
-            return false;
-        }
-        // A typed PATH jump: an absolute (`/disk2/`) or home-relative (`~/x/`)
-        // query browses that path directly — mounts at unconventional roots
-        // (and anywhere else) are reachable without a Locations row. Same
-        // trailing-`/` trigger as the folder-name descend below.
-        {
-            let Some(flow) = self.add_space.as_ref() else {
-                return false;
-            };
-            let text = flow.search.read(cx).text().to_string();
-            if text.ends_with('/') && (text.starts_with('/') || text.starts_with('~')) {
-                let target = crate::pickers::typed_path_target(&text, flow.home.as_deref());
-                let Some(target) = target else {
-                    // Path-shaped but unresolvable (`~/…` before home is
-                    // known) — leave the query alone.
-                    return false;
-                };
-                self.add_space_descend(target, false, cx);
-                return true;
-            }
-        }
-        let target = {
-            let Some(flow) = self.add_space.as_ref() else {
-                return false;
-            };
-            let text = flow.search.read(cx).text().to_string();
-            let Some(query) = text.strip_suffix('/') else {
-                return false;
-            };
-            if query.is_empty() || query.contains('/') {
-                return false;
-            }
-            let Some(listing) = flow.browser.ready() else {
-                return false;
-            };
-            let dirs = browser_rows(listing);
-            let names: Vec<&str> = dirs.iter().map(|e| e.name.as_str()).collect();
-            crate::pickers::segment_target(&names, query).map(|ix| {
-                (
-                    crate::pickers::child_path(&listing.path, &dirs[ix].name),
-                    dirs[ix].is_repo,
-                )
-            })
+    fn add_space_open_path(&mut self, target: String, from_home: bool, cx: &mut Context<Self>) {
+        let Some(flow) = self.add_space.as_mut() else {
+            return;
         };
-        let Some((full, is_repo)) = target else {
-            return false;
-        };
-        self.add_space_descend(full, is_repo, cx);
-        true
+        flow.step = ProjectStep::Folders;
+        flow.focus_pending = true;
+        let search = flow.search.clone();
+        search.update(cx, |input, cx| {
+            input.set_placeholder("Search folders or paste a path…", cx);
+        });
+        let in_home = from_home
+            || flow
+                .home
+                .as_deref()
+                .is_some_and(|home| path_under(&target, home));
+        // An arbitrary absolute path may lie outside Home or a displayed
+        // volume. Root breadcrumbs remain honest in that case.
+        flow.location = Some(if in_home {
+            ("Home".into(), None)
+        } else {
+            ("/".into(), Some("/".into()))
+        });
+        flow.browser_repo = false;
+        // Keep a typed destination editable until the device confirms it.
+        self.load_space_folders(Some(target), cx);
     }
 
     /// The tab-completion target: the highlighted row when the query prefixes
@@ -2251,7 +2289,9 @@ impl Shell {
         };
         flow.focus_pending = true;
         let device_id = flow.device.as_ref().map(|d| d.id.clone());
-        let went_home = path.is_none();
+        let flow_id = flow.id;
+        flow.folder_request = flow.folder_request.wrapping_add(1);
+        let request = flow.folder_request;
         flow.browser_path = path.clone();
         flow.browser = Loadable::Loading;
         flow.active = 0;
@@ -2278,29 +2318,84 @@ impl Shell {
             let result = engine
                 .client()
                 .call(methods::LIST_FOLDERS, serde_json::Value::Object(params))
-                .await;
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<FolderListing>(value)
+                        .map_err(|error| error.to_string())
+                });
             this.update(cx, |shell, cx| {
-                if let Some(flow) = shell.add_space.as_mut() {
-                    flow.browser = match result {
-                        Ok(value) => match serde_json::from_value::<FolderListing>(value) {
-                            Ok(listing) => {
-                                // A pathless browse resolved home — remember it
-                                // so the breadcrumbs can fold it into the
-                                // device crumb.
-                                if went_home {
-                                    flow.home = Some(listing.path.clone());
-                                }
-                                Loadable::Ready(listing)
-                            }
-                            Err(err) => Loadable::Error(err.to_string()),
-                        },
-                        Err(err) => Loadable::Error(err.to_string()),
-                    };
-                }
-                cx.notify();
+                shell.finish_space_folder_load(flow_id, request, device_id, path, result, cx);
             })
             .ok();
         }));
+    }
+
+    fn finish_space_folder_load(
+        &mut self,
+        flow_id: u64,
+        request: u64,
+        device_id: Option<String>,
+        path: Option<String>,
+        result: Result<FolderListing, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(flow) = self.add_space.as_mut() else {
+            return;
+        };
+        if flow.id != flow_id
+            || flow.folder_request != request
+            || flow.step != ProjectStep::Folders
+            || flow.device.as_ref().map(|d| d.id.as_str()) != device_id.as_deref()
+            || flow.browser_path != path
+        {
+            return;
+        }
+        let went_home = path.is_none();
+        let input_empty = flow.search.read(cx).is_empty();
+        let pending_home_path = flow.pending_home_path.take();
+        let jump_home_path = if went_home && result.is_ok() && input_empty {
+            pending_home_path.clone()
+        } else {
+            None
+        };
+        let restore_home_query = if went_home && result.is_err() && input_empty {
+            pending_home_path
+        } else {
+            None
+        };
+        let clear_confirmed_path = result.is_ok()
+            && path.as_deref().is_some_and(|target| {
+                let query = flow.search.read(cx).text();
+                is_project_path_query(query)
+                    && crate::pickers::typed_path_target(query, flow.home.as_deref()).as_deref()
+                        == Some(target)
+            });
+        let search = flow.search.clone();
+        flow.browser = match result {
+            Ok(listing) => {
+                if went_home {
+                    flow.home = Some(listing.path.clone());
+                }
+                Loadable::Ready(listing)
+            }
+            Err(error) => Loadable::Error(error),
+        };
+        cx.notify();
+        if clear_confirmed_path {
+            search.update(cx, |input, cx| input.set_text("", cx));
+        } else if let Some(query) = restore_home_query {
+            search.update(cx, |input, cx| input.set_text(query, cx));
+        }
+        if let Some(query) = jump_home_path
+            && let Some(home) = self
+                .add_space
+                .as_ref()
+                .and_then(|flow| flow.home.as_deref())
+            && let Some(target) = crate::pickers::typed_path_target(&query, Some(home))
+        {
+            self.add_space_open_path(target, true, cx);
+        }
     }
 
     /// Create the space for the browser's current folder.
@@ -2312,6 +2407,12 @@ impl Shell {
             return;
         };
         if flow.submit_busy || flow.step != ProjectStep::Folders {
+            return;
+        }
+        let query = flow.search.read(cx).text();
+        if is_project_path_query(query) {
+            // The visible path is a destination request, not a filter on the
+            // old listing. Return must resolve it before Add can use it.
             return;
         }
         let Some(device) = flow.device.clone() else {
@@ -2327,13 +2428,7 @@ impl Shell {
         // Same (device, folder) already has a space → just switch to it. The
         // engine dedupes this case too (a createSpace for a duplicate pair
         // no-ops), so creating would leave the minted id dangling.
-        if let Some(existing) = self
-            .state
-            .read(cx)
-            .spaces
-            .iter()
-            .find(|s| s.device_id == device.id && s.path == path)
-            .map(|s| s.id.clone())
+        if let Some(existing) = existing_project_id(&self.state.read(cx).spaces, &device.id, &path)
         {
             self.finish_add_space_submission(flow_id, origin, existing, Ok(()), cx);
             return;
@@ -2460,8 +2555,7 @@ impl Shell {
     /// maps to a REAL key: ↑↓ (or ctrl-n/p) navigate, →/⏎ open the
     /// highlighted folder, ← up a level, ⇥ completes the query to the
     /// previewed folder name, ⌘⏎ add the OPEN folder, ⌫ (empty query) also
-    /// goes up, esc closes. (Typing `/` also descends — see the Edited
-    /// subscription.)
+    /// goes up, esc closes. Paths open only on Return, including pasted paths.
     fn add_space_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         // ←/→ act on the FOLDERS, not the text cursor — the palette is a
         // navigator first; queries are short and edited with ⌫.
@@ -2562,6 +2656,7 @@ impl Shell {
             input.set_ghost(ghost, cx);
         });
         let query = search.read(cx).text().to_string();
+        let path_query = step != ProjectStep::Devices && is_project_path_query(&query);
         let row = |ix: usize| {
             popover::menu_row(&theme, ix == active, format!("project-result-{ix}"))
                 .id(("project-result", ix))
@@ -2599,30 +2694,73 @@ impl Shell {
                 }
             }
             ProjectStep::Locations => {
-                for (ix, (name, path)) in self.add_space_locations(cx).into_iter().enumerate() {
-                    let glyph = if path.is_none() {
-                        icons::HOME
-                    } else {
-                        icons::HARD_DRIVE
-                    };
-                    let label = name.clone();
+                if path_query {
+                    let target = crate::pickers::typed_path_target(&query, home.as_deref())
+                        .unwrap_or_else(|| query.clone());
+                    let device_name = device.as_ref().map(|d| d.name.as_str()).unwrap_or("device");
                     rows.push(
-                        row(ix)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.add_space_goto_location(name.clone(), path.clone(), cx)
-                            }))
-                            .child(icon(glyph).size(px(17.0)).text_color(theme.text_muted))
-                            .child(popover::search_highlight(
-                                label.into(),
-                                Some(&query),
-                                &theme,
-                            ))
+                        row(0)
+                            .on_click(cx.listener(|this, _, _, cx| this.add_space_open_active(cx)))
+                            .child(
+                                icon(icons::FOLDER)
+                                    .size(px(17.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(format!("Open {target} on {device_name}")),
+                            )
                             .into_any_element(),
                     );
+                } else {
+                    for (ix, (name, path)) in self.add_space_locations(cx).into_iter().enumerate() {
+                        let glyph = if path.is_none() {
+                            icons::HOME
+                        } else {
+                            icons::HARD_DRIVE
+                        };
+                        let label = name.clone();
+                        rows.push(
+                            row(ix)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.add_space_goto_location(name.clone(), path.clone(), cx)
+                                }))
+                                .child(icon(glyph).size(px(17.0)).text_color(theme.text_muted))
+                                .child(popover::search_highlight(
+                                    label.into(),
+                                    Some(&query),
+                                    &theme,
+                                ))
+                                .into_any_element(),
+                        );
+                    }
                 }
             }
             ProjectStep::Folders => {
-                if !loading && load_error.is_none() {
+                if path_query {
+                    {
+                        let target = crate::pickers::typed_path_target(&query, home.as_deref())
+                            .unwrap_or_else(|| query.clone());
+                        let device_name =
+                            device.as_ref().map(|d| d.name.as_str()).unwrap_or("device");
+                        let label = format!("Open {target} on {device_name}");
+                        rows.push(
+                            row(0)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.add_space_open_active(cx)),
+                                )
+                                .child(
+                                    icon(icons::FOLDER)
+                                        .size(px(17.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(div().min_w_0().truncate().child(label))
+                                .into_any_element(),
+                        );
+                    }
+                } else if !loading && load_error.is_none() {
                     for (ix, entry) in self.add_space_filtered(cx).into_iter().enumerate() {
                         let base = listing.as_ref().map(|l| l.path.as_str()).unwrap_or("");
                         let full = crate::pickers::child_path(base, &entry.name);
@@ -2684,8 +2822,16 @@ impl Shell {
                     popover::btn_ghost(&theme, "Retry", "project-retry")
                         .id("project-retry")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            let path = this.add_space.as_ref().and_then(|f| f.browser_path.clone());
-                            this.load_space_folders(path, cx);
+                            let typed_path = this.add_space.as_ref().is_some_and(|flow| {
+                                is_project_path_query(flow.search.read(cx).text())
+                            });
+                            if typed_path {
+                                this.add_space_open_active(cx);
+                            } else {
+                                let path =
+                                    this.add_space.as_ref().and_then(|f| f.browser_path.clone());
+                                this.load_space_folders(path, cx);
+                            }
                         })),
                 ),
             );
@@ -2694,6 +2840,7 @@ impl Shell {
                 match step {
                     ProjectStep::Devices => "No devices found",
                     ProjectStep::Locations => "No locations found",
+                    ProjectStep::Folders if path_query => "Open Home first to use ~ paths",
                     ProjectStep::Folders if query.is_empty() => "No folders here",
                     ProjectStep::Folders => "No folders match",
                 },
@@ -2920,7 +3067,9 @@ impl Shell {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .when(busy || listing.is_none(), |el| el.opacity(0.5))
+                    .when(busy || listing.is_none() || path_query, |el| {
+                        el.opacity(0.5)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.submit_add_space(cx)))
                     .child(
                         popover::key_cap(&theme)
@@ -3565,6 +3714,40 @@ mod project_flow_tests {
             assert_eq!(flow.step, ProjectStep::Locations);
             assert_eq!(flow.device.as_ref().unwrap().id, "remote");
             assert!(flow.search.read(cx).is_empty());
+            search.update(cx, |input, cx| input.set_text("/srv/naïve project/", cx));
+            shell.add_space_open_active(cx);
+            let flow = shell.add_space.as_ref().unwrap();
+            assert_eq!(flow.step, ProjectStep::Folders);
+            assert_eq!(flow.device.as_ref().unwrap().id, "remote");
+            assert_eq!(flow.browser_path.as_deref(), Some("/srv/naïve project"));
+            let flow_id = flow.id;
+            let request = flow.folder_request;
+            shell.finish_space_folder_load(
+                flow_id,
+                request,
+                Some("remote".into()),
+                Some("/srv/naïve project".into()),
+                Ok(FolderListing {
+                    path: "/srv/naïve project".into(),
+                    entries: Vec::new(),
+                    truncated: false,
+                }),
+                cx,
+            );
+            assert!(search.read(cx).is_empty());
+            assert_eq!(
+                shell
+                    .add_space
+                    .as_ref()
+                    .unwrap()
+                    .browser
+                    .ready()
+                    .unwrap()
+                    .path,
+                "/srv/naïve project"
+            );
+            shell.add_space_back_to(ProjectStep::Locations, cx);
+            let flow = shell.add_space.as_mut().unwrap();
             flow.drives = Loadable::Ready(vec![DriveEntry {
                 name: "Projects".into(),
                 path: "/projects".into(),
@@ -3591,9 +3774,257 @@ mod project_flow_tests {
             assert!(flow.device.is_none());
             assert!(flow.drives.ready().is_none());
             assert!(flow.search.read(cx).is_empty());
-            // Slash navigation only applies to folders, never device search.
+            // A path in device search remains a device query.
             search.update(cx, |input, cx| input.set_text("/projects/", cx));
-            assert!(!shell.add_space_slash_descend(cx));
+            shell.add_space_open_active(cx);
+            assert_eq!(shell.add_space.as_ref().unwrap().step, ProjectStep::Devices);
         });
+    }
+
+    #[gpui::test]
+    fn standalone_opens_local_home_and_paths_require_return(cx: &mut gpui::TestAppContext) {
+        let data = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let shell = cx.new(|cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.local_device_id = Some("local".into());
+                state.devices = serde_json::from_value(serde_json::json!([
+                    {"id":"local","name":"Studio","platform":"macos","lastSeenAt":null},
+                    {"id":"remote","name":"Server","platform":"linux","lastSeenAt":null}
+                ]))
+                .unwrap();
+                state
+            });
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    data_dir: data.path().into(),
+                    ipc_port: 0,
+                    edge_url: String::new(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zeron_proto::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        shell.update(cx, |shell, cx| {
+            shell.open_add_space(cx);
+            let flow = shell.add_space.as_ref().unwrap();
+            assert_eq!(flow.step, ProjectStep::Folders);
+            assert_eq!(flow.device.as_ref().unwrap().id, "local");
+            assert_eq!(flow.location.as_ref().unwrap().0, "Home");
+            assert_eq!(flow.browser_path, None);
+            let search = flow.search.clone();
+            search.update(cx, |input, cx| {
+                input.set_text("/Volumes/Work/naïve project/", cx)
+            });
+            assert_eq!(shell.add_space.as_ref().unwrap().browser_path, None);
+            shell.add_space_open_active(cx);
+            let flow = shell.add_space.as_ref().unwrap();
+            assert_eq!(
+                flow.browser_path.as_deref(),
+                Some("/Volumes/Work/naïve project")
+            );
+            assert_eq!(flow.location.as_ref().unwrap().0, "/");
+            assert_eq!(flow.search.read(cx).text(), "/Volumes/Work/naïve project/");
+            assert!(flow.browser.ready().is_none());
+
+            // A tilde pasted before Home is known waits for that device's
+            // Home listing, then opens the expanded path.
+            search.update(cx, |input, cx| input.set_text("~/work space/", cx));
+            shell.add_space_open_active(cx);
+            let flow = shell.add_space.as_ref().unwrap();
+            assert_eq!(flow.pending_home_path.as_deref(), Some("~/work space/"));
+            let flow_id = flow.id;
+            let request = flow.folder_request;
+            shell.finish_space_folder_load(
+                flow_id,
+                request,
+                Some("local".into()),
+                None,
+                Ok(FolderListing {
+                    path: "/Users/éva".into(),
+                    entries: Vec::new(),
+                    truncated: false,
+                }),
+                cx,
+            );
+            let flow = shell.add_space.as_ref().unwrap();
+            assert_eq!(flow.browser_path.as_deref(), Some("/Users/éva/work space"));
+            assert_eq!(flow.location.as_ref().unwrap().0, "Home");
+        });
+    }
+
+    #[gpui::test]
+    fn local_home_lists_children_and_manual_open_keeps_add_target(cx: &mut gpui::TestAppContext) {
+        let data = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let shell = cx.new(move |cx| test_shell(data.path().into(), cx));
+        shell.update(cx, |shell, cx| {
+            shell.state.update(cx, |state, cx| {
+                state.local_device_id = Some("local".into());
+                state.devices = serde_json::from_value(serde_json::json!([
+                    {"id":"local","name":"Studio","platform":"macos","lastSeenAt":null}
+                ]))
+                .unwrap();
+                cx.notify();
+            });
+            shell.open_add_space(cx);
+            let flow = shell.add_space.as_ref().unwrap();
+            assert_eq!(flow.step, ProjectStep::Folders);
+            assert_eq!(flow.browser_path, None);
+            let flow_id = flow.id;
+            let home_request = flow.folder_request;
+            shell.finish_space_folder_load(
+                flow_id,
+                home_request,
+                Some("local".into()),
+                None,
+                Ok(FolderListing {
+                    path: "/Users/alex".into(),
+                    entries: ["Desktop", "Documents", "Downloads"]
+                        .into_iter()
+                        .map(|name| zeron_proto::FolderEntry {
+                            name: name.into(),
+                            is_dir: true,
+                            is_repo: false,
+                        })
+                        .collect(),
+                    truncated: false,
+                }),
+                cx,
+            );
+            assert_eq!(
+                shell
+                    .add_space_filtered(cx)
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["Desktop", "Documents", "Downloads"]
+            );
+            let search = shell.add_space.as_ref().unwrap().search.clone();
+            search.update(cx, |input, cx| input.set_text("Doc", cx));
+            assert_eq!(shell.add_space_filtered(cx).len(), 1);
+            shell.add_space_open_active(cx);
+            let flow = shell.add_space.as_ref().unwrap();
+            assert_eq!(flow.browser_path.as_deref(), Some("/Users/alex/Documents"));
+            assert!(flow.search.read(cx).is_empty());
+            let child_request = flow.folder_request;
+            shell.finish_space_folder_load(
+                flow_id,
+                child_request,
+                Some("local".into()),
+                Some("/Users/alex/Documents".into()),
+                Ok(FolderListing {
+                    path: "/Users/alex/Documents".into(),
+                    entries: Vec::new(),
+                    truncated: false,
+                }),
+                cx,
+            );
+            assert_eq!(
+                shell
+                    .add_space
+                    .as_ref()
+                    .unwrap()
+                    .browser
+                    .ready()
+                    .unwrap()
+                    .path,
+                "/Users/alex/Documents"
+            );
+            shell.add_space_go_up(cx);
+            assert_eq!(
+                shell.add_space.as_ref().unwrap().browser_path.as_deref(),
+                Some("/Users/alex")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn stale_folder_and_drive_results_cannot_replace_current_device(cx: &mut gpui::TestAppContext) {
+        let data = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let shell = cx.new(move |cx| test_shell(data.path().into(), cx));
+        shell.update(cx, |shell, cx| {
+            shell.open_add_space(cx);
+            let first_id = shell.add_space.as_ref().unwrap().id;
+            shell.add_space.as_mut().unwrap().step = ProjectStep::Folders;
+            shell.add_space.as_mut().unwrap().device = Some(serde_json::from_value(
+                serde_json::json!({"id":"local","name":"Studio","platform":"macos","lastSeenAt":null})
+            ).unwrap());
+            shell.add_space.as_mut().unwrap().browser_path = Some("/new".into());
+            shell.add_space.as_mut().unwrap().folder_request = 2;
+            shell.add_space.as_mut().unwrap().drives_request = 2;
+            shell.add_space.as_mut().unwrap().pending_home_path = Some("~/old".into());
+            let search = shell.add_space.as_ref().unwrap().search.clone();
+            search.update(cx, |input, cx| input.set_text("/new", cx));
+            shell.add_space.as_mut().unwrap().browser_path = None;
+            shell.finish_space_folder_load(
+                first_id, 2, Some("local".into()), None,
+                Ok(FolderListing { path: "/home/local".into(), entries: Vec::new(), truncated: false }), cx,
+            );
+            assert_eq!(shell.add_space.as_ref().unwrap().browser_path, None);
+            assert!(shell.add_space.as_ref().unwrap().pending_home_path.is_none());
+            shell.add_space.as_mut().unwrap().browser_path = Some("/new".into());
+            shell.add_space.as_mut().unwrap().browser = Loadable::Idle;
+            let listing = |path: &str| FolderListing { path: path.into(), entries: Vec::new(), truncated: false };
+            shell.finish_space_folder_load(first_id, 1, Some("local".into()), Some("/old".into()), Ok(listing("/old")), cx);
+            assert!(shell.add_space.as_ref().unwrap().browser.ready().is_none());
+            shell.finish_space_folder_load(first_id, 2, Some("remote".into()), Some("/new".into()), Ok(listing("/new")), cx);
+            assert!(shell.add_space.as_ref().unwrap().browser.ready().is_none());
+            shell.finish_space_drives_load(first_id, 1, Some("local".into()), Ok(DriveListing { drives: Vec::new() }), cx);
+            assert!(shell.add_space.as_ref().unwrap().drives.ready().is_none());
+            for error in ["No such file", "Not a directory", "permission denied"] {
+                shell.finish_space_folder_load(first_id, 2, Some("local".into()), Some("/new".into()), Err(error.into()), cx);
+                assert!(shell.add_space.as_ref().unwrap().browser.ready().is_none());
+                assert_eq!(shell.add_space.as_ref().unwrap().browser.error(), Some(error));
+            }
+
+            shell.open_add_space(cx);
+            shell.finish_space_folder_load(first_id, 2, Some("local".into()), Some("/new".into()), Ok(listing("/new")), cx);
+            assert!(shell.add_space.as_ref().unwrap().browser.ready().is_none());
+        });
+    }
+
+    #[test]
+    fn existing_project_match_requires_exact_device_and_path() {
+        let project = Space {
+            id: "existing".into(),
+            device_id: "local".into(),
+            path: "/Users/éva/work space".into(),
+            name: None,
+            git_detected: false,
+            git_checked_at: None,
+            checkout_id: None,
+            created_at: Utc::now(),
+        };
+        assert_eq!(
+            existing_project_id(&[project.clone()], "local", &project.path),
+            Some("existing".into())
+        );
+        assert_eq!(
+            existing_project_id(&[project.clone()], "remote", &project.path),
+            None
+        );
+        assert_eq!(
+            existing_project_id(&[project], "local", "/Users/éva/work space/"),
+            None
+        );
     }
 }
