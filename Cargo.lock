@@ -11824,6 +11824,7 @@ dependencies = [
  "zeron-engine",
  "zeron-proto",
  "zeron-rpc",
+ "zeron-sync",
  "zeron-ui",
  "zeron-update",
 ]

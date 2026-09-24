@@ -161,8 +161,8 @@ async fn invoke(root: &Path, ssh: &Path, args: &[&str], server_port: u16) -> std
         .env("FAKE_SSH_ROOT", root)
         .env("CODEX_HOME", root.join("synthetic-codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))
-        .env("ZERON_WORKOS_CLIENT_ID", "")
-        .env("ZERON_EDGE_URL", "http://127.0.0.1:1");
+        .env("LUNA_WORKOS_CLIENT_ID", "")
+        .env("LUNA_EDGE_URL", "http://127.0.0.1:1");
     let _ = server_port;
     command.output().await.unwrap()
 }
@@ -496,7 +496,8 @@ async fn ssh_cli_enrolls_reconnects_rejects_wrong_target_and_stops_only_owned() 
         .env("FAKE_SSH_ROOT", root)
         .env("CODEX_HOME", root.join("synthetic-codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))
-        .env("ZERON_WORKOS_CLIENT_ID", "")
+        .env("LUNA_WORKOS_CLIENT_ID", "")
+        .env("LUNA_EDGE_URL", "http://127.0.0.1:1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -973,7 +974,8 @@ async fn remote_read_window_exit_cancels_a_pending_ssh_connect() {
         .env("LUNA_DATA_DIR", root.join("client-profile"))
         .env("LUNA_SSH_BIN", &ssh)
         .env("FAKE_SSH_ROOT", root)
-        .env("ZERON_WORKOS_CLIENT_ID", "")
+        .env("LUNA_WORKOS_CLIENT_ID", "")
+        .env("LUNA_EDGE_URL", "http://127.0.0.1:1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -1040,7 +1042,8 @@ async fn held_target_lock_never_blocks_read_view_exit() {
         .env("LUNA_DATA_DIR", root.join("client-profile"))
         .env("LUNA_SSH_BIN", &ssh)
         .env("FAKE_SSH_ROOT", root)
-        .env("ZERON_WORKOS_CLIENT_ID", "")
+        .env("LUNA_WORKOS_CLIENT_ID", "")
+        .env("LUNA_EDGE_URL", "http://127.0.0.1:1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -1330,7 +1333,7 @@ int main(void) {
             .success()
     );
     let script = format!(
-        "#!/bin/sh\nset -eu\nexport LUNA_DATA_DIR={}\nexport LUNA_SSH_BIN={}\nexport FAKE_SSH_ROOT={}\nexport CODEX_HOME={}\nexport CLAUDE_CONFIG_DIR={}\nexport LUNA_L30_QA_ROOT={}\nexport ZERON_WORKOS_CLIENT_ID=''\nexport ZERON_EDGE_URL='http://127.0.0.1:1'\nunset ZERON_EDGE_TOKEN\nprintf '%s\\n' \"$$\" > {}\nexec {} ssh view --host fixture-host --machine {} --environment {} --workspace-scope development --remote-port {} --ipc-port {} --artifact {} --session-file {} --project {} --task {} > {} 2>&1\n",
+        "#!/bin/sh\nset -eu\nexport LUNA_DATA_DIR={}\nexport LUNA_SSH_BIN={}\nexport FAKE_SSH_ROOT={}\nexport CODEX_HOME={}\nexport CLAUDE_CONFIG_DIR={}\nexport LUNA_L30_QA_ROOT={}\nexport LUNA_WORKOS_CLIENT_ID=''\nexport LUNA_EDGE_URL='http://127.0.0.1:1'\nunset LUNA_EDGE_TOKEN\nprintf '%s\\n' \"$$\" > {}\nexec {} ssh view --host fixture-host --machine {} --environment {} --workspace-scope development --remote-port {} --ipc-port {} --artifact {} --session-file {} --project {} --task {} > {} 2>&1\n",
         shell_quote(&root.join("client").display().to_string()),
         shell_quote(&ssh.display().to_string()),
         shell_quote(&root.display().to_string()),

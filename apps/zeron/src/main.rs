@@ -92,40 +92,66 @@ enum BackupCommand {
     Now,
     /// Show the newest verified automatic or manual archive.
     Status,
+    /// Preview counts, storage and compatibility without restoring an archive.
+    Preview { archive: std::path::PathBuf },
     /// Restore a verified archive while LUNA is stopped; keep previous files.
     Restore { archive: std::path::PathBuf },
     /// Roll back an interrupted offline restore before starting LUNA.
     Recover,
 }
 
-/// Production edge (Cloudflare Worker + Durable Objects on the zeron.sh zone).
-/// `ZERON_EDGE_URL` overrides (local dev / self-hosting).
-const DEFAULT_EDGE_URL: &str = "https://edge.zeron.sh";
-
-/// Production WorkOS AuthKit client id — public knowledge (it appears in every
-/// authorize URL), so baking it in is safe. Overridden by `ZERON_WORKOS_CLIENT_ID`;
-/// set it to the empty string — or set a dev bearer via `ZERON_EDGE_TOKEN` — to
-/// force dev-mode auth instead.
-const DEFAULT_WORKOS_CLIENT_ID: &str = "client_01KWD0EAKZKD50YCQJNYSRE4BY";
-
 fn edge_url_from_env() -> String {
-    std::env::var("ZERON_EDGE_URL")
+    std::env::var("LUNA_EDGE_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_EDGE_URL.into())
+        .unwrap_or_else(|| zeron_engine::OFFLINE_EDGE_URL.into())
 }
 
-/// WorkOS client id resolution: explicit env wins (empty string = dev mode);
-/// otherwise a `ZERON_EDGE_TOKEN` dev bearer keeps dev mode (smoke tests,
-/// local wrangler); otherwise the baked production client id makes optional
-/// sync available while a bare start remains local-only.
-fn workos_client_id_from_env(edge_token: &Option<String>) -> Option<String> {
-    match std::env::var("ZERON_WORKOS_CLIENT_ID") {
-        Ok(v) if v.trim().is_empty() => None,
-        Ok(v) => Some(v),
-        Err(_) if edge_token.is_some() => None,
-        Err(_) => Some(DEFAULT_WORKOS_CLIENT_ID.into()),
+/// An owned endpoint is required before auth or a dev bearer can opt in.
+fn workos_client_id_from_env(edge_url: &str) -> Option<String> {
+    (edge_url != zeron_engine::OFFLINE_EDGE_URL)
+        .then(|| std::env::var("LUNA_WORKOS_CLIENT_ID").ok())
+        .flatten()
+        .filter(|id| !id.trim().is_empty())
+}
+
+fn edge_token_from_env(edge_url: &str) -> Option<String> {
+    (edge_url != zeron_engine::OFFLINE_EDGE_URL)
+        .then(|| std::env::var("LUNA_EDGE_TOKEN").ok())
+        .flatten()
+        .filter(|token| !token.trim().is_empty())
+}
+
+fn validate_owned_service_config() -> anyhow::Result<()> {
+    let edge = std::env::var("LUNA_EDGE_URL").unwrap_or_default();
+    if edge.trim().is_empty() || edge.trim() == zeron_engine::OFFLINE_EDGE_URL {
+        anyhow::ensure!(
+            std::env::var_os("LUNA_WORKOS_CLIENT_ID").is_none()
+                && std::env::var_os("LUNA_EDGE_TOKEN").is_none(),
+            "LUNA auth requires an explicit owned LUNA_EDGE_URL"
+        );
+        return Ok(());
     }
+    let normalized = edge.trim().to_ascii_lowercase();
+    let (scheme, rest) = normalized.split_once("://").unwrap_or(("", ""));
+    anyhow::ensure!(
+        scheme == "https" || scheme == "http",
+        "LUNA_EDGE_URL requires an HTTP(S) URL"
+    );
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    anyhow::ensure!(!host.is_empty(), "LUNA_EDGE_URL has no host");
+    anyhow::ensure!(
+        host != "zeron.sh" && !host.ends_with(".zeron.sh"),
+        "LUNA cannot use Zeron's service endpoint"
+    );
+    Ok(())
 }
 
 /// mimalloc, macOS only: libmalloc never returns the streaming churn's
@@ -158,6 +184,7 @@ fn main() -> anyhow::Result<()> {
             error.exit();
         }
     };
+    validate_owned_service_config()?;
     #[cfg(windows)]
     if let Some(pid) = cli.wait_for_exit {
         zeron_update::windows::wait_for_exit(pid)?;
@@ -279,6 +306,37 @@ fn main() -> anyhow::Result<()> {
                         println!("no verified backup");
                     }
                 }
+                BackupCommand::Preview { archive } => {
+                    let preview = zeron_engine::backup::BackupService::preview_managed_offline(
+                        &root, &archive,
+                    )?;
+                    println!("archive {}", archive.display());
+                    println!("source {}", preview.manifest.source_root);
+                    println!("destination {}", root.display());
+                    println!("entries {}", preview.manifest.entries.len());
+                    println!("databases {}", preview.manifest.databases.len());
+                    println!(
+                        "attachments {}",
+                        preview
+                            .manifest
+                            .entries
+                            .iter()
+                            .filter(|entry| entry.category == "attachment")
+                            .count()
+                    );
+                    println!("required bytes {}", preview.required_bytes);
+                    println!("conflicts {}", preview.conflicts.len());
+                    for conflict in &preview.conflicts {
+                        println!("conflict {conflict}");
+                    }
+                    println!("unsupported {}", preview.unsupported.len());
+                    for reason in &preview.unsupported {
+                        println!("unsupported: {reason}");
+                    }
+                    for category in &preview.manifest.excluded_categories {
+                        println!("excluded: {category}");
+                    }
+                }
                 BackupCommand::Restore { archive } => {
                     let receipt = zeron_engine::backup::BackupService::restore_managed_offline(
                         &root, &archive,
@@ -314,7 +372,8 @@ fn main() -> anyhow::Result<()> {
             DaemonCommand::Status => daemon::status(),
         },
         None => {
-            let edge_token = std::env::var("ZERON_EDGE_TOKEN").ok();
+            let edge_url = edge_url_from_env();
+            let edge_token = edge_token_from_env(&edge_url);
             // Headed: the UI probes LUNA_IPC_PORT and connects to a running
             // daemon, or embeds the engine in-process (ARCHITECTURE §1).
             zeron_ui::run_app(zeron_ui::UiConfig {
@@ -322,11 +381,11 @@ fn main() -> anyhow::Result<()> {
                 ipc_port: std::env::var("LUNA_IPC_PORT")
                     .ok()
                     .and_then(|p| p.parse().ok())
-                    .unwrap_or(37654),
-                edge_url: edge_url_from_env(),
-                workos_client_id: workos_client_id_from_env(&edge_token),
+                    .unwrap_or(zeron_engine::DEFAULT_LUNA_IPC_PORT),
+                edge_url: edge_url.clone(),
+                workos_client_id: workos_client_id_from_env(&edge_url),
                 edge_token,
-                org_id: std::env::var("ZERON_ORG_ID").ok(),
+                org_id: std::env::var("LUNA_ORG_ID").ok(),
                 default_harness: zeron_ui::HarnessId::ClaudeCode,
                 initial_url: cli.open_url,
             });
@@ -364,22 +423,18 @@ fn attach_parent_console() {
 /// `logout`, and `status` — one resolution so the CLI auth commands always
 /// operate on the exact session the daemon will load.
 fn engine_config_from_env() -> zeron_engine::EngineConfig {
-    // Dev-mode bearer (no WorkOS): an explicit token enables sync.
-    let edge_token = std::env::var("ZERON_EDGE_TOKEN").ok();
+    let edge_url = edge_url_from_env();
+    let edge_token = edge_token_from_env(&edge_url);
     zeron_engine::EngineConfig {
         data_dir: paths::data_dir(),
-        edge_url: edge_url_from_env(),
+        edge_url: edge_url.clone(),
         ipc_port: std::env::var("LUNA_IPC_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
-            .unwrap_or(37654),
+            .unwrap_or(zeron_engine::DEFAULT_LUNA_IPC_PORT),
         default_harness: harness_from_env(),
-        // WorkOS mode: the signed-in session's org wins; ZERON_ORG_ID (dev
-        // default "dev-org") scopes the workspace room otherwise.
-        org_id: std::env::var("ZERON_ORG_ID").ok(),
-        // Real auth against production by default; see
-        // `workos_client_id_from_env` for the dev-mode escape hatches.
-        workos_client_id: workos_client_id_from_env(&edge_token),
+        org_id: std::env::var("LUNA_ORG_ID").ok(),
+        workos_client_id: workos_client_id_from_env(&edge_url),
         edge_token,
     }
 }
@@ -409,6 +464,13 @@ async fn sync_cli(ipc_port: u16) -> anyhow::Result<()> {
         .map_err(|e| {
             anyhow::anyhow!("no engine listening on 127.0.0.1:{ipc_port} ({e}) — is LUNA running?")
         })?;
+    let info: zeron_proto::EngineInfo = client
+        .call_as(zeron_rpc::methods::ENGINE_INFO, serde_json::json!({}))
+        .await?;
+    anyhow::ensure!(
+        info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1),
+        "local listener is not a compatible LUNA engine"
+    );
     let status = client
         .call(zeron_rpc::methods::SYNC_STATUS, serde_json::json!({}))
         .await

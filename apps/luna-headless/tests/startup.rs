@@ -29,8 +29,8 @@ fn start(root: &Path, ipc: u16, remote: u16) -> Child {
             &remote.to_string(),
         ])
         .env("LUNA_DATA_DIR", root.join("data"))
-        .env("ZERON_WORKOS_CLIENT_ID", "")
-        .env("ZERON_EDGE_URL", "http://127.0.0.1:1")
+        .env("LUNA_WORKOS_CLIENT_ID", "")
+        .env("LUNA_EDGE_URL", "http://127.0.0.1:1")
         .env("ZERON_HARNESS", "mock")
         .env("CODEX_HOME", root.join("synthetic-codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("synthetic-claude"))

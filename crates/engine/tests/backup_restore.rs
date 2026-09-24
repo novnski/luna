@@ -135,7 +135,59 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     fs::create_dir(root.join("credentials")).unwrap();
     fs::write(root.join("credentials/synthetic-only.txt"), b"do not touch").unwrap();
+    let remote_grants = root.join("profiles/local/remote-auth.json");
+    fs::write(&remote_grants, b"synthetic remote grant excluded").unwrap();
+    let db = root.join("profiles/local/docs.sqlite3");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute(
+        "INSERT INTO task_cleanup(task_id,state,detail,updated_at,owner_boot_id)
+         VALUES ('synthetic-task','failed','synthetic checkpoint',1,'synthetic-boot')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO local_executable_authority(doc_id,kind,row_id,payload_hash)
+         VALUES ('synthetic-doc','command','synthetic-row','synthetic-hash')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
     let receipt = BackupService::run_managed_offline_now(&root, 1_700_000_000_000).unwrap();
+    let claims = &receipt.manifest.databases[0];
+    assert_eq!(claims.cleanup_tasks, Some(1));
+    assert_eq!(claims.cleanup_projects, Some(0));
+    assert_eq!(claims.cleanup_paths, Some(0));
+    assert_eq!(claims.local_executable_authority, Some(1));
+    assert!(
+        !receipt
+            .manifest
+            .entries
+            .iter()
+            .any(|entry| entry.path.ends_with("remote-auth.json"))
+    );
+    let preview = BackupService::preview_managed_offline(&root, &receipt.archive).unwrap();
+    assert_eq!(preview.manifest, receipt.manifest);
+    assert!(preview.required_bytes > 0);
+    assert!(preview.unsupported.is_empty(), "{:?}", preview.unsupported);
+    assert!(preview.manifest.databases.len() > 0);
+    assert!(
+        preview
+            .manifest
+            .entries
+            .iter()
+            .any(|entry| entry.category == "attachment")
+    );
+    let copied_root = root.with_file_name("copied-luna");
+    fs::create_dir(&copied_root).unwrap();
+    fs::write(copied_root.join("device-id"), "synthetic-device").unwrap();
+    let copied_preview =
+        BackupService::preview_managed_offline(&copied_root, &receipt.archive).unwrap();
+    assert!(
+        copied_preview
+            .unsupported
+            .iter()
+            .any(|reason| reason.contains("original data-root path"))
+    );
     fs::write(root.join("ui-settings.json"), b"synthetic newer settings").unwrap();
     let journals = root.join("profiles/local/journals");
     fs::create_dir_all(&journals).unwrap();
@@ -145,9 +197,23 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
         BackupService::restore_managed_offline(&root, &receipt.archive),
         Err(BackupError::EngineRunning)
     ));
+    assert!(matches!(
+        BackupService::preview_managed_offline(&root, &receipt.archive),
+        Err(BackupError::EngineRunning)
+    ));
     drop(lock);
     let restored = BackupService::restore_managed_offline(&root, &receipt.archive).unwrap();
     assert!(restored.restored_entries > 0);
+    let conn = Connection::open(&db).unwrap();
+    for table in ["task_cleanup", "local_executable_authority"] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1, "{table} survived restore");
+    }
+    drop(conn);
     assert_eq!(
         fs::read(root.join("ui-settings.json")).unwrap(),
         br#"{"theme":"synthetic"}"#
@@ -156,6 +222,10 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
     assert_eq!(
         fs::read(root.join("credentials/synthetic-only.txt")).unwrap(),
         b"do not touch"
+    );
+    assert_eq!(
+        fs::read(&remote_grants).unwrap(),
+        b"synthetic remote grant excluded"
     );
     assert_eq!(
         fs::read(restored.rollback_dir.join("ui-settings.json")).unwrap(),
@@ -171,6 +241,74 @@ fn managed_offline_restore_preserves_excluded_files_and_keeps_rollback() {
         b"synthetic newer journal\n"
     );
     assert!(!BackupService::recover_managed_restore(&root).unwrap());
+}
+
+#[test]
+fn managed_offline_backup_refuses_unreviewed_future_schema() {
+    let (_parent, root, _backups) = fixture();
+    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+    let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations(version,applied_at) VALUES (13,1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
+    assert!(
+        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 12"))
+    );
+}
+
+#[test]
+fn managed_offline_backup_refuses_missing_v12_authority_table() {
+    let (_parent, root, _backups) = fixture();
+    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+    let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
+    conn.execute("DROP TABLE local_executable_authority", [])
+        .unwrap();
+    drop(conn);
+    let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
+    assert!(
+        matches!(result, Err(BackupError::Invalid(message)) if message.contains("missing table local_executable_authority"))
+    );
+}
+
+#[test]
+fn managed_offline_v9_archive_remains_restorable_after_v12_migrations() {
+    let (_parent, root, _backups) = fixture();
+    fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+    let db = root.join("profiles/local/docs.sqlite3");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "DROP TABLE local_executable_authority;
+         DROP TABLE task_cleanup_paths;
+         DROP TABLE task_cleanup;
+         DROP TABLE project_cleanup;
+         DELETE FROM schema_migrations WHERE version > 9;",
+    )
+    .unwrap();
+    drop(conn);
+    let archive = BackupService::run_managed_offline_now(&root, 1_700_000_000_000).unwrap();
+    let claims = &archive.manifest.databases[0];
+    assert_eq!(claims.schema_version, 9);
+    assert_eq!(claims.cleanup_tasks, None);
+    assert_eq!(claims.local_executable_authority, None);
+    let preview = BackupService::preview_managed_offline(&root, &archive.archive).unwrap();
+    assert!(preview.unsupported.is_empty(), "{:?}", preview.unsupported);
+    fs::write(root.join("ui-settings.json"), b"synthetic changed").unwrap();
+    BackupService::restore_managed_offline(&root, &archive.archive).unwrap();
+    assert_eq!(
+        fs::read(root.join("ui-settings.json")).unwrap(),
+        br#"{"theme":"synthetic"}"#
+    );
+    let conn = Connection::open(&db).unwrap();
+    let schema: i64 = conn
+        .query_row("SELECT max(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(schema, 12);
 }
 
 #[test]
@@ -386,7 +524,7 @@ fn staged_activity_rebuild_survives_restart_and_detects_interrupted_readback() {
 }
 
 #[test]
-fn staged_restore_rebuilds_appshot_history_from_v9_source_facts() {
+fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schema() {
     let (_parent, root, backups) = fixture();
     add_synthetic_task(&root, None);
     let record = AppshotActivityRecord {
@@ -421,7 +559,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts() {
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 9);
+    assert_eq!(backup.manifest.databases[0].schema_version, 12);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)

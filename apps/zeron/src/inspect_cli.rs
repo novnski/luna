@@ -10,7 +10,7 @@ use zeron_proto::{Chat, Device, EngineInfo, Space, TaskCommandRead, TaskIdentity
 use zeron_rpc::{RpcClient, RpcError, methods};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_PORT: u16 = 37654;
+const DEFAULT_PORT: u16 = zeron_engine::DEFAULT_LUNA_IPC_PORT;
 const MAX_LIMIT: u16 = 100;
 
 #[derive(Debug, Args)]
@@ -18,7 +18,7 @@ pub struct InspectArgs {
     /// Emit a versioned JSON object, including for failures.
     #[arg(long, global = true)]
     json: bool,
-    /// Local engine IPC port (defaults to LUNA_IPC_PORT or 37654).
+    /// Local engine IPC port (defaults to LUNA_IPC_PORT or 59778).
     #[arg(long, global = true)]
     port: Option<u16>,
     #[command(subcommand)]
@@ -222,6 +222,11 @@ async fn execute(args: InspectArgs) -> Result<Output, CliError> {
             ))
         })?;
     let info: EngineInfo = call(&client, methods::ENGINE_INFO, json!({})).await?;
+    if !info.supports(zeron_proto::capabilities::LUNA_OWNER_IPC_V1) {
+        return Err(CliError::protocol(
+            "local listener is not a compatible LUNA engine",
+        ));
+    }
     match args.command {
         InspectCommand::Status { machine } => {
             require_machine(&info, machine.as_deref())?;

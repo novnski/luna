@@ -314,6 +314,37 @@ async fn clean_local_auth_construction_does_not_probe_edge_health() {
 }
 
 #[tokio::test]
+async fn unconfigured_luna_auth_stays_local_and_does_not_load_a_saved_session() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("session.json"), b"synthetic stale session").unwrap();
+    let config = config(
+        dir.path(),
+        zeron_engine::OFFLINE_EDGE_URL.into(),
+        Some("synthetic-client-id"),
+        Some("synthetic-bearer"),
+    );
+    let auth = Engine::build_auth(&config).await;
+    assert!(auth.offline_only());
+    assert!(!auth.workos_enabled());
+    assert!(!auth.loaded_workos_session());
+    assert_eq!(auth.state(), AuthState::SignedOut);
+    assert!(auth.access_token().await.is_err());
+    assert_eq!(
+        Engine::initial_workspace_scope(&auth),
+        WorkspaceScope::Local
+    );
+    let profile = Engine::resolve_profile(&config, &auth, WorkspaceScope::Local)
+        .unwrap()
+        .expect("local profile");
+    let runtime = Engine::assemble_runtime(&config, auth, profile)
+        .await
+        .unwrap();
+    assert!(runtime.core().links().is_none());
+    assert!(runtime.core().updater().is_none());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn local_runtime_does_not_start_the_edge_updater() {
     let dir = tempfile::tempdir().unwrap();
     let (edge_url, requests, edge_task) = rejecting_edge().await;

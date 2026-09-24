@@ -16,6 +16,11 @@ use zeron_rpc::{RpcError, RpcReply, RpcService, methods};
 
 use zeron_sync::DocsStore;
 
+/// No owned sync service has been configured for a local LUNA installation.
+pub const OFFLINE_EDGE_URL: &str = "luna-local://offline";
+/// Distinct from Zeron's historical owner IPC port.
+pub const DEFAULT_LUNA_IPC_PORT: u16 = 59778;
+
 mod activity_history;
 pub mod agent_accounts;
 mod attention;
@@ -954,14 +959,15 @@ impl Engine {
     /// installations must be able to start locally without network access.
     pub async fn build_auth(config: &EngineConfig) -> Auth {
         let mut auth_config = AuthConfig::new(config.edge_url.clone(), config.data_dir.clone());
+        auth_config.offline_only = config.edge_url == OFFLINE_EDGE_URL;
         auth_config.workos_client_id = config.workos_client_id.clone();
-        if let Ok(base) = std::env::var("ZERON_WORKOS_API_BASE")
+        if let Ok(base) = std::env::var("LUNA_WORKOS_API_BASE")
             && !base.trim().is_empty()
         {
             auth_config.workos_api_base = base;
         }
         auth_config.callback_port = Some(
-            std::env::var("ZERON_CALLBACK_PORT")
+            std::env::var("LUNA_CALLBACK_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(27641),
@@ -974,7 +980,9 @@ impl Engine {
 
     /// Capture the workspace boundary once, before refresh or sign-in can mutate auth.
     pub fn initial_workspace_scope(auth: &Auth) -> WorkspaceScope {
-        if !auth.workos_enabled() {
+        if auth.offline_only() {
+            WorkspaceScope::Local
+        } else if !auth.workos_enabled() {
             WorkspaceScope::Development
         } else if auth.loaded_workos_session() {
             WorkspaceScope::Synced
@@ -1002,10 +1010,10 @@ impl Engine {
                     .filter(|org| !org.is_empty());
                 let org_id = dev_token_org
                     .or(config.org_id.clone())
-                    .unwrap_or_else(|| env_or("ZERON_ORG_ID", DEFAULT_ORG_ID));
+                    .unwrap_or_else(|| env_or("LUNA_ORG_ID", DEFAULT_ORG_ID));
                 let user_id = auth
                     .user_id()
-                    .unwrap_or_else(|| env_or("ZERON_USER_ID", DEFAULT_USER_ID));
+                    .unwrap_or_else(|| env_or("LUNA_USER_ID", DEFAULT_USER_ID));
                 Ok(Some(EngineProfile::development(
                     &config.data_dir,
                     &org_id,
