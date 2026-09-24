@@ -13,7 +13,42 @@ const MARKER: &str = ".luna-l32-native-fixture";
 const MARKER_CONTENTS: &[u8] = b"L32 synthetic native fixture\n";
 const PREPARED: &str = ".luna-l32-prepared";
 const PREPARED_CONTENTS: &[u8] = b"L32 prepared synthetic root v1\n";
+const QA_BUNDLE: &str = "LUNA-Native-QA.app";
 const MAX_ENTRIES: usize = 10_000;
+
+/// No-argument LaunchServices route for the exact copied, signed QA bundle.
+/// A QA-named bundle in an invalid location is an error, never a production
+/// fallback. Ordinary `LUNA.app` paths are left to the normal CLI/startup.
+pub fn qa_root_from_executable(executable: &Path) -> Result<Option<PathBuf>> {
+    let Some(bundle) = executable
+        .ancestors()
+        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == QA_BUNDLE))
+    else {
+        return Ok(None);
+    };
+    ensure!(
+        executable == bundle.join("Contents/MacOS/luna"),
+        "QA bundle executable path is malformed"
+    );
+    ensure!(
+        std::fs::symlink_metadata(bundle)?.file_type().is_dir()
+            && std::fs::symlink_metadata(executable)?.file_type().is_file(),
+        "QA bundle or executable is not a real file"
+    );
+    let root = validate_root(bundle.parent().context("QA bundle has no fixture root")?)?;
+    ensure!(
+        bundle.canonicalize()? == root.join(QA_BUNDLE)
+            && executable.canonicalize()? == root.join(QA_BUNDLE).join("Contents/MacOS/luna"),
+        "QA bundle escaped its fixture root"
+    );
+    let prepared = root.join(PREPARED);
+    ensure!(
+        std::fs::symlink_metadata(&prepared)?.file_type().is_file()
+            && std::fs::read(&prepared)? == PREPARED_CONTENTS,
+        "QA bundle requires a prepared synthetic fixture"
+    );
+    Ok(Some(root))
+}
 
 /// Only an explicitly marked private directory below the system temp root.
 pub fn validate_root(path: &Path) -> Result<PathBuf> {
@@ -120,6 +155,13 @@ pub fn run(root: PathBuf, check_only: bool) -> Result<()> {
     let core = runtime.block_on(async { prepare_core(&root) })?;
     tracing::info!(root = %root.display(), "L32 synthetic native fixture prepared");
     if check_only {
+        if std::fs::symlink_metadata(root.join(QA_BUNDLE)).is_ok() {
+            let copied_executable = root.join(QA_BUNDLE).join("Contents/MacOS/luna");
+            ensure!(
+                qa_root_from_executable(&copied_executable)?.as_deref() == Some(root.as_path()),
+                "copied QA bundle does not resolve this synthetic root"
+            );
+        }
         let result: Result<()> = runtime.block_on(async {
             let handle = zeron_ui::EngineHandle::synthetic_from_core(core.clone()).await?;
             ensure!(
@@ -159,6 +201,13 @@ pub fn run(root: PathBuf, check_only: bool) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn synthetic_executable(root: &Path, bundle: &str) -> PathBuf {
+        let executable = root.join(bundle).join("Contents/MacOS/luna");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"synthetic Mach-O placeholder").unwrap();
+        executable
+    }
+
     #[test]
     fn marker_and_private_temp_root_are_required() {
         let fixture = tempfile::tempdir().unwrap();
@@ -182,5 +231,55 @@ mod tests {
             std::os::unix::fs::symlink("/", fixture.path().join("escape")).unwrap();
             assert!(validate_root(fixture.path()).is_err());
         }
+    }
+
+    #[test]
+    fn no_argument_route_requires_exact_prepared_qa_bundle() {
+        let fixture = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        std::fs::write(fixture.path().join(MARKER), MARKER_CONTENTS).unwrap();
+        std::fs::write(fixture.path().join(PREPARED), PREPARED_CONTENTS).unwrap();
+        let normal = synthetic_executable(fixture.path(), "LUNA.app");
+        assert!(qa_root_from_executable(&normal).unwrap().is_none());
+        let qa = synthetic_executable(fixture.path(), QA_BUNDLE);
+        assert_eq!(
+            qa_root_from_executable(&qa).unwrap(),
+            Some(fixture.path().canonicalize().unwrap())
+        );
+        std::fs::write(fixture.path().join(PREPARED), b"bad marker").unwrap();
+        assert!(qa_root_from_executable(&qa).is_err());
+        std::fs::remove_file(fixture.path().join(PREPARED)).unwrap();
+        assert!(qa_root_from_executable(&qa).is_err());
+        std::fs::write(fixture.path().join(PREPARED), PREPARED_CONTENTS).unwrap();
+        std::fs::write(fixture.path().join(MARKER), b"bad marker").unwrap();
+        assert!(qa_root_from_executable(&qa).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qa_bundle_symlink_and_malformed_path_fail_closed() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let fixture = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(fixture.path().join(MARKER), MARKER_CONTENTS).unwrap();
+        std::fs::write(fixture.path().join(PREPARED), PREPARED_CONTENTS).unwrap();
+        let normal = synthetic_executable(fixture.path(), "LUNA.app");
+        symlink(
+            fixture.path().join("LUNA.app"),
+            fixture.path().join(QA_BUNDLE),
+        )
+        .unwrap();
+        let linked = fixture.path().join(QA_BUNDLE).join("Contents/MacOS/luna");
+        assert!(qa_root_from_executable(&linked).is_err());
+        std::fs::remove_file(fixture.path().join(QA_BUNDLE)).unwrap();
+        let malformed = fixture.path().join(QA_BUNDLE).join("Other/MacOS/luna");
+        assert!(qa_root_from_executable(&malformed).is_err());
+        assert!(qa_root_from_executable(&normal).unwrap().is_none());
     }
 }

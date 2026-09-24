@@ -89,14 +89,25 @@ disables native Codex metadata and Claude Keychain fallback, and does not set
 `HOME` or `CODEX_HOME` globally. The fixture uses in-memory RPC and port 0;
 no daemon, remote listener, appshot service, or Edge supervisor starts.
 
-The parent may launch the app through LaunchServices with the explicit mode:
+After check-only, copy the signed app **intact** into that prepared root with
+the exact opt-in name, then verify the copy's signature and binary hash:
 
 ```sh
-open -n -a "$candidate/LUNA.app" --args native-fixture --root "$fixture"
+ditto "$candidate/LUNA.app" "$fixture/LUNA-Native-QA.app"
+codesign --verify --deep --strict "$fixture/LUNA-Native-QA.app"
+shasum -a 256 "$fixture/LUNA-Native-QA.app/Contents/MacOS/luna"
 ```
 
-The app's own entrypoint is the signed Rust executable, with no shell/exec
-wrapper inside the bundle. Use supported Computer readback for first render,
+Compare that hash with `manifest.json`. The parent launches only by selecting
+the **exact absolute QA bundle path** with supported Computer
+`cua.getApp(appPath)`; it takes no arguments. The signed Rust executable
+detects this exact bundle name under the prepared private temp root before
+ordinary CLI parsing, logging, or profile access. Missing or invalid context
+refuses startup. A normal `LUNA.app` retains normal behavior. No Terminal,
+`open` command, shell/exec wrapper, extra launcher, or global environment
+change is involved in the native launch.
+
+Use supported Computer readback for first render,
 local/mock identity, task/project navigation, settings, backup status, native
 close/reopen and exact data-root persistence. Read only bounded excerpts from
 `$fixture/logs/luna-native-fixture.log`. Quit the exact fixture app, verify its

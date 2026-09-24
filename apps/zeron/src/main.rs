@@ -163,20 +163,23 @@ fn main() -> anyhow::Result<()> {
     let argv: Vec<_> = std::env::args_os().collect();
     let inspect_json = argv.get(1).is_some_and(|arg| arg == "inspect")
         && argv.iter().skip(2).any(|arg| arg == "--json");
-    let cli = match Cli::try_parse_from(argv) {
-        Ok(cli) => cli,
-        Err(error) => {
-            if inspect_json
-                && !matches!(
-                    error.kind(),
-                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
-                )
-            {
-                std::process::exit(inspect_cli::print_parse_error(&error));
-            }
-            error.exit();
+    #[cfg(target_os = "macos")]
+    let qa_root = native_fixture::qa_root_from_executable(&std::env::current_exe()?)?;
+    #[cfg(target_os = "macos")]
+    let cli = if let Some(root) = qa_root {
+        anyhow::ensure!(argv.len() == 1, "QA bundle accepts no launch arguments");
+        Cli {
+            command: Some(Command::NativeFixture {
+                root,
+                check_only: false,
+            }),
+            open_url: None,
         }
+    } else {
+        parse_cli(argv, inspect_json)
     };
+    #[cfg(not(target_os = "macos"))]
+    let cli = parse_cli(argv, inspect_json);
     #[cfg(target_os = "macos")]
     let native_root = match &cli.command {
         Some(Command::NativeFixture { root, .. }) => Some(native_fixture::validate_root(root)?),
@@ -436,6 +439,23 @@ fn main() -> anyhow::Result<()> {
                 synthetic_core: None,
             });
             Ok(())
+        }
+    }
+}
+
+fn parse_cli(argv: Vec<std::ffi::OsString>, inspect_json: bool) -> Cli {
+    match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) => {
+            if inspect_json
+                && !matches!(
+                    error.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                )
+            {
+                std::process::exit(inspect_cli::print_parse_error(&error));
+            }
+            error.exit();
         }
     }
 }
