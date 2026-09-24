@@ -888,6 +888,7 @@ impl Pickers {
         // restart (stale rows stay visible while the reload runs).
         let catalog_observe = cx.observe_global::<HarnessCatalogChanged>(|this: &mut Self, cx| {
             this.ensure_harnesses(true, cx);
+            this.prefetch_models(true, cx);
             cx.notify();
         });
         // Dev/testing knob: `ZERON_OPEN_PICKER=model|traits|repo|branch` boots

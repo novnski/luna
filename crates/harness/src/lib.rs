@@ -237,6 +237,12 @@ pub trait Harness: Send + Sync {
         Ok(result)
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
+    /// A provider-authored catalog suitable for replacing a saved snapshot.
+    /// Adapters with bundled fallbacks override this so probe failures cannot
+    /// turn a last-known-good cache into a static list.
+    async fn models_live(&self) -> Result<Vec<Model>, HarnessError> {
+        self.models().await
+    }
     /// Slash commands the agent advertises (ACP `availableCommands`); empty
     /// for harnesses without them. May spawn a short-lived discovery process.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {

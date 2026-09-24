@@ -9,6 +9,9 @@
 //! curated list directly; `ClaudeHarness::models` is the single seam where
 //! dynamic discovery can later be spliced in.
 
+use std::collections::HashSet;
+
+use serde_json::Value;
 use zeron_proto::{Model, ModelOption, ModelOptionChoice, ReasoningLevel};
 
 /// The ultrathink directive rides every user message as a prompt prefix — that
@@ -202,6 +205,136 @@ pub fn static_models() -> Vec<Model> {
             vec![toggle("thinking", "Thinking")],
         ),
     ]
+}
+
+/// Translate the CLI's account-visible `initialize.response.models` list into
+/// picker rows. Its aliases may omit older accepted model IDs, so preserve
+/// curated rows that are not represented by a live resolved model.
+pub(crate) fn models_from_initialize(response: &Value) -> Vec<Model> {
+    let Some(entries) = response
+        .get("response")
+        .and_then(|value| value.get("models"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let curated = static_models();
+    let mut models = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let Some(value) = entry.get("value").and_then(Value::as_str).map(str::trim) else {
+            continue;
+        };
+        if value.is_empty() || value == "default" {
+            continue;
+        }
+        let resolved = entry
+            .get("resolvedModel")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let id = if value.ends_with("[1m]") && !resolved.ends_with("[1m]") {
+            value
+        } else if resolved.starts_with("claude-") {
+            resolved
+        } else {
+            value
+        };
+        if !seen.insert(id.to_owned()) {
+            continue;
+        }
+        let base = id.strip_suffix("[1m]").unwrap_or(id);
+        let template = curated.iter().find(|model| model.id == base).or_else(|| {
+            let (stem, date) = base.rsplit_once('-')?;
+            (date.len() == 8 && date.chars().all(|ch| ch.is_ascii_digit()))
+                .then(|| curated.iter().find(|model| model.id == stem))
+                .flatten()
+        });
+        let mut reasoning_levels = entry
+            .get("supportedEffortLevels")
+            .and_then(Value::as_array)
+            .map(|levels| {
+                levels
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(|level| match level {
+                        "low" => Some(ReasoningLevel::Low),
+                        "medium" => Some(ReasoningLevel::Medium),
+                        "high" => Some(ReasoningLevel::High),
+                        "xhigh" => Some(ReasoningLevel::XHigh),
+                        "max" => Some(ReasoningLevel::Max),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                template.map_or_else(Vec::new, |model| model.reasoning_levels.clone())
+            });
+        if entry.get("supportsEffort").and_then(Value::as_bool) == Some(true)
+            && !reasoning_levels.contains(&ReasoningLevel::Ultrathink)
+        {
+            reasoning_levels.push(ReasoningLevel::Ultrathink);
+        }
+        if template.is_some_and(|model| model.reasoning_levels.contains(&ReasoningLevel::Ultracode))
+            && !reasoning_levels.contains(&ReasoningLevel::Ultracode)
+        {
+            reasoning_levels.push(ReasoningLevel::Ultracode);
+        }
+        let mut options = template.map_or_else(Vec::new, |model| model.options.clone());
+        if id.ends_with("[1m]") && !options.iter().any(|option| option.id == "contextWindow") {
+            options.push(context_window());
+        }
+        if id.ends_with("[1m]")
+            && let Some(option) = options
+                .iter_mut()
+                .find(|option| option.id == "contextWindow")
+        {
+            option.default_choice = "1m".into();
+        }
+        if entry.get("supportsFastMode").and_then(Value::as_bool) == Some(true)
+            && !options.iter().any(|option| option.id == "fastMode")
+        {
+            options.push(toggle("fastMode", "Fast Mode"));
+        }
+        models.push(Model {
+            id: id.to_owned(),
+            label: template
+                .map(|model| model.label.clone())
+                .or_else(|| {
+                    entry
+                        .get("displayName")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| id.to_owned()),
+            description: entry
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+                .or_else(|| template.and_then(|model| model.description.clone())),
+            reasoning_levels,
+            options,
+        });
+    }
+    if models.is_empty() {
+        return models;
+    }
+    for model in curated {
+        let represented = seen.iter().any(|id| {
+            id == &model.id
+                || id.strip_suffix("[1m]") == Some(model.id.as_str())
+                || id.strip_prefix(&model.id).is_some_and(|tail| {
+                    tail.len() == 9
+                        && tail.starts_with('-')
+                        && tail[1..].chars().all(|ch| ch.is_ascii_digit())
+                })
+        });
+        if !represented {
+            models.push(model);
+        }
+    }
+    models
 }
 
 #[cfg(test)]

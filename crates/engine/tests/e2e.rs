@@ -1033,6 +1033,128 @@ async fn rpc_surface_over_in_memory_transport() {
     }
 }
 
+/// Exercises the real engine RPC and device-root persistence with a provider
+/// whose catalog can change between calls and fail after a good result.
+#[tokio::test]
+async fn model_catalog_cache_survives_refresh_failure_and_engine_reopen() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CatalogHarness {
+        answer: Arc<Mutex<Result<Vec<Model>, String>>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Harness for CatalogHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Catalog fixture"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.answer
+                .lock()
+                .unwrap()
+                .clone()
+                .map_err(HarnessError::Protocol)
+        }
+        async fn run(
+            &self,
+            _request: RunRequest,
+            _controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            Err(HarnessError::Protocol(
+                "catalog fixture does not run turns".into(),
+            ))
+        }
+    }
+
+    let model = |id: &str| Model {
+        id: id.into(),
+        label: id.into(),
+        description: None,
+        reasoning_levels: Vec::new(),
+        options: Vec::new(),
+    };
+    let root = tempfile::tempdir().unwrap();
+    let answer = Arc::new(Mutex::new(Ok(vec![model("first")])));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = || -> Arc<dyn Harness> {
+        Arc::new(CatalogHarness {
+            answer: answer.clone(),
+            calls: calls.clone(),
+        })
+    };
+    let core = assemble(root.path(), provider());
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let list = |refresh: bool| serde_json::json!({"harness": "mock", "refresh": refresh});
+
+    let first = client
+        .call(zeron_rpc::methods::LIST_MODELS, list(false))
+        .await
+        .unwrap();
+    assert_eq!(first[0]["id"], "first");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        std::fs::read_dir(root.path().join("model-cache"))
+            .unwrap()
+            .count(),
+        1
+    );
+
+    *answer.lock().unwrap() = Ok(vec![model("second")]);
+    let cached = client
+        .call(zeron_rpc::methods::LIST_MODELS, list(false))
+        .await
+        .unwrap();
+    assert_eq!(cached[0]["id"], "first");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let refreshed = client
+        .call(zeron_rpc::methods::LIST_MODELS, list(true))
+        .await
+        .unwrap();
+    assert_eq!(refreshed[0]["id"], "second");
+    *answer.lock().unwrap() = Err("offline".into());
+    assert!(
+        client
+            .call(zeron_rpc::methods::LIST_MODELS, list(true))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        client
+            .call(zeron_rpc::methods::LIST_MODELS, list(false))
+            .await
+            .unwrap()[0]["id"],
+        "second"
+    );
+
+    drop(client);
+    drop(core);
+    let reopened = assemble(root.path(), provider());
+    let reopened_client = zeron_rpc::memory_client(reopened.rpc_service());
+    assert_eq!(
+        reopened_client
+            .call(zeron_rpc::methods::LIST_MODELS, list(false))
+            .await
+            .unwrap()[0]["id"],
+        "second"
+    );
+}
+
 #[tokio::test]
 async fn respond_input_resolves_pending_question() {
     // Harness that asks a question through RunControls and echoes the answer.

@@ -387,6 +387,19 @@ pub struct AgentAccounts {
 }
 
 impl AgentAccounts {
+    /// IDs only: background catalog refresh does not need usage or profile
+    /// reads, and must not touch another provider's credential store.
+    pub(crate) fn codex_account_ids(&self) -> Vec<String> {
+        let state = lock(&self.inner.state);
+        let mut ids = vec![CODEX_NATIVE_ACCOUNT_ID.to_owned()];
+        for account in &state.codex_accounts {
+            if !ids.contains(&account.id) {
+                ids.push(account.id.clone());
+            }
+        }
+        ids
+    }
+
     pub fn new(config: AgentAccountsConfig) -> Self {
         let http = reqwest::Client::builder()
             .timeout(HTTP_TIMEOUT)

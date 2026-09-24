@@ -52,7 +52,7 @@ use zeron_proto::{
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
 use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child};
-use catalog::{apply_ultrathink, static_models, to_effort};
+use catalog::{apply_ultrathink, models_from_initialize, static_models, to_effort};
 use normalize::Normalizer;
 use wire::{ControlRequestFrame, Frame, allow_response, control_response_line};
 
@@ -260,7 +260,7 @@ impl ClaudeHarness {
     /// control_response. No user message is ever written, so no turn (and no
     /// API call) happens; the child is torn down as soon as the response
     /// lands.
-    async fn discover_commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+    async fn discover_initialize(&self) -> Result<Value, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
         crate::compose_child_path(&mut cmd, &exe);
@@ -320,7 +320,7 @@ impl ClaudeHarness {
                         .unwrap_or("initialize control request failed");
                     return Err(HarnessError::Protocol(msg.into()));
                 }
-                return Ok(parse_initialize_commands(&response));
+                return Ok(response);
             }
             Err(HarnessError::Protocol(
                 "claude exited before answering the initialize control request".into(),
@@ -330,8 +330,23 @@ impl ClaudeHarness {
         shutdown_child(&mut child, self.kill_grace).await;
         match result {
             Ok(inner) => inner,
-            Err(_) => Err(HarnessError::Protocol("command discovery timed out".into())),
+            Err(_) => Err(HarnessError::Protocol(
+                "Claude initialization timed out".into(),
+            )),
         }
+    }
+
+    /// The CLI's read-only initialization response contains its current model
+    /// aliases and account-visible resolved models. No user message is sent.
+    pub async fn live_models(&self) -> Result<Vec<Model>, HarnessError> {
+        let response = self.discover_initialize().await?;
+        let models = models_from_initialize(&response);
+        if models.is_empty() {
+            return Err(HarnessError::Protocol(
+                "Claude initialize returned no models".into(),
+            ));
+        }
+        Ok(models)
     }
 }
 
@@ -417,9 +432,9 @@ impl Harness for ClaudeHarness {
         true
     }
 
-    /// The curated static catalog (see [`catalog`]); requires an installed CLI
-    /// so an absent binary surfaces as [`HarnessError::NotInstalled`] here,
-    /// like the discovery call would.
+    /// Keep the trait's lightweight bundled list for internal callers that
+    /// are not presenting the model picker. The engine cache invokes
+    /// `live_models` in the background and for explicit refreshes.
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         self.resolve_executable()?;
         Ok(static_models())
@@ -432,7 +447,11 @@ impl Harness for ClaudeHarness {
     /// stdout line, well before any API traffic). Cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         self.commands
-            .get_or_try_init(|| self.discover_commands())
+            .get_or_try_init(|| async {
+                self.discover_initialize()
+                    .await
+                    .map(|response| parse_initialize_commands(&response))
+            })
             .await
             .cloned()
     }

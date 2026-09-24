@@ -138,6 +138,7 @@ pub mod integration_settings;
 pub mod local_import;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
+mod model_cache;
 pub mod permissions;
 pub mod profile;
 pub mod recovery;
@@ -295,6 +296,7 @@ pub struct EngineCore {
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
     pub agent_accounts: AgentAccounts,
+    model_cache: Arc<model_cache::ModelCache>,
     pub task_identity: TaskIdentityService,
     pub device_id: String,
     remote_auth: Option<Arc<zeron_rpc::RemoteAuthStore>>,
@@ -634,6 +636,12 @@ impl EngineCore {
         let backup_control = backup::IsolatedRoot::open(data_dir)
             .ok()
             .map(backup_control::BackupControl::new);
+        let model_cache = Arc::new(model_cache::ModelCache::new(
+            data_dir.to_path_buf(),
+            device_write.handle(),
+            registry.clone(),
+            agent_accounts.clone(),
+        ));
         Ok(Self {
             backup_control,
             store,
@@ -650,6 +658,7 @@ impl EngineCore {
             spaces_sync,
             uploads,
             agent_accounts,
+            model_cache,
             task_identity,
             device_id,
             remote_auth,
@@ -836,6 +845,7 @@ impl EngineCore {
             self.diff_sync.clone(),
             self.uploads.clone(),
             self.agent_accounts.clone(),
+            self.model_cache.clone(),
             self.task_identity.clone(),
             self.workspace_scope,
             self.cleanup_boot_id.clone(),

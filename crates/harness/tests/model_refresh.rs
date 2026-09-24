@@ -51,6 +51,10 @@ async fn check_refresh(harness: &dyn Harness, dir: &Path) {
     std::fs::write(&state, r#"{"id":"second-"}"#).unwrap();
     assert_eq!(harness.models().await.unwrap()[255].id, "second-255");
     std::fs::write(&state, r#"{"id":"broken-","broken":true}"#).unwrap();
+    assert!(
+        harness.models_live().await.is_err(),
+        "a failed live probe must not be saved over the last good catalog"
+    );
     let fallback = harness.models().await.unwrap();
     assert!(!fallback.iter().any(|m| m.id.starts_with("second-")));
     std::fs::write(&state, r#"{"id":"recovered-"}"#).unwrap();

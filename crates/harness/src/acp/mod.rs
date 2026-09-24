@@ -1697,6 +1697,21 @@ impl Harness for AcpHarness {
         }
     }
 
+    async fn models_live(&self) -> Result<Vec<Model>, HarnessError> {
+        self.resolve_launch()?;
+        if self.spec.id == HarnessId::Devin {
+            return self.models().await;
+        }
+        let models = self.discover_models().await?;
+        if models.is_empty() {
+            return Err(HarnessError::Protocol(format!(
+                "{} returned no models",
+                self.spec.display_name
+            )));
+        }
+        Ok(models)
+    }
+
     /// the agent's advertised commands minus the spec's hidden ones, then its
     /// skills. Skills are read fresh on every call so a newly added one shows
     /// up, and they still list when discovery fails (a signed-out agent).

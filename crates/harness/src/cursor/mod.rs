@@ -247,6 +247,14 @@ impl Harness for CursorHarness {
         }
     }
 
+    async fn models_live(&self) -> Result<Vec<Model>, HarnessError> {
+        let models = self.discover_models().await?;
+        if models.is_empty() {
+            return Err(HarnessError::Protocol("Cursor returned no models".into()));
+        }
+        Ok(models)
+    }
+
     // No `commands()` override: @cursor/sdk 1.0.28 exposes no slash-command
     // listing (the cursor-agent TUI's slash commands are client-side only),
     // so the trait's empty default is the honest answer, not a gap.

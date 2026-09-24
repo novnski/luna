@@ -184,6 +184,8 @@ struct ListModelsParams {
     harness: HarnessId,
     #[serde(default)]
     account_id: Option<String>,
+    #[serde(default)]
+    refresh: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1082,6 +1084,7 @@ pub struct EngineRpc {
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
     agent_accounts: AgentAccounts,
+    model_cache: std::sync::Arc<crate::model_cache::ModelCache>,
     codex_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
     opencode_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
     claude_usage_last_good: std::sync::Mutex<Option<zeron_proto::UsageLimitSnapshot>>,
@@ -1272,7 +1275,7 @@ impl EngineRpc {
     }
 
     #[allow(clippy::too_many_arguments)] // engine assembly seam, not a public API
-    pub fn new(
+    pub(crate) fn new(
         store: std::sync::Arc<DocsStore>,
         sessions: SessionsEngine,
         doc_host: DocHost,
@@ -1285,6 +1288,7 @@ impl EngineRpc {
         diff_sync: CheckoutDiffSync,
         uploads: Uploads,
         agent_accounts: AgentAccounts,
+        model_cache: std::sync::Arc<crate::model_cache::ModelCache>,
         task_identity: crate::TaskIdentityService,
         workspace_scope: WorkspaceScope,
         cleanup_boot_id: String,
@@ -1317,6 +1321,7 @@ impl EngineRpc {
             diff_sync,
             uploads,
             agent_accounts,
+            model_cache,
             codex_usage_last_good: std::sync::Mutex::new(None),
             opencode_usage_last_good: std::sync::Mutex::new(None),
             claude_usage_last_good: std::sync::Mutex::new(None),
@@ -1331,6 +1336,7 @@ impl EngineRpc {
             activity_cancel: CancellationToken::new(),
         };
         rpc.spawn_activity_bootstrap();
+        rpc.model_cache.start_background_refresh();
         rpc
     }
 
@@ -8199,28 +8205,11 @@ impl RpcService for EngineRpc {
             }
             methods::LIST_MODELS => {
                 let p: ListModelsParams = parse_params(params)?;
-                if p.harness == HarnessId::Codex {
-                    let execution = self
-                        .agent_accounts
-                        .resolve_execution(HarnessId::Codex, p.account_id.as_deref())
-                        .map_err(|e| RpcError::Failed(e.to_string()))?;
-                    let home = execution.codex_home.ok_or_else(|| {
-                        RpcError::Failed("Codex account did not resolve an execution home".into())
-                    })?;
-                    let models = zeron_harness::codex::CodexHarness::new()
-                        .models_for_home(&home, execution.codex_file_auth)
-                        .await
-                        .map_err(|e| RpcError::Failed(e.to_string()))?;
-                    return RpcReply::value(&models);
-                }
-                let harness = self
-                    .registry
-                    .resolve(p.harness)
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                let models = harness
-                    .models()
+                let models = self
+                    .model_cache
+                    .list(p.harness, p.account_id.as_deref(), p.refresh)
                     .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    .map_err(RpcError::Failed)?;
                 RpcReply::value(&models)
             }
             methods::LIST_COMMANDS => {

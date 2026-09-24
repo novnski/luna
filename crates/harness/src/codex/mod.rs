@@ -800,6 +800,22 @@ impl CodexHarness {
         }
     }
 
+    /// Account-scoped, authoritative discovery for callers that persist a
+    /// last-known-good catalog. Unlike `models_for_home`, this never returns
+    /// the bundled fallback as if it were a fresh provider response.
+    pub async fn live_models_for_home(
+        &self,
+        codex_home: &std::path::Path,
+        force_file_auth: bool,
+    ) -> Result<Vec<Model>, HarnessError> {
+        self.discover_models(Some(codex_home), force_file_auth)
+            .await
+    }
+
+    pub fn fallback_models() -> Vec<Model> {
+        static_models()
+    }
+
     async fn run_with_mode(
         &self,
         mut request: RunRequest,

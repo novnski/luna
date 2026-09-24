@@ -16,8 +16,8 @@ use zeron_harness::{
     SteerMessage,
 };
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel, ToolCall, UserInputAnswer,
-    UserInputQuestion,
+    AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, ToolCall,
+    UserInputAnswer, UserInputQuestion,
 };
 
 fn fixture_path() -> PathBuf {
@@ -759,6 +759,43 @@ async fn commands_come_from_the_initialize_control_request() {
     // but object identity of the cached list is the cheap assertion).
     let again = h.commands().await.expect("cache hit");
     assert_eq!(again, commands);
+}
+
+#[tokio::test]
+async fn models_come_from_the_initialize_control_request() {
+    let models = harness().live_models().await.expect("live CLI catalog");
+    assert!(!models.iter().any(|model| model.id == "default"));
+    let fresh = models
+        .iter()
+        .find(|model| model.id == "claude-fresh-7")
+        .expect("a newly advertised model appears without a bundled entry");
+    assert_eq!(fresh.label, "Fresh 7");
+    assert!(fresh.reasoning_levels.contains(&ReasoningLevel::High));
+    let long_context = models
+        .iter()
+        .find(|model| model.id == "claude-fable-5[1m]")
+        .expect("live long-context model");
+    assert_eq!(long_context.label, "Fable 5");
+    assert_eq!(
+        long_context
+            .options
+            .iter()
+            .find(|option| option.id == "contextWindow")
+            .map(|option| option.default_choice.as_str()),
+        Some("1m")
+    );
+}
+
+/// Read-only live CLI smoke: no user message or model turn is sent.
+#[tokio::test]
+#[ignore]
+async fn live_models_discovery() {
+    let models = ClaudeHarness::new()
+        .live_models()
+        .await
+        .expect("live models");
+    assert!(models.iter().any(|model| model.id.starts_with("claude-")));
+    eprintln!("{} Claude model rows discovered", models.len());
 }
 
 /// Live smoke against the real CLI: `cargo test -p zeron-harness --test

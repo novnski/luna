@@ -25,14 +25,15 @@ use gpui::{
 };
 
 use crate::composer::ComposerInput;
+use futures::{StreamExt, stream};
 use std::time::Duration;
 use zeron_engine::registry::TitleSettings;
 use zeron_engine::registry::{HarnessDescriptor, descriptor_enabled};
 
 use zeron_proto::Model;
 use zeron_proto::{
-    AgentLoginPoll, AgentLoginStart, AgentLoginStatus, HarnessId, InstructionSettingsView,
-    IntegrationInventoryView, IntegrationKind, RuntimeContractView,
+    AgentAccountsSnapshot, AgentLoginPoll, AgentLoginStart, AgentLoginStatus, HarnessId,
+    InstructionSettingsView, IntegrationInventoryView, IntegrationKind, RuntimeContractView,
 };
 use zeron_rpc::methods;
 
@@ -118,6 +119,9 @@ pub struct HarnessesPage {
     error: Option<String>,
     load_task: Option<Task<()>>,
     toggle_task: Option<Task<()>>,
+    model_refresh_task: Option<Task<()>>,
+    model_refresh_running: bool,
+    model_refresh_result: Option<String>,
     /// a sign-in that switches its harness on once it succeeds.
     sign_in: Option<SignIn>,
     sign_in_failure: Option<SignInFailure>,
@@ -224,6 +228,9 @@ impl HarnessesPage {
             error: None,
             load_task: None,
             toggle_task: None,
+            model_refresh_task: None,
+            model_refresh_running: false,
+            model_refresh_result: None,
             sign_in: None,
             sign_in_failure: None,
             sign_in_task: None,
@@ -264,6 +271,9 @@ impl HarnessesPage {
         }
         self.cancel_sign_in(cx);
         self.title_task = None;
+        self.model_refresh_task = None;
+        self.model_refresh_running = false;
+        self.model_refresh_result = None;
         self.title_settings = Loadable::Idle;
         self.title_models = Loadable::Idle;
         self.title_menu = None;
@@ -1218,6 +1228,165 @@ impl HarnessesPage {
         }));
     }
 
+    fn refresh_model_cache(&mut self, cx: &mut Context<Self>) {
+        if self.model_refresh_running {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let harnesses: Vec<_> = self
+            .harnesses
+            .ready()
+            .into_iter()
+            .flat_map(|items| items.iter())
+            .filter(|item| item.installed && item.id != HarnessId::Mock)
+            .map(|item| item.id)
+            .collect();
+        if harnesses.is_empty() {
+            self.model_refresh_result = Some("No installed agents on the selected device.".into());
+            cx.notify();
+            return;
+        }
+        let target = self.target_device.clone();
+        self.model_refresh_running = true;
+        self.model_refresh_result = None;
+        self.model_refresh_task = Some(cx.spawn(async move |this, cx| {
+            let mut targets: Vec<(HarnessId, Option<String>)> = harnesses
+                .iter()
+                .copied()
+                .filter(|harness| *harness != HarnessId::Codex)
+                .map(|harness| (harness, None))
+                .collect();
+            let mut account_warning = None;
+            if harnesses.contains(&HarnessId::Codex) {
+                let mut params = serde_json::json!({"harness": HarnessId::Codex});
+                if let Some(target) = &target {
+                    params["targetDeviceId"] = target.clone().into();
+                }
+                match engine
+                    .client()
+                    .call(methods::LIST_AGENT_ACCOUNTS, params)
+                    .await
+                {
+                    Ok(value) => match serde_json::from_value::<AgentAccountsSnapshot>(value) {
+                        Ok(snapshot) => {
+                            let mut ids: Vec<_> = snapshot
+                                .accounts
+                                .into_iter()
+                                .filter(|account| account.harness == HarnessId::Codex)
+                                .map(|account| account.id)
+                                .collect();
+                            ids.sort();
+                            ids.dedup();
+                            targets.extend(ids.into_iter().map(|id| (HarnessId::Codex, Some(id))));
+                        }
+                        Err(error) => account_warning = Some(error.to_string()),
+                    },
+                    Err(error) => account_warning = Some(error.to_string()),
+                }
+                if !targets
+                    .iter()
+                    .any(|(harness, _)| *harness == HarnessId::Codex)
+                {
+                    targets.push((HarnessId::Codex, None));
+                }
+            }
+            let total = targets.len();
+            let results = stream::iter(targets)
+                .map(|(harness, account_id)| {
+                    let engine = engine.clone();
+                    let target = target.clone();
+                    async move {
+                        let mut params = serde_json::json!({"harness": harness, "refresh": true});
+                        if let Some(account_id) = account_id {
+                            params["accountId"] = account_id.into();
+                        }
+                        if let Some(target) = target {
+                            params["targetDeviceId"] = target.into();
+                        }
+                        let result = engine
+                            .client()
+                            .call(methods::LIST_MODELS, params)
+                            .await
+                            .map_err(|error| error.to_string())
+                            .and_then(|value| {
+                                serde_json::from_value::<Vec<Model>>(value)
+                                    .map_err(|error| error.to_string())
+                            });
+                        (harness, result)
+                    }
+                })
+                .buffer_unordered(2)
+                .collect::<Vec<_>>()
+                .await;
+            this.update(cx, |page, cx| {
+                if page.target_device != target {
+                    return;
+                }
+                let failures: Vec<_> = results
+                    .iter()
+                    .filter_map(|(harness, result)| {
+                        result
+                            .as_ref()
+                            .err()
+                            .map(|error| format!("{harness:?}: {error}"))
+                    })
+                    .collect();
+                let updated = total - failures.len();
+                page.model_refresh_running = false;
+                let mut message = if failures.is_empty() {
+                    format!("Updated {updated} model catalogs on the selected device.")
+                } else {
+                    format!("Updated {updated}/{total}. {}", failures.join(" · "))
+                };
+                if let Some(warning) = account_warning {
+                    message.push_str(&format!(" Codex account listing failed: {warning}"));
+                }
+                page.model_refresh_result = Some(message);
+                if updated > 0 {
+                    crate::pickers::bump_harness_catalog(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn render_model_cache(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        widgets::section_card(theme)
+            .mt(px(20.0))
+            .p(px(16.0))
+            .child(widgets::row_title(theme, "Model cache"))
+            .child(widgets::page_subtitle(
+                theme,
+                "LUNA saves model lists on each device and refreshes them in the background after launch. Refresh now to check the selected device for new models without restarting.",
+            ))
+            .child(
+                widgets::ghost_action(theme)
+                    .id("refresh-model-cache")
+                    .mt(px(8.0))
+                    .when(!self.model_refresh_running, |element| {
+                        element
+                            .hover(|style| widgets::ghost_hover(theme, style))
+                            .on_click(cx.listener(|page, _, _, cx| {
+                                page.refresh_model_cache(cx);
+                            }))
+                    })
+                    .when(self.model_refresh_running, |element| element.opacity(0.5))
+                    .child(if self.model_refresh_running {
+                        "Refreshing…"
+                    } else {
+                        "Refresh models"
+                    }),
+            )
+            .when_some(self.model_refresh_result.clone(), |element, result| {
+                element.child(div().mt(px(8.0)).child(meta_text(theme, result)))
+            })
+            .into_any_element()
+    }
+
     /// The page-header device switcher (the Accounts pattern): platform glyph
     /// · name · presence dot · sort glyph, opening a dropdown of every
     /// registered device.
@@ -1597,6 +1766,7 @@ impl Render for HarnessesPage {
             .map(|message| widgets::error_strip(&theme, message).into_any_element());
         let switcher = self.render_device_switcher(&theme, cx);
         let titles = self.render_titles(&theme, cx);
+        let model_cache = self.render_model_cache(&theme, cx);
         let local_sections = (self.target_device.is_none()).then(|| {
             (
                 self.render_integrations(&theme, cx),
@@ -1640,6 +1810,7 @@ impl Render for HarnessesPage {
                             )
                             .children(error)
                             .child(body)
+                            .child(model_cache)
                             .when_some(local_sections, |el, (integrations, instructions, runtime)| {
                                 el.child(integrations).child(instructions).child(runtime)
                             })
