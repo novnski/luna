@@ -27,6 +27,22 @@ luna status      # local/synced mode and engine status
 luna daemon start|stop|restart|status
 ```
 
+## macOS development app
+
+For agent-led development, the agent runs `scripts/run-macos-dev.sh --refresh`
+after a meaningful code change. It builds with Cargo's existing debug cache,
+then gracefully quits and reopens the isolated **LUNA Dev** app. The build
+happens while the previous app is still open; a failed build leaves it running. A quit
+blocked by unsaved work leaves the existing bundle intact.
+
+The script replaces the same app at `target/luna-macos-dev/LUNA Dev.app` and
+overwrites `target/luna-macos-dev/last-build.log` each time. It does not install
+a release or keep a history of development apps. With LUNA Dev closed,
+`--build-only` assembles the bundle without launching it. Rust UI and engine
+changes still need a rebuild and process restart; they cannot refresh inside
+the running app. Keep `target/debug` for fast incremental builds; follow
+`AGENTS.md` for size checks and scoped cleanup when it grows too large.
+
 ## Optional multi-device sync
 
 Sync requires a service owned and configured for this project. Set `LUNA_EDGE_URL` and the service's `LUNA_WORKOS_CLIENT_ID` before signing in; a fresh clone has no hosted service configured.

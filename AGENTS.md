@@ -2,6 +2,12 @@
 
 Follow the parent workspace instructions. Work from this repository root, read `Cargo.toml` and the relevant crate before changing code, and preserve unrelated work. Use `--locked` for normal Cargo verification.
 
+## macOS developer app handoff
+
+- After each meaningful LUNA code change and its relevant checks, run `scripts/run-macos-dev.sh --refresh` yourself so the user gets a new **LUNA Dev** app to try. Do not ask the user to build, reinstall, or run the command. This handles UI and engine changes with the same incremental Cargo cache.
+- Confirm the refreshed app's exact bundle process is running, its expected IPC port is listening, and `codesign --verify --deep --strict 'target/luna-macos-dev/LUNA Dev.app'` succeeds before reporting it ready. Report the build time and any limitation that affects testing.
+- The refresh command replaces one bundle under `target/luna-macos-dev/` and removes its temporary previous bundle. Preserve the dev data directory and `target/debug` cache. If a build fails or LUNA Dev declines to quit because of unsaved work, leave the current app intact and report the blocker; never force-quit it just to refresh.
+
 ## Rust build and disk hygiene
 
 - Prefer `cargo check --locked -p <package>` for fast feedback, then focused tests for the changed crate. Run broad workspace builds only when the change actually requires them. Avoid repeatedly compiling the large UI dependency graph for an engine-only change.
