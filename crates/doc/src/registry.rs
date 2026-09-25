@@ -871,6 +871,14 @@ impl RegistryDoc {
             ("title", opt_str(chat.title.as_deref())),
             ("archived", json!(chat.archived)),
             (
+                "settlementOverride",
+                chat.settlement_override
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?
+                    .unwrap_or(Value::Null),
+            ),
+            (
                 "pinnedOrder",
                 chat.pinned_order
                     .as_deref()
@@ -1201,6 +1209,23 @@ impl RegistryDoc {
         Ok(true)
     }
 
+    pub fn set_chat_settlement_override(
+        &mut self,
+        chat_id: &str,
+        settlement: &luna_proto::ChatSettlementOverride,
+    ) -> Result<bool, DocError> {
+        if !self.row_exists(KIND_CHATS, chat_id) {
+            return Ok(false);
+        }
+        self.write(
+            KIND_CHATS,
+            chat_id,
+            OpKind::Update,
+            fields([("settlementOverride", serde_json::to_value(settlement)?)]),
+        );
+        Ok(true)
+    }
+
     /// Tombstone: delete the chat row (and its session-status row). The
     /// per-chat session doc remains — this removes the index entry only.
     pub fn delete_chat(&mut self, chat_id: &str) -> Result<bool, DocError> {
@@ -1321,6 +1346,14 @@ impl RegistryDoc {
                     ("deviceId", json!(chat.device_id)),
                     ("title", opt_str(chat.title.as_deref())),
                     ("archived", json!(chat.archived)),
+                    (
+                        "settlementOverride",
+                        chat.settlement_override
+                            .as_ref()
+                            .map(serde_json::to_value)
+                            .transpose()?
+                            .unwrap_or(Value::Null),
+                    ),
                     (
                         "pinnedOrder",
                         chat.pinned_order

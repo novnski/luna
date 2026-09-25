@@ -94,11 +94,39 @@ impl Shell {
 
     /// Open a session from the sidebar: select it, the main area follows.
     pub(crate) fn open_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.open_chat_with_activity(chat_id, false, cx);
+    }
+
+    pub(super) fn open_activity_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.open_chat_with_activity(chat_id, true, cx);
+    }
+
+    fn open_chat_with_activity(
+        &mut self,
+        chat_id: String,
+        from_activity: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.dismiss_command_palette(cx);
         self.route = Route::Chat;
         self.focus_composer(cx);
-        self.state
-            .update(cx, |s, cx| s.select_chat(Some(chat_id), cx));
+        let review_since = if from_activity {
+            let state = self.state.read(cx);
+            state
+                .chats
+                .iter()
+                .find(|chat| chat.id == chat_id)
+                .and_then(|chat| self.review_attention_updated_at(&chat_id, &chat.device_id))
+        } else {
+            None
+        };
+        self.state.update(cx, |state, cx| {
+            if from_activity {
+                state.select_chat_from_activity(chat_id, review_since, cx);
+            } else {
+                state.select_chat(Some(chat_id), cx);
+            }
+        });
         cx.notify();
     }
 

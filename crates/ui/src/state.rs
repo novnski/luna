@@ -884,6 +884,9 @@ pub struct AppState {
     /// the local device.
     pub selected_device: Option<String>,
     pub selected_chat: Option<String>,
+    /// Activity rows stay in the filter while their task is open. Leaving the
+    /// task acknowledges the item that led the user there.
+    deferred_activity_seen: Option<(String, Option<i64>)>,
     /// Boot auto-select happened (or a manual selection superseded it).
     pub auto_selected: bool,
     /// First chats / spaces watch frame has landed — device-local state that
@@ -995,6 +998,7 @@ impl AppState {
             no_project: false,
             selected_device: None,
             selected_chat: None,
+            deferred_activity_seen: None,
             transcript: Vec::new(),
             queue: Vec::new(),
             context_usage: None,
@@ -2193,11 +2197,45 @@ impl AppState {
     /// dropping the old task drops its stream receiver, which cancels the doc
     /// watch server-side. Selecting a chat also lands in its space and marks it
     /// seen (a global-list click must switch the tab strip too).
+    pub fn select_chat_from_activity(
+        &mut self,
+        chat_id: String,
+        attention_updated_at_ms: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((previous, updated_at)) = self.deferred_activity_seen.take()
+            && previous != chat_id
+        {
+            self.mark_chat_seen_since(&previous, updated_at, cx);
+        }
+        self.deferred_activity_seen = Some((chat_id.clone(), attention_updated_at_ms));
+        self.select_chat(Some(chat_id), cx);
+    }
+
+    pub fn activity_chat_being_read(&self) -> Option<&str> {
+        let (chat_id, _) = self.deferred_activity_seen.as_ref()?;
+        (self.selected_chat.as_deref() == Some(chat_id.as_str())).then_some(chat_id.as_str())
+    }
+
     pub fn select_chat(&mut self, chat_id: Option<String>, cx: &mut Context<Self>) {
+        if self
+            .deferred_activity_seen
+            .as_ref()
+            .is_some_and(|(pending, _)| Some(pending.as_str()) != chat_id.as_deref())
+            && let Some((previous, updated_at)) = self.deferred_activity_seen.take()
+        {
+            self.mark_chat_seen_since(&previous, updated_at, cx);
+        }
+        let defer_seen = self
+            .deferred_activity_seen
+            .as_ref()
+            .is_some_and(|(pending, _)| Some(pending.as_str()) == chat_id.as_deref());
         if self.selected_chat == chat_id {
             // Re-selecting still clears a fresh "completed" badge.
             if let Some(id) = chat_id {
-                self.mark_chat_seen(&id, cx);
+                if !defer_seen {
+                    self.mark_chat_seen(&id, cx);
+                }
             }
             return;
         }
@@ -2230,7 +2268,9 @@ impl AppState {
                     }
                 }
             }
-            self.mark_chat_seen(id, cx);
+            if !defer_seen {
+                self.mark_chat_seen(id, cx);
+            }
         }
         if let (Some(chat_id), Some(handle)) = (chat_id, self.engine.clone()) {
             self.transcript_task =
@@ -2307,13 +2347,32 @@ impl AppState {
     }
 
     pub fn mark_chat_seen(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+        self.mark_chat_seen_since(chat_id, None, cx);
+    }
+
+    /// A review-only Activity item can arrive without a newer chat message
+    /// (for example, a queued send fails). Visiting that task still advances
+    /// its seen marker past the item, even when the transcript was read before.
+    pub fn mark_chat_seen_since(
+        &mut self,
+        chat_id: &str,
+        attention_updated_at_ms: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(chat) = self.chats.iter_mut().find(|c| c.id == chat_id) else {
             return;
         };
-        if !chat.unseen() {
+        let attention_unseen = attention_updated_at_ms.is_some_and(|updated_at| {
+            chat.last_seen_at
+                .is_none_or(|seen| seen.timestamp_millis() < updated_at)
+        });
+        if !chat.unseen() && !attention_unseen {
             return;
         }
-        chat.last_seen_at = Some(Utc::now());
+        let seen_at = attention_updated_at_ms
+            .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+            .map_or_else(Utc::now, |attention_at| Utc::now().max(attention_at));
+        chat.last_seen_at = Some(seen_at);
         chat.manually_unread = false;
         cx.notify();
         let Some(handle) = self.engine.clone() else {
@@ -2321,7 +2380,8 @@ impl AppState {
         };
         let chat_id = chat_id.to_string();
         cx.spawn(async move |_, _| {
-            let intent = serde_json::json!({ "kind": "markSeen" });
+            let intent =
+                serde_json::json!({ "kind": "markSeen", "at": seen_at.timestamp_millis() });
             if let Err(err) = crate::task_commands::execute(&handle, &chat_id, intent).await {
                 tracing::warn!(chat = %chat_id, error = %err, "markChatSeen failed");
             }
@@ -3475,6 +3535,7 @@ mod tests {
             device_id: "dev".into(),
             title: None,
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: None,
             branch: None,

@@ -1492,6 +1492,7 @@ impl WorkspaceHost {
                 device_id: host_device.clone(),
                 title: None,
                 archived: false,
+                settlement_override: None,
                 pinned_order: None,
                 cwd: Some(cwd.unwrap_or_else(|| {
                     space

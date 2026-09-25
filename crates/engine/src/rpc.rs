@@ -295,6 +295,9 @@ enum TaskCommandIntent {
     SetRead {
         read: bool,
     },
+    SetSettled {
+        settled: bool,
+    },
     SetArchived {
         archived: bool,
     },
@@ -472,6 +475,7 @@ impl TaskCommandIntent {
             Self::Rename { .. } => "rename",
             Self::SetPinned { .. } => "setPinned",
             Self::SetRead { .. } => "setRead",
+            Self::SetSettled { .. } => "setSettled",
             Self::SetArchived { .. } => "setArchived",
             Self::MoveProject { .. } => "moveProject",
             Self::ForkTask { .. } => "forkTask",
@@ -506,6 +510,7 @@ impl TaskCommandIntent {
             Self::Rename { .. }
                 | Self::SetPinned { .. }
                 | Self::SetRead { .. }
+                | Self::SetSettled { .. }
                 | Self::SetArchived { .. }
                 | Self::MoveProject { .. }
                 | Self::ForkTask { .. }
@@ -544,6 +549,7 @@ impl TaskCommandIntent {
         matches!(
             self,
             Self::SetArchived { .. }
+                | Self::SetSettled { .. }
                 | Self::MoveProject { .. }
                 | Self::ForkTask { .. }
                 | Self::EditEarlierMessage { .. }
@@ -4328,6 +4334,7 @@ impl EngineRpc {
                                     device_id: host_device,
                                     title: None,
                                     archived: false,
+                                    settlement_override: None,
                                     pinned_order: None,
                                     cwd: Some(cwd.unwrap_or_else(|| {
                                         space
@@ -4575,6 +4582,7 @@ impl EngineRpc {
                                         device_id: source_for_registry.device_id,
                                         title: target_title,
                                         archived: false,
+                                        settlement_override: None,
                                         pinned_order: None,
                                         cwd: source_for_registry.cwd.clone(),
                                         branch: source_for_registry.branch,
@@ -5151,6 +5159,62 @@ impl EngineRpc {
                         } else {
                             doc.set_chat_unread(&owned_task_id, true)?;
                         }
+                        Ok(())
+                    })?;
+                Ok(Some(receipt))
+            }
+            TaskCommandIntent::SetSettled { settled } => {
+                if settled {
+                    let pending = self.sessions.has_live_run(task_id)
+                        || self
+                            .sessions
+                            .session_status(task_id)
+                            .is_some_and(|session| {
+                                matches!(
+                                    session.status,
+                                    luna_proto::SessionStatus::Working
+                                        | luna_proto::SessionStatus::AwaitingApproval
+                                        | luna_proto::SessionStatus::AwaitingInput
+                                )
+                            });
+                    let queued = self
+                        .doc_host
+                        .open(task_id)
+                        .map_err(TaskProjectionError::Mutation)?
+                        .doc()
+                        .read_queue()
+                        .map_err(|error| TaskProjectionError::Mutation(error.into()))?;
+                    if pending || !queued.is_empty() {
+                        return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "Finish the active run or review its queued work before settling this task"
+                                .into(),
+                        )));
+                    }
+                }
+                let owned_task_id = task_id.to_string();
+                let (_, receipt) =
+                    self.commit_task_projection(command_id, task_id, move |doc| {
+                        let at = doc
+                            .chat(&owned_task_id)?
+                            .map(|chat| {
+                                chrono::Utc::now()
+                                    .max(chat.last_message_at.unwrap_or(chat.created_at))
+                            })
+                            .unwrap_or_else(chrono::Utc::now);
+                        if settled {
+                            doc.set_chat_seen(&owned_task_id, at)?;
+                        }
+                        doc.set_chat_settlement_override(
+                            &owned_task_id,
+                            &luna_proto::ChatSettlementOverride {
+                                disposition: if settled {
+                                    luna_proto::SettlementDisposition::Settled
+                                } else {
+                                    luna_proto::SettlementDisposition::Active
+                                },
+                                at,
+                            },
+                        )?;
                         Ok(())
                     })?;
                 Ok(Some(receipt))
@@ -10256,6 +10320,7 @@ mod tests {
             device_id: "device".into(),
             title: Some("Task".into()),
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: Some("/workspace".into()),
             branch: None,

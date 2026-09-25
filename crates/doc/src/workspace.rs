@@ -245,6 +245,13 @@ impl WorkspaceDoc {
         row.insert("deviceId", chat.device_id.as_str())?;
         set_opt_str(&row, "title", chat.title.as_deref())?;
         row.insert("archived", chat.archived)?;
+        match &chat.settlement_override {
+            Some(settlement) => row.insert(
+                "settlementOverride",
+                LoroValue::from(serde_json::to_value(settlement)?),
+            )?,
+            None => row.delete("settlementOverride")?,
+        }
         match chat.pinned_order.as_deref() {
             Some(order) => row.insert("pinnedOrder", order)?,
             None => row.delete("pinnedOrder")?,
@@ -496,6 +503,24 @@ impl WorkspaceDoc {
         Ok(true)
     }
 
+    /// One deliberate sidebar settlement choice. Automatic settlement is a
+    /// derived view and does not write to the shared document.
+    pub fn set_chat_settlement_override(
+        &self,
+        chat_id: &str,
+        settlement: &luna_proto::ChatSettlementOverride,
+    ) -> Result<bool, DocError> {
+        let Some(row) = self.existing_row("chats", chat_id) else {
+            return Ok(false);
+        };
+        row.insert(
+            "settlementOverride",
+            LoroValue::from(serde_json::to_value(settlement)?),
+        )?;
+        self.doc.commit();
+        Ok(true)
+    }
+
     /// Tombstone: delete the chat row (and its session-status row). The per-chat
     /// session doc remains — DeleteChat removes the index entry, not the transcript.
     pub fn delete_chat(&self, chat_id: &str) -> Result<bool, DocError> {
@@ -714,6 +739,8 @@ pub(crate) struct RawChat {
     title: Option<String>,
     #[serde(default)]
     archived: bool,
+    #[serde(default)]
+    settlement_override: Option<luna_proto::ChatSettlementOverride>,
     #[serde(default, deserialize_with = "luna_proto::deserialize_pin_order")]
     pinned_order: Option<String>,
     #[serde(default)]
@@ -777,6 +804,7 @@ impl From<RawChat> for Chat {
             device_id: raw.device_id,
             title: raw.title,
             archived: raw.archived,
+            settlement_override: raw.settlement_override,
             pinned_order: raw.pinned_order,
             cwd: raw.cwd,
             branch: raw.branch,
@@ -853,6 +881,7 @@ mod tests {
             device_id: device_id.into(),
             title: Some("First chat".into()),
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: Some("/tmp/repo".into()),
             branch: Some("main".into()),

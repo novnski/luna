@@ -16,6 +16,7 @@ pub(super) struct CommandPalette {
     // while this input is still absent from the dispatch tree.
     focus_pending: bool,
     scroll: gpui::ScrollHandle,
+    matches_shown: usize,
     _search_events: Subscription,
 }
 
@@ -190,6 +191,7 @@ impl Shell {
                 if let Some(palette) = this.command_palette.as_mut() {
                     palette.active = 0;
                     palette.selection = PaletteSelection::Default;
+                    palette.matches_shown = CHAT_RESULT_LIMIT;
                     palette.scroll.set_offset(gpui::point(px(0.0), px(0.0)));
                 }
                 this.begin_session_history_search(cx);
@@ -206,6 +208,7 @@ impl Shell {
             enter_press: EnterPress::default(),
             focus_pending: true,
             scroll: gpui::ScrollHandle::new(),
+            matches_shown: CHAT_RESULT_LIMIT,
             _search_events: events,
         });
         cx.notify();
@@ -248,6 +251,7 @@ impl Shell {
             });
         }
         let state = self.state.read(cx);
+        let results_start = entries.len();
         let current_project = match self.settings.space_filter.as_deref() {
             Some(crate::settings::PERSONAL_SPACE_FILTER) => None,
             Some(space_id) => Some(space_id.to_string()),
@@ -290,7 +294,14 @@ impl Shell {
                 )
             })
             .collect();
-        chats.sort_by(|a, b| spaces::compare_sidebar_chats(self.settings.sidebar_sort, a, b));
+        // Search recency is independent of the sidebar's Created sort and pin
+        // order. Both user sends and completed replies refresh last_message_at.
+        chats.sort_by(|a, b| {
+            b.last_message_at
+                .unwrap_or(b.created_at)
+                .cmp(&a.last_message_at.unwrap_or(a.created_at))
+                .then_with(|| a.id.cmp(&b.id))
+        });
         let (current_chats, other_chats): (Vec<_>, Vec<_>) = chats
             .into_iter()
             .partition(|chat| chat.space_id == current_project);
@@ -301,7 +312,11 @@ impl Shell {
             current_chats
                 .into_iter()
                 .filter(|chat| !content_tasks.contains(chat.id.as_str()))
-                .take(CHAT_RESULT_LIMIT)
+                .take(if query.is_empty() {
+                    CHAT_RESULT_LIMIT
+                } else {
+                    usize::MAX
+                })
                 .map(|chat| Entry::Chat {
                     id: chat.id.clone(),
                     group: ResultGroup::CurrentChats,
@@ -317,28 +332,105 @@ impl Shell {
         } else {
             ResultGroup::CurrentContent
         };
-        entries.extend(
-            self.history_search_results
-                .iter()
-                .map(|event| Entry::History {
-                    event_id: event.event_id.clone(),
-                    group: history_group,
-                }),
-        );
-        if self.history_search_next_cursor.is_some() {
-            entries.push(Entry::LoadOlder(history_group));
-        }
+        // The index returns matching events newest first. Keep the newest
+        // match per thread, then order threads by their latest overall
+        // activity rather than by the time of that particular matched text.
+        let mut seen_tasks = std::collections::HashSet::new();
+        let mut content_events: Vec<_> = self
+            .history_search_results
+            .iter()
+            .filter(|event| seen_tasks.insert(event.task_id.as_str()))
+            .collect();
+        let chat_activity: std::collections::HashMap<_, _> = state
+            .chats
+            .iter()
+            .map(|chat| {
+                (
+                    chat.id.as_str(),
+                    (
+                        chat.last_message_at
+                            .unwrap_or(chat.created_at)
+                            .timestamp_millis(),
+                        matches_query(&query, chat.title.as_deref().unwrap_or("New session")),
+                    ),
+                )
+            })
+            .collect();
+        content_events.sort_by(|a, b| {
+            chat_activity
+                .get(b.task_id.as_str())
+                .map(|value| value.0)
+                .unwrap_or(b.timestamp_ms)
+                .cmp(
+                    &chat_activity
+                        .get(a.task_id.as_str())
+                        .map(|value| value.0)
+                        .unwrap_or(a.timestamp_ms),
+                )
+                .then_with(|| a.task_id.cmp(&b.task_id))
+        });
+        entries.extend(content_events.into_iter().map(|event| Entry::History {
+            event_id: event.event_id.clone(),
+            group: history_group,
+        }));
         if !query.is_empty() {
+            let event_lookup: std::collections::HashMap<_, _> = self
+                .history_search_results
+                .iter()
+                .map(|event| {
+                    (
+                        event.event_id.as_str(),
+                        (event.task_id.as_str(), event.timestamp_ms),
+                    )
+                })
+                .collect();
             entries.extend(
                 other_chats
                     .into_iter()
                     .filter(|chat| !content_tasks.contains(chat.id.as_str()))
-                    .take(CHAT_RESULT_LIMIT)
                     .map(|chat| Entry::Chat {
                         id: chat.id.clone(),
                         group: ResultGroup::OtherChats,
                     }),
             );
+            let sort_key = |entry: &Entry| -> (u8, i64, String) {
+                let (task_id, event_at) = match entry {
+                    Entry::Chat { id, .. } => (id.as_str(), 0),
+                    Entry::History { event_id, .. } => event_lookup
+                        .get(event_id.as_str())
+                        .copied()
+                        .unwrap_or(("", 0)),
+                    Entry::LoadOlder(_) => return (3, i64::MIN, String::new()),
+                    _ => return (4, i64::MIN, String::new()),
+                };
+                let activity = chat_activity.get(task_id);
+                let rank = if activity.is_some_and(|value| value.1) {
+                    0
+                } else if matches!(entry, Entry::Chat { .. }) {
+                    1
+                } else {
+                    2
+                };
+                (
+                    rank,
+                    activity.map(|value| value.0).unwrap_or(event_at),
+                    task_id.to_string(),
+                )
+            };
+            entries[results_start..].sort_by(|a, b| {
+                let left = sort_key(a);
+                let right = sort_key(b);
+                left.0
+                    .cmp(&right.0)
+                    .then_with(|| right.1.cmp(&left.1))
+                    .then_with(|| left.2.cmp(&right.2))
+            });
+            let shown = palette.matches_shown.max(CHAT_RESULT_LIMIT);
+            let has_more_matches = entries.len() - results_start > shown;
+            entries.truncate(results_start + shown);
+            if has_more_matches || self.history_search_next_cursor.is_some() {
+                entries.push(Entry::LoadOlder(history_group));
+            }
         }
         entries
     }
@@ -460,7 +552,11 @@ impl Shell {
                 return;
             }
             Entry::LoadOlder(_) => {
+                if let Some(palette) = self.command_palette.as_mut() {
+                    palette.matches_shown += CHAT_RESULT_LIMIT;
+                }
                 self.load_more_session_history(cx);
+                cx.notify();
                 return;
             }
             _ => {}
@@ -697,6 +793,7 @@ impl Shell {
         let theme = Theme::of(cx).for_popup();
         let mut rows = Vec::new();
         let mut previous_group = None;
+        let mut search_heading_shown = false;
         for (ix, entry) in entries.iter().enumerate() {
             // End spacing belongs to the content, so it scrolls out of the
             // fade instead of leaving a permanent gutter beside the chrome.
@@ -706,7 +803,11 @@ impl Shell {
                 .when(ix == 0, |row| row.pt(px(8.0)))
                 .when(ix + 1 == entries.len(), |row| row.pb(px(8.0)));
             if let Some(group) = entry.group()
-                && previous_group != Some(group)
+                && (if query.trim().is_empty() {
+                    previous_group != Some(group)
+                } else {
+                    !search_heading_shown
+                })
             {
                 if ix > 0 {
                     row = row.child(spaces::sidebar_separator(&theme).w_full().my(px(7.0)));
@@ -719,9 +820,14 @@ impl Shell {
                         .text_size(crate::typography::ui_rems(9.5))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text_faint)
-                        .child(self.command_group_label(group, cx)),
+                        .child(if query.trim().is_empty() {
+                            self.command_group_label(group, cx)
+                        } else {
+                            SharedString::from("Matching threads")
+                        }),
                 );
                 previous_group = Some(group);
+                search_heading_shown = true;
             }
             let content = if let Some((label, glyph)) = entry.action() {
                 let shortcut = match entry {
@@ -814,6 +920,9 @@ impl Shell {
                     state.display_status_for(chat, Utc::now()),
                     active == Some(ix),
                     chat.archived,
+                    chat.pinned_order.is_some(),
+                    false,
+                    false,
                     None,
                     Some(&query),
                     &theme,
@@ -827,7 +936,7 @@ impl Shell {
                     .id("command-history-load-older")
                     .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .role(gpui::Role::Button)
-                    .aria_label("Load older recorded content")
+                    .aria_label("Show more matching threads")
                     .min_h(px(30.0))
                     .justify_center()
                     .text_color(theme.text_muted)
@@ -835,9 +944,9 @@ impl Shell {
                         this.activate_command(entry.clone(), window, cx)
                     }))
                     .child(if self.history_search_loading {
-                        "Loading older…"
+                        "Loading more…"
                     } else {
-                        "Load older"
+                        "Show more results"
                     })
                     .into_any_element()
             } else {

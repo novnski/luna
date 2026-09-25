@@ -346,6 +346,7 @@ mod tests {
             device_id: device.into(),
             title: None,
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: cwd.map(str::to_owned),
             branch: Some("feature/pr".into()),

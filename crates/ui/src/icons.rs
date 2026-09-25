@@ -81,6 +81,8 @@ icon_assets![
     // Hand-drawn git-branch glyph in the Solar Linear style (like the
     // terminal/plus/return ports) — the set has no branch icon.
     (GIT_BRANCH, "git-branch"),
+    // Compact task pin for the sidebar's pinned rows and hover action.
+    (PIN, "pin"),
     // Provider-neutral pull-request glyph, drawn in the same linear family.
     (PULL_REQUEST, "pull-request"),
     // Compact history-ref glyphs, drawn in the same linear style.

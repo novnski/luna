@@ -16,6 +16,7 @@ use luna_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing,
 struct ActiveChatRow {
     status: ChatIndicator,
     chat: luna_proto::Chat,
+    can_settle: bool,
     folder: String,
     branch: Option<String>,
     change_request: Option<luna_proto::ChangeRequestSummary>,
@@ -44,6 +45,85 @@ pub(super) fn compare_sidebar_chats(
             .cmp(&left.last_message_at.unwrap_or(left.created_at)),
     };
     primary.then_with(|| left.id.cmp(&right.id))
+}
+
+const ACTIVE_PAGE: usize = 20;
+const SETTLED_INITIAL: usize = 10;
+const SETTLED_PAGE: usize = 25;
+
+pub(super) fn can_manually_settle_chat(
+    chat: &luna_proto::Chat,
+    status: ChatIndicator,
+    has_attention: bool,
+    has_queued_message: bool,
+) -> bool {
+    !chat.archived
+        && chat.pinned_order.is_none()
+        && !has_attention
+        && !has_queued_message
+        && matches!(status, ChatIndicator::Idle | ChatIndicator::Completed)
+}
+
+pub(super) fn is_settled_chat(
+    chat: &luna_proto::Chat,
+    status: ChatIndicator,
+    now: chrono::DateTime<Utc>,
+    auto_settle_after_days: Option<u16>,
+    has_attention: bool,
+) -> bool {
+    if chat.archived
+        || chat.pinned_order.is_some()
+        || has_attention
+        || status != ChatIndicator::Idle
+    {
+        return false;
+    }
+    let last_activity = chat.last_message_at.unwrap_or(chat.created_at);
+    if let Some(override_state) = &chat.settlement_override
+        && override_state.at >= last_activity
+    {
+        return override_state.disposition == luna_proto::SettlementDisposition::Settled;
+    }
+    let Some(days) = auto_settle_after_days else {
+        return false;
+    };
+    now.signed_duration_since(last_activity) >= chrono::Duration::days(i64::from(days))
+}
+
+/// Bound row creation even when a user makes hundreds of threads in a day.
+/// The selected row remains reachable after navigation from search.
+fn active_page<'a>(
+    chats: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    selected_id: Option<&str>,
+    now: chrono::DateTime<Utc>,
+    auto_settle_after_days: Option<u16>,
+    attention_task_keys: &std::collections::HashSet<(String, String)>,
+    shown: usize,
+) -> (Vec<(ChatIndicator, &'a luna_proto::Chat)>, usize) {
+    let active: Vec<_> = chats
+        .into_iter()
+        .filter(|(status, chat)| {
+            !is_settled_chat(
+                chat,
+                *status,
+                now,
+                auto_settle_after_days,
+                attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
+            )
+        })
+        .collect();
+    let limit = shown.max(ACTIVE_PAGE);
+    let total = active.len();
+    let mut visible: Vec<_> = active.iter().copied().take(limit).collect();
+    if let Some(selected) = active
+        .iter()
+        .skip(limit)
+        .find(|(_, chat)| Some(chat.id.as_str()) == selected_id)
+    {
+        visible.push(*selected);
+    }
+    let hidden = total.saturating_sub(visible.len());
+    (visible, hidden)
 }
 
 /// Activity is a view of the existing task rows, not a second inbox. Unseen
@@ -75,7 +155,12 @@ fn activity_sidebar_chats<'a>(
         .into_iter()
         .filter_map(|(status, chat)| {
             let key = (chat.device_id.clone(), chat.id.clone());
-            activity_sidebar_bucket(status, attention_task_keys.contains(&key))
+            let review_status = if status == ChatIndicator::Errored && !chat.unseen() {
+                ChatIndicator::Idle
+            } else {
+                status
+            };
+            activity_sidebar_bucket(review_status, attention_task_keys.contains(&key))
                 .map(|bucket| (bucket, status, chat))
         })
         .collect();
@@ -147,6 +232,10 @@ enum SidebarViewRow {
     ShowBranch,
     ShowPullRequest,
     ShowHarness,
+    SettleOff,
+    Settle1Day,
+    Settle3Days,
+    Settle7Days,
 }
 
 impl SidebarViewRow {
@@ -155,12 +244,19 @@ impl SidebarViewRow {
     fn closes_menu(self) -> bool {
         matches!(
             self,
-            Self::ByDevice | Self::InOneList | Self::LastUpdated | Self::Created
+            Self::ByDevice
+                | Self::InOneList
+                | Self::LastUpdated
+                | Self::Created
+                | Self::SettleOff
+                | Self::Settle1Day
+                | Self::Settle3Days
+                | Self::Settle7Days
         )
     }
 }
 
-const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 7] = [
+const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 11] = [
     SidebarViewRow::ByDevice,
     SidebarViewRow::InOneList,
     SidebarViewRow::LastUpdated,
@@ -168,6 +264,10 @@ const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 7] = [
     SidebarViewRow::ShowBranch,
     SidebarViewRow::ShowPullRequest,
     SidebarViewRow::ShowHarness,
+    SidebarViewRow::SettleOff,
+    SidebarViewRow::Settle1Day,
+    SidebarViewRow::Settle3Days,
+    SidebarViewRow::Settle7Days,
 ];
 
 // list items stay tightly related at 2px, while section boundaries use 12px
@@ -701,6 +801,10 @@ impl Shell {
             SidebarViewRow::ShowHarness => {
                 self.settings.sidebar_show_harness = !self.settings.sidebar_show_harness
             }
+            SidebarViewRow::SettleOff => self.settings.sidebar_auto_settle_after_days = None,
+            SidebarViewRow::Settle1Day => self.settings.sidebar_auto_settle_after_days = Some(1),
+            SidebarViewRow::Settle3Days => self.settings.sidebar_auto_settle_after_days = Some(3),
+            SidebarViewRow::Settle7Days => self.settings.sidebar_auto_settle_after_days = Some(7),
         }
         self.schedule_save(cx);
         if row.closes_menu() {
@@ -752,6 +856,7 @@ impl Shell {
         let show_harness = self.settings.sidebar_show_harness;
         let show_branch = self.settings.sidebar_show_branch;
         let show_pr = self.settings.sidebar_show_pull_request;
+        let auto_settle_after_days = self.settings.sidebar_auto_settle_after_days;
 
         let labels = [
             "By device",
@@ -761,6 +866,10 @@ impl Shell {
             "Branch",
             "Pull request",
             "Harness",
+            "Off",
+            "After 1 day",
+            "After 3 days",
+            "After 7 days",
         ];
         let icons = [
             icons::LAPTOP,
@@ -770,6 +879,10 @@ impl Shell {
             icons::GIT_BRANCH,
             icons::PULL_REQUEST,
             icons::BOT,
+            icons::CLOSE_CIRCLE,
+            icons::CLOCK_CIRCLE,
+            icons::CLOCK_CIRCLE,
+            icons::CLOCK_CIRCLE,
         ];
         let selected = [
             organization == SidebarOrganization::ByDevice,
@@ -779,6 +892,10 @@ impl Shell {
             show_branch,
             show_pr,
             show_harness,
+            auto_settle_after_days.is_none(),
+            auto_settle_after_days == Some(1),
+            auto_settle_after_days == Some(3),
+            auto_settle_after_days == Some(7),
         ];
         let mut rows: Vec<AnyElement> = SIDEBAR_VIEW_ROWS
             .iter()
@@ -815,6 +932,7 @@ impl Shell {
                 .into_any_element()
             })
             .collect();
+        let settle_rows = rows.split_off(7);
         let show_rows = rows.split_off(4);
         let sort_rows = rows.split_off(2);
         let organization_rows = rows;
@@ -842,6 +960,9 @@ impl Shell {
             .child(popover::menu_separator())
             .child(popover::menu_heading(theme, "Show"))
             .child(div().flex().flex_col().gap(px(2.0)).children(show_rows))
+            .child(popover::menu_separator())
+            .child(popover::menu_heading(theme, "Auto-settle inactive tasks"))
+            .child(div().flex().flex_col().gap(px(2.0)).children(settle_rows))
             .into_any_element()
     }
 
@@ -1085,8 +1206,8 @@ impl Shell {
             .pt(px(8.0))
             .pb(px(4.0))
             .child(trigger)
-            .child(self.render_activity_action(theme, cx))
             .child(view_trigger)
+            .child(self.render_activity_action(theme, cx))
             .into_any_element()
     }
 
@@ -1301,25 +1422,33 @@ impl Shell {
     /// the screen.
     pub(super) fn sidebar_visible_order(&self, cx: &Context<Self>) -> Vec<String> {
         let filter = self.settings.space_filter.clone();
+        let attention_task_keys = self.activity_task_keys(cx);
+        let mut settlement_task_keys = attention_task_keys.clone();
+        settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let state = self.state.read(cx);
+        let now = Utc::now();
         let mut chats: Vec<luna_proto::Chat> = if self.activity.view_active {
-            activity_sidebar_chats(
-                state.sidebar_chats(Utc::now(), None),
-                &self.activity_task_keys(),
+            activity_sidebar_chats(state.sidebar_chats(now, None), &attention_task_keys)
+                .into_iter()
+                .map(|(_, chat)| chat.clone())
+                .collect()
+        } else {
+            let mut chats = state.sidebar_chats(now, filter.as_deref());
+            chats.sort_by(|left, right| {
+                compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
+            });
+            active_page(
+                chats,
+                state.selected_chat.as_deref(),
+                now,
+                self.settings.sidebar_auto_settle_after_days,
+                &settlement_task_keys,
+                self.active_shown,
             )
+            .0
             .into_iter()
             .map(|(_, chat)| chat.clone())
             .collect()
-        } else {
-            let mut chats: Vec<_> = state
-                .sidebar_chats(Utc::now(), filter.as_deref())
-                .into_iter()
-                .map(|(_, chat)| chat.clone())
-                .collect();
-            chats.sort_by(|left, right| {
-                compare_sidebar_chats(self.settings.sidebar_sort, left, right)
-            });
-            chats
         };
         if self.activity.view_active {
             return chats.into_iter().map(|chat| chat.id).collect();
@@ -1363,21 +1492,46 @@ impl Shell {
         let now = Utc::now();
         let filter = self.settings.space_filter.clone();
         let activity_view = self.activity.view_active;
-        let attention_task_keys = self.activity_task_keys();
+        let attention_task_keys = self.activity_task_keys(cx);
+        let mut settlement_task_keys = attention_task_keys.clone();
+        settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let mut rows: Vec<ActiveChatRow> = {
             let state = self.state.read(cx);
-            let chats: Vec<_> = if activity_view {
-                activity_sidebar_chats(state.sidebar_chats(now, None), &attention_task_keys)
+            let (chats, hidden_count): (Vec<_>, usize) = if activity_view {
+                (
+                    activity_sidebar_chats(state.sidebar_chats(now, None), &attention_task_keys),
+                    0,
+                )
             } else {
                 let mut chats = state.sidebar_chats(now, filter.as_deref());
                 chats.sort_by(|left, right| {
                     compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
                 });
-                chats
+                active_page(
+                    chats,
+                    state.selected_chat.as_deref(),
+                    now,
+                    self.settings.sidebar_auto_settle_after_days,
+                    &settlement_task_keys,
+                    self.active_shown,
+                )
             };
+            self.sidebar_hidden_active_count = hidden_count;
             chats
                 .into_iter()
                 .map(|(status, chat)| {
+                    let has_attention =
+                        settlement_task_keys.contains(&(chat.device_id.clone(), chat.id.clone()));
+                    let has_queued_message = state.selected_chat.as_deref()
+                        == Some(chat.id.as_str())
+                        && !state.queue.is_empty();
+                    let can_settle = !activity_view
+                        && can_manually_settle_chat(
+                            chat,
+                            status,
+                            has_attention,
+                            has_queued_message,
+                        );
                     let chat = chat.clone();
                     // Line 1 is "project @ device" (t3code's project row);
                     // project-less sessions read as their home-dir cwd `~`.
@@ -1391,11 +1545,7 @@ impl Shell {
                         .device_name(&chat.device_id)
                         .unwrap_or("Unknown device")
                         .to_string();
-                    let mut folder = project.clone();
-                    // Unknown device → no fragment, same as the archived list.
-                    if state.device_name(&chat.device_id).is_some() {
-                        folder = format!("{folder} @ {device}");
-                    }
+                    let folder = project;
                     // The branch shows whenever the engine has stamped one —
                     // main-checkout sessions included, not just worktrees.
                     let branch = crate::change_requests::conversation_branch(&chat, &state.spaces)
@@ -1416,6 +1566,7 @@ impl Shell {
                     ActiveChatRow {
                         status,
                         chat: chat.clone(),
+                        can_settle,
                         folder,
                         branch,
                         change_request,
@@ -1467,6 +1618,11 @@ impl Shell {
         // `sidebar_visible_order` hands the jump shortcuts and cycling, so a
         // chip always names the key that opens its row.
         let mut slot = 0usize;
+        let has_unpinned_rows = groups.iter().any(|(group, _)| {
+            !group
+                .as_ref()
+                .is_some_and(|(key, _)| key == "__luna_pinned__")
+        });
         let mut rendered = Vec::new();
         for (group, rows) in groups {
             let mut rendered_rows = Vec::with_capacity(rows.len());
@@ -1474,6 +1630,7 @@ impl Shell {
                 let ActiveChatRow {
                     status,
                     chat,
+                    can_settle,
                     folder,
                     branch,
                     change_request,
@@ -1511,6 +1668,9 @@ impl Shell {
                     status,
                     is_selected,
                     false,
+                    chat.pinned_order.is_some(),
+                    activity_view,
+                    can_settle,
                     jump_label,
                     None,
                     theme,
@@ -1589,8 +1749,209 @@ impl Shell {
                 .child(body)
                 .into_any_element();
             rendered.push((format!("g:{collapse_key}"), height, element));
+            if key == "__luna_pinned__" && has_unpinned_rows && !collapsed {
+                let divider = div()
+                    .w_full()
+                    .pt(px(8.0))
+                    .pb(px(8.0))
+                    .px(px(Theme::SPACE_SM))
+                    .child(sidebar_separator(theme))
+                    .into_any_element();
+                rendered.push(("divider:pinned".into(), 17.0, divider));
+            }
+        }
+        if self.sidebar_hidden_active_count > 0 {
+            let remaining = self.sidebar_hidden_active_count.min(ACTIVE_PAGE);
+            let more = div()
+                .id("active-more")
+                .mt(px(SIDEBAR_SECTION_GAP))
+                .h(px(36.0))
+                .px(px(Theme::SPACE_SM))
+                .flex()
+                .flex_row()
+                .items_center()
+                // Plus is 14px; task harness marks are 13px with an 8px gap.
+                // A 7px gap puts this label on the same text column as titles.
+                .gap(px(7.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_size(crate::typography::ui_rems(13.0))
+                .text_color(theme.text_muted)
+                .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.active_shown += ACTIVE_PAGE;
+                    cx.notify();
+                }))
+                .child(icon(icons::PLUS).size(px(14.0)))
+                .child(SharedString::from(format!("Show {remaining} more")))
+                .into_any_element();
+            rendered.push(("more:active".into(), 36.0 + SIDEBAR_SECTION_GAP, more));
         }
         rendered
+    }
+
+    /// Settled tasks stay in the synced task list; automatic settling is a
+    /// derived view, while deliberate overrides live on the task record.
+    pub(super) fn render_settled_section(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let now = Utc::now();
+        let mut attention_task_keys = self.activity_task_keys(cx);
+        attention_task_keys.extend(self.settlement_blocking_task_keys());
+        let mut rows: Vec<luna_proto::Chat> = {
+            let state = self.state.read(cx);
+            state
+                .sidebar_chats(now, self.settings.space_filter.as_deref())
+                .into_iter()
+                .filter(|(status, chat)| {
+                    is_settled_chat(
+                        chat,
+                        *status,
+                        now,
+                        self.settings.sidebar_auto_settle_after_days,
+                        attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
+                    )
+                })
+                .map(|(_, chat)| chat.clone())
+                .collect()
+        };
+        if rows.is_empty() {
+            return None;
+        }
+        rows.sort_by(|left, right| compare_sidebar_chats(SidebarSort::LastUpdated, left, right));
+        let total = rows.len();
+        let shown = self.settled_shown.max(SETTLED_INITIAL);
+        let visible_count = total.min(shown);
+        let has_more = total > shown;
+        let body_height = SIDEBAR_DISCLOSURE_BODY_INSET
+            + visible_count as f32 * 36.0
+            + visible_count.saturating_sub(1) as f32 * SIDEBAR_LIST_GAP
+            + if has_more {
+                36.0 + SIDEBAR_LIST_GAP
+            } else {
+                0.0
+            };
+        let open = self.settled_open;
+        let label: SharedString = if open {
+            "Settled".into()
+        } else {
+            format!("Settled ({total})").into()
+        };
+        let header = sidebar_disclosure_header(
+            theme,
+            label,
+            self.sidebar_disclosure_chevron("settled", open, theme),
+        )
+        .id("settled-toggle")
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.begin_sidebar_disclosure_motion(
+                "settled",
+                if this.settled_open { body_height } else { 0.0 },
+                if this.settled_open { 0.0 } else { body_height },
+            );
+            this.settled_open = !this.settled_open;
+            this.settled_shown = SETTLED_INITIAL;
+            cx.notify();
+        }));
+        let selected = self.state.read(cx).selected_chat.clone();
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET))
+            .gap(px(SIDEBAR_LIST_GAP));
+        for chat in rows.into_iter().take(shown) {
+            let id = chat.id.clone();
+            let menu_id = id.clone();
+            let title = transcript::single_line(
+                &chat.title.clone().unwrap_or_else(|| "New session".into()),
+            );
+            let time_ago = format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now);
+            let selected_row = selected.as_deref() == Some(id.as_str());
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("settled-{id}")))
+                    .h(px(36.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(10.0))
+                    .px(px(Theme::SPACE_SM))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .when(selected_row, |el| el.bg(crate::theme::glass_selected_bg()))
+                    .hover(|el| el.bg(theme.glass_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                            this.chat_menu.open(ChatMenuState {
+                                chat_id: menu_id.clone(),
+                                position: event.position,
+                                page: ChatMenuPage::Root,
+                            });
+                            cx.notify();
+                        }),
+                    )
+                    .child(sidebar_faded_label(
+                        format!("settled-title-{}", chat.id).into(),
+                        true,
+                        div()
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_color(theme.text.opacity(0.65))
+                            .child(SharedString::from(title)),
+                    ))
+                    .child(
+                        div()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text_muted.opacity(0.55))
+                            .child(SharedString::from(time_ago)),
+                    ),
+            );
+        }
+        let mut body = div().w_full().flex().flex_col().child(list);
+        if has_more {
+            let remaining = (total - shown).min(SETTLED_PAGE);
+            body = body.child(
+                div()
+                    .id("settled-more")
+                    .mt(px(SIDEBAR_LIST_GAP))
+                    .h(px(36.0))
+                    .px(px(Theme::SPACE_SM))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(10.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_color(theme.text_muted)
+                    .hover(|el| el.bg(theme.glass_hover()).text_color(theme.text))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.settled_shown = this.settled_shown.max(SETTLED_INITIAL) + SETTLED_PAGE;
+                        cx.notify();
+                    }))
+                    .child(icon(icons::PLUS).size(px(14.0)))
+                    .child(SharedString::from(format!("Show {remaining} more"))),
+            );
+        }
+        let body = self.render_sidebar_disclosure_body(
+            "settled",
+            open,
+            body_height,
+            body.into_any_element(),
+        );
+        Some(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .pt(px(SIDEBAR_SECTION_GAP))
+                .child(header)
+                .child(body)
+                .into_any_element(),
+        )
     }
 
     /// The sidebar's archived shelf — a direct port of t3code's settled
@@ -3387,6 +3748,7 @@ mod tests {
             device_id: "device".into(),
             title: None,
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: None,
             branch: None,

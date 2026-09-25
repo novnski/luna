@@ -6005,6 +6005,7 @@ rename to new_name.rs
             device_id: device.into(),
             title: None,
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: cwd.map(Into::into),
             branch: None,

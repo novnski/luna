@@ -150,6 +150,22 @@ pub struct ConversationSourceContext {
     pub observed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SettlementDisposition {
+    Settled,
+    Active,
+}
+
+/// A deliberate settle or return-to-active action. New message activity after
+/// this timestamp supersedes it; automatic settling needs no stored writes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSettlementOverride {
+    pub disposition: SettlementDisposition,
+    pub at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
@@ -158,6 +174,8 @@ pub struct Chat {
     pub device_id: String,
     pub title: Option<String>,
     pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement_override: Option<ChatSettlementOverride>,
     /// LUNA-owned global pin position. `None` means unpinned. Keys are dense
     /// dyadic fractions encoded as canonical binary strings, so inserting
     /// between adjacent tasks never rewrites another task's projection.

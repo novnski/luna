@@ -936,6 +936,7 @@ mod tests {
             device_id: "machine".into(),
             title: Some("Synthetic".into()),
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: Some("/synthetic/project".into()),
             branch: None,

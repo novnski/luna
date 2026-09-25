@@ -255,6 +255,7 @@ fn chat(id: &str, device_id: &str) -> Chat {
         device_id: device_id.into(),
         title: Some("First chat".into()),
         archived: false,
+        settlement_override: None,
         pinned_order: None,
         cwd: Some("/tmp/repo".into()),
         branch: Some("main".into()),

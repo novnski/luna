@@ -38,6 +38,15 @@ impl ActivityUi {
     }
 }
 
+fn review_clears_on_visit(kind: AttentionKind) -> bool {
+    matches!(
+        kind,
+        AttentionKind::TaskFailed
+            | AttentionKind::QueuedSendFailed
+            | AttentionKind::AutomationFailed
+    )
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Delivery {
     in_app: bool,
@@ -354,12 +363,79 @@ impl Shell {
         cx.notify();
     }
 
-    pub(super) fn activity_task_keys(&self) -> std::collections::HashSet<(String, String)> {
+    pub(super) fn review_attention_updated_at(
+        &self,
+        chat_id: &str,
+        device_id: &str,
+    ) -> Option<i64> {
+        self.activity
+            .snapshot
+            .as_ref()?
+            .needs_attention
+            .iter()
+            .filter(|item| {
+                item.task_id.as_deref() == Some(chat_id)
+                    && item.device_id == device_id
+                    && review_clears_on_visit(item.kind)
+            })
+            .map(|item| item.updated_at_ms)
+            .max()
+    }
+
+    pub(super) fn activity_task_keys(
+        &self,
+        cx: &App,
+    ) -> std::collections::HashSet<(String, String)> {
+        let state = self.state.read(cx);
+        let mut keys: std::collections::HashSet<_> = self
+            .activity
+            .snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| &snapshot.needs_attention)
+            .filter_map(|item| {
+                let task_id = item.task_id.as_ref()?;
+                if review_clears_on_visit(item.kind)
+                    && state.chats.iter().any(|chat| {
+                        chat.id == *task_id
+                            && chat.device_id == item.device_id
+                            && !chat.manually_unread
+                            && chat
+                                .last_seen_at
+                                .is_some_and(|seen| seen.timestamp_millis() >= item.updated_at_ms)
+                    })
+                {
+                    return None;
+                }
+                Some((item.device_id.clone(), task_id.clone()))
+            })
+            .collect();
+        if let Some(chat_id) = state.activity_chat_being_read()
+            && let Some(chat) = state.chats.iter().find(|chat| chat.id == chat_id)
+        {
+            keys.insert((chat.device_id.clone(), chat.id.clone()));
+        }
+        keys
+    }
+
+    /// Reading clears review-only rows from Activity, but queued work and
+    /// unanswered requests still block settlement until actually resolved.
+    pub(super) fn settlement_blocking_task_keys(
+        &self,
+    ) -> std::collections::HashSet<(String, String)> {
         self.activity
             .snapshot
             .as_ref()
             .into_iter()
             .flat_map(|snapshot| &snapshot.needs_attention)
+            .filter(|item| {
+                matches!(
+                    item.kind,
+                    AttentionKind::ApprovalRequired
+                        | AttentionKind::UserInputRequired
+                        | AttentionKind::QueuedSendFailed
+                )
+            })
             .filter_map(|item| {
                 item.task_id
                     .as_ref()
@@ -661,7 +737,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let active = self.activity.view_active;
-        let task_keys = self.activity_task_keys();
+        let task_keys = self.activity_task_keys(cx);
         let has_attention = self
             .state
             .read(cx)
@@ -672,9 +748,9 @@ impl Shell {
                     status,
                     luna_proto::ChatIndicator::AwaitingApproval
                         | luna_proto::ChatIndicator::AwaitingInput
-                        | luna_proto::ChatIndicator::Errored
                         | luna_proto::ChatIndicator::Completed
-                ) || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
+                ) || (status == &luna_proto::ChatIndicator::Errored && chat.unseen())
+                    || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
             });
         div()
             .id("sidebar-activity-action")

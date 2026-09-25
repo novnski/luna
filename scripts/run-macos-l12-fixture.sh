@@ -298,6 +298,9 @@ case "$ACTION" in
     # Launch through LaunchServices so native CUA receives the bundle identity.
     # `open` returns after launch; status/stop track only the exact app process.
     launch_env=(--env LUNA_DISABLE_SOUND=1 --env LUNA_DISABLE_NOTIFICATIONS=1)
+    if [[ "${LUNA_SIDEBAR_SCALE_QA:-0}" == "1" ]]; then
+      launch_env+=(--env LUNA_SIDEBAR_SCALE_QA=1)
+    fi
     if [[ "$L20_OPT_IN" == "1" ]]; then
       launch_env+=(--env LUNA_L20_CHECKPOINT_QA=1)
     fi

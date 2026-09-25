@@ -435,6 +435,7 @@ fn add_synthetic_task(root: &Path, room_gen: Option<u32>) {
             device_id: "synthetic-device".into(),
             title: Some("Synthetic task".into()),
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: None,
             branch: None,

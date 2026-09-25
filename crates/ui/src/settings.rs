@@ -528,6 +528,9 @@ pub enum SidebarSort {
     Created,
 }
 
+/// A view preference only. It never invokes provider or LUNA archive actions.
+pub const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: Option<u16> = Some(1);
+
 /// Persisted sentinel for the explicit projectless/personal sidebar scope.
 /// `None` remains All projects, so personal cannot be represented by absence.
 pub const PERSONAL_SPACE_FILTER: &str = "__luna_personal__";
@@ -667,6 +670,8 @@ pub struct UiSettings {
     pub sidebar_organization: SidebarOrganization,
     /// Timestamp used to order active sessions (newest first).
     pub sidebar_sort: SidebarSort,
+    /// Move idle, seen, unpinned tasks into Settled after this many days.
+    pub sidebar_auto_settle_after_days: Option<u16>,
     /// Optional harness branding and repository metadata shown below each
     /// session title.
     pub sidebar_show_harness: bool,
@@ -811,6 +816,7 @@ impl Default for UiSettings {
             sidebar_grouped: false,
             sidebar_organization: SidebarOrganization::InOneList,
             sidebar_sort: SidebarSort::LastUpdated,
+            sidebar_auto_settle_after_days: DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
             sidebar_show_harness: true,
             sidebar_show_branch: true,
             sidebar_show_pull_request: true,
@@ -1341,6 +1347,9 @@ impl UiSettings {
         if self.sidebar_organization == SidebarOrganization::ByProject {
             self.sidebar_organization = SidebarOrganization::InOneList;
         }
+        self.sidebar_auto_settle_after_days = self
+            .sidebar_auto_settle_after_days
+            .filter(|days| (1..=365).contains(days));
         self.sidebar_width = clamp_or(
             self.sidebar_width,
             SIDEBAR_MIN,
@@ -2010,6 +2019,7 @@ mod tests {
             sidebar_grouped: true,
             sidebar_organization: SidebarOrganization::ByDevice,
             sidebar_sort: SidebarSort::Created,
+            sidebar_auto_settle_after_days: Some(1),
             sidebar_show_harness: false,
             sidebar_show_branch: false,
             sidebar_show_pull_request: false,

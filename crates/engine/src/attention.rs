@@ -399,6 +399,7 @@ mod tests {
             device_id: "synthetic-device".into(),
             title: Some("Private task title".into()),
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: Some("/private/synthetic/path".into()),
             branch: None,

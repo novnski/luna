@@ -124,6 +124,7 @@ mod tests {
             device_id: "device".into(),
             title: None,
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: None,
             branch: None,

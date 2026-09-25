@@ -1660,6 +1660,12 @@ pub struct Shell {
     /// expanded list ("Show more" reveals another page).
     pub(super) archived_open: bool,
     pub(super) archived_shown: usize,
+    /// Inactive threads are shelved by the sidebar view, without archiving
+    /// their provider task. Keep this disclosure collapsed by default.
+    pub(super) settled_open: bool,
+    pub(super) settled_shown: usize,
+    pub(super) active_shown: usize,
+    pub(super) sidebar_hidden_active_count: usize,
     /// Archived slim row under the pointer — swaps its time label for the
     /// Unarchive affordance and restores the dimmed harness mark (t3code's
     /// settled-row hover).
@@ -2134,6 +2140,10 @@ impl Shell {
             new_thread_artwork_ready: Default::default(),
             archived_open: true,
             archived_shown: 0,
+            settled_open: false,
+            settled_shown: 0,
+            active_shown: 20,
+            sidebar_hidden_active_count: 0,
             archived_hover: None,
             sidebar_collapsed_groups: std::collections::HashSet::new(),
             sidebar_disclosure_motion: std::collections::HashMap::new(),
@@ -5428,6 +5438,21 @@ impl Shell {
         cx.notify();
     }
 
+    pub(super) fn set_chat_settled(
+        &mut self,
+        chat_id: String,
+        settled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_chat_menu(cx);
+        self.mutate_task(
+            chat_id,
+            serde_json::json!({ "kind": "setSettled", "settled": settled }),
+            cx,
+        );
+        cx.notify();
+    }
+
     /// A jump shortcut: open the sidebar row at `slot`. A slot past the end of
     /// a short list does nothing. Reads the DISPLAYED order — sort and
     /// grouping view options permute the list, and the chip on a row must
@@ -7007,6 +7032,9 @@ impl Shell {
         status: luna_proto::ChatIndicator,
         selected: bool,
         archived: bool,
+        pinned: bool,
+        activity_row: bool,
+        can_settle: bool,
         // This row's jump combo while the hint overlay is up. It takes the
         // corner outright — above hover and above the status word — so all
         // nine chips appear together instead of leaving a hole on whichever
@@ -7030,6 +7058,28 @@ impl Shell {
             format!("chat-{id}")
         };
         let corner_hovered = self.chat_status_hover.as_deref() == Some(row_id.as_str());
+        let pin_control = (!archived && (pinned || (corner_hovered && search_query.is_none())))
+            .then(|| {
+                let pin_id = id.clone();
+                div()
+                    .id(SharedString::from(format!("{row_id}-pin")))
+                    .role(gpui::Role::Button)
+                    .aria_label(if pinned { "Unpin task" } else { "Pin task" })
+                    .size(px(18.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.glass_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.set_chat_pinned(pin_id.clone(), !pinned, cx);
+                    }))
+                    .child(icon(icons::PIN).size(px(12.0)).text_color(theme.text_muted))
+                    .into_any_element()
+            });
         // Send-truth overrides: a send unadopted past the grace window is
         // FAILED (explicit, with the transcript's retry affordance); a send
         // whose delivery path is degraded is QUEUED, not Working — the
@@ -7096,21 +7146,18 @@ impl Shell {
                 .flex()
                 .flex_row()
                 .items_center()
+                .justify_center()
                 .gap(px(4.0))
                 .h(px(18.0))
-                // The pill's padding bleeds right into the row's padding so
-                // its TEXT right-aligns exactly where the status word/time
-                // sits — the swap moves pixels around the label, not it.
-                // 4px: what's left of the row's 8px padding then equals the
-                // 4px of air above the pill (18px tall on the 14px line,
-                // 6px row padding minus the 2px overflow).
+                .w(px(84.0))
                 .px(px(4.0))
-                .mr(px(-4.0))
                 .rounded(px(5.0))
                 .bg(crate::theme::wash(0.10))
                 .hover(|s| s.bg(crate::theme::wash(0.18)))
                 .child(
-                    icon(if archived {
+                    icon(if can_settle {
+                        icons::CHECK
+                    } else if archived {
                         icons::ARCHIVE_UP_MINIMALISTIC
                     } else {
                         icons::ARCHIVE_MINIMALISTIC
@@ -7123,7 +7170,9 @@ impl Shell {
                     div()
                         .text_size(crate::typography::ui_rems(10.0))
                         .text_color(theme.text_muted)
-                        .child(SharedString::from(if archived {
+                        .child(SharedString::from(if can_settle {
+                            "Settle"
+                        } else if archived {
                             "Unarchive"
                         } else {
                             "Archive"
@@ -7160,6 +7209,7 @@ impl Shell {
                             .into_any_element()
                     };
                     div()
+                        .h(px(18.0))
                         .flex()
                         .flex_row()
                         .items_center()
@@ -7175,6 +7225,9 @@ impl Shell {
                         .into_any_element()
                 }
                 None => div()
+                    .h(px(18.0))
+                    .flex()
+                    .items_center()
                     .text_size(crate::typography::ui_rems(10.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .child(time_ago.clone())
@@ -7187,10 +7240,15 @@ impl Shell {
         // archiving only clicks on the corner itself, so the row's own click
         // stays the selector.
         let corner: AnyElement = {
-            let archive_id = id.clone();
+            let action_id = id.clone();
             div()
                 .id(SharedString::from(format!("{row_id}-corner")))
                 .flex_none()
+                // At rest the pin sits beside the timestamp/status. The
+                // action expands this slot on hover and pushes the pin left,
+                // matching T3's pinned-card geometry.
+                .min_w(px(32.0))
+                .when(corner_hovered, |corner| corner.w(px(84.0)))
                 // Pin the corner to line 1's text height so the archive pill
                 // (taller, padded) overflows vertically instead of growing the
                 // row — the swap must not shift the card's content.
@@ -7202,11 +7260,16 @@ impl Shell {
                 .h(px(14.0))
                 .flex()
                 .items_center()
+                .justify_end()
                 .cursor_pointer()
                 .when(corner_hovered, |el| {
                     el.on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.set_chat_archived(archive_id.clone(), !archived, cx);
+                        if can_settle {
+                            this.set_chat_settled(action_id.clone(), true, cx);
+                        } else {
+                            this.set_chat_archived(action_id.clone(), !archived, cx);
+                        }
                     }))
                 })
                 .child(corner_body)
@@ -7280,7 +7343,11 @@ impl Shell {
             })
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.open_chat(select_id.clone(), cx);
+                if activity_row {
+                    this.open_activity_chat(select_id.clone(), cx);
+                } else {
+                    this.open_chat(select_id.clone(), cx);
+                }
             }))
             .on_mouse_down(
                 MouseButton::Right,
@@ -7293,7 +7360,7 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            // Line 1: "project @ device", status word / time-ago right.
+            // Line 1: project, pin control, status word / time-ago right.
             .child(
                 div()
                     .w_full()
@@ -7310,6 +7377,7 @@ impl Shell {
                             .text_color(subline)
                             .child(popover::search_highlight(space_name, search_query, theme)),
                     ))
+                    .when_some(pin_control, |line, control| line.child(control))
                     .child(div().text_color(subline).child(corner)),
             )
             // Line 2: harness identity belongs directly with the title,
@@ -7711,11 +7779,12 @@ impl Shell {
             .collect();
 
         // t3code's archived accordion, below the active list.
-        let archived_section = if activity_view {
-            None
-        } else {
-            self.render_archived_section(theme, cx)
-        };
+        let older_section = (!activity_view)
+            .then(|| self.render_settled_section(theme, cx))
+            .flatten();
+        let archived_section = (!activity_view)
+            .then(|| self.render_archived_section(theme, cx))
+            .flatten();
 
         // The normal project filter and Activity toggle share the existing
         // fixed header row above the sidebar's scrolling task list.
@@ -7773,6 +7842,7 @@ impl Shell {
                             .into_any_element()
                     })
                     .children(terminal_inventory)
+                    .children(older_section)
                     .children(archived_section),
             ),
         )
@@ -8626,9 +8696,43 @@ impl Shell {
             let rename_id = chat_id.clone();
             let archive_id = chat_id.clone();
             let delete_id = chat_id.clone();
-            let (archived, pinned, unread, can_move_up, can_move_down, native_history_fork) = {
+            let mut attention_task_keys = self.activity_task_keys(cx);
+            attention_task_keys.extend(self.settlement_blocking_task_keys());
+            let now = Utc::now();
+            let (
+                archived,
+                pinned,
+                unread,
+                settled,
+                can_settle,
+                can_move_up,
+                can_move_down,
+                native_history_fork,
+            ) = {
                 let state = self.state.read(cx);
                 let chat = state.chats.iter().find(|chat| chat.id == chat_id);
+                let has_attention = chat.is_some_and(|chat| {
+                    attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
+                });
+                let has_queued_message =
+                    state.selected_chat.as_deref() == Some(&chat_id) && !state.queue.is_empty();
+                let settled = chat.is_some_and(|chat| {
+                    spaces::is_settled_chat(
+                        chat,
+                        state.display_status_for(chat, now),
+                        now,
+                        self.settings.sidebar_auto_settle_after_days,
+                        has_attention,
+                    )
+                });
+                let can_settle = chat.is_some_and(|chat| {
+                    spaces::can_manually_settle_chat(
+                        chat,
+                        state.display_status_for(chat, now),
+                        has_attention,
+                        has_queued_message,
+                    )
+                });
                 let mut pins: Vec<_> = state
                     .chats
                     .iter()
@@ -8646,6 +8750,8 @@ impl Shell {
                     chat.is_some_and(|chat| chat.archived),
                     chat.is_some_and(|chat| chat.pinned_order.is_some()),
                     chat.is_some_and(luna_proto::Chat::unseen),
+                    settled,
+                    can_settle,
                     pin_index.is_some_and(|index| index > 0),
                     pin_index.is_some_and(|index| index + 1 < pins.len()),
                     chat.and_then(|chat| chat.config.as_ref())
@@ -8658,6 +8764,7 @@ impl Shell {
             let move_up_id = chat_id.clone();
             let move_down_id = chat_id.clone();
             let read_id = chat_id.clone();
+            let settle_id = chat_id.clone();
             let move_project_id = chat_id.clone();
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();
@@ -8746,6 +8853,25 @@ impl Shell {
                                 "Mark unread"
                             })),
                     )
+                    .when(!archived && (settled || can_settle), |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-settle-{chat_id}"))
+                                .id("chat-menu-settle")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_chat_settled(settle_id.clone(), !settled, cx)
+                                }))
+                                .child(
+                                    icon(icons::CHECK)
+                                        .size(px(16.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(SharedString::from(if settled {
+                                    "Return to Active"
+                                } else {
+                                    "Settle"
+                                })),
+                        )
+                    })
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-move-{chat_id}"))
                             .id("chat-menu-move")
@@ -12510,6 +12636,7 @@ mod tests {
             device_id: "device".into(),
             title: None,
             archived: false,
+            settlement_override: None,
             pinned_order: None,
             cwd: Some(cwd.into()),
             branch: None,

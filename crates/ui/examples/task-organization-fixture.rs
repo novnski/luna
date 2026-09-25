@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
+use luna_doc::{
+    MessagePart, MessageRole, MessageStatus, QueueHoldReason, QueueMessageStatus, QueuedMessage,
+    SessionMessageEntry,
+};
 use luna_engine::{
     AgentAccountsConfig, Auth, AuthConfig, EngineCore, EngineProfile, GitCheckpoints,
     HarnessRegistry, Repos,
@@ -34,6 +38,7 @@ const TASK_L25_FOREIGN: &str = "c3c3c3c3-c3c3-43c3-83c3-c3c3c3c3c3c3";
 const L20_OPT_IN: &str = "LUNA_L20_CHECKPOINT_QA";
 const L24_OPT_IN: &str = "LUNA_L24_INTEGRATION_QA";
 const L25_OPT_IN: &str = "LUNA_L25_SEND_QA";
+const SIDEBAR_SCALE_OPT_IN: &str = "LUNA_SIDEBAR_SCALE_QA";
 const REMOTE_DEVICE: &str = "fixture-offline-machine";
 const L24_GLOBAL_INSTRUCTIONS: &str =
     "L24 QA global: identify the selected synthetic task before reporting integration evidence.";
@@ -557,6 +562,195 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Disposable sidebar load case: 60 fresh rows, one automatically settled
+/// older row, one manually settled recent row, one reactivated recent row,
+/// one review-only activity failure, plus the archived task. No real provider
+/// profile is touched.
+async fn seed_sidebar_scale(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
+    let marker = root.join("SIDEBAR-QA.json");
+    if marker.exists() {
+        let prior: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker)?)?;
+        anyhow::ensure!(
+            prior["fixture"] == "sidebar-scale-v5" && core.workspace.read_chats()?.len() == 67,
+            "sidebar fixture is incomplete"
+        );
+        return Ok(());
+    }
+    let now = chrono::Utc::now();
+    let mut ids = Vec::new();
+    for index in 0..=60u16 {
+        let id = format!("d349{index:04x}-64d7-4aeb-b686-a751fb570467");
+        core.workspace.create_chat(
+            &id,
+            Some("fixture-root"),
+            Some(&core.device_id),
+            Some(task_config()),
+            None,
+        )?;
+        let title = if index == 0 {
+            "Scale keyword older thread".to_string()
+        } else {
+            format!("Scale keyword recent thread {index:02}")
+        };
+        core.workspace.rename_chat(&id, &title)?;
+        let at = if index == 0 {
+            now - chrono::Duration::days(30)
+        } else {
+            now - chrono::Duration::minutes(i64::from(index))
+        };
+        anyhow::ensure!(
+            core.workspace.set_chat_activity(
+                &id,
+                Some(at.timestamp_millis()),
+                Some(at.timestamp_millis())
+            )?,
+            "sidebar task activity update did not apply"
+        );
+        ids.push(id);
+    }
+    let client = luna_rpc::memory_client(core.rpc_service());
+    command(
+        &client,
+        "fixture-sidebar-old-seen",
+        &ids[0],
+        serde_json::json!({ "kind": "setRead", "read": true }),
+    )
+    .await?;
+    command(
+        &client,
+        "fixture-sidebar-review-seen",
+        &ids[1],
+        serde_json::json!({
+            "kind": "markSeen",
+            "at": (now - chrono::Duration::seconds(10)).timestamp_millis()
+        }),
+    )
+    .await?;
+    core.doc_host
+        .open(&ids[1])?
+        .doc()
+        .push_queued(&QueuedMessage {
+            id: "sidebar-review-failure".into(),
+            text: "Fixture-only queued message requiring review".into(),
+            attachments: Vec::new(),
+            hold_for_turn_end: false,
+            follow_up_behavior: Default::default(),
+            hold_reason: Some(QueueHoldReason::ProviderRejected),
+            issued_by: core.device_id.clone(),
+            issued_at: now.timestamp_millis(),
+            edited_at: None,
+            revision: 1,
+            execution: None,
+            status: QueueMessageStatus::Held,
+            delivery_gate: None,
+        })?;
+    command(
+        &client,
+        "fixture-sidebar-manual-settle",
+        &ids[60],
+        serde_json::json!({ "kind": "setSettled", "settled": true }),
+    )
+    .await?;
+    anyhow::ensure!(
+        core.workspace.chat(&ids[60])?.is_some_and(|chat| {
+            chat.settlement_override.is_some_and(|settlement| {
+                settlement.disposition == luna_proto::SettlementDisposition::Settled
+            })
+        }),
+        "manual settlement did not persist to the synced task record"
+    );
+    command(
+        &client,
+        "fixture-sidebar-reactivation-settle",
+        &ids[59],
+        serde_json::json!({ "kind": "setSettled", "settled": true }),
+    )
+    .await?;
+    let settled_at = core
+        .workspace
+        .chat(&ids[59])?
+        .and_then(|chat| chat.settlement_override)
+        .ok_or_else(|| anyhow::anyhow!("reactivation seed did not settle"))?
+        .at;
+    anyhow::ensure!(
+        core.workspace.set_chat_activity(
+            &ids[59],
+            Some((settled_at + chrono::Duration::seconds(1)).timestamp_millis()),
+            None,
+        )?,
+        "reactivated task was not found"
+    );
+    anyhow::ensure!(
+        core.workspace.chat(&ids[59])?.is_some_and(|chat| {
+            chat.settlement_override.is_some_and(|settlement| {
+                chat.last_message_at
+                    .is_some_and(|activity| activity > settlement.at)
+            })
+        }),
+        "new activity did not supersede manual settlement"
+    );
+    for (task_id, message_id, body, created_at) in [
+        (
+            ids[0].as_str(),
+            "sidebar-old-content",
+            "buriedmarker appears in this older conversation",
+            (now - chrono::Duration::days(30)).timestamp_millis(),
+        ),
+        (
+            TASK_ARCHIVED,
+            "sidebar-archived-content",
+            "archiveonlymarker appears in this archived conversation",
+            now.timestamp_millis(),
+        ),
+    ] {
+        core.doc_host
+            .open(task_id)?
+            .doc()
+            .push_message(&SessionMessageEntry {
+                id: message_id.into(),
+                role: MessageRole::User,
+                parts: vec![MessagePart::Text {
+                    id: "text".into(),
+                    text: body.into(),
+                }],
+                created_at,
+                device_id: core.device_id.clone(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: None,
+            })?;
+    }
+    let rebuilt: luna_proto::HistoryRebuildResult = client
+        .call_as(
+            methods::REBUILD_SESSION_HISTORY,
+            serde_json::json!({"taskIds": [ids[0], TASK_ARCHIVED]}),
+        )
+        .await?;
+    anyhow::ensure!(
+        rebuilt.indexed_tasks == 2,
+        "sidebar content index is incomplete"
+    );
+    anyhow::ensure!(
+        core.workspace.read_chats()?.len() == 67,
+        "sidebar task count differs"
+    );
+    std::fs::write(
+        marker,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "fixture": "sidebar-scale-v5",
+            "recentCount": 60,
+            "olderId": ids[0],
+            "recentIds": &ids[1..],
+            "manualArchivedId": TASK_ARCHIVED,
+            "reviewTaskId": ids[1],
+            "manualSettledId": ids[60],
+            "reactivatedId": ids[59],
+            "expectedActivePage": 20,
+            "contentQueries": ["buriedmarker", "archiveonlymarker"],
+        }))?,
+    )?;
+    Ok(())
+}
+
 async fn seed_l24(core: &EngineCore, root: &Path) -> anyhow::Result<bool> {
     let marker = root.join("L24-FIXTURE.txt");
     if marker.exists() {
@@ -821,6 +1015,12 @@ fn main() -> anyhow::Result<()> {
         Err(std::env::VarError::NotPresent) => false,
         Err(error) => return Err(error.into()),
     };
+    let sidebar_scale = match std::env::var(SIDEBAR_SCALE_OPT_IN) {
+        Ok(value) if value == "1" => true,
+        Ok(value) => anyhow::bail!("{SIDEBAR_SCALE_OPT_IN} must be 1 when set, got {value:?}"),
+        Err(std::env::VarError::NotPresent) => false,
+        Err(error) => return Err(error.into()),
+    };
     anyhow::ensure!(
         !l20_seed_only || l20,
         "--l20-seed-only requires {L20_OPT_IN}=1"
@@ -896,6 +1096,9 @@ fn main() -> anyhow::Result<()> {
     // before IPC/bootstrap can lazily request EngineCore::auth().
     core.set_auth(Auth::new(fixture_auth_config(&root)));
     runtime.block_on(seed(&core, &root))?;
+    if sidebar_scale {
+        runtime.block_on(seed_sidebar_scale(&core, &root))?;
+    }
     if l20 {
         runtime.block_on(seed_l20(&core, &root))?;
     }
@@ -964,7 +1167,7 @@ fn main() -> anyhow::Result<()> {
         workos_client_id: None,
         default_harness: HarnessId::Mock,
     };
-    let handle = if l25 {
+    let handle = if l25 || sidebar_scale {
         runtime.block_on(state::EngineHandle::fixture_from_core(&core))?
     } else {
         runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?

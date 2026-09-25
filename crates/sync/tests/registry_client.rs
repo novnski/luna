@@ -34,6 +34,8 @@ fn chat(id: &str, device_id: &str) -> Chat {
         device_id: device_id.into(),
         title: Some("chat".into()),
         archived: false,
+        settlement_override: None,
+        pinned_order: None,
         cwd: Some("/tmp".into()),
         branch: None,
         checkout_id: None,
@@ -46,6 +48,7 @@ fn chat(id: &str, device_id: &str) -> Chat {
         harness_session_cwd: None,
         space_id: None,
         last_seen_at: None,
+        manually_unread: false,
         room_gen: None,
     }
 }
