@@ -8,8 +8,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui::{AnyWindowHandle, AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use luna_doc::{
     MessagePart, MessageRole, MessageStatus, QueueHoldReason, QueueMessageStatus, QueuedMessage,
     SessionMessageEntry,
@@ -39,6 +40,8 @@ const L20_OPT_IN: &str = "LUNA_L20_CHECKPOINT_QA";
 const L24_OPT_IN: &str = "LUNA_L24_INTEGRATION_QA";
 const L25_OPT_IN: &str = "LUNA_L25_SEND_QA";
 const SIDEBAR_SCALE_OPT_IN: &str = "LUNA_SIDEBAR_SCALE_QA";
+const SIDEBAR_HOVER_CAPTURE_OPT_IN: &str = "LUNA_SIDEBAR_HOVER_CAPTURE";
+const SIDEBAR_HOVER_TARGET_Y: f32 = 360.0;
 const REMOTE_DEVICE: &str = "fixture-offline-machine";
 const L24_GLOBAL_INSTRUCTIONS: &str =
     "L24 QA global: identify the selected synthetic task before reporting integration evidence.";
@@ -47,6 +50,19 @@ const L24_APP_INSTRUCTIONS: &str =
 const L24_OTHER_INSTRUCTIONS: &str =
     "L24 QA Unrelated checkout: this is the synthetic project B instruction.";
 const FAKE_CODEX_BYTES: &[u8] = include_bytes!("../../harness/tests/fixtures/fake-codex.sh");
+
+fn capture_hover_frame(
+    window: AnyWindowHandle,
+    cx: &mut AsyncApp,
+    output: &Path,
+    name: &str,
+) -> anyhow::Result<()> {
+    window.update(cx, |_, window, cx| {
+        window.draw(cx).clear();
+        window.render_to_image()?.save(output.join(name))?;
+        Ok(())
+    })?
+}
 
 fn validate_opt_in_root(root: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -1021,6 +1037,18 @@ fn main() -> anyhow::Result<()> {
         Err(std::env::VarError::NotPresent) => false,
         Err(error) => return Err(error.into()),
     };
+    let hover_capture = match std::env::var(SIDEBAR_HOVER_CAPTURE_OPT_IN) {
+        Ok(value) if value == "1" => true,
+        Ok(value) => {
+            anyhow::bail!("{SIDEBAR_HOVER_CAPTURE_OPT_IN} must be 1 when set, got {value:?}")
+        }
+        Err(std::env::VarError::NotPresent) => false,
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        !hover_capture || sidebar_scale,
+        "{SIDEBAR_HOVER_CAPTURE_OPT_IN} requires {SIDEBAR_SCALE_OPT_IN}=1"
+    );
     anyhow::ensure!(
         !l20_seed_only || l20,
         "--l20-seed-only requires {L20_OPT_IN}=1"
@@ -1175,6 +1203,7 @@ fn main() -> anyhow::Result<()> {
     let chats = core.workspace.read_chats()?;
     let spaces = core.workspace.read_spaces()?;
     let device = core.device_id.clone();
+    let hover_capture_output = root.join("HOVER-QA");
 
     gpui_platform::application()
         .with_assets(icons::Assets)
@@ -1250,7 +1279,7 @@ fn main() -> anyhow::Result<()> {
                 state.fixture_attach_engine(handle, cx);
                 state
             });
-            cx.open_window(
+            let window = cx.open_window(
                 WindowOptions {
                     window_background: theme::Theme::of(cx).window_background_appearance(),
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -1264,6 +1293,134 @@ fn main() -> anyhow::Result<()> {
             .unwrap();
             state.update(cx, |_, cx| cx.notify());
             cx.activate(true);
+            if hover_capture {
+                cx.spawn(async move |cx| {
+                    let result: anyhow::Result<()> = async {
+                        std::fs::create_dir_all(&hover_capture_output)?;
+                        cx.background_executor().timer(Duration::from_millis(900)).await;
+                        let window = AnyWindowHandle::from(window);
+                        capture_hover_frame(window, cx, &hover_capture_output, "before.png")?;
+                        window.update(cx, |_, window, cx| {
+                            window.draw(cx).clear();
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position: gpui::point(px(100.0), px(SIDEBAR_HOVER_TARGET_Y)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                        })?;
+                        cx.background_executor().timer(Duration::from_millis(650)).await;
+                        capture_hover_frame(window, cx, &hover_capture_output, "hover-650ms.png")?;
+                        // Root frames continue while the sidebar row is
+                        // cached; the fade's liveness clock must not erase a
+                        // still-hovered row during those frames.
+                        window.update(cx, |_, window, cx| {
+                            for _ in 0..3 {
+                                window.refresh();
+                                window.draw(cx).clear();
+                            }
+                        })?;
+                        cx.background_executor().timer(Duration::from_millis(3200)).await;
+                        capture_hover_frame(window, cx, &hover_capture_output, "hover-3850ms.png")?;
+                        window.update(cx, |_, window, cx| {
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position: gpui::point(px(170.0), px(SIDEBAR_HOVER_TARGET_Y)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                        })?;
+                        cx.background_executor().timer(Duration::from_millis(400)).await;
+                        capture_hover_frame(window, cx, &hover_capture_output, "body-right.png")?;
+                        window.update(cx, |_, window, cx| {
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position: gpui::point(px(190.0), px(SIDEBAR_HOVER_TARGET_Y)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                        })?;
+                        cx.background_executor().timer(Duration::from_millis(500)).await;
+                        capture_hover_frame(window, cx, &hover_capture_output, "action.png")?;
+                        for (name, x) in [("settle.png", 210.0), ("archive.png", 230.0)] {
+                            window.update(cx, |_, window, cx| {
+                                window.dispatch_event(
+                                    gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                        position: gpui::point(px(x), px(SIDEBAR_HOVER_TARGET_Y)),
+                                        ..Default::default()
+                                    }),
+                                    cx,
+                                );
+                            })?;
+                            cx.background_executor().timer(Duration::from_millis(450)).await;
+                            capture_hover_frame(window, cx, &hover_capture_output, name)?;
+                        }
+                        window.update(cx, |_, window, cx| {
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position: gpui::point(px(600.0), px(SIDEBAR_HOVER_TARGET_Y)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                        })?;
+                        cx.background_executor().timer(Duration::from_millis(300)).await;
+                        capture_hover_frame(window, cx, &hover_capture_output, "left.png")?;
+                        window.update(cx, |_, window, cx| {
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position: gpui::point(px(100.0), px(SIDEBAR_HOVER_TARGET_Y)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                        })?;
+                        cx.background_executor().timer(Duration::from_millis(650)).await;
+                        capture_hover_frame(window, cx, &hover_capture_output, "reenter.png")?;
+                        for (name, y) in [
+                            ("git-project.png", 295.0),
+                            ("non-git-project.png", 425.0),
+                            ("projectless.png", 490.0),
+                        ] {
+                            window.update(cx, |_, window, cx| {
+                                window.dispatch_event(
+                                    gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                        position: gpui::point(px(100.0), px(y)),
+                                        ..Default::default()
+                                    }),
+                                    cx,
+                                );
+                            })?;
+                            cx.background_executor().timer(Duration::from_millis(450)).await;
+                            capture_hover_frame(window, cx, &hover_capture_output, name)?;
+                        }
+                        std::fs::write(
+                            hover_capture_output.join("readback.json"),
+                            serde_json::to_vec_pretty(&serde_json::json!({
+                                "fixture": "sidebar-scale-v5",
+                                "target": "Disconnected project task",
+                                "pointerLogical": {"x": 100, "y": SIDEBAR_HOVER_TARGET_Y},
+                                "forcedCachedFrames": 3,
+                                "frames": ["before.png", "hover-650ms.png", "hover-3850ms.png", "body-right.png", "action.png", "settle.png", "archive.png", "left.png", "reenter.png", "git-project.png", "non-git-project.png", "projectless.png"],
+                                "status": "captured"
+                            }))?,
+                        )?;
+                        Ok(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        eprintln!("sidebar hover capture failed: {error:#}");
+                        let _ = std::fs::write(
+                            hover_capture_output.join("ERROR.txt"),
+                            format!("{error:#}\n"),
+                        );
+                    }
+                })
+                .detach();
+            }
         });
     runtime.block_on(core.shutdown());
     Ok(())

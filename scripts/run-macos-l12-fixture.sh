@@ -301,6 +301,10 @@ case "$ACTION" in
     if [[ "${LUNA_SIDEBAR_SCALE_QA:-0}" == "1" ]]; then
       launch_env+=(--env LUNA_SIDEBAR_SCALE_QA=1)
     fi
+    if [[ "${LUNA_SIDEBAR_HOVER_CAPTURE:-0}" == "1" ]]; then
+      [[ "${LUNA_SIDEBAR_SCALE_QA:-0}" == "1" ]] || fail "hover capture requires LUNA_SIDEBAR_SCALE_QA=1"
+      launch_env+=(--env LUNA_SIDEBAR_HOVER_CAPTURE=1)
+    fi
     if [[ "$L20_OPT_IN" == "1" ]]; then
       launch_env+=(--env LUNA_L20_CHECKPOINT_QA=1)
     fi

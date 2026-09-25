@@ -722,25 +722,11 @@ fn sidebar_key_order_changed(old: &[(String, f32)], new: &[(String, f32)]) -> bo
             .any(|((old_key, _), (new_key, _))| old_key != new_key)
 }
 
-/// Exact active-session row height. Harness identity lives on the title line
-/// and the Working glyph lives in the status corner, so neither adds a third
-/// line. Compact rows omit the metadata line and its preceding gap entirely;
-/// branch / pull-request rows add the exact height of their tallest child.
-/// Keeping this calculation beside the renderer's metrics prevents disclosure
-/// clips when view options alter the row structure.
-pub(super) fn chat_row_height(shows_branch: bool, shows_pull_request: bool) -> f32 {
-    let mut metadata_height: f32 = 0.0;
-    if shows_branch {
-        metadata_height = metadata_height.max(14.0);
-    }
-    if shows_pull_request {
-        metadata_height = metadata_height.max(16.0);
-    }
-    if metadata_height == 0.0 {
-        45.0
-    } else {
-        47.0 + metadata_height
-    }
+/// All active task rows reserve the same height, including tasks without a
+/// branch or pull request. The tallest metadata line fits within 63 pixels.
+/// Keep this value shared by the renderer and sidebar reorder geometry.
+pub(super) fn chat_row_height(_shows_branch: bool, _shows_pull_request: bool) -> f32 {
+    63.0
 }
 /// Flex gap between sidebar list items.
 const SIDEBAR_LIST_GAP: f32 = 2.0;
@@ -7482,6 +7468,7 @@ impl Shell {
         } else {
             text.opacity(0.8)
         };
+        let hover_progress = motion::hover_t_or(&fade_key, if corner_hovered { 1.0 } else { 0.0 });
         div()
             .id(SharedString::from(row_id.clone()))
             .h(px(chat_row_height(
@@ -7490,6 +7477,7 @@ impl Shell {
             )))
             .flex()
             .flex_col()
+            .justify_center()
             .gap(px(2.0))
             .rounded(px(if search_query.is_some() {
                 popover::PALETTE_ITEM_RADIUS
@@ -7498,8 +7486,8 @@ impl Shell {
             }))
             .px(px(Theme::SPACE_SM))
             .py(px(6.0))
-            .text_color(motion::hover_blend(&fade_key, rest_text, text))
-            .bg(motion::hover_blend(&fade_key, rest_bg, hover_bg))
+            .text_color(motion::mix(rest_text, text, hover_progress))
+            .bg(motion::mix(rest_bg, hover_bg, hover_progress))
             // No selection ring (user request) — the wash alone marks the
             // active row.
             // Row hover drives BOTH the wash blend and the corner's
@@ -7542,7 +7530,16 @@ impl Shell {
             )
             .when_some(details, |row, details| {
                 let height = details.estimated_height();
-                let action_width = if can_settle { 96.0 } else { 72.0 };
+                // Exclude the actual control cluster, not the full status
+                // reservation: an empty gap before Pin still belongs to the
+                // thread's detail-hover region.
+                let action_width = if pinned {
+                    96.0
+                } else if can_settle {
+                    72.0
+                } else {
+                    50.0
+                };
                 row.tooltip_at(
                     move |_, cx| cx.new(|_| details.clone()).into(),
                     move |bounds, pointer, window| {
@@ -7599,8 +7596,8 @@ impl Shell {
                             .child(popover::search_highlight(title, search_query, theme)),
                     )),
             )
-            // Line 3 is structural, not reserved whitespace: compact states
-            // omit it completely when both Branch and Pull request are hidden.
+            // Omit the third line when both Branch and Pull request are hidden;
+            // the two-line group stays centered in the uniform row height.
             .when(shows_metadata, |row| {
                 row.child(
                     div()
@@ -13870,9 +13867,9 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_chat_height_tracks_visible_metadata() {
-        assert_eq!(chat_row_height(false, false), 45.0);
-        assert_eq!(chat_row_height(true, false), 61.0);
+    fn sidebar_chat_height_is_uniform() {
+        assert_eq!(chat_row_height(false, false), 63.0);
+        assert_eq!(chat_row_height(true, false), 63.0);
         assert_eq!(chat_row_height(false, true), 63.0);
         assert_eq!(chat_row_height(true, true), 63.0);
     }

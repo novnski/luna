@@ -694,13 +694,19 @@ impl HoverFades {
 
     /// Hover progress (0..1) for `key` at `now`; stamps liveness.
     pub fn value_at(&mut self, key: &str, now: Instant) -> f32 {
+        self.value_at_or(key, now, 0.0)
+    }
+
+    /// Cached elements can miss a frame and lose their fade entry while they
+    /// remain hovered. Use the caller's authoritative hover state when absent.
+    pub fn value_at_or(&mut self, key: &str, now: Instant, absent: f32) -> f32 {
         let frame = self.frame;
         match self.entries.get_mut(key) {
             Some(entry) => {
                 entry.seen = frame;
                 entry.value(now, Self::duration())
             }
-            None => 0.0,
+            None => absent,
         }
     }
 
@@ -736,6 +742,12 @@ thread_local! {
 /// Hover progress (0..1) for `key` this frame.
 pub fn hover_t(key: &str) -> f32 {
     HOVER_FADES.with(|fades| fades.borrow_mut().value_at(key, Instant::now()))
+}
+
+/// Hover progress with a fallback for a cached element whose fade entry was
+/// pruned between renders.
+pub fn hover_t_or(key: &str, absent: f32) -> f32 {
+    HOVER_FADES.with(|fades| fades.borrow_mut().value_at_or(key, Instant::now(), absent))
 }
 
 /// Record a hover flip for `key` (reduced motion snaps).
