@@ -78,20 +78,37 @@ pub struct ToolDiffStat {
 
 /// Line-level add/delete counts for one file's diff.
 pub fn diff_stat(diff: &ToolDiff) -> ToolDiffStat {
-    let (additions, deletions) = match &diff.old_text {
-        None => (diff.new_text.lines().count() as u64, 0),
-        Some(old) => {
-            let text_diff = similar::TextDiff::from_lines(old.as_str(), diff.new_text.as_str());
-            let mut additions = 0u64;
-            let mut deletions = 0u64;
-            for change in text_diff.iter_all_changes() {
-                match change.tag() {
-                    similar::ChangeTag::Insert => additions += 1,
-                    similar::ChangeTag::Delete => deletions += 1,
-                    similar::ChangeTag::Equal => {}
-                }
+    let (additions, deletions) = if let Some(patch) = &diff.unified_diff {
+        let mut in_hunk = false;
+        let (mut additions, mut deletions) = (0, 0);
+        for line in patch.lines() {
+            if line.starts_with("@@") {
+                in_hunk = true;
+            } else if line.starts_with("diff --git ") {
+                in_hunk = false;
+            } else if in_hunk && line.starts_with('+') {
+                additions += 1;
+            } else if in_hunk && line.starts_with('-') {
+                deletions += 1;
             }
-            (additions, deletions)
+        }
+        (additions, deletions)
+    } else {
+        match &diff.old_text {
+            None => (diff.new_text.lines().count() as u64, 0),
+            Some(old) => {
+                let text_diff = similar::TextDiff::from_lines(old.as_str(), diff.new_text.as_str());
+                let mut additions = 0u64;
+                let mut deletions = 0u64;
+                for change in text_diff.iter_all_changes() {
+                    match change.tag() {
+                        similar::ChangeTag::Insert => additions += 1,
+                        similar::ChangeTag::Delete => deletions += 1,
+                        similar::ChangeTag::Equal => {}
+                    }
+                }
+                (additions, deletions)
+            }
         }
     };
     ToolDiffStat {
@@ -433,18 +450,23 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 {
                     *e = *is_error;
                     *resolved = true;
-                    // Show command stdout/stderr in the chip, with a small
-                    // synced preview and lazy host-journal fetch for longer
-                    // results. Other tool results keep the existing policy.
-                    if matches!(call, ToolCall::Exec { .. }) {
-                        *out_slot = output.as_deref().and_then(summarize_tool_output);
-                        *output_bytes = output.as_ref().and_then(|full| {
-                            (out_slot.as_deref() != Some(full.trim())).then_some(full.len() as u64)
-                        });
+                    // Preserve a small synced preview for each tool kind;
+                    // full text stays in the owning host's journal.
+                    let private_result = matches!(
+                        call,
+                        ToolCall::Mcp { .. }
+                            | ToolCall::ComputerUse { .. }
+                            | ToolCall::Unknown { .. }
+                    );
+                    *out_slot = if private_result {
+                        None
                     } else {
-                        *out_slot = None;
-                        *output_bytes = None;
-                    }
+                        output.as_deref().and_then(summarize_tool_output)
+                    };
+                    *output_bytes = output.as_ref().and_then(|full| {
+                        (private_result || out_slot.as_deref() != Some(full.trim()))
+                            .then_some(full.len() as u64)
+                    });
                     *diff_slot = None;
                     *diff_stats = diff.as_ref().map(|d| vec![diff_stat(d)]);
                 }
@@ -634,20 +656,25 @@ pub fn apply_sidecar_refs(chat_id: &str, parts: &mut [MessagePart]) {
     }
 }
 
-/// Point oversized output previews at the owning host's run journal. This
-/// intentionally leaves diff refs alone: diffs are not uploaded to a sidecar.
+/// Point full output and diff details at the owning host's run journal.
 pub fn apply_journal_output_refs(chat_id: &str, parts: &mut [MessagePart]) {
     for part in parts.iter_mut() {
         if let MessagePart::Tool {
             id,
             resolved: true,
             output_ref,
-            output_bytes: Some(_),
+            output_bytes,
+            diff_ref,
+            diff_stats,
             ..
         } = part
-            && output_ref.is_none()
         {
-            *output_ref = Some(format!("{chat_id}/{id}"));
+            if output_ref.is_none() && output_bytes.is_some() {
+                *output_ref = Some(format!("{chat_id}/{id}"));
+            }
+            if diff_ref.is_none() && diff_stats.is_some() {
+                *diff_ref = Some(format!("{chat_id}/{id}.diff"));
+            }
         }
     }
 }
@@ -1250,6 +1277,7 @@ mod tests {
             path: "/w/a.rs".into(),
             old_text: Some("a\nb\nc\n".into()),
             new_text: "a\nB\nc\nd\n".into(),
+            unified_diff: None,
         });
         assert_eq!(stat.path, "/w/a.rs");
         assert_eq!(stat.additions, 2); // B + d
@@ -1259,6 +1287,7 @@ mod tests {
             path: "/w/new.rs".into(),
             old_text: None,
             new_text: "one\ntwo\n".into(),
+            unified_diff: None,
         });
         assert_eq!((stat.additions, stat.deletions), (2, 0));
     }
@@ -1286,6 +1315,7 @@ mod tests {
                     path: "/w/a.rs".into(),
                     old_text: Some("a\n".into()),
                     new_text: "b\n".into(),
+                    unified_diff: None,
                 }),
             },
         );
@@ -1343,6 +1373,7 @@ mod tests {
                     path: "/w/a".into(),
                     old_text: None,
                     new_text: "x\n".into(),
+                    unified_diff: None,
                 }),
             },
         );

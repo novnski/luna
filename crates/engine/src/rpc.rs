@@ -790,6 +790,7 @@ fn tool_file_path(call: &ToolCall) -> Option<&str> {
         ToolCall::ReadFile { path }
         | ToolCall::WriteFile { path, .. }
         | ToolCall::EditFile { path, .. } => Some(path),
+        ToolCall::ViewImage { path } => Some(path),
         ToolCall::ApplyPatch { path } | ToolCall::Search { path, .. } => path.as_deref(),
         ToolCall::Exec { .. }
         | ToolCall::Glob { .. }
@@ -9755,7 +9756,7 @@ impl RpcService for EngineRpc {
             methods::FETCH_TOOL_BLOB => {
                 let p: FetchToolBlobParams = parse_params(params)?;
                 let local = match p.blob_ref.split_once('/') {
-                    Some((chat_id, part_id)) if !part_id.ends_with(".diff") => {
+                    Some((chat_id, part_id)) => {
                         let sessions = self.sessions.clone();
                         let chat_id = chat_id.to_owned();
                         let part_id = part_id.to_owned();

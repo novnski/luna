@@ -891,6 +891,60 @@ async fn reasoning_preserves_summary_parts_and_item_boundaries_per_thread() {
 }
 
 #[tokio::test]
+async fn tool_history_preserves_read_search_patch_web_and_image_events() {
+    let (controls, _steer, _token) = controls("Yes");
+    let mut req = request("scenario:tool-history");
+    req.cwd = "/tmp".into();
+    let events = run_to_end(&harness(), req, controls).await;
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolCall { id, call: ToolCall::ReadFile { path } }
+        if id == "read-1" && path == "/tmp/demo.rs"
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolCall { id, call: ToolCall::Search { pattern, path } }
+        if id == "search-1" && pattern == "old" && path.as_deref() == Some("/tmp/demo.rs")
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolCall { id, call: ToolCall::EditFile { path, .. } }
+        if id == "edit-1" && path == "/tmp/demo.rs"
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolResult { id, diff: Some(diff), .. }
+        if id == "edit-1" && diff.path == "/tmp/demo.rs"
+            && diff.unified_diff.as_deref().is_some_and(|patch| patch.contains("+new"))
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolCall { id, call: ToolCall::WriteFile { path, .. } }
+        if id == "create-1" && path == "/tmp/created.txt"
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolResult { id, diff: Some(diff), .. }
+        if id == "create-1" && diff.old_text.is_none()
+            && diff.new_text == "created by provider\n"
+            && diff.unified_diff.is_none()
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolResult { id, output: Some(output), .. }
+        if id == "web-1" && output.contains("https://doc.rust-lang.org/")
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::ToolCall { id, call: ToolCall::ViewImage { path } }
+        if id == "image-1" && path == "/tmp/demo.png"
+    )));
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::GeneratedImage { id, path, .. }
+        if id == "image-1:view" && path == "/tmp/demo.png"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        }
+    )));
+}
+
+#[tokio::test]
 async fn happy_path_maps_deltas_items_usage_and_done() {
     let (controls, _steer, _token) = controls("Yes");
     let mut req = request("scenario:happy");

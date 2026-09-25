@@ -1002,7 +1002,11 @@ impl SessionsEngine {
         {
             return Err(EngineError::Other("invalid tool output ref".into()));
         }
-        Ok(self.inner.journal.tool_output(chat_id, part_id)?)
+        if let Some(part_id) = part_id.strip_suffix(".diff") {
+            Ok(self.inner.journal.tool_diff(chat_id, part_id)?)
+        } else {
+            Ok(self.inner.journal.tool_output(chat_id, part_id)?)
+        }
     }
 
     /// Bind generated-image intake to the same profile store used by attachment RPCs.
@@ -4670,9 +4674,20 @@ impl Inner {
             if seen.contains(&key) {
                 return vec![];
             }
+            let viewed = id.ends_with(":view");
             let result = if let Some((uploads, allowed_root)) = self.generated_images.get() {
                 let uploads = uploads.clone();
-                let root = allowed_root.clone();
+                // Codex reports the exact local raster it inspected. Copy it
+                // through the same race-checked intake, then persist only the
+                // profile-owned copy so later edits cannot rewrite history.
+                let root = if viewed {
+                    std::path::Path::new(&path)
+                        .parent()
+                        .unwrap_or(allowed_root)
+                        .to_path_buf()
+                } else {
+                    allowed_root.clone()
+                };
                 let stable_key = key.clone();
                 tokio::task::spawn_blocking(move || {
                     uploads.import_generated_image(std::path::Path::new(&path), &root, &stable_key)
@@ -4698,13 +4713,22 @@ impl Inner {
                     tracing::warn!(chat = %chat_id, error = %err, "generated image import failed");
                     vec![
                         AgentEvent::ToolResult {
-                            id: id.strip_suffix(":image").unwrap_or(&id).into(),
+                            id: id
+                                .strip_suffix(":image")
+                                .or_else(|| id.strip_suffix(":view"))
+                                .unwrap_or(&id)
+                                .into(),
                             is_error: true,
                             output: None,
                             diff: None,
                         },
                         AgentEvent::Error {
-                            message: "Generated image unavailable".into(),
+                            message: if viewed {
+                                "Viewed image unavailable"
+                            } else {
+                                "Generated image unavailable"
+                            }
+                            .into(),
                         },
                     ]
                 }

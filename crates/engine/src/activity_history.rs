@@ -508,6 +508,14 @@ fn tool_event(
             None,
             format!("Web search {query}"),
         ),
+        ToolCall::ViewImage { path } => (
+            ActivityKind::File,
+            "viewImage".into(),
+            None,
+            Some(path.clone()),
+            None,
+            path.clone(),
+        ),
         ToolCall::Mcp { server, tool, .. } if server == "luna" && tool == "luna_status" => (
             ActivityKind::Tool,
             tool.clone(),

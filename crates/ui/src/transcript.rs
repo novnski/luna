@@ -749,6 +749,7 @@ pub enum ToolDetail {
     Output {
         lines: Vec<SharedString>,
         truncated_by: usize,
+        raw_text: Arc<str>,
     },
     /// A thought's markdown, pre-flattened into wrapped STYLED lines — one
     /// fixed-height row each, so the height stays analytic like `Output`
@@ -775,6 +776,9 @@ pub enum ToolDetail {
 
 /// Max verbatim output lines per chip before the counted tail row.
 pub const OUTPUT_DETAIL_MAX_LINES: usize = 24;
+const OUTPUT_CODE_HEADER_HEIGHT: f32 = 26.0;
+const OUTPUT_VIEWPORT_MAX_HEIGHT: f32 = 252.0;
+const DIFF_VIEWPORT_MAX_HEIGHT: f32 = 360.0;
 
 /// Max diff lines an inline tool-diff detail renders — the detail is one
 /// stacked element inside its transcript row, so it must stay bounded
@@ -800,7 +804,16 @@ pub fn tool_detail(
     diff_stats: Option<&[luna_doc::ToolDiffStat]>,
 ) -> Option<ToolDetail> {
     if let Some(diff) = diff {
-        let mut file = diff_to_file(diff);
+        let mut file = if let Some(patch) = &diff.unified_diff {
+            let patch = if patch.starts_with("diff --git ") {
+                patch.clone()
+            } else {
+                format!("diff --git a/{0} b/{0}\n{patch}", diff.path)
+            };
+            crate::changes::parse_patch(&patch).into_iter().next()?
+        } else {
+            diff_to_file(diff)
+        };
         if file.hunks.is_empty() {
             return None;
         }
@@ -811,8 +824,15 @@ pub fn tool_detail(
         crate::changes::truncate_file_lines(&mut file, DIFF_DETAIL_MAX_LINES);
         return Some(ToolDetail::Diff {
             file: Arc::new(file),
-            old_text: diff.old_text.as_deref().map(Arc::from),
-            new_text: Some(Arc::from(diff.new_text.as_str())),
+            old_text: diff
+                .unified_diff
+                .is_none()
+                .then(|| diff.old_text.as_deref().map(Arc::from))
+                .flatten(),
+            new_text: diff
+                .unified_diff
+                .is_none()
+                .then(|| Arc::from(diff.new_text.as_str())),
         });
     }
     if let Some(stats) = diff_stats.filter(|s| !s.is_empty()) {
@@ -837,6 +857,7 @@ pub fn tool_detail(
     Some(ToolDetail::Output {
         lines,
         truncated_by,
+        raw_text: Arc::from(output),
     })
 }
 
@@ -882,6 +903,7 @@ pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
             None => url.clone(),
         },
         ToolCall::WebSearch { query } => query.clone(),
+        ToolCall::ViewImage { .. } => return None,
         ToolCall::Todo { items } => items
             .iter()
             .map(|i| format!("{} {}", if i.done { "[x]" } else { "[ ]" }, i.text))
@@ -931,11 +953,12 @@ pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
     if lines.is_empty() {
         return None;
     }
-    let truncated_by = lines.len().saturating_sub(OUTPUT_DETAIL_MAX_LINES);
-    lines.truncate(OUTPUT_DETAIL_MAX_LINES);
+    let truncated_by = lines.len().saturating_sub(FULL_OUTPUT_MAX_LINES);
+    lines.truncate(FULL_OUTPUT_MAX_LINES);
     Some(ToolDetail::Output {
         lines,
         truncated_by,
+        raw_text: Arc::from(text),
     })
 }
 
@@ -1013,6 +1036,7 @@ pub enum RowKind {
         path: String,
         name: String,
         mime_type: String,
+        viewed: bool,
     },
     User {
         /// Visible prompt (attachment-ref trailer already stripped). When the
@@ -1137,6 +1161,7 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
             Some(ToolDetail::Output {
                 lines,
                 truncated_by,
+                ..
             }) => {
                 acc.push(1);
                 acc.extend_from_slice(&(lines.len() as u32).to_le_bytes());
@@ -1190,6 +1215,7 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
         if let Some(ToolDetail::Output {
             lines,
             truncated_by,
+            ..
         }) = t.invocation.as_deref()
         {
             for line in lines {
@@ -1389,7 +1415,19 @@ pub fn rows_for_entry(
                     resolved: *resolved,
                     detail: tool_detail(output.as_deref(), diff.as_ref(), diff_stats.as_deref())
                         .map(Arc::new),
-                    invocation: call_block(call).map(Arc::new),
+                    invocation: if matches!(
+                        call,
+                        ToolCall::WriteFile { .. }
+                            | ToolCall::EditFile { .. }
+                            | ToolCall::ApplyPatch { .. }
+                    ) && (diff.is_some()
+                        || diff_stats.is_some()
+                        || diff_ref.is_some())
+                    {
+                        None
+                    } else {
+                        call_block(call).map(Arc::new)
+                    },
                     output_ref: output_ref.clone().map(SharedString::from),
                     output_bytes: *output_bytes,
                     diff_ref: diff_ref.clone().map(SharedString::from),
@@ -1516,6 +1554,7 @@ pub fn rows_for_entry(
                                 path: path.clone(),
                                 name: name.clone(),
                                 mime_type: mime_type.clone(),
+                                viewed: part_id.ends_with(":view"),
                             },
                         });
                     }
@@ -1935,9 +1974,13 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
         ToolDetail::Output {
             lines,
             truncated_by,
+            ..
         } => {
             let rows = lines.len() + usize::from(*truncated_by > 0);
-            rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD
+            OUTPUT_CODE_HEADER_HEIGHT
+                + 2.0
+                + (rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD)
+                    .min(OUTPUT_VIEWPORT_MAX_HEIGHT)
         }
         ToolDetail::Thought {
             lines,
@@ -1946,7 +1989,9 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
             let rows = lines.len() + usize::from(*truncated_by > 0);
             rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD
         }
-        ToolDetail::Diff { file, .. } => crate::changes::body_height(file),
+        ToolDetail::Diff { file, .. } => {
+            crate::changes::body_height(file).min(DIFF_VIEWPORT_MAX_HEIGHT)
+        }
         ToolDetail::Stats { stats } => stats.len() as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD,
     };
     DETAIL_SEPARATOR + body
@@ -1991,6 +2036,7 @@ fn blob_detail(text: &str, is_diff: bool) -> Option<ToolDetail> {
     Some(ToolDetail::Output {
         lines,
         truncated_by,
+        raw_text: Arc::from(text),
     })
 }
 
@@ -5228,18 +5274,21 @@ impl Transcript {
         path: &str,
         name: &str,
         mime_type: &str,
+        viewed: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use crate::attachments::AttachmentSnapshot;
         let devices = self.generated_attachment_device_ids(owner, cx);
         let state = self.attachment_state(&devices, path, Some(mime_type), cx);
         let theme = Theme::of(cx).clone();
+        let width = if viewed { 96.0 } else { 512.0 };
+        let height = if viewed { 80.0 } else { 320.0 };
         let frame = div()
             .id(SharedString::from(format!("{row_id}-generated")))
-            .w(px(512.0))
+            .w(px(width))
             .max_w_full()
-            .h(px(320.0))
-            .max_h(px(420.0))
+            .h(px(height))
+            .max_h(px(if viewed { height } else { 420.0 }))
             .flex()
             .items_center()
             .justify_center()
@@ -5250,8 +5299,8 @@ impl Transcript {
             AttachmentSnapshot::Loaded(loaded) => {
                 let dimensions =
                     crate::appshots::png_dimensions(&loaded.image.bytes).unwrap_or((512, 320));
-                let scale = (512.0 / dimensions.0 as f32)
-                    .min(420.0 / dimensions.1 as f32)
+                let scale = (width / dimensions.0 as f32)
+                    .min((if viewed { height } else { 420.0 }) / dimensions.1 as f32)
                     .min(1.0);
                 let preview =
                     crate::attachments::PreviewImage::new(name.to_owned(), loaded.image.clone());
@@ -5259,7 +5308,11 @@ impl Transcript {
                     .w(px(dimensions.0 as f32 * scale))
                     .h(px(dimensions.1 as f32 * scale))
                     .role(gpui::Role::Button)
-                    .aria_label("Preview generated image")
+                    .aria_label(if viewed {
+                        "Preview viewed image"
+                    } else {
+                        "Preview generated image"
+                    })
                     .tab_index(0)
                     .cursor_pointer()
                     .focus_visible(move |style| style.border_2().border_color(theme.accent))
@@ -5281,11 +5334,19 @@ impl Transcript {
             }
             AttachmentSnapshot::Loading => frame
                 .text_color(theme.text_muted)
-                .child("Loading generated image…")
+                .child(if viewed {
+                    "Loading image…"
+                } else {
+                    "Loading generated image…"
+                })
                 .into_any_element(),
             AttachmentSnapshot::Error { .. } => frame
                 .text_color(theme.text_muted)
-                .child("Generated image unavailable")
+                .child(if viewed {
+                    "Image unavailable"
+                } else {
+                    "Generated image unavailable"
+                })
                 .into_any_element(),
         }
     }
@@ -6157,7 +6218,8 @@ impl Transcript {
                 path,
                 name,
                 mime_type,
-            } => self.render_generated_image(&row.id, owner, path, name, mime_type, cx),
+                viewed,
+            } => self.render_generated_image(&row.id, owner, path, name, mime_type, *viewed, cx),
             RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
         };
 
@@ -6799,6 +6861,10 @@ impl Transcript {
         // the same gutter as the rounded task-tree elbows below it.
         let header = div()
             .id(SharedString::from(format!("{row_id}-hdr")))
+            .role(gpui::Role::Button)
+            .aria_label(format!("Tool activity: {summary}"))
+            .aria_expanded(open)
+            .tab_index(0)
             .relative()
             .flex()
             .flex_row()
@@ -6924,6 +6990,16 @@ impl Transcript {
                         .toggled_at
                         .is_some_and(|at| at.elapsed() < FOLD_TWEEN_WINDOW);
                 let toggle_key = key.clone();
+                let primary_blob = tool.diff_ref.clone().or_else(|| tool.output_ref.clone());
+                let (chip_label, chip_detail) = tool_chip_content(&tool.call);
+                let chip_accessible_name = if tool.is_thought {
+                    "Thought process".to_owned()
+                } else {
+                    format!(
+                        "{chip_label}: {}",
+                        chip_detail.chars().take(120).collect::<String>()
+                    )
+                };
                 let mut card = div()
                     .my(px((base_row_height - CHIP_CARD_HEIGHT) / 2.0))
                     .when(collapses, |el| el.ml(px(ACTIVITY_TEXT_GAP)))
@@ -6941,6 +7017,10 @@ impl Transcript {
                     .child(
                         div()
                             .id(key.clone())
+                            .role(gpui::Role::Button)
+                            .aria_label(chip_accessible_name)
+                            .aria_expanded(open)
+                            .tab_index(0)
                             .h(px(if collapses {
                                 CHIP_CARD_HEIGHT
                             } else {
@@ -6959,6 +7039,9 @@ impl Transcript {
                                 entry.open = Some(!currently_open);
                                 entry.epoch += 1;
                                 entry.toggled_at = Some(Instant::now());
+                                if !currently_open && let Some(blob_ref) = primary_blob.clone() {
+                                    this.spawn_blob_fetch(blob_ref, cx);
+                                }
                                 cx.notify();
                             }))
                             .child(chip_header(tool, open, theme, cx.entity_id(), cx)),
@@ -6967,6 +7050,7 @@ impl Transcript {
                 // Invocation first (what was asked), then output/diff (what
                 // came back), separated by a small gap.
                 if open || animating {
+                    let copy_ui = self.copy_ui_for(&key, cx);
                     let mut panel = div()
                         .flex_none()
                         .min_w_0()
@@ -6981,7 +7065,13 @@ impl Transcript {
                                     .flex_none()
                                     .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
                             )
-                            .child(detail_body(invocation, None, theme));
+                            .child(detail_body(
+                                invocation,
+                                None,
+                                theme,
+                                Some((copy_ui.clone(), 0, key.clone())),
+                                matches!(&tool.call, ToolCall::Exec { .. }),
+                            ));
                     }
                     if let Some(detail) = detail.as_deref() {
                         panel = panel
@@ -6991,7 +7081,13 @@ impl Transcript {
                                     .flex_none()
                                     .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
                             )
-                            .child(detail_body(detail, detail_highlights[ix].clone(), theme));
+                            .child(detail_body(
+                                detail,
+                                detail_highlights[ix].clone(),
+                                theme,
+                                Some((copy_ui.clone(), 1, key.clone())),
+                                false,
+                            ));
                     }
                     if let Some(ChipAffordance { blob_ref, label }) = affordance {
                         let loading = matches!(
@@ -7338,6 +7434,7 @@ fn tool_icon_path(call: &ToolCall) -> &'static str {
         ToolCall::Search { .. } => crate::icons::MAGNIFER,
         ToolCall::Glob { .. } => crate::icons::FOLDER_WITH_FILES,
         ToolCall::WebFetch { .. } | ToolCall::WebSearch { .. } => crate::icons::GLOBAL,
+        ToolCall::ViewImage { .. } => crate::icons::FILE_IMAGE,
         ToolCall::Todo { .. } => crate::icons::CHECKLIST,
         call if is_agent_call(call) => crate::icons::BOT,
         ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::BOT,
@@ -7367,12 +7464,22 @@ fn detail_body(
     detail: &ToolDetail,
     diff_highlights: Option<Arc<crate::changes::DiffHighlights>>,
     theme: &Theme,
+    copy: Option<(render::CopyUi, usize, SharedString)>,
+    invocation_is_command: bool,
 ) -> AnyElement {
     let body = div().w_full().min_w_0().flex().flex_col().overflow_hidden();
     match detail {
         // No comment layer: an inline tool diff is a record of what the
         // agent already did, not a review surface.
         ToolDetail::Diff { file, .. } => body
+            .id(copy
+                .as_ref()
+                .map(|(_, _, key)| format!("{key}-diff-scroll"))
+                .unwrap_or_else(|| format!("tool-diff-{}", file.path)))
+            .h(px(
+                crate::changes::body_height(file).min(DIFF_VIEWPORT_MAX_HEIGHT)
+            ))
+            .overflow_y_scroll()
             .child(crate::changes::render_file_body_with_syntax(
                 file,
                 diff_highlights,
@@ -7424,24 +7531,86 @@ fn detail_body(
         ToolDetail::Output {
             lines,
             truncated_by,
-        } => body
-            .py(px(6.0))
-            .font_family(theme.font_mono.clone())
-            .text_size(px(TOOL_TEXT_SIZE))
-            .children(lines.iter().map(|line| {
-                div()
-                    .h(px(OUTPUT_LINE_HEIGHT))
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .text_color(theme.text_faint)
-                    .child(div().w_full().min_w_0().truncate().child(line.clone()))
-            }))
-            .when(*truncated_by > 0, |block| {
-                block.child(more_lines_row(*truncated_by, theme))
-            })
-            .into_any_element(),
+            raw_text,
+        } => {
+            let scroll_id = copy
+                .as_ref()
+                .map(|(_, ix, key)| format!("{key}-scroll-{ix}"))
+                .unwrap_or_else(|| "tool-output-scroll".into());
+            let header = div()
+                .h(px(OUTPUT_CODE_HEADER_HEIGHT))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px(px(8.0))
+                .border_b_1()
+                .border_color(crate::theme::hairline(0.08))
+                .font_family(theme.font_sans_fixed.clone())
+                .text_size(px(10.0))
+                .text_color(theme.text_muted)
+                .child(match copy.as_ref().map(|(_, ix, _)| *ix) {
+                    Some(0) if invocation_is_command => "Command",
+                    Some(0) => "Invocation",
+                    _ => "Output",
+                });
+            let header = if let Some((copy, ix, key)) = copy {
+                let handler = copy.handler.clone();
+                let copied = copy.copied_ix == Some(ix);
+                let value = SharedString::from(raw_text.to_string());
+                header.child(
+                    div()
+                        .id(format!("{key}-copy-{ix}"))
+                        .role(gpui::Role::Button)
+                        .aria_label(match ix {
+                            0 if invocation_is_command => "Copy command",
+                            0 => "Copy invocation",
+                            _ => "Copy output",
+                        })
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(theme.text))
+                        .child(if copied { "Copied" } else { "Copy" })
+                        .on_click(move |_, window, cx| {
+                            (handler)(ix, value.clone(), window, cx);
+                            cx.stop_propagation();
+                        }),
+                )
+            } else {
+                header
+            };
+            let rows = lines.len() + usize::from(*truncated_by > 0);
+            let viewport = (rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD)
+                .min(OUTPUT_VIEWPORT_MAX_HEIGHT);
+            body.rounded(px(7.0))
+                .border_1()
+                .border_color(crate::theme::hairline(0.08))
+                .bg(crate::theme::ink(0.045))
+                .child(header)
+                .child(
+                    div()
+                        .id(scroll_id)
+                        .h(px(viewport))
+                        .overflow_y_scroll()
+                        .py(px(6.0))
+                        .px(px(8.0))
+                        .font_family(theme.font_mono.clone())
+                        .text_size(px(TOOL_TEXT_SIZE))
+                        .children(lines.iter().map(|line| {
+                            div()
+                                .h(px(OUTPUT_LINE_HEIGHT))
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .text_color(theme.text_faint)
+                                .child(div().w_full().min_w_0().truncate().child(line.clone()))
+                        }))
+                        .when(*truncated_by > 0, |block| {
+                            block.child(more_lines_row(*truncated_by, theme))
+                        }),
+                )
+                .into_any_element()
+        }
         ToolDetail::Thought {
             lines,
             truncated_by,
@@ -7645,6 +7814,7 @@ fn chip_header_row(
         | ToolCall::WriteFile { path, .. }
         | ToolCall::EditFile { path, .. }
         | ToolCall::ApplyPatch { path: Some(path) } => Some(path.as_str()),
+        ToolCall::ViewImage { path } => Some(path.as_str()),
         _ => None,
     };
     let running = tool.subagent_ref.is_some()
@@ -9812,6 +9982,7 @@ mod tests {
                             "/fixture/preview.png",
                             "generated.png",
                             "image/png",
+                            false,
                             cx,
                         )
                     })
@@ -12347,6 +12518,7 @@ mod tests {
             path: "/w/a.rs".into(),
             old_text: Some(old.join("\n") + "\n"),
             new_text: new.join("\n") + "\n",
+            unified_diff: None,
         };
         let Some(ToolDetail::Diff {
             file,
@@ -12384,6 +12556,7 @@ mod tests {
             path: "/w/new.txt".into(),
             old_text: None,
             new_text: "only\n".into(),
+            unified_diff: None,
         };
         let Some(ToolDetail::Diff {
             file,
@@ -12405,6 +12578,7 @@ mod tests {
         let Some(ToolDetail::Output {
             lines,
             truncated_by,
+            ..
         }) = tool_detail(Some(&output), None, None)
         else {
             panic!("expected output detail");
@@ -12684,6 +12858,7 @@ mod tests {
         let Some(ToolDetail::Output {
             lines,
             truncated_by,
+            ..
         }) = call_block(&ToolCall::Exec {
             command: "set -e\ncargo test".into(),
         })

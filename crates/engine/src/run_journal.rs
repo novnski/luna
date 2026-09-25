@@ -379,6 +379,19 @@ impl RunJournal {
         chat_id: &str,
         part_id: &str,
     ) -> Result<Option<String>, JournalError> {
+        self.tool_blob(chat_id, part_id, false)
+    }
+
+    pub fn tool_diff(&self, chat_id: &str, part_id: &str) -> Result<Option<String>, JournalError> {
+        self.tool_blob(chat_id, part_id, true)
+    }
+
+    fn tool_blob(
+        &self,
+        chat_id: &str,
+        part_id: &str,
+        diff: bool,
+    ) -> Result<Option<String>, JournalError> {
         let file = match File::open(self.path_for(chat_id)) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -391,7 +404,11 @@ impl RunJournal {
                 continue;
             }
             if let Ok(parsed) = serde_json::from_str::<JournalLine>(&line) {
-                if let Some(output) = tool_result_output(&parsed.event, part_id) {
+                if diff {
+                    if let Some(value) = tool_result_diff(&parsed.event, part_id) {
+                        found = serde_json::to_string(value).ok();
+                    }
+                } else if let Some(output) = tool_result_output(&parsed.event, part_id) {
                     found = Some(output.to_owned());
                 }
             }
@@ -451,6 +468,18 @@ fn tool_result_output<'a>(event: &'a AgentEvent, part_id: &str) -> Option<&'a st
             ..
         } if id == part_id => Some(output),
         AgentEvent::Subagent { event, .. } => tool_result_output(event, part_id),
+        _ => None,
+    }
+}
+
+fn tool_result_diff<'a>(event: &'a AgentEvent, part_id: &str) -> Option<&'a luna_proto::ToolDiff> {
+    match event {
+        AgentEvent::ToolResult {
+            id,
+            diff: Some(diff),
+            ..
+        } if id == part_id => Some(diff),
+        AgentEvent::Subagent { event, .. } => tool_result_diff(event, part_id),
         _ => None,
     }
 }

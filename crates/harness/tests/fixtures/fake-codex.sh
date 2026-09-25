@@ -578,6 +578,20 @@ case "$turnline" in
   emit '{"method":"turn/completed","params":{"turn":{"id":"publication-turn","status":"completed"}}}'
   ;;
 
+*scenario:tool-history*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"tool-history-turn\"}}}"
+  emit '{"method":"turn/started","params":{"turn":{"id":"tool-history-turn"}}}'
+  emit '{"method":"item/started","params":{"item":{"id":"read-1","type":"commandExecution","command":"cat /tmp/demo.rs","commandActions":[{"type":"read","command":"cat /tmp/demo.rs","name":"demo.rs","path":"/tmp/demo.rs"}]}}}'
+  emit '{"method":"item/completed","params":{"item":{"id":"read-1","type":"commandExecution","status":"completed","exitCode":0,"aggregatedOutput":"old\n"}}}'
+  emit '{"method":"item/started","params":{"item":{"id":"search-1","type":"commandExecution","command":"rg old /tmp/demo.rs","commandActions":[{"type":"search","command":"rg old /tmp/demo.rs","query":"old","path":"/tmp/demo.rs"}]}}}'
+  emit '{"method":"item/completed","params":{"item":{"id":"search-1","type":"commandExecution","status":"completed","exitCode":0,"aggregatedOutput":"1:old\n"}}}'
+  emit '{"method":"item/completed","params":{"item":{"id":"edit-1","type":"fileChange","status":"completed","changes":[{"path":"/tmp/demo.rs","kind":{"type":"update","move_path":null},"diff":"diff --git a//tmp/demo.rs b//tmp/demo.rs\n@@ -1 +1 @@\n-old\n+new\n"}]}}}'
+  emit '{"method":"item/completed","params":{"item":{"id":"create-1","type":"fileChange","status":"completed","changes":[{"path":"/tmp/created.txt","kind":{"type":"add"},"diff":"created by provider\n"}]}}}'
+  emit '{"method":"item/completed","params":{"item":{"id":"web-1","type":"webSearch","query":"Rust docs","action":{"type":"search","query":"Rust docs"},"results":[{"title":"Rust documentation","url":"https://doc.rust-lang.org/","snippet":"Learn Rust"}]}}}'
+  emit '{"method":"item/completed","params":{"item":{"id":"image-1","type":"imageView","path":"/tmp/demo.png"}}}'
+  emit '{"method":"turn/completed","params":{"turn":{"id":"tool-history-turn","status":"completed"}}}'
+  ;;
+
 *scenario:happy*)
   # Verify the turn/start + thread/start params the harness must send.
   for want in '"method":"turn/start"' '"effort":"ultra"' '"model":"gpt-5.6-sol"' \

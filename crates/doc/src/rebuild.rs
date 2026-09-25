@@ -176,6 +176,7 @@ mod tests {
                         path: "/w/a.rs".into(),
                         old_text: Some("a\nb\n".into()),
                         new_text: "a\nc\nd\n".into(),
+                        unified_diff: None,
                     }),
                     output_ref: None,
                     output_bytes: None,

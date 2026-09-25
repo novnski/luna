@@ -426,6 +426,7 @@ fn tool_chip_content_raw(call: &crate::ToolCall) -> (&'static str, String) {
         ToolCall::Glob { pattern } => ("Glob", pattern.clone()),
         ToolCall::WebFetch { url, .. } => ("Fetch", url.clone()),
         ToolCall::WebSearch { query } => ("Web", query.clone()),
+        ToolCall::ViewImage { path } => ("View image", path.clone()),
         ToolCall::Todo { items } => {
             let done = items.iter().filter(|i| i.done).count();
             ("Todo", format!("{done}/{} done", items.len()))
@@ -478,6 +479,7 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     let mut reads = 0usize;
     let mut searches = 0usize;
     let mut fetches = 0usize;
+    let mut images = 0usize;
     let mut todos = 0usize;
     let mut other = 0usize;
     let mut failed = 0usize;
@@ -503,6 +505,7 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
                 searches += 1
             }
             ToolCall::WebFetch { .. } => fetches += 1,
+            ToolCall::ViewImage { .. } => images += 1,
             ToolCall::Todo { .. } => todos += 1,
             ToolCall::Mcp { .. } | ToolCall::ComputerUse { .. } | ToolCall::Unknown { .. } => {
                 other += 1
@@ -524,6 +527,9 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     }
     if fetches > 0 {
         segments.push(format!("fetched {}", plural(fetches, "page", "pages")));
+    }
+    if images > 0 {
+        segments.push(format!("viewed {}", plural(images, "image", "images")));
     }
     if todos > 0 {
         segments.push("updated todos".to_string());

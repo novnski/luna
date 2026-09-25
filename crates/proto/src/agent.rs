@@ -405,6 +405,9 @@ pub enum ToolCall {
     WebSearch {
         query: String,
     },
+    ViewImage {
+        path: String,
+    },
     Todo {
         #[serde(default)]
         items: Vec<TodoItem>,
@@ -532,6 +535,9 @@ pub struct ToolDiff {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_text: Option<String>,
     pub new_text: String,
+    /// Provider-supplied patch when complete before/after text is unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unified_diff: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

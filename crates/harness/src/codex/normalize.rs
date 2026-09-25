@@ -8,7 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use luna_proto::{
-    AgentEvent, ComputerUseStatus, ContextOperationStatus, DoneStatus, TodoItem, ToolCall,
+    AgentEvent, ComputerUseStatus, ContextOperationStatus, DoneStatus, TodoItem, ToolCall, ToolDiff,
 };
 use serde_json::Value;
 
@@ -31,6 +31,159 @@ fn command_output(item: &Value) -> Option<String> {
         "{}\n… [command output truncated by LUNA after 64 KiB]",
         &output[..end]
     ))
+}
+
+fn bounded_text(text: &str) -> String {
+    if text.len() <= COMMAND_OUTPUT_MAX_BYTES {
+        return text.to_owned();
+    }
+    let mut end = COMMAND_OUTPUT_MAX_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n… [tool output truncated by LUNA after 64 KiB]",
+        &text[..end]
+    )
+}
+
+fn command_call(item: &Value) -> ToolCall {
+    let command = str_field(item, &["command"]);
+    let actions = item
+        .get("commandActions")
+        .or_else(|| item.get("command_actions"))
+        .and_then(Value::as_array);
+    match actions.map(Vec::as_slice) {
+        Some([action]) => match action.get("type").and_then(Value::as_str) {
+            Some("read") => action
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|path| ToolCall::ReadFile {
+                    path: path.to_owned(),
+                })
+                .unwrap_or(ToolCall::Exec { command }),
+            Some("search") => action
+                .get("query")
+                .and_then(Value::as_str)
+                .map(|pattern| ToolCall::Search {
+                    pattern: pattern.to_owned(),
+                    path: action
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                })
+                .unwrap_or(ToolCall::Exec { command }),
+            Some("listFiles") => ToolCall::Glob {
+                pattern: action
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("workspace")
+                    .to_owned(),
+            },
+            _ => ToolCall::Exec { command },
+        },
+        _ => ToolCall::Exec { command },
+    }
+}
+
+fn web_search_call(item: &Value) -> ToolCall {
+    let query = str_field(item, &["query"]);
+    match item.get("action") {
+        Some(action) if action.get("type").and_then(Value::as_str) == Some("openPage") => {
+            let url = str_field(action, &["url"]);
+            ToolCall::WebFetch { url, prompt: None }
+        }
+        Some(action) if action.get("type").and_then(Value::as_str) == Some("findInPage") => {
+            let url = str_field(action, &["url"]);
+            let pattern = str_field(action, &["pattern"]);
+            ToolCall::WebSearch {
+                query: format!("Find {pattern} in {url}"),
+            }
+        }
+        Some(action) if query.is_empty() => {
+            let queries = action
+                .get("queries")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                })
+                .unwrap_or_default();
+            ToolCall::WebSearch { query: queries }
+        }
+        _ => ToolCall::WebSearch { query },
+    }
+}
+
+fn web_search_output(item: &Value) -> Option<String> {
+    let results = item.get("results").filter(|value| !value.is_null())?;
+    let text = serde_json::to_string_pretty(results).ok()?;
+    (!text.is_empty() && text != "[]").then(|| bounded_text(&text))
+}
+
+fn file_change_events(phase: Phase, id: String, item: &Value, failed: bool) -> Vec<AgentEvent> {
+    let Some(changes) = item.get("changes").and_then(Value::as_array) else {
+        return tool_lifecycle(phase, id, ToolCall::ApplyPatch { path: None }, failed);
+    };
+    if changes.is_empty() {
+        return tool_lifecycle(phase, id, ToolCall::ApplyPatch { path: None }, failed);
+    }
+    if phase == Phase::Started && changes.len() > 1 {
+        return vec![AgentEvent::ToolCall {
+            id,
+            call: ToolCall::ApplyPatch { path: None },
+        }];
+    }
+    let mut events = Vec::new();
+    for (index, change) in changes.iter().enumerate() {
+        let path = str_field(change, &["path"]);
+        let kind = change
+            .get("kind")
+            .and_then(|value| value.as_str().or_else(|| value.get("type")?.as_str()))
+            .unwrap_or("update")
+            .to_owned();
+        let part_id = if index == 0 {
+            id.clone()
+        } else {
+            format!("{id}#{index}")
+        };
+        let call = file_change_call(&[(path.clone(), kind.clone())]);
+        events.push(AgentEvent::ToolCall {
+            id: part_id.clone(),
+            call,
+        });
+        if phase == Phase::Completed {
+            let patch = change
+                .get("diff")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(bounded_text);
+            let diff = patch.map(|text| {
+                let is_patch = text.starts_with("diff --git ") || text.starts_with("@@ ");
+                let (old_text, new_text, unified_diff) = match (kind.as_str(), is_patch) {
+                    ("add", false) => (None, text, None),
+                    ("delete", false) => (Some(text), String::new(), None),
+                    _ => (None, String::new(), Some(text)),
+                };
+                ToolDiff {
+                    path,
+                    old_text,
+                    new_text,
+                    unified_diff,
+                }
+            });
+            events.push(AgentEvent::ToolResult {
+                id: part_id,
+                is_error: failed,
+                output: None,
+                diff,
+            });
+        }
+    }
+    events
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -952,45 +1105,31 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
         "commandExecution" | "command_execution" => match phase {
             Phase::Started => vec![AgentEvent::ToolCall {
                 id,
-                call: ToolCall::Exec {
-                    command: str_field(item, &["command"]),
-                },
+                call: command_call(item),
             }],
             Phase::Completed => {
                 let exit_code = field(item, &["exitCode", "exit_code"])
                     .and_then(Value::as_i64)
                     .unwrap_or(0);
-                vec![AgentEvent::ToolResult {
+                let call = command_call(item);
+                let mut events = Vec::new();
+                if !matches!(call, ToolCall::Exec { .. }) {
+                    events.push(AgentEvent::ToolCall {
+                        id: id.clone(),
+                        call,
+                    });
+                }
+                events.push(AgentEvent::ToolResult {
                     id,
                     is_error: status == "failed" || exit_code != 0,
                     output: command_output(item),
                     diff: None,
-                }]
+                });
+                events
             }
         },
         "fileChange" | "file_change" => {
-            let changes: Vec<(String, String)> = item
-                .get("changes")
-                .and_then(Value::as_array)
-                .map(|a| a.as_slice())
-                .unwrap_or_default()
-                .iter()
-                .map(|c| {
-                    // Unknown kinds degrade to "update", like codex.ts.
-                    let kind = c
-                        .get("kind")
-                        .and_then(Value::as_str)
-                        .filter(|k| matches!(*k, "add" | "delete" | "update"))
-                        .unwrap_or("update");
-                    (str_field(c, &["path"]), kind.to_owned())
-                })
-                .collect();
-            tool_lifecycle(
-                phase,
-                id,
-                file_change_call(&changes),
-                status == "failed" || status == "declined",
-            )
+            file_change_events(phase, id, item, status == "failed" || status == "declined")
         }
         "mcpToolCall" | "mcp_tool_call" => match phase {
             Phase::Started => {
@@ -1007,7 +1146,21 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
             Phase::Completed => vec![AgentEvent::ToolResult {
                 id,
                 is_error: status == "failed",
-                output: None,
+                output: item
+                    .pointer("/result/content")
+                    .and_then(Value::as_array)
+                    .and_then(|items| {
+                        let text = items
+                            .iter()
+                            .filter_map(|entry| {
+                                (entry.get("type").and_then(Value::as_str) == Some("text"))
+                                    .then(|| entry.get("text").and_then(Value::as_str))
+                                    .flatten()
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        (!text.is_empty()).then(|| bounded_text(&text))
+                    }),
                 diff: None,
             }],
         },
@@ -1042,14 +1195,38 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
             }
             Phase::Completed => Vec::new(),
         },
-        "webSearch" | "web_search" => tool_lifecycle(
-            phase,
-            id,
-            ToolCall::WebSearch {
-                query: str_field(item, &["query"]),
-            },
-            false,
-        ),
+        "webSearch" | "web_search" => {
+            let mut events = tool_lifecycle(phase, id, web_search_call(item), false);
+            if phase == Phase::Completed {
+                if let Some(AgentEvent::ToolResult { output, .. }) = events.last_mut() {
+                    *output = web_search_output(item);
+                }
+            }
+            events
+        }
+        "imageView" | "image_view" => {
+            let path = str_field(item, &["path"]);
+            let mut events = tool_lifecycle(
+                phase,
+                id.clone(),
+                ToolCall::ViewImage { path: path.clone() },
+                status == "failed",
+            );
+            if phase == Phase::Completed && status != "failed" && !path.is_empty() {
+                let name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("image")
+                    .to_owned();
+                events.push(AgentEvent::GeneratedImage {
+                    id: format!("{id}:view"),
+                    path,
+                    name,
+                    mime_type: String::new(),
+                });
+            }
+            events
+        }
         "todoList" | "todo_list" => {
             let items = item
                 .get("items")

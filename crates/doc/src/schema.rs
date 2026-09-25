@@ -2085,6 +2085,7 @@ mod tests {
                     path: "/w/a.rs".into(),
                     old_text: Some("old\n".into()),
                     new_text: "new\n".into(),
+                    unified_diff: None,
                 }),
             },
         );
@@ -2136,6 +2137,7 @@ mod tests {
                     path: "/w/a.rs".into(),
                     old_text: Some("old".into()),
                     new_text: "new".into(),
+                    unified_diff: None,
                 }),
                 output_ref: None,
                 output_bytes: None,
