@@ -868,14 +868,15 @@ struct SidebarThreadTooltip {
     model: Option<SharedString>,
     branch: Option<SharedString>,
     status: Option<SharedString>,
-    offset_from_pointer: f32,
 }
 
 impl SidebarThreadTooltip {
-    fn beside_sidebar(mut self, window: &Window, sidebar_width: f32) -> Self {
-        self.offset_from_pointer =
-            (sidebar_width - f32::from(window.mouse_position().x) + 6.0).max(0.0);
-        self
+    fn estimated_height(&self) -> f32 {
+        let rows = 2
+            + usize::from(self.model.is_some())
+            + usize::from(self.branch.is_some())
+            + usize::from(self.status.is_some());
+        56.0 + rows as f32 * 25.0
     }
 
     fn detail(theme: &Theme, glyph: &'static str, label: SharedString) -> gpui::Div {
@@ -930,10 +931,27 @@ impl Render for SidebarThreadTooltip {
             .when_some(self.status.clone(), |el, status| {
                 el.child(Self::detail(&theme, icons::CHECK, status))
             });
-        div()
-            .pl(px(self.offset_from_pointer))
-            .child(crate::frost::frosted(7.0, crate::frost::MENU_BLUR, card))
+        crate::frost::frosted(7.0, crate::frost::MENU_BLUR, card)
     }
+}
+
+fn sidebar_thread_tooltip_anchor(
+    bounds: gpui::Bounds<Pixels>,
+    pointer: Point<Pixels>,
+    window: &Window,
+    action_width: f32,
+    tooltip_height: f32,
+) -> Option<Point<Pixels>> {
+    // The action strip owns its own tooltips. Excluding it also prevents the
+    // row tooltip from flashing between adjacent action buttons.
+    if !bounds.contains(&pointer) || pointer.x >= bounds.right() - px(action_width) {
+        return None;
+    }
+    let last_top = (window.viewport_size().height - px(tooltip_height + 8.0)).max(px(8.0));
+    let top = bounds.top().min(last_top).max(px(8.0));
+    // GPUI adds one pixel to an anchor. The card therefore begins at the
+    // row's top and just beyond the sidebar edge, independent of the cursor.
+    Some(gpui::point(bounds.right() + px(13.0), top - px(1.0)))
 }
 
 impl Render for SurfaceTabTooltip {
@@ -7523,12 +7541,15 @@ impl Shell {
                 }),
             )
             .when_some(details, |row, details| {
-                let sidebar_width = self.sidebar_now();
-                row.tooltip(move |window, cx| {
-                    cx.new(|_| details.clone().beside_sidebar(window, sidebar_width))
-                        .into()
-                })
-                .tooltip_show_delay(Duration::from_millis(600))
+                let height = details.estimated_height();
+                let action_width = if can_settle { 96.0 } else { 72.0 };
+                row.tooltip_at(
+                    move |_, cx| cx.new(|_| details.clone()).into(),
+                    move |bounds, pointer, window| {
+                        sidebar_thread_tooltip_anchor(bounds, pointer, window, action_width, height)
+                    },
+                )
+                .tooltip_show_delay(Duration::from_millis(300))
             })
             // Line 1: project and one stable right-side status/action group.
             .child(

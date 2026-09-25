@@ -642,6 +642,28 @@ impl Interactivity {
         self.tooltip_builder = Some(TooltipBuilder {
             build: Rc::new(build_tooltip),
             hoverable: false,
+            placement: None,
+        });
+    }
+
+    /// Show a tooltip at an element-relative position. Returning `None` from
+    /// `placement` excludes that part of the element from the tooltip trigger.
+    /// The returned point is the tooltip's top-left anchor in window coordinates.
+    pub fn tooltip_at(
+        &mut self,
+        build_tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static,
+        placement: impl Fn(Bounds<Pixels>, Point<Pixels>, &Window) -> Option<Point<Pixels>> + 'static,
+    ) where
+        Self: Sized,
+    {
+        debug_assert!(
+            self.tooltip_builder.is_none(),
+            "calling tooltip more than once on the same element is not supported"
+        );
+        self.tooltip_builder = Some(TooltipBuilder {
+            build: Rc::new(build_tooltip),
+            hoverable: false,
+            placement: Some(Rc::new(placement)),
         });
     }
 
@@ -661,6 +683,7 @@ impl Interactivity {
         self.tooltip_builder = Some(TooltipBuilder {
             build: Rc::new(build_tooltip),
             hoverable: true,
+            placement: None,
         });
     }
 
@@ -1542,6 +1565,19 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// The fluent API equivalent to [`Interactivity::tooltip_at`].
+    fn tooltip_at(
+        mut self,
+        build_tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static,
+        placement: impl Fn(Bounds<Pixels>, Point<Pixels>, &Window) -> Option<Point<Pixels>> + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().tooltip_at(build_tooltip, placement);
+        self
+    }
+
     /// Use the given callback to construct a new tooltip view when the mouse hovers over this element.
     /// The tooltip itself is also hoverable and won't disappear when the user moves the mouse into
     /// the tooltip. The fluent API equivalent to [`Interactivity::hoverable_tooltip`].
@@ -1596,6 +1632,9 @@ type CanDropPredicate = Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> bool + 's
 pub(crate) struct TooltipBuilder {
     build: Rc<dyn Fn(&mut Window, &mut App) -> AnyView + 'static>,
     hoverable: bool,
+    placement: Option<
+        Rc<dyn Fn(Bounds<Pixels>, Point<Pixels>, &Window) -> Option<Point<Pixels>> + 'static>,
+    >,
 }
 
 pub(crate) type KeyDownListener =
@@ -2956,23 +2995,43 @@ impl Interactivity {
                     .clone();
 
                 let tooltip_is_hoverable = tooltip_builder.hoverable;
+                let tooltip_placement = tooltip_builder.placement.clone();
+                let source_bounds = hitbox.bounds;
+                let placement_for_build = tooltip_placement.clone();
                 let build_tooltip = Rc::new(move |window: &mut Window, cx: &mut App| {
-                    Some(((tooltip_builder.build)(window, cx), tooltip_is_hoverable))
+                    let anchor = placement_for_build
+                        .as_ref()
+                        .map_or(Some(window.mouse_position()), |placement| {
+                            placement(source_bounds, window.mouse_position(), window)
+                        })?;
+                    Some((
+                        (tooltip_builder.build)(window, cx),
+                        tooltip_is_hoverable,
+                        anchor,
+                    ))
                 });
                 // Use bounds instead of testing hitbox since this is called during prepaint.
                 let check_is_hovered_during_prepaint = Rc::new({
                     let pending_mouse_down = pending_mouse_down.clone();
-                    let source_bounds = hitbox.bounds;
+                    let tooltip_placement = tooltip_placement.clone();
                     move |window: &Window| {
                         !window.last_input_was_keyboard()
                             && pending_mouse_down.borrow().is_none()
                             && source_bounds.contains(&window.mouse_position())
+                            && tooltip_placement.as_ref().is_none_or(|placement| {
+                                placement(source_bounds, window.mouse_position(), window).is_some()
+                            })
                     }
                 });
                 let check_is_hovered = Rc::new({
                     let hitbox = hitbox.clone();
+                    let tooltip_placement = tooltip_placement.clone();
                     move |window: &Window| {
-                        pending_mouse_down.borrow().is_none() && hitbox.is_hovered(window)
+                        pending_mouse_down.borrow().is_none()
+                            && hitbox.is_hovered(window)
+                            && tooltip_placement.as_ref().is_none_or(|placement| {
+                                placement(source_bounds, window.mouse_position(), window).is_some()
+                            })
                     }
                 });
                 register_tooltip_mouse_handlers(
@@ -3423,7 +3482,9 @@ pub(crate) fn clear_active_tooltip_if_not_hoverable(
 ) {
     let should_clear = match active_tooltip.borrow().as_ref() {
         None => false,
-        Some(ActiveTooltip::WaitingForShow { .. }) => false,
+        // A click or scroll before the delay expires must cancel the pending
+        // tooltip. Otherwise it can appear over content that moved or closed.
+        Some(ActiveTooltip::WaitingForShow { .. }) => true,
         Some(ActiveTooltip::Visible { is_hoverable, .. }) => !is_hoverable,
         Some(ActiveTooltip::WaitingForHide { .. }) => false,
     };
@@ -3449,7 +3510,7 @@ pub(crate) fn set_tooltip_on_window(
 pub(crate) fn register_tooltip_mouse_handlers(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     tooltip_id: Option<TooltipId>,
-    build_tooltip: Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,
+    build_tooltip: Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool, Point<Pixels>)>>,
     check_is_hovered: Rc<dyn Fn(&Window) -> bool>,
     check_is_hovered_during_prepaint: Rc<dyn Fn(&Window) -> bool>,
     show_delay: Option<Duration>,
@@ -3510,7 +3571,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
 /// gets occluded after display, it will stick around until the mouse exits the hover bounds.
 fn handle_tooltip_mouse_move(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
-    build_tooltip: &Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,
+    build_tooltip: &Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool, Point<Pixels>)>>,
     check_is_hovered: &Rc<dyn Fn(&Window) -> bool>,
     check_is_hovered_during_prepaint: &Rc<dyn Fn(&Window) -> bool>,
     tooltip_id: Option<TooltipId>,
@@ -3586,13 +3647,13 @@ fn handle_tooltip_mouse_move(
                         return;
                     };
                     cx.update(|window, cx| {
-                        let new_tooltip =
-                            build_tooltip(window, cx).map(|(view, tooltip_is_hoverable)| {
+                        let new_tooltip = build_tooltip(window, cx).map(
+                            |(view, tooltip_is_hoverable, anchor)| {
                                 let weak_active_tooltip = Rc::downgrade(&active_tooltip);
                                 ActiveTooltip::Visible {
                                     tooltip: AnyTooltip {
                                         view,
-                                        mouse_position: window.mouse_position(),
+                                        mouse_position: anchor,
                                         check_visible_and_update: Rc::new(
                                             move |tooltip_bounds, window, cx| {
                                                 let Some(active_tooltip) =
@@ -3613,7 +3674,8 @@ fn handle_tooltip_mouse_move(
                                     },
                                     is_hoverable: tooltip_is_hoverable,
                                 }
-                            });
+                            },
+                        );
                         *active_tooltip.borrow_mut() = new_tooltip;
                         window.refresh();
                     })

@@ -50,7 +50,6 @@ fn sidebar_thread_tooltip(
         model,
         branch,
         status,
-        offset_from_pointer: 0.0,
     }
 }
 
@@ -1936,7 +1935,7 @@ impl Shell {
                     Some("Settled".into()),
                 )
             };
-            let sidebar_width = self.sidebar_now();
+            let tooltip_height = details.estimated_height();
             list = list.child(
                 div()
                     .id(SharedString::from(format!("settled-{id}")))
@@ -1948,11 +1947,19 @@ impl Shell {
                     .px(px(Theme::SPACE_SM))
                     .rounded(px(6.0))
                     .cursor_pointer()
-                    .tooltip(move |window, cx| {
-                        cx.new(|_| details.clone().beside_sidebar(window, sidebar_width))
-                            .into()
-                    })
-                    .tooltip_show_delay(Duration::from_millis(600))
+                    .tooltip_at(
+                        move |_, cx| cx.new(|_| details.clone()).into(),
+                        move |bounds, pointer, window| {
+                            sidebar_thread_tooltip_anchor(
+                                bounds,
+                                pointer,
+                                window,
+                                0.0,
+                                tooltip_height,
+                            )
+                        },
+                    )
+                    .tooltip_show_delay(Duration::from_millis(300))
                     .when(selected_row, |el| el.bg(crate::theme::glass_selected_bg()))
                     .hover(|el| el.bg(theme.glass_hover()))
                     .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)))
@@ -2186,7 +2193,7 @@ impl Shell {
                 let hover_id = id.clone();
                 let open_id = id.clone();
                 let menu_id = id.clone();
-                let sidebar_width = self.sidebar_now();
+                let tooltip_height = details.estimated_height();
                 list = list.child(
                     div()
                         .id(SharedString::from(format!("archived-{id}")))
@@ -2198,11 +2205,19 @@ impl Shell {
                         .px(px(Theme::SPACE_SM))
                         .rounded(px(6.0))
                         .cursor_pointer()
-                        .tooltip(move |window, cx| {
-                            cx.new(|_| details.clone().beside_sidebar(window, sidebar_width))
-                                .into()
-                        })
-                        .tooltip_show_delay(Duration::from_millis(600))
+                        .tooltip_at(
+                            move |_, cx| cx.new(|_| details.clone()).into(),
+                            move |bounds, pointer, window| {
+                                sidebar_thread_tooltip_anchor(
+                                    bounds,
+                                    pointer,
+                                    window,
+                                    28.0,
+                                    tooltip_height,
+                                )
+                            },
+                        )
+                        .tooltip_show_delay(Duration::from_millis(300))
                         .when(is_selected, |el| el.bg(selected_wash))
                         .when(!is_selected, |el| el.hover(|s| s.bg(theme.glass_hover())))
                         .on_hover(cx.listener(move |this, entered: &bool, _, cx| {

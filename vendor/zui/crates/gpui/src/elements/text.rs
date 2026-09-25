@@ -1218,7 +1218,7 @@ impl Element for InteractiveText {
                                 .index_for_position(window.mouse_position())
                                 .ok()
                                 .and_then(|position| tooltip_builder(position, window, cx))
-                                .map(|view| (view, tooltip_is_hoverable))
+                                .map(|view| (view, tooltip_is_hoverable, window.mouse_position()))
                         }
                     });
 
