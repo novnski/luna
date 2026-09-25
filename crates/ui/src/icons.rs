@@ -76,6 +76,9 @@ icon_assets![
     (MORE_HORIZONTAL, "more-horizontal"),
     (FOLDER_WITH_FILES, "folder-with-files"),
     (FOLDER, "folder"),
+    // Solar Linear composer chips: slash commands and generic file mentions.
+    (MAGIC_WAND_3, "magic-wand-3"),
+    (FILE, "file"),
     // Hand-drawn floppy disk in the Solar Linear style. Workspace editor save.
     (FLOPPY_DISK, "floppy-disk"),
     // Hand-drawn git-branch glyph in the Solar Linear style (like the

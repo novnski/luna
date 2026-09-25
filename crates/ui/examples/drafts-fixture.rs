@@ -37,6 +37,8 @@ const L11_TASK_B: &str = "22222222-2222-4222-8222-222222222222";
 const L11_TASK_C: &str = "33333333-3333-4333-8333-333333333333";
 const L11_BOOTSTRAP_MARKER: &str = "l11-bootstrap-v2.complete";
 const L11_RICH_DRAFT_TEXT: &str = "L11 rich draft survives clear, restart, and provider handoff";
+const COMPOSER_CHIP_SAMPLE: &str =
+    "/app-creator [src](luna-file:src/) [codex.rs](luna-file:codex.rs)";
 const MEDIUM_REASONING: &[ReasoningLevel] = &[ReasoningLevel::Medium];
 const L11_REASONING: &[ReasoningLevel] = &[ReasoningLevel::Medium, ReasoningLevel::High];
 const PNG_B64: &str =
@@ -1698,6 +1700,24 @@ fn main() -> anyhow::Result<()> {
     auth_config.use_in_memory_credentials_for_tests();
     core.set_auth(Auth::new(auth_config));
     let startup = initialize_fixture_workspace(&core, &root, &mode)?;
+    if matches!(
+        mode.as_str(),
+        "composer-chips-sent" | "composer-chips-sent-skill"
+    ) {
+        let text = if mode == "composer-chips-sent-skill" {
+            "/app-creator"
+        } else {
+            COMPOSER_CHIP_SAMPLE
+        };
+        runtime.block_on(async {
+            core.doc_host.open(startup.task_id)?.write_user_message(
+                "composer-chips-sent-qa",
+                text,
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
     if mode == "recovery" {
         runtime.block_on(seed_recovery(&core))?;
     } else if mode == "queue" {
@@ -1718,7 +1738,7 @@ fn main() -> anyhow::Result<()> {
         &engine_data,
     ))?;
     let boot = EngineBootConfig {
-        data_dir: ui_data.clone(),
+        data_dir: engine_data.clone(),
         ipc_port,
         edge_url: String::new(),
         edge_token: None,
@@ -1730,6 +1750,7 @@ fn main() -> anyhow::Result<()> {
     let chats = core.workspace.read_chats()?;
     let device = core.device_id.clone();
     let seed = startup.stage_draft_evidence;
+    let preview_chips = mode == "composer-chips";
     let selected_task_id = startup.task_id;
 
     gpui_platform::application()
@@ -1810,6 +1831,14 @@ fn main() -> anyhow::Result<()> {
                     .update(cx, |shell, _, _| shell.fixture_appshots_composer())
                     .unwrap();
                 composer.update(cx, |composer, cx| composer.fixture_stage_draft_evidence(cx));
+            }
+            if preview_chips {
+                let composer = window
+                    .update(cx, |shell, _, _| shell.fixture_appshots_composer())
+                    .unwrap();
+                composer.update(cx, |composer, cx| {
+                    composer.fixture_stage_chip_preview(COMPOSER_CHIP_SAMPLE, cx)
+                });
             }
             state.update(cx, |_, cx| cx.notify());
             cx.activate(true);

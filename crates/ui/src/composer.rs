@@ -1040,15 +1040,15 @@ const UNDO_COALESCE: Duration = Duration::from_millis(700);
 /// Cap on retained undo steps — a long-lived composer must not grow forever.
 const UNDO_LIMIT: usize = 200;
 
-/// The literal `@` a chip displays before its file name. Projected as TEXT so
-/// it shapes, wraps, and hit-tests with the label — the earlier SVG icons
-/// painted into a reserved whitespace slot never sat right at text size
-/// (user report). Chips read as inline code: `@name` in the mono font over
-/// the code wash.
+/// The literal `@` a file chip displays before its name. The icon occupies
+/// shaped non-breaking spaces, so its position follows the editor's text
+/// layout instead of a guessed character width.
 const MENTION_PREFIX: char = '@';
 const MENTION_TOOLTIP_DELAY: Duration = Duration::from_millis(420);
 const MENTION_TOOLTIP_HEIGHT: f32 = 24.0;
 const MENTION_SIDE_PAD: &str = "\u{00A0}";
+// Four mono spaces center the 15px glyph with matching space on both sides.
+const CHIP_ICON_SLOT: &str = "\u{00A0}\u{00A0}\u{00A0}\u{00A0}";
 /// A private URI scheme keeps file mentions distinguishable from ordinary
 /// Markdown links pasted into the composer.
 const FILE_MENTION_SCHEME: &str = "luna-file:";
@@ -1234,10 +1234,54 @@ fn file_mention_links(text: &str) -> Vec<FileMentionLink> {
     links
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComposerChipKind {
+    Skill,
+    Folder,
+    File,
+}
+
+impl ComposerChipKind {
+    pub(crate) fn icon(self) -> &'static str {
+        match self {
+            Self::Skill => crate::icons::MAGIC_WAND_3,
+            Self::Folder => crate::icons::FOLDER,
+            Self::File => crate::icons::FILE,
+        }
+    }
+}
+
+pub(crate) fn composer_chip_palette(
+    kind: ComposerChipKind,
+    theme: &Theme,
+) -> (gpui::Hsla, gpui::Hsla) {
+    use crate::theme::Appearance;
+
+    let (text, wash_alpha) = match (kind, theme.appearance) {
+        (ComposerChipKind::Skill, Appearance::Dark) => (0xFFC185, 0.14),
+        (ComposerChipKind::Skill, Appearance::Light) => (0x8B5200, 0.10),
+        (ComposerChipKind::Folder, Appearance::Dark) => (0xA795FF, 0.17),
+        (ComposerChipKind::Folder, Appearance::Light) => (0x5D46B9, 0.10),
+        (ComposerChipKind::File, Appearance::Dark) => (0x80D9CE, 0.16),
+        (ComposerChipKind::File, Appearance::Light) => (0x006D66, 0.10),
+    };
+    let text: gpui::Hsla = gpui::rgb(text).into();
+    (text, text.opacity(wash_alpha))
+}
+
+#[derive(Debug, Clone)]
+struct ComposerChipSpan {
+    raw: Range<usize>,
+    display: Range<usize>,
+    icon_slot: Option<Range<usize>>,
+    kind: ComposerChipKind,
+}
+
 #[derive(Debug, Clone, Default)]
 struct TextProjection {
     display: String,
     mentions: Vec<(FileMentionLink, Range<usize>)>,
+    chips: Vec<ComposerChipSpan>,
 }
 
 /// A path alone is not enough: two identical relative paths can appear in a
@@ -1341,30 +1385,74 @@ struct MentionHit {
 
 impl TextProjection {
     fn new(raw: &str) -> Self {
+        Self::project(raw, false)
+    }
+
+    fn for_composer(raw: &str) -> Self {
+        Self::project(raw, true)
+    }
+
+    fn push_chip(
+        &mut self,
+        raw: Range<usize>,
+        label: &str,
+        kind: ComposerChipKind,
+        with_icon: bool,
+    ) -> Range<usize> {
+        let display_start = self.display.len();
+        if !with_icon {
+            self.display.push_str(MENTION_SIDE_PAD);
+        }
+        let icon_slot = with_icon.then(|| {
+            let start = self.display.len();
+            self.display.push_str(CHIP_ICON_SLOT);
+            start..self.display.len()
+        });
+        self.display.push_str(label);
+        self.display.push('\u{00A0}');
+        let display = display_start..self.display.len();
+        self.chips.push(ComposerChipSpan {
+            raw,
+            display: display.clone(),
+            icon_slot,
+            kind,
+        });
+        display
+    }
+
+    fn project(raw: &str, with_icons: bool) -> Self {
         let links = file_mention_links(raw);
         let labels = mention_display_labels(&links);
         let mut projection = Self::default();
         let mut raw_at = 0;
-        for (link, label) in links.into_iter().zip(labels) {
-            projection.display.push_str(&raw[raw_at..link.range.start]);
-            let display_start = projection.display.len();
-            // The chip is plain projected text — `@` plus the label between
-            // non-breaking side bearings; the rounded code wash beneath it is
-            // painted by `ComposerTextElement::paint`. Every character here
-            // must exist in Geist (no exotic whitespace — U+2003/U+202F shape
-            // at fallback width and collapsed the chip once already).
-            projection.display.push_str(MENTION_SIDE_PAD);
-            projection.display.push(MENTION_PREFIX);
-            for ch in label.chars() {
-                projection
-                    .display
-                    .push(if ch == ' ' { '\u{00A0}' } else { ch });
+        // Completion inserts a trailing separator. Requiring it keeps a slash
+        // query editable until the user finishes or accepts the command.
+        if with_icons && let Some(end) = raw.find(char::is_whitespace) {
+            let command = raw
+                .strip_prefix('/')
+                .and_then(|tail| tail.get(..end.saturating_sub(1)));
+            if command.is_some_and(|name| !name.is_empty() && !name.contains('/')) {
+                projection.push_chip(0..end, &raw[..end], ComposerChipKind::Skill, true);
+                raw_at = end;
             }
-            projection.display.push('\u{00A0}');
-            let display_end = projection.display.len();
-            projection
-                .mentions
-                .push((link.clone(), display_start..display_end));
+        }
+        for (link, label) in links.into_iter().zip(labels) {
+            if link.range.start < raw_at {
+                continue;
+            }
+            projection.display.push_str(&raw[raw_at..link.range.start]);
+            let mut chip_label = String::with_capacity(label.len() + 1);
+            chip_label.push(MENTION_PREFIX);
+            for ch in label.chars() {
+                chip_label.push(if ch == ' ' { '\u{00A0}' } else { ch });
+            }
+            let kind = if link.is_dir {
+                ComposerChipKind::Folder
+            } else {
+                ComposerChipKind::File
+            };
+            let display = projection.push_chip(link.range.clone(), &chip_label, kind, with_icons);
+            projection.mentions.push((link.clone(), display));
             raw_at = link.range.end;
         }
         projection.display.push_str(&raw[raw_at..]);
@@ -1374,15 +1462,15 @@ impl TextProjection {
     fn raw_to_display(&self, raw: usize) -> usize {
         let mut raw_at = 0;
         let mut display_at = 0;
-        for (link, display) in &self.mentions {
-            if raw <= link.range.start {
+        for chip in &self.chips {
+            if raw <= chip.raw.start {
                 return display_at + raw.saturating_sub(raw_at);
             }
-            if raw < link.range.end {
-                return display.start;
+            if raw < chip.raw.end {
+                return chip.display.start;
             }
-            raw_at = link.range.end;
-            display_at = display.end;
+            raw_at = chip.raw.end;
+            display_at = chip.display.end;
         }
         display_at + raw.saturating_sub(raw_at)
     }
@@ -1390,32 +1478,32 @@ impl TextProjection {
     fn display_to_raw(&self, display_offset: usize) -> usize {
         let mut raw_at = 0;
         let mut display_at = 0;
-        for (link, display) in &self.mentions {
-            if display_offset <= display.start {
+        for chip in &self.chips {
+            if display_offset <= chip.display.start {
                 return raw_at + display_offset.saturating_sub(display_at);
             }
-            if display_offset < display.end {
-                return if display_offset - display.start < display.len() / 2 {
-                    link.range.start
+            if display_offset < chip.display.end {
+                return if display_offset - chip.display.start < chip.display.len() / 2 {
+                    chip.raw.start
                 } else {
-                    link.range.end
+                    chip.raw.end
                 };
             }
-            raw_at = link.range.end;
-            display_at = display.end;
+            raw_at = chip.raw.end;
+            display_at = chip.display.end;
         }
         raw_at + display_offset.saturating_sub(display_at)
     }
 
     fn normalize_range(&self, range: Range<usize>) -> Range<usize> {
         if range.is_empty() {
-            for (link, _) in &self.mentions {
-                if link.range.start < range.start && range.start < link.range.end {
-                    let midpoint = link.range.start + link.range.len() / 2;
+            for chip in &self.chips {
+                if chip.raw.start < range.start && range.start < chip.raw.end {
+                    let midpoint = chip.raw.start + chip.raw.len() / 2;
                     let at = if range.start < midpoint {
-                        link.range.start
+                        chip.raw.start
                     } else {
-                        link.range.end
+                        chip.raw.end
                     };
                     return at..at;
                 }
@@ -1423,25 +1511,25 @@ impl TextProjection {
             return range;
         }
         let mut normalized = range;
-        for (link, _) in &self.mentions {
-            if normalized.start < link.range.end && normalized.end > link.range.start {
-                normalized.start = normalized.start.min(link.range.start);
-                normalized.end = normalized.end.max(link.range.end);
+        for chip in &self.chips {
+            if normalized.start < chip.raw.end && normalized.end > chip.raw.start {
+                normalized.start = normalized.start.min(chip.raw.start);
+                normalized.end = normalized.end.max(chip.raw.end);
             }
         }
         normalized
     }
 
     fn previous_boundary(&self, raw: usize) -> Option<usize> {
-        self.mentions
+        self.chips
             .iter()
-            .find_map(|(link, _)| (raw == link.range.end).then_some(link.range.start))
+            .find_map(|chip| (raw == chip.raw.end).then_some(chip.raw.start))
     }
 
     fn next_boundary(&self, raw: usize) -> Option<usize> {
-        self.mentions
+        self.chips
             .iter()
-            .find_map(|(link, _)| (raw == link.range.start).then_some(link.range.end))
+            .find_map(|chip| (raw == chip.raw.start).then_some(chip.raw.end))
     }
 }
 
@@ -1519,6 +1607,91 @@ pub fn sent_mention_display(raw: &str) -> Option<(String, Vec<SentMentionSpan>)>
         })
         .collect();
     Some((projection.display, spans))
+}
+
+/// Render-only chip positions for a sent user bubble. The row retains its
+/// existing projected text for copying and storage; these ranges add icon
+/// space only to the visible text layout.
+#[derive(Debug, Clone)]
+pub(crate) struct SentVisualChipSpan {
+    pub(crate) range: Range<usize>,
+    pub(crate) icon_slot: Range<usize>,
+    pub(crate) kind: ComposerChipKind,
+}
+
+fn push_sent_visual_chip(
+    display: &mut String,
+    spans: &mut Vec<SentVisualChipSpan>,
+    label: &str,
+    kind: ComposerChipKind,
+    append_right_pad: bool,
+) {
+    let start = display.len();
+    display.push_str(CHIP_ICON_SLOT);
+    let icon_slot = start..display.len();
+    display.push_str(label);
+    if append_right_pad {
+        display.push_str(MENTION_SIDE_PAD);
+    }
+    spans.push(SentVisualChipSpan {
+        range: start..display.len(),
+        icon_slot,
+        kind,
+    });
+}
+
+/// Decorate the already-projected user-row text for native rendering. A
+/// command may arrive without the trailing space completion inserted because
+/// send trims the prompt; it is still a complete chip in a sent message.
+pub(crate) fn sent_chip_visual(
+    text: &str,
+    mentions: &[SentMentionSpan],
+) -> Option<(String, Vec<SentVisualChipSpan>)> {
+    let slash_end = text.strip_prefix('/').and_then(|_| {
+        let end = text.find(char::is_whitespace).unwrap_or(text.len());
+        let name = &text[1..end];
+        (!name.is_empty() && !name.contains('/')).then_some(end)
+    });
+    if slash_end.is_none() && mentions.is_empty() {
+        return None;
+    }
+
+    let mut display =
+        String::with_capacity(text.len() + (mentions.len() + 1) * CHIP_ICON_SLOT.len());
+    let mut spans = Vec::with_capacity(mentions.len() + usize::from(slash_end.is_some()));
+    let mut at = 0;
+    if let Some(end) = slash_end {
+        push_sent_visual_chip(
+            &mut display,
+            &mut spans,
+            &text[..end],
+            ComposerChipKind::Skill,
+            true,
+        );
+        at = end;
+    }
+    for mention in mentions {
+        if mention.range.start < at {
+            continue;
+        }
+        display.push_str(&text[at..mention.range.start]);
+        let label = &text[mention.range.clone()];
+        let label = label.strip_prefix(MENTION_SIDE_PAD).unwrap_or(label);
+        push_sent_visual_chip(
+            &mut display,
+            &mut spans,
+            label,
+            if mention.is_dir {
+                ComposerChipKind::Folder
+            } else {
+                ComposerChipKind::File
+            },
+            false,
+        );
+        at = mention.range.end;
+    }
+    display.push_str(&text[at..]);
+    Some((display, spans))
 }
 
 /// Direction of the last edit — a run only merges with edits of its own kind.
@@ -1807,7 +1980,7 @@ struct InputLayoutKey {
     font_size: Pixels,
     color: gpui::Hsla,
     chip_family: SharedString,
-    chip_color: gpui::Hsla,
+    chip_colors: [gpui::Hsla; 3],
     marked_range: Option<Range<usize>>,
     placeholder: SharedString,
     mentions_enabled: bool,
@@ -2056,11 +2229,12 @@ impl ComposerInput {
 
     fn refresh_projection(&mut self) {
         self.projection = if self.mentions_enabled {
-            TextProjection::new(&self.content)
+            TextProjection::for_composer(&self.content)
         } else {
             TextProjection {
                 display: self.content.clone(),
                 mentions: Vec::new(),
+                chips: Vec::new(),
             }
         };
     }
@@ -2129,8 +2303,8 @@ impl ComposerInput {
     }
 
     /// Replace a completed plain-text token (slash commands) as one
-    /// non-coalescing undo step. Unlike [`Self::replace_mention`], the
-    /// replacement is ordinary text — no link, no chip projection.
+    /// non-coalescing undo step. The prompt keeps ordinary text; only the
+    /// editor projects the completed command as a chip.
     pub fn replace_plain_token(
         &mut self,
         range: Range<usize>,
@@ -3174,13 +3348,19 @@ impl ComposerInput {
         cx: &App,
     ) -> f32 {
         let theme = Theme::of(cx);
+        let chip_colors = [
+            ComposerChipKind::Skill,
+            ComposerChipKind::Folder,
+            ComposerChipKind::File,
+        ]
+        .map(|kind| composer_chip_palette(kind, theme).0);
         let key = InputLayoutKey {
             width,
             font: style.font(),
             font_size: style.font_size.to_pixels(window.rem_size()),
             color: style.color,
             chip_family: theme.font_mono.clone(),
-            chip_color: theme.code_text,
+            chip_colors,
             marked_range: self.marked_range.clone(),
             placeholder: self.placeholder.clone(),
             mentions_enabled: self.mentions_enabled,
@@ -3209,21 +3389,20 @@ impl ComposerInput {
         let font_size = style.font_size.to_pixels(window.rem_size());
         self.line_height = px(self.configured_line_height);
 
-        // Chips read as inline code: the markdown renderer's recipe (mono font
-        // + the spectrum's `code_text`) over the rounded `code_wash` beneath.
-        let (chip_font, chip_color) = {
-            let theme = Theme::of(cx);
-            (gpui::font(theme.font_mono.clone()), theme.code_text)
-        };
-        let run_for = |len: usize, underline: bool, chip: bool| TextRun {
+        // Each chip keeps the familiar mono label while its semantic tone
+        // separates slash commands, directories, and files.
+        let chip_font = gpui::font(theme.font_mono.clone());
+        let run_for = |len: usize, underline: bool, chip: Option<ComposerChipKind>| TextRun {
             len,
-            font: if chip {
+            font: if chip.is_some() {
                 chip_font.clone()
             } else {
                 style.font()
             },
-            color: if chip { chip_color } else { style.color },
-            // Rounded mention washes are painted explicitly beneath the text;
+            color: chip
+                .map(|kind| composer_chip_palette(kind, theme).0)
+                .unwrap_or(style.color),
+            // Rounded chip washes are painted explicitly beneath the text;
             // TextRun backgrounds are square and can disappear in wrapped runs.
             background_color: None,
             underline: underline.then_some(UnderlineStyle {
@@ -3238,27 +3417,27 @@ impl ComposerInput {
                 let start = self.projection.raw_to_display(marked.start);
                 let end = self.projection.raw_to_display(marked.end);
                 vec![
-                    run_for(start, false, false),
-                    run_for(end.saturating_sub(start), true, false),
-                    run_for(display.len() - end, false, false),
+                    run_for(start, false, None),
+                    run_for(end.saturating_sub(start), true, None),
+                    run_for(display.len() - end, false, None),
                 ]
                 .into_iter()
                 .filter(|r| r.len > 0)
                 .collect()
             }
-            _ if is_placeholder => vec![run_for(display.len(), false, false)],
+            _ if is_placeholder => vec![run_for(display.len(), false, None)],
             _ => {
                 let mut runs = Vec::new();
                 let mut at = 0;
-                for (_, chip) in &self.projection.mentions {
-                    if at < chip.start {
-                        runs.push(run_for(chip.start - at, false, false));
+                for chip in &self.projection.chips {
+                    if at < chip.display.start {
+                        runs.push(run_for(chip.display.start - at, false, None));
                     }
-                    runs.push(run_for(chip.len(), false, true));
-                    at = chip.end;
+                    runs.push(run_for(chip.display.len(), false, Some(chip.kind)));
+                    at = chip.display.end;
                 }
                 if at < display.len() {
-                    runs.push(run_for(display.len() - at, false, false));
+                    runs.push(run_for(display.len() - at, false, None));
                 }
                 runs
             }
@@ -3587,7 +3766,8 @@ impl Render for MentionPathTooltip {
 
 struct ComposerTextPrepaint {
     cursor: Option<PaintQuad>,
-    mention_quads: Vec<PaintQuad>,
+    chip_quads: Vec<PaintQuad>,
+    chip_icons: Vec<(Bounds<Pixels>, &'static str, gpui::Hsla)>,
     mention_hits: Vec<MentionHit>,
     selection_quads: Vec<PaintQuad>,
     /// Completion preview: window-space origin of the end-of-text caret plus
@@ -3669,12 +3849,51 @@ impl gpui::Element for ComposerTextElement {
         let paint_bounds = input.paint_bounds(bounds);
         let scroll = px(input.scroll_top);
         let origin = point(bounds.left() - px(input.scroll_left), bounds.top() - scroll);
-        let selection_color = Theme::of(cx).selection;
-        let caret_color = Theme::of(cx).caret;
-        // The inline-code recipe: chips use the spectrum wash like `code` spans.
-        let mention_color = Theme::of(cx).code_wash;
+        let theme = Theme::of(cx);
+        let selection_color = theme.selection;
+        let caret_color = theme.caret;
 
-        let mut mention_quads = Vec::new();
+        let mut chip_quads = Vec::new();
+        let mut chip_icons = Vec::new();
+        for chip in &input.projection.chips {
+            let (text_color, wash) = composer_chip_palette(chip.kind, theme);
+            for local_bounds in input.bounds_for_display_range(chip.display.clone()) {
+                chip_quads.push(quad(
+                    Bounds::new(
+                        point(
+                            origin.x + local_bounds.origin.x,
+                            origin.y + local_bounds.origin.y + px(2.0),
+                        ),
+                        size(local_bounds.size.width, local_bounds.size.height - px(4.0)),
+                    ),
+                    px(5.0),
+                    wash,
+                    px(0.0),
+                    gpui::transparent_black(),
+                    BorderStyle::default(),
+                ));
+            }
+            if let Some(slot) = &chip.icon_slot
+                && let Some(local_bounds) = input.bounds_for_display_range(slot.clone()).first()
+            {
+                let icon_size = px(15.0);
+                chip_icons.push((
+                    Bounds::new(
+                        point(
+                            origin.x
+                                + local_bounds.origin.x
+                                + (local_bounds.size.width - icon_size) / 2.0,
+                            origin.y
+                                + local_bounds.origin.y
+                                + (local_bounds.size.height - icon_size) / 2.0,
+                        ),
+                        size(icon_size, icon_size),
+                    ),
+                    chip.kind.icon(),
+                    text_color,
+                ));
+            }
+        }
         let mut mention_hits = Vec::new();
         for (mention, display) in &input.projection.mentions {
             let target = MentionTooltipTarget {
@@ -3693,14 +3912,6 @@ impl gpui::Element for ComposerTextElement {
                     ),
                     size(local_bounds.size.width, local_bounds.size.height - px(4.0)),
                 );
-                mention_quads.push(quad(
-                    chip_bounds,
-                    px(5.0),
-                    mention_color,
-                    px(0.0),
-                    gpui::transparent_black(),
-                    BorderStyle::default(),
-                ));
                 let above_anchor = chip_bounds.top() - px(MENTION_TOOLTIP_HEIGHT) - px(1.0);
                 let anchor_y = if above_anchor >= px(0.0) {
                     above_anchor
@@ -3813,7 +4024,8 @@ impl gpui::Element for ComposerTextElement {
             });
         ComposerTextPrepaint {
             cursor,
-            mention_quads,
+            chip_quads,
+            chip_icons,
             mention_hits,
             selection_quads,
             ghost,
@@ -3863,7 +4075,7 @@ impl gpui::Element for ComposerTextElement {
                 bounds: paint_bounds,
             }),
             |window| {
-                for quad in prepaint.mention_quads.drain(..) {
+                for quad in prepaint.chip_quads.drain(..) {
                     window.paint_quad(quad);
                 }
                 for quad in prepaint.selection_quads.drain(..) {
@@ -3881,6 +4093,18 @@ impl gpui::Element for ComposerTextElement {
                         cx,
                     );
                     y += height;
+                }
+                for (bounds, path, color) in prepaint.chip_icons.drain(..) {
+                    if let Err(error) = window.paint_svg(
+                        bounds,
+                        path.into(),
+                        None,
+                        gpui::TransformationMatrix::default(),
+                        color,
+                        cx,
+                    ) {
+                        tracing::warn!(%error, path, "composer chip icon render failed");
+                    }
                 }
                 if let Some((ghost_origin, ghost)) = prepaint.ghost.take() {
                     let style = window.text_style();
@@ -14078,6 +14302,11 @@ impl Composer {
     pub fn fixture_clear_appshots(&mut self, cx: &mut Context<Self>) {
         self.appshots.clear();
         cx.notify();
+    }
+
+    /// Show all three composer chip kinds in the isolated native QA fixture.
+    pub fn fixture_stage_chip_preview(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
     }
 
     /// Seed the real persistence path with neutral fixture-only images. This

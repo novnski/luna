@@ -7114,12 +7114,10 @@ impl Transcript {
     }
 }
 
-/// A sent message's text with its file-mention chips. The same recipe as the
-/// markdown renderer's inline code (`flat_text_element`): chip ranges shape in
-/// the mono font at the spectrum's `code_text`, [`StyledText`] supplies wrapped glyph
-/// geometry through its layout handle, and a canvas paints the rounded
-/// `code_wash` *beneath* the glyphs — so chips wrap, clip, and scroll exactly
-/// like the text they decorate.
+/// A sent message's slash-command and file-mention chips. The row keeps its
+/// original copy text while this element adds icon space to the visible text.
+/// Chip ranges shape in the mono font, and their rounded washes and SVGs use
+/// the same semantic colors as the composer.
 ///
 /// Per-frame cost while an assistant message streams below: shaping hits
 /// gpui's line-layout cache (identical text + runs ⇒ reuse) and the underlay
@@ -7137,9 +7135,11 @@ fn user_bubble_text(
     measured_h: Rc<Cell<f32>>,
     entity_id: gpui::EntityId,
 ) -> AnyElement {
-    // Split runs at chip boundaries (spans are in order): body text keeps the
-    // sans font, chips read as inline code. Size/line-height flow from the
-    // bubble's div like every text child.
+    let (visible, chips) = crate::composer::sent_chip_visual(text.as_ref(), &mentions)
+        .unwrap_or_else(|| (text.to_string(), Vec::new()));
+    let text: SharedString = visible.into();
+    // Split runs at chip boundaries: body text keeps the sans font; chips
+    // keep the composer's mono labels and semantic colors.
     let body_run = |len: usize| TextRun {
         len,
         font: gpui::font(theme.font_sans.clone()),
@@ -7148,21 +7148,21 @@ fn user_bubble_text(
         underline: None,
         strikethrough: None,
     };
-    let chip_run = |len: usize| TextRun {
+    let chip_run = |len: usize, kind| TextRun {
         len,
         font: gpui::font(theme.font_mono.clone()),
-        color: theme.code_text,
+        color: crate::composer::composer_chip_palette(kind, theme).0,
         background_color: None,
         underline: None,
         strikethrough: None,
     };
-    let mut runs = Vec::with_capacity(mentions.len() * 2 + 1);
+    let mut runs = Vec::with_capacity(chips.len() * 2 + 1);
     let mut at = 0;
-    for span in mentions.iter() {
+    for span in &chips {
         if at < span.range.start {
             runs.push(body_run(span.range.start - at));
         }
-        runs.push(chip_run(span.range.len()));
+        runs.push(chip_run(span.range.len(), span.kind));
         at = span.range.end;
     }
     if at < text.len() {
@@ -7170,13 +7170,13 @@ fn user_bubble_text(
     }
     let styled = StyledText::new(text.clone()).with_runs(runs);
     let layout = styled.layout().clone();
-    let wash = theme.code_wash;
     let sel_key: std::sync::Arc<str> = format!("{row_id}:u").into();
     let sel_theme = theme.clone();
     let underlay = canvas(
         |_, _, _| (),
         move |_, _, window, cx| {
-            for span in mentions.iter() {
+            for span in &chips {
+                let (_, wash) = crate::composer::composer_chip_palette(span.kind, &sel_theme);
                 for rect in render::range_rects(&layout, &span.range, 0.0, 2.0) {
                     window.paint_quad(quad(
                         rect,
@@ -7189,6 +7189,30 @@ fn user_bubble_text(
                 }
             }
             render::paint_text_selection(window, &sel_key, &text, &layout, &sel_theme);
+            for span in &chips {
+                let (color, _) = crate::composer::composer_chip_palette(span.kind, &sel_theme);
+                for slot in render::range_rects(&layout, &span.icon_slot, 0.0, 0.0) {
+                    let icon_size = px(15.0);
+                    let icon_bounds = Bounds::new(
+                        point(
+                            slot.left() + (slot.size.width - icon_size) / 2.0,
+                            slot.top() + (slot.size.height - icon_size) / 2.0,
+                        ),
+                        size(icon_size, icon_size),
+                    );
+                    let path = span.kind.icon();
+                    if let Err(error) = window.paint_svg(
+                        icon_bounds,
+                        path.into(),
+                        None,
+                        gpui::TransformationMatrix::default(),
+                        color,
+                        cx,
+                    ) {
+                        tracing::warn!(%error, path, "sent chip icon render failed");
+                    }
+                }
+            }
             // Passive geometry cache only: no entity update and no notify.
             // `bounds().height` can be the collapsed clip height, so derive
             // the full text height from the wrapped line layouts instead. The
