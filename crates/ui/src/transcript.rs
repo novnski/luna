@@ -744,8 +744,8 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
 /// A chip's expandable detail payload.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolDetail {
-    /// Command/tool output as a code block: verbatim lines (indentation
-    /// intact), capped at [`OUTPUT_DETAIL_MAX_LINES`] with a counted tail.
+    /// Command/tool output as a code block: indentation intact, long lines
+    /// visually wrapped, capped at [`OUTPUT_DETAIL_MAX_LINES`] with a counted tail.
     Output {
         lines: Vec<SharedString>,
         truncated_by: usize,
@@ -823,7 +823,7 @@ pub fn tool_detail(
     let output = output?;
     let mut lines: Vec<SharedString> = output
         .lines()
-        .map(|l| SharedString::from(l.to_owned()))
+        .flat_map(|line| wrap_cols(line, CALL_WRAP_COLS))
         .collect();
     // Trim trailing blank output lines so the block hugs its content.
     while lines.last().is_some_and(|l| l.trim().is_empty()) {
@@ -1965,8 +1965,7 @@ struct ChipAffordance {
     label: SharedString,
 }
 
-/// Line cap for a FETCHED full output (a defensive ceiling, not a doc cap —
-/// the harness bounds outputs at 4KiB, so this is rarely reached).
+/// Line cap for a FETCHED full output (a defensive ceiling, not a doc cap).
 const FULL_OUTPUT_MAX_LINES: usize = 400;
 
 /// Build the upgraded detail from a fetched sidecar blob. Diff blobs parse
@@ -1979,7 +1978,7 @@ fn blob_detail(text: &str, is_diff: bool) -> Option<ToolDetail> {
     }
     let mut lines: Vec<SharedString> = text
         .lines()
-        .map(|l| SharedString::from(l.to_owned()))
+        .flat_map(|line| wrap_cols(line, CALL_WRAP_COLS))
         .collect();
     while lines.last().is_some_and(|l| l.trim().is_empty()) {
         lines.pop();
@@ -4628,6 +4627,13 @@ impl Transcript {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        let target_device = blob_ref.split_once('/').and_then(|(chat_id, _)| {
+            self.state
+                .read(cx)
+                .visible_chats()
+                .find(|chat| chat.id == chat_id)
+                .map(|chat| chat.device_id.clone())
+        });
         let is_diff = blob_ref.ends_with(".diff");
         let ref_key = blob_ref.clone();
         let task = cx.spawn(async move |this, cx| {
@@ -4635,7 +4641,7 @@ impl Transcript {
                 &engine,
                 cx.background_executor(),
                 luna_rpc::methods::FETCH_TOOL_BLOB,
-                serde_json::json!({ "blobRef": ref_key.as_ref() }),
+                serde_json::json!({ "blobRef": ref_key.as_ref(), "targetDeviceId": target_device }),
                 Duration::from_secs(20),
             )
             .await;

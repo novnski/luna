@@ -2103,12 +2103,7 @@ mod tests {
                 diff_stats,
                 ..
             } => {
-                // One-liner chips: the fold drops outputs entirely (journal
-                // only), so even a direct apply_sidecar_refs call has no
-                // output to key — diff stats still get their ref (this test
-                // calls apply_sidecar_refs directly; the live fold no longer
-                // does).
-                assert_eq!(output.as_deref(), None);
+                assert_eq!(output.as_deref(), Some("total 0\nmore lines"));
                 assert_eq!(output_ref.as_deref(), None);
                 assert_eq!(*output_bytes, None);
                 assert!(diff.is_none(), "no inline diff text in the doc");

@@ -12,6 +12,27 @@ use luna_proto::{
 };
 use serde_json::Value;
 
+/// A command can print megabytes. Keep the host journal and lazy RPC response
+/// bounded while preserving ordinary command output verbatim.
+const COMMAND_OUTPUT_MAX_BYTES: usize = 64 * 1024;
+
+fn command_output(item: &Value) -> Option<String> {
+    let output = field(item, &["aggregatedOutput", "aggregated_output"])
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())?;
+    if output.len() <= COMMAND_OUTPUT_MAX_BYTES {
+        return Some(output.to_owned());
+    }
+    let mut end = COMMAND_OUTPUT_MAX_BYTES;
+    while !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!(
+        "{}\n… [command output truncated by LUNA after 64 KiB]",
+        &output[..end]
+    ))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     Started,
@@ -942,7 +963,7 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 vec![AgentEvent::ToolResult {
                     id,
                     is_error: status == "failed" || exit_code != 0,
-                    output: None,
+                    output: command_output(item),
                     diff: None,
                 }]
             }

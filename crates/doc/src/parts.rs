@@ -17,9 +17,8 @@ use crate::constants::MSG_INLINE_MAX;
 /// summary, so 160 is generous.
 pub const TOOL_OUTPUT_SUMMARY_MAX: usize = 160;
 
-/// The doc-resident form of a tool output (docs/chat2-sync.md A1; the R2
-/// sidecar is PARKED as of 2026-08-10, so this IS the whole record in the
-/// doc — the full text survives only in the host's local run journal):
+/// The doc-resident form of a tool output (docs/chat2-sync.md A1). Full text
+/// stays in the host's local run journal and can be fetched when expanded.
 ///
 /// - Markdown code fences are stripped first — ACP harnesses fence every
 ///   output, so the fence is transport wrapping, never content (pre-fix,
@@ -218,11 +217,11 @@ pub enum MessagePart {
         /// Kept so old docs render their diffs.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diff: Option<ToolDiff>,
-        /// Sidecar key (`{chatId}/{partId}`) of the full output — additive;
-        /// stamped by [`apply_sidecar_refs`] (the fold is chat-agnostic).
+        /// Key (`{chatId}/{partId}`) for lazy full output from the host
+        /// journal or a legacy sidecar; the fold is chat-agnostic.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_ref: Option<String>,
-        /// Full-output byte length, so the UI can say "Show full output (12 KB)".
+        /// Captured-output byte length, so the UI can say "Show full output (12 KB)".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_bytes: Option<u64>,
         /// Sidecar key (`{chatId}/{partId}.diff`) of the full diff JSON.
@@ -421,6 +420,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             for p in out.iter_mut() {
                 if let MessagePart::Tool {
                     id: pid,
+                    call,
                     is_error: e,
                     resolved,
                     output: out_slot,
@@ -433,16 +433,18 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 {
                     *e = *is_error;
                     *resolved = true;
-                    // Tool OUTPUTS never enter the doc (2026-08-10 product
-                    // call: chips are one-liners — name + call info — like
-                    // pre-output builds; the R2 sidecar is parked with them,
-                    // docs/chat2-sync.md A2). Full text lives only in the
-                    // host's run journal. Inline diffs die the same way:
-                    // stats only, never text. `is_error` still folds so
-                    // failed chips read as failed.
-                    let _ = output; // journal-only
-                    *out_slot = None;
-                    *output_bytes = None;
+                    // Show command stdout/stderr in the chip, with a small
+                    // synced preview and lazy host-journal fetch for longer
+                    // results. Other tool results keep the existing policy.
+                    if matches!(call, ToolCall::Exec { .. }) {
+                        *out_slot = output.as_deref().and_then(summarize_tool_output);
+                        *output_bytes = output.as_ref().and_then(|full| {
+                            (out_slot.as_deref() != Some(full.trim())).then_some(full.len() as u64)
+                        });
+                    } else {
+                        *out_slot = None;
+                        *output_bytes = None;
+                    }
                     *diff_slot = None;
                     *diff_stats = diff.as_ref().map(|d| vec![diff_stat(d)]);
                 }
@@ -628,6 +630,24 @@ pub fn apply_sidecar_refs(chat_id: &str, parts: &mut [MessagePart]) {
             if diff_ref.is_none() && diff_stats.is_some() {
                 *diff_ref = Some(format!("{chat_id}/{id}.diff"));
             }
+        }
+    }
+}
+
+/// Point oversized output previews at the owning host's run journal. This
+/// intentionally leaves diff refs alone: diffs are not uploaded to a sidecar.
+pub fn apply_journal_output_refs(chat_id: &str, parts: &mut [MessagePart]) {
+    for part in parts.iter_mut() {
+        if let MessagePart::Tool {
+            id,
+            resolved: true,
+            output_ref,
+            output_bytes: Some(_),
+            ..
+        } = part
+            && output_ref.is_none()
+        {
+            *output_ref = Some(format!("{chat_id}/{id}"));
         }
     }
 }
@@ -1269,18 +1289,19 @@ mod tests {
                 }),
             },
         );
+        apply_sidecar_refs("chat-9", &mut parts);
         match &parts[0] {
             MessagePart::Tool {
                 output,
+                output_ref,
                 output_bytes,
                 diff,
                 diff_stats,
                 ..
             } => {
-                // One-liner chips: outputs never enter the doc at all
-                // (journal-only); diff text neither — stats survive.
-                assert_eq!(output.as_deref(), None);
-                assert_eq!(*output_bytes, None);
+                assert_eq!(output.as_deref(), Some("running 42 tests…"));
+                assert_eq!(output_ref.as_deref(), Some("chat-9/t"));
+                assert_eq!(*output_bytes, Some(full.len() as u64));
                 assert!(diff.is_none(), "inline diff text must not enter the doc");
                 let stats = diff_stats.as_ref().unwrap();
                 assert_eq!(stats.len(), 1);
@@ -1329,14 +1350,15 @@ mod tests {
         apply_sidecar_refs("chat-9", &mut parts); // idempotent
         match &parts[0] {
             MessagePart::Tool {
+                output,
                 output_ref,
+                output_bytes,
                 diff_ref,
                 ..
             } => {
-                // One-liner fold: outputs never reach the doc, so there is
-                // no output content to key even after resolution; diff
-                // STATS exist, so the diff ref still stamps.
+                assert_eq!(output.as_deref(), Some("hello"));
                 assert_eq!(output_ref.as_deref(), None);
+                assert_eq!(*output_bytes, None);
                 assert_eq!(diff_ref.as_deref(), Some("chat-9/t1.diff"));
             }
             other => panic!("unexpected {other:?}"),

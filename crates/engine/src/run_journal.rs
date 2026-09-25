@@ -372,6 +372,33 @@ impl RunJournal {
         Ok(all.into_iter().filter(|(seq, _)| *seq > from).collect())
     }
 
+    /// Find a tool result on demand without materializing a whole long run.
+    /// The latest matching event wins if a provider reused an item id.
+    pub fn tool_output(
+        &self,
+        chat_id: &str,
+        part_id: &str,
+    ) -> Result<Option<String>, JournalError> {
+        let file = match File::open(self.path_for(chat_id)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let mut found = None;
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            if !line.contains(part_id) {
+                continue;
+            }
+            if let Ok(parsed) = serde_json::from_str::<JournalLine>(&line) {
+                if let Some(output) = tool_result_output(&parsed.event, part_id) {
+                    found = Some(output.to_owned());
+                }
+            }
+        }
+        Ok(found)
+    }
+
     /// The last event in a chat's journal, if any (ignores a torn tail line).
     pub fn last_event(&self, chat_id: &str) -> Result<Option<(u64, AgentEvent)>, JournalError> {
         let path = self.path_for(chat_id);
@@ -413,6 +440,18 @@ impl RunJournal {
             std::fs::remove_file(path)?;
         }
         Ok(())
+    }
+}
+
+fn tool_result_output<'a>(event: &'a AgentEvent, part_id: &str) -> Option<&'a str> {
+    match event {
+        AgentEvent::ToolResult {
+            id,
+            output: Some(output),
+            ..
+        } if id == part_id => Some(output),
+        AgentEvent::Subagent { event, .. } => tool_result_output(event, part_id),
+        _ => None,
     }
 }
 

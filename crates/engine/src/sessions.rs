@@ -986,6 +986,25 @@ impl SessionsEngine {
         lock(&self.inner.doc_host).take();
     }
 
+    /// Read a completed tool's full output only when its detail is opened.
+    /// The journal is host-local; it never adds full output to the synced doc.
+    pub fn tool_output(&self, chat_id: &str, part_id: &str) -> Result<Option<String>, EngineError> {
+        if chat_id.is_empty()
+            || chat_id.len() > 128
+            || !chat_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            || part_id.is_empty()
+            || part_id.len() > 200
+            || !part_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._:#~-".contains(&byte))
+        {
+            return Err(EngineError::Other("invalid tool output ref".into()));
+        }
+        Ok(self.inner.journal.tool_output(chat_id, part_id)?)
+    }
+
     /// Bind generated-image intake to the same profile store used by attachment RPCs.
     pub fn set_generated_images(
         &self,
@@ -6853,12 +6872,9 @@ async fn drive_run(
         let skip_fold = matches!(&event, AgentEvent::SessionStarted { .. }) && !folded.is_empty();
         if !skip_fold {
             fold_event_into_parts(&mut folded, &event);
-            // R2 sidecar PARKED (2026-08-10, product call): the fold's
-            // summary/stats ARE the doc's whole record — no refs stamped, no
-            // uploads. Full outputs survive only in the host's local run
-            // journal. To reintroduce: `luna_doc::sidecar_payload(&event)`
-            // → `apply_sidecar_refs` → `doc_host.upload_tool_sidecar`, all
-            // still in place and tested.
+            // The small output preview lives in the doc; an output ref points
+            // back to the host journal for lazy full-text reads. No R2 upload.
+            luna_doc::apply_journal_output_refs(&chat_id, &mut folded);
         }
 
         if let AgentEvent::Done { status, error, .. } = &event {

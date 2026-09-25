@@ -6229,6 +6229,7 @@ fn forwardable(method: &str) -> bool {
             | methods::UPLOAD_CHUNK
             | methods::UPLOAD_COMMIT
             | methods::READ_ATTACHMENT_CHUNK
+            | methods::FETCH_TOOL_BLOB
             // Updates report/apply on the device whose binary they concern.
             | methods::UPDATE_STATUS
             | methods::APPLY_UPDATE
@@ -9753,11 +9754,28 @@ impl RpcService for EngineRpc {
             }
             methods::FETCH_TOOL_BLOB => {
                 let p: FetchToolBlobParams = parse_params(params)?;
-                let text = self
-                    .doc_host
-                    .fetch_tool_blob(&p.blob_ref)
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let local = match p.blob_ref.split_once('/') {
+                    Some((chat_id, part_id)) if !part_id.ends_with(".diff") => {
+                        let sessions = self.sessions.clone();
+                        let chat_id = chat_id.to_owned();
+                        let part_id = part_id.to_owned();
+                        tokio::task::spawn_blocking(move || {
+                            sessions.tool_output(&chat_id, &part_id)
+                        })
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                    }
+                    _ => None,
+                };
+                let text = match local {
+                    Some(text) => text,
+                    None => self
+                        .doc_host
+                        .fetch_tool_blob(&p.blob_ref)
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?,
+                };
                 RpcReply::value(&serde_json::json!({ "text": text }))
             }
             other => Err(RpcError::UnknownMethod(other.to_string())),
