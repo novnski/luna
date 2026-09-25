@@ -2041,20 +2041,16 @@ impl Shell {
             .role(gpui::Role::Button)
             .aria_label("Toggle usage")
             .aria_expanded(open)
-            .size(px(if open { 32.0 } else { 36.0 }))
+            .size(px(32.0))
             .track_focus(&self.usage_action_focus)
             .cursor_pointer()
             .rounded(px(Theme::CONTROL_RADIUS))
-            .bg(if open {
-                theme.glass_hover().opacity(0.65)
-            } else {
-                theme.glass_hover().opacity(0.15)
-            })
-            .hover(|el| el.bg(theme.glass_hover()))
+            .bg(theme.glass_hover().opacity(if open { 0.65 } else { 0.0 }))
+            .hover(|el| el.bg(theme.glass_hover().opacity(if open { 0.8 } else { 0.0 })))
             .flex()
             .items_center()
             .justify_center()
-            .text_color(if open { theme.text } else { theme.text_muted })
+            .text_color(theme.text)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if matches!(

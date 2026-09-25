@@ -196,6 +196,16 @@ fn main() -> anyhow::Result<()> {
                     .await;
                 let result = (|| -> anyhow::Result<()> {
                     capture(window.into(), cx, &capture_output.join("usage-codex.png"))?;
+                    // Exercise the footer action through the rendered window.
+                    // The 600x500 fixture places Usage at (101, 474).
+                    click(window.into(), cx, 101.0, 474.0)?;
+                    capture(window.into(), cx, &capture_output.join("usage-closed.png"))?;
+                    click(window.into(), cx, 101.0, 474.0)?;
+                    capture(
+                        window.into(),
+                        cx,
+                        &capture_output.join("usage-reopened.png"),
+                    )?;
                     click(window.into(), cx, 61.0, 347.0)?;
                     capture(
                         window.into(),
@@ -216,7 +226,15 @@ fn main() -> anyhow::Result<()> {
     if let Some(error) = failure.lock().unwrap().take() {
         anyhow::bail!(error);
     }
-    if !output.join("usage-codex.png").is_file() || !output.join("usage-opencode.png").is_file() {
+    if [
+        "usage-codex.png",
+        "usage-closed.png",
+        "usage-reopened.png",
+        "usage-opencode.png",
+    ]
+    .iter()
+    .any(|name| !output.join(name).is_file())
+    {
         anyhow::bail!("usage screenshots were not written");
     }
     Ok(())

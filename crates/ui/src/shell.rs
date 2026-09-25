@@ -7702,7 +7702,6 @@ impl Shell {
         };
         let user_menu =
             self.render_user_menu(user_line.clone(), trigger_subline, menu_identity, theme, cx);
-        let compact_usage_footer = self.usage_card_open && !self.settings.usage_sidebar_hidden;
 
         // The normal project filter and Activity toggle share the existing
         // fixed header row above the sidebar's scrolling task list.
@@ -7827,13 +7826,9 @@ impl Shell {
                     .mx(px(Theme::SPACE_SM))
                     .mt(px(4.0))
                     .mb(px(Theme::SPACE_SM))
-                    .when(!compact_usage_footer, |el| {
-                        el.pt(px(8.0)).border_t_1().border_color(theme.border)
-                    })
-                    .when(compact_usage_footer, |el| el.pl(px(3.0)))
+                    .pl(px(3.0))
                     .flex()
                     .items_center()
-                    .when(!compact_usage_footer, |el| el.justify_between())
                     .child(
                         div()
                             .id("sidebar-settings-action")
@@ -7880,7 +7875,7 @@ impl Shell {
                         el.child(self.render_usage_action(theme, cx))
                     })
                     .child(user_menu)
-                    .when(compact_usage_footer, |el| el.child(div().flex_1()))
+                    .child(div().flex_1())
                     .when_some(self.render_provider_update_badge(theme, cx), |el, badge| {
                         el.child(badge)
                     }),
@@ -7893,7 +7888,6 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let compact = self.usage_card_open && !self.settings.usage_sidebar_hidden;
         let statuses = self
             .accounts_page
             .as_ref()
@@ -7920,13 +7914,11 @@ impl Shell {
                     if pending.len() == 1 { "" } else { "s" }
                 ))
                 .w(px(48.0))
-                .h(px(if compact { 24.0 } else { 48.0 }))
-                .rounded(px(if compact { 12.0 } else { Theme::CONTROL_RADIUS }))
+                .h(px(24.0))
+                .rounded(px(12.0))
                 .border_1()
-                .border_color(theme.border)
-                .when(compact, |el| {
-                    el.border_color(gpui::rgb(0x3a3a3a)).bg(gpui::rgb(0x242424))
-                })
+                .border_color(gpui::rgb(0x3a3a3a))
+                .bg(gpui::rgb(0x242424))
                 .cursor_pointer()
                 .hover(|el| el.bg(theme.glass_hover()))
                 .flex()
@@ -7940,14 +7932,10 @@ impl Shell {
                 )
                 .child(
                     icon(icons::ARROW_DOWN)
-                        .size(px(if compact { 12.0 } else { 15.0 }))
+                        .size(px(12.0))
                         .text_color(theme.accent),
                 )
-                .child(
-                    icon(mark)
-                        .size(px(if compact { 13.0 } else { 16.0 }))
-                        .text_color(theme.text),
-                )
+                .child(icon(mark).size(px(13.0)).text_color(theme.text))
                 .into_any_element(),
         )
     }
