@@ -354,7 +354,11 @@ fn sidebar_disclosure_header(theme: &Theme, label: SharedString, chevron: AnyEle
             div()
                 .text_size(crate::typography::ui_rems(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text_muted.opacity(0.5))
+                .text_color(if theme.appearance.is_light() {
+                    theme.text_muted
+                } else {
+                    theme.text_muted.opacity(0.5)
+                })
                 .child(label),
         ))
         .child(sidebar_separator(theme).flex_1())
@@ -545,9 +549,13 @@ impl Shell {
 
     fn sidebar_disclosure_chevron(&self, key: &str, open: bool, theme: &Theme) -> AnyElement {
         let resting_reveal = if open { 1.0 } else { 0.0 };
-        let chevron = icon(icons::ALT_ARROW_RIGHT)
-            .size(px(12.0))
-            .text_color(theme.text_muted.opacity(0.5));
+        let chevron = icon(icons::ALT_ARROW_RIGHT).size(px(12.0)).text_color(
+            if theme.appearance.is_light() {
+                theme.text_muted
+            } else {
+                theme.text_muted.opacity(0.5)
+            },
+        );
         if let Some(tween) = self
             .sidebar_disclosure_motion
             .get(key)
@@ -2186,7 +2194,11 @@ impl Shell {
                 } else {
                     div()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted.opacity(0.55))
+                        .text_color(if theme.appearance.is_light() {
+                            theme.text_muted
+                        } else {
+                            theme.text_muted.opacity(0.55)
+                        })
                         .child(time_ago)
                         .into_any_element()
                 };

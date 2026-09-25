@@ -345,8 +345,8 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
         .child(title.into())
 }
 
-/// The quiet meta line under a row title: `text-[12px]
-/// text-muted-foreground/65` fragments joined by dots.
+/// The quiet meta line under a row title. Light appearance keeps the authored
+/// muted tone intact; fading it over pale cards made useful copy hard to read.
 pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
     let mut line = div()
         .mt(px(Theme::TEXT_STACK_GAP))
@@ -357,13 +357,21 @@ pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
         .gap_x(px(8.0))
         .gap_y(px(2.0))
         .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
-        .text_color(theme.text_muted.opacity(0.65));
+        .text_color(if theme.appearance.is_light() {
+            theme.text_muted
+        } else {
+            theme.text_muted.opacity(0.65)
+        });
     let mut first = true;
     for fragment in fragments {
         if !first {
             line = line.child(
                 div()
-                    .text_color(theme.text_muted.opacity(0.3))
+                    .text_color(if theme.appearance.is_light() {
+                        theme.text_muted
+                    } else {
+                        theme.text_muted.opacity(0.3)
+                    })
                     .child(SharedString::from("·")),
             );
         }
@@ -412,7 +420,13 @@ pub fn toggle_switch(theme: &Theme, on: bool) -> gpui::Div {
         .w(px(32.0))
         .h(px(18.0))
         .rounded_full()
-        .bg(if on { theme.text } else { ink(0.15) })
+        .bg(if on {
+            theme.text
+        } else if theme.appearance.is_light() {
+            theme.text_muted.opacity(0.72)
+        } else {
+            ink(0.15)
+        })
         .relative()
         .child(
             div()
@@ -421,7 +435,13 @@ pub fn toggle_switch(theme: &Theme, on: bool) -> gpui::Div {
                 .left(px(if on { 16.0 } else { 2.0 }))
                 .size(px(14.0))
                 .rounded_full()
-                .bg(if on { theme.on_solid } else { ink(0.7) }),
+                .bg(if on {
+                    theme.on_solid
+                } else if theme.appearance.is_light() {
+                    theme.bg
+                } else {
+                    ink(0.7)
+                }),
         )
 }
 

@@ -242,6 +242,16 @@ pub enum SavePolicy {
     Immediate,
 }
 
+/// Semantic colors for additions and deletions. The alternate pair remains
+/// distinguishable without relying on red/green color perception.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffColorScheme {
+    #[default]
+    RedGreen,
+    BlueOrange,
+}
+
 /// The sole in-process owner and writer of `ui-settings.json`.
 ///
 /// Mutations land in `current` before any timer starts. Replacing a pending
@@ -779,6 +789,8 @@ pub struct UiSettings {
     pub theme_selection: luna_theme::ThemeSelection,
     /// Changes pane: side-by-side diffs instead of the unified stack.
     pub diff_split: bool,
+    /// Additions/deletions in diffs and change counts.
+    pub diff_color_scheme: DiffColorScheme,
     /// Changes pane: wrap long source lines instead of scrolling horizontally.
     pub diff_wrap: bool,
     /// Agent-sent Markdown fences: wrap long lines to the chat width instead
@@ -870,6 +882,7 @@ impl Default for UiSettings {
             code_font_size: crate::typography::CODE_FONT_SIZE_DEFAULT,
             theme_selection: luna_theme::ThemeSelection::default(),
             diff_split: false,
+            diff_color_scheme: DiffColorScheme::default(),
             diff_wrap: false,
             code_fences_fit_content: false,
             transcript_width: TRANSCRIPT_WIDTH_DEFAULT,

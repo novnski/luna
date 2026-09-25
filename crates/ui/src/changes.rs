@@ -1743,6 +1743,42 @@ impl Render for DiffHeaderTooltip {
 }
 
 impl Changes {
+    /// Apply Appearance preferences to already-open diff tabs as well as tabs
+    /// created after the preference was saved.
+    pub(crate) fn apply_appearance_preferences(
+        &mut self,
+        split: bool,
+        wrap: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let next_mode = DiffMode::from_split(split);
+        let mode_changed = self.mode != next_mode;
+        let wrap_changed = self.wrap_lines != wrap;
+        if !mode_changed && !wrap_changed {
+            return;
+        }
+        self.mode = next_mode;
+        self.wrap_lines = wrap;
+        self.reset_horizontal_scroll();
+        if mode_changed {
+            self.hover = None;
+            self.reflatten(cx);
+        } else if self
+            .rows
+            .iter()
+            .any(|row| matches!(row, DiffRow::FoldingBody { .. }))
+        {
+            self.fold_settle = None;
+            for fold in self.folds.values_mut() {
+                fold.toggled_at = None;
+            }
+            self.reflatten(cx);
+        } else {
+            self.list.remeasure();
+            cx.notify();
+        }
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
         let settings = crate::settings::current(cx);

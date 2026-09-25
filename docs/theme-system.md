@@ -24,6 +24,13 @@ Accent overlays affect controls, focus, selections, caret, activity and the
 three-tone glyph. They do not recolor syntax, terminal ANSI, status, or diff
 semantics.
 
+Appearance also stores a separate diff color scheme in device-local
+`ui-settings.json`: the theme's red/green semantic pair or a blue/orange pair.
+The alternate pair changes addition and deletion colors in open and future
+diff views while keeping syntax, terminal, and accent colors theme-owned.
+Chat-code wrapping, diff wrapping and layout, and workspace-file wrapping are
+independent choices in the same file. They apply immediately to open views.
+
 Surface preference affects only surface composition. Theme default preserves
 the variant's recommendation; either override remains active while users move
 between built-in, imported, and linked themes. Forced frost derives window,
@@ -72,6 +79,11 @@ turning the page into a grid of bespoke buttons. Accent remains a compact
 right-aligned swatch control; its three-tone first swatch means “Theme default.”
 Glass is an adjacent conventional settings row with a compact
 `Theme default` / `Frosted` / `Opaque` selector.
+If a saved variant has been removed from the library, startup selects and
+saves the matching Luna built-in so the displayed choice matches the palette.
+The Reset appearance action restores all first-install Appearance preferences,
+including theme choices, typography, width, wrapping, diff presentation, and
+new-thread artwork. It leaves imported and linked library entries available.
 
 ## VS Code import
 

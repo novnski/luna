@@ -3186,7 +3186,9 @@ impl Shell {
                 surface.set_word_wrap(word_wrap, window, cx)
             });
         }
-        self.schedule_save(cx);
+        settings::update(SavePolicy::Immediate, cx, |settings| {
+            settings.files_word_wrap = word_wrap;
+        });
         cx.notify();
     }
 
@@ -4172,6 +4174,10 @@ impl Shell {
         self.settings.code_font_family = current.code_font_family;
         self.settings.code_font_size = current.code_font_size;
         self.settings.transcript_width = current.transcript_width;
+        self.settings.code_fences_fit_content = current.code_fences_fit_content;
+        self.settings.diff_split = current.diff_split;
+        self.settings.diff_wrap = current.diff_wrap;
+        self.settings.diff_color_scheme = current.diff_color_scheme;
     }
 
     fn retry_engine(&mut self, cx: &mut Context<Self>) {
@@ -4402,11 +4408,25 @@ impl Shell {
             SettingsSection::Appearance => {
                 if self.appearance_page.is_none() {
                     let page = cx.new(AppearancePage::new);
-                    self.appearance_settings_sub = Some(cx.subscribe(
+                    self.appearance_settings_sub = Some(cx.subscribe_in(
                         &page,
-                        |this: &mut Shell, _, event: &AppearanceSettingsEvent, cx| match *event {
-                            AppearanceSettingsEvent::CodeFontSizeChanged(size) => {
-                                this.set_code_font_size(size, cx);
+                        window,
+                        |this: &mut Shell, _, event: &AppearanceSettingsEvent, window, cx| {
+                            match *event {
+                                AppearanceSettingsEvent::CodeFontSizeChanged(size) => {
+                                    this.set_code_font_size(size, cx);
+                                }
+                                AppearanceSettingsEvent::FileWordWrapChanged(wrap) => {
+                                    this.set_files_word_wrap(wrap, window, cx);
+                                }
+                                AppearanceSettingsEvent::DiffPreferencesChanged { split, wrap } => {
+                                    for diff in this.diffs.values() {
+                                        diff.update(cx, |diff, cx| {
+                                            diff.apply_appearance_preferences(split, wrap, cx)
+                                        });
+                                    }
+                                    cx.notify();
+                                }
                             }
                         },
                     ));
@@ -7446,6 +7466,8 @@ impl Shell {
         let selected_wash = crate::theme::glass_selected_bg();
         let subline = if search_query.is_some() {
             theme.text_muted
+        } else if theme.appearance.is_light() {
+            theme.text_muted
         } else {
             theme.text_muted.opacity(0.5)
         };
@@ -7586,7 +7608,11 @@ impl Shell {
                                 icon(path)
                                     .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
                                     .flex_none()
-                                    .text_color(tint.unwrap_or(subline).opacity(0.8)),
+                                    .text_color(if theme.appearance.is_light() {
+                                        theme.text_muted
+                                    } else {
+                                        tint.unwrap_or(subline).opacity(0.8)
+                                    }),
                             )
                         },
                     )

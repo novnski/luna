@@ -93,12 +93,35 @@ pub fn init(
     surface: SurfacePreference,
     cx: &mut App,
 ) {
+    // Theme library has already loaded. A deleted or unavailable custom id
+    // must not leave Settings claiming that it is selected while the renderer
+    // silently paints Luna's fallback palette.
+    let registry = luna_theme::ThemeRegistry::active();
+    let mut resolved_themes = themes.clone();
+    for (model, fallback) in [
+        (luna_theme::Appearance::Light, "luna-light"),
+        (luna_theme::Appearance::Dark, "luna-dark"),
+    ] {
+        let selected = resolved_themes.variant_id(model);
+        if !registry
+            .variant(selected)
+            .is_some_and(|variant| variant.appearance == model)
+        {
+            resolved_themes.set_variant(model, fallback);
+        }
+    }
+    if resolved_themes != themes {
+        let restored = resolved_themes.clone();
+        settings::update(SavePolicy::Immediate, cx, |settings| {
+            settings.theme_selection = restored;
+        });
+    }
     let system = Appearance::from_window(cx.window_appearance());
     tracing::debug!(?mode, ?system, "appearance: initial");
     cx.set_global(AppearanceState {
         mode,
         system,
-        themes: themes.clone(),
+        themes: resolved_themes.clone(),
         accent,
         surface,
     });
@@ -106,7 +129,7 @@ pub fn init(
     let appearance = resolve(mode, system);
     Theme::install_selection(
         appearance,
-        themes.variant_id(model_appearance(appearance)),
+        resolved_themes.variant_id(model_appearance(appearance)),
         accent,
         surface,
         cx,
@@ -204,6 +227,15 @@ pub fn set_surface(surface: SurfacePreference, cx: &mut App) {
     settings::update(SavePolicy::Immediate, cx, |settings| {
         settings.surface = surface;
     });
+}
+
+/// Keep the authored theme palette while replacing only the semantic diff pair.
+pub fn set_diff_color_scheme(scheme: settings::DiffColorScheme, cx: &mut App) {
+    if settings::update(SavePolicy::Immediate, cx, |settings| {
+        settings.diff_color_scheme = scheme;
+    }) {
+        apply_registry_change(cx);
+    }
 }
 
 /// Subscribe a window to OS appearance changes. The returned [`Subscription`]

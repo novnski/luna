@@ -6254,7 +6254,11 @@ impl Transcript {
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
                 .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text_muted.opacity(0.55))
+                .text_color(if theme.appearance.is_light() {
+                    theme.text_muted
+                } else {
+                    theme.text_muted.opacity(0.55)
+                })
                 .child(SharedString::from(format_timestamp(ms, &chrono::Local)));
             let copy = copy_text.clone().map(|text| {
                 let entry_id = copy_entry_id.clone();
@@ -7517,13 +7521,13 @@ fn detail_body(
                     .child(
                         div()
                             .flex_none()
-                            .text_color(theme.success)
+                            .text_color(theme.diff_add)
                             .child(SharedString::from(format!("+{}", stat.additions))),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_color(theme.danger)
+                            .text_color(theme.diff_del)
                             .child(SharedString::from(format!("−{}", stat.deletions))),
                     )
             }))

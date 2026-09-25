@@ -795,7 +795,8 @@ impl Theme {
     } else {
         1.0
     };
-    /// Light-mode frost alpha — glass-forward, like dark mode.
+    /// Light-mode frost alpha. A near-solid tint keeps thin metadata readable
+    /// over a changing desktop while retaining a little of the native material.
     ///
     /// A light tint controls the blur less than a dark one: the desktop's
     /// colour bleeds through more readily, so light frost runs *heavier* than
@@ -805,7 +806,7 @@ impl Theme {
     /// see [`Self::glass_overlay`], where light coverage steps up to keep menu
     /// text legible over an unknown backdrop.
     pub const GLASS_ALPHA_LIGHT: f32 = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        0.80
+        0.94
     } else {
         1.0
     };
@@ -1256,6 +1257,24 @@ impl Theme {
         self
     }
 
+    fn with_diff_color_scheme(mut self, scheme: crate::settings::DiffColorScheme) -> Self {
+        if scheme == crate::settings::DiffColorScheme::BlueOrange {
+            let (addition, deletion) = match self.appearance {
+                Appearance::Light => (
+                    ModelColor::rgb(37, 99, 235), // blue-600
+                    ModelColor::rgb(194, 65, 12), // orange-700, readable on light surfaces
+                ),
+                Appearance::Dark => (
+                    ModelColor::rgb(96, 165, 250), // blue-400
+                    ModelColor::rgb(251, 146, 60), // orange-400
+                ),
+            };
+            self.diff_add = model_color(addition);
+            self.diff_del = model_color(deletion);
+        }
+        self
+    }
+
     /// Resolve one complete registered variant and then apply the narrowly
     /// scoped accent policy. Components consume only the resulting semantic
     /// tokens; VS Code keys never escape the importer.
@@ -1396,7 +1415,8 @@ impl Theme {
             .with_font_mono(crate::typography::code_effective_family_name(cx))
             .with_font_terminal(crate::typography::terminal_effective_family_name(cx))
             .with_code_font_size(crate::typography::code_font_size(cx))
-            .with_terminal_font_size(crate::typography::terminal_font_size(cx));
+            .with_terminal_font_size(crate::typography::terminal_font_size(cx))
+            .with_diff_color_scheme(crate::settings::current(cx).diff_color_scheme);
         sync_gpui_base_scrollbar(&next, cx);
         cx.set_global(next);
         // An accent-only swap leaves CURRENT_APPEARANCE unchanged, but cached
@@ -1458,7 +1478,8 @@ impl Theme {
                 .with_font_mono(crate::typography::code_effective_family_name(cx))
                 .with_font_terminal(crate::typography::terminal_effective_family_name(cx))
                 .with_code_font_size(crate::typography::code_font_size(cx))
-                .with_terminal_font_size(crate::typography::terminal_font_size(cx));
+                .with_terminal_font_size(crate::typography::terminal_font_size(cx))
+                .with_diff_color_scheme(crate::settings::current(cx).diff_color_scheme);
         let changed = cx.try_global::<Theme>().is_some_and(|theme| {
             theme.variant_id != next.variant_id
                 || theme.accent_selection != next.accent_selection

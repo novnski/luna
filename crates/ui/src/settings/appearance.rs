@@ -22,6 +22,7 @@ use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::icons;
 use crate::popover::{self, Popup};
 use crate::settings::widgets;
+use crate::settings::{DiffColorScheme, SavePolicy};
 use crate::theme::{Appearance, Theme};
 use crate::theme_library;
 use crate::typography::{self, FontAvailability, UiFontFamily, UiFontSize};
@@ -51,6 +52,8 @@ pub enum FontKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppearanceSettingsEvent {
     CodeFontSizeChanged(f32),
+    FileWordWrapChanged(bool),
+    DiffPreferencesChanged { split: bool, wrap: bool },
 }
 
 impl FontKind {
@@ -235,9 +238,95 @@ pub struct AppearancePage {
     review_entry: Option<String>,
     library_error: Option<SharedString>,
     background_error: Option<SharedString>,
+    reset_confirmation_open: bool,
 }
 
 impl AppearancePage {
+    fn reset_to_defaults(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = crate::settings::remove_new_thread_composer_background(cx) {
+            self.background_error = Some(error.into());
+            self.reset_confirmation_open = false;
+            cx.notify();
+            return;
+        }
+        let defaults = crate::settings::UiSettings::default();
+        crate::settings::update(SavePolicy::Immediate, cx, |settings| {
+            settings.code_fences_fit_content = defaults.code_fences_fit_content;
+            settings.diff_split = defaults.diff_split;
+            settings.diff_wrap = defaults.diff_wrap;
+            settings.diff_color_scheme = defaults.diff_color_scheme;
+            settings.transcript_width = defaults.transcript_width;
+            settings.new_thread_background_effect = defaults.new_thread_background_effect;
+        });
+        appearance::set_mode(defaults.appearance, cx);
+        appearance::set_theme(Appearance::Light, defaults.theme_selection.light, cx);
+        appearance::set_theme(Appearance::Dark, defaults.theme_selection.dark, cx);
+        appearance::set_accent(defaults.accent, cx);
+        appearance::set_surface(defaults.surface, cx);
+        typography::set_family(defaults.ui_font_family, cx);
+        typography::set_font_size(defaults.ui_font_size, window, cx);
+        typography::set_terminal_family(defaults.terminal_font_family, cx);
+        typography::set_terminal_font_size(defaults.terminal_font_size, cx);
+        typography::set_code_family(defaults.code_font_family, cx);
+        typography::set_code_font_size(defaults.code_font_size, cx);
+        cx.emit(AppearanceSettingsEvent::CodeFontSizeChanged(
+            defaults.code_font_size,
+        ));
+        cx.emit(AppearanceSettingsEvent::FileWordWrapChanged(
+            defaults.files_word_wrap,
+        ));
+        self.emit_diff_preferences(cx);
+        appearance::apply_registry_change(cx);
+        self.pending_width = None;
+        self.selected_font = typography::effective(cx);
+        self.selected_terminal_font = typography::terminal_effective(cx);
+        self.selected_code_font = typography::code_effective(cx);
+        self.selected_size = typography::font_size(cx);
+        self.selected_terminal_size = typography::terminal_font_size(cx);
+        self.selected_code_size = typography::code_font_size(cx);
+        self.background_error = None;
+        self.reset_confirmation_open = false;
+        cx.refresh_windows();
+    }
+
+    fn toggle_chat_code_wrap(&mut self, cx: &mut Context<Self>) {
+        let enabled = !crate::settings::current(cx).code_fences_fit_content;
+        crate::settings::update(SavePolicy::Immediate, cx, |settings| {
+            settings.code_fences_fit_content = enabled;
+        });
+        cx.refresh_windows();
+    }
+
+    fn toggle_diff_wrap(&mut self, cx: &mut Context<Self>) {
+        let wrap = !crate::settings::current(cx).diff_wrap;
+        crate::settings::update(SavePolicy::Immediate, cx, |settings| {
+            settings.diff_wrap = wrap;
+        });
+        self.emit_diff_preferences(cx);
+    }
+
+    fn toggle_file_wrap(&mut self, cx: &mut Context<Self>) {
+        let wrap = !crate::settings::current(cx).files_word_wrap;
+        cx.emit(AppearanceSettingsEvent::FileWordWrapChanged(wrap));
+        cx.notify();
+    }
+
+    fn set_diff_layout(&mut self, split: bool, cx: &mut Context<Self>) {
+        crate::settings::update(SavePolicy::Immediate, cx, |settings| {
+            settings.diff_split = split;
+        });
+        self.emit_diff_preferences(cx);
+    }
+
+    fn emit_diff_preferences(&mut self, cx: &mut Context<Self>) {
+        let settings = crate::settings::current(cx);
+        cx.emit(AppearanceSettingsEvent::DiffPreferencesChanged {
+            split: settings.diff_split,
+            wrap: settings.diff_wrap,
+        });
+        cx.notify();
+    }
+
     fn queue_width(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
         let width = crate::settings::normalize_transcript_width(width);
         if self
@@ -306,6 +395,10 @@ impl AppearancePage {
             || (self.width_keyboard_active && self.width_focus.is_focused(window));
         let slider = div()
             .id("transcript-width-slider")
+            .role(gpui::Role::Slider)
+            .aria_label("Conversation width")
+            .aria_value(format!("{} pixels", width as u32))
+            .tab_index(0)
             .track_focus(&self.width_focus)
             .relative()
             .w(px(240.0))
@@ -509,7 +602,14 @@ impl AppearancePage {
             review_entry: None,
             library_error: None,
             background_error: None,
+            reset_confirmation_open: false,
         }
+    }
+
+    #[doc(hidden)]
+    pub fn fixture_scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.scroll.scroll.scroll_to_bottom();
+        cx.notify();
     }
 
     fn font_menu(&self, kind: FontKind) -> &Popup<()> {
@@ -1076,11 +1176,24 @@ impl AppearancePage {
         cx.notify();
     }
 
+    fn toggle_import_variant(&mut self, variant_id: &str, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.import_dialog.as_mut()
+            && !dialog.selected.remove(variant_id)
+        {
+            dialog.selected.insert(variant_id.to_owned());
+        }
+        cx.notify();
+    }
+
     fn on_scroll_hovered(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
         if self.scroll.set_list_hovered(*hovered) {
             cx.notify();
         }
     }
+}
+
+fn is_activation_key(event: &KeyDownEvent) -> bool {
+    !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space")
 }
 
 impl popover::ScrollRailHost for AppearancePage {
@@ -1262,6 +1375,14 @@ fn surface_choice(
             "appearance-surface-{}",
             surface_label(surface).to_lowercase().replace(' ', "-")
         )))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Glass: {}", surface_label(surface)))
+        .aria_toggled(if selected {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .tab_index(0)
         .h(px(30.0))
         .px(px(10.0))
         .rounded(px(7.0))
@@ -1292,6 +1413,78 @@ fn surface_choice(
         .child(surface_label(surface))
 }
 
+fn preference_choice(
+    theme: &Theme,
+    label: &'static str,
+    id: &'static str,
+    selected: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let focus_color = theme.accent;
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .aria_toggled(if selected {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .tab_index(0)
+        .focus_visible(move |style| style.border_2().border_color(focus_color))
+        .h(px(30.0))
+        .px(px(10.0))
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(if selected { theme.accent } else { theme.border })
+        .bg(if selected {
+            theme.accent_wash
+        } else {
+            theme.surface_raised
+        })
+        .text_size(crate::typography::ui_rems(11.5))
+        .font_weight(if selected {
+            gpui::FontWeight::MEDIUM
+        } else {
+            gpui::FontWeight::NORMAL
+        })
+        .text_color(if selected {
+            theme.accent
+        } else {
+            theme.text_muted
+        })
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .when(!selected, |control| {
+            control.hover(|style| style.bg(theme.surface_raised_hover))
+        })
+        .child(label)
+}
+
+fn preference_row(
+    theme: &Theme,
+    first: bool,
+    icon: &'static str,
+    title: &'static str,
+    description: &'static str,
+    control: AnyElement,
+) -> AnyElement {
+    widgets::card_row(theme, first)
+        .child(widgets::row_tile(theme, icon))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(widgets::row_title(theme, title))
+                .child(widgets::meta_line(
+                    theme,
+                    vec![div().child(description).into_any_element()],
+                )),
+        )
+        .child(div().flex_none().ml(px(10.0)).child(control))
+        .into_any_element()
+}
+
 fn background_effect_choice(
     theme: &Theme,
     effect: crate::settings::NewThreadBackgroundEffect,
@@ -1302,6 +1495,14 @@ fn background_effect_choice(
             "new-thread-background-effect-{}",
             effect.label().to_lowercase()
         )))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Background effect: {}", effect.label()))
+        .aria_toggled(if selected {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .tab_index(0)
         .h(px(28.0))
         .px(px(9.0))
         .rounded(px(7.0))
@@ -1465,6 +1666,9 @@ fn compact_action(
     let id = id.into();
     popover::btn_ghost(theme, label, id.clone())
         .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
         .h(px(28.0))
         .px(px(9.0))
         .py(px(0.0))
@@ -1684,6 +1888,14 @@ fn accent_swatch(
     };
     div()
         .id(SharedString::from(format!("accent-{}", selection.label())))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Accent color: {}", selection.label()))
+        .aria_toggled(if selected {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .tab_index(0)
         .flex_none()
         .w(px(30.0))
         .h(px(34.0))
@@ -1736,6 +1948,21 @@ impl AppearancePage {
         }
     }
 
+    fn toggle_theme_menu(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
+        if self.theme_menu(appearance).is_open() {
+            self.close_theme_menu(appearance, cx);
+        } else {
+            let other = if appearance.is_light() {
+                Appearance::Dark
+            } else {
+                Appearance::Light
+            };
+            self.close_theme_menu(other, cx);
+            self.theme_menu_mut(appearance).open(());
+        }
+        cx.notify();
+    }
+
     fn render_font_picker(
         &mut self,
         kind: FontKind,
@@ -1774,6 +2001,8 @@ impl AppearancePage {
                 let label = SharedString::from(family.label().to_owned());
                 popover::menu_row_nav(theme, active, focused, format!("{slug}-font-option-{ix}"))
                     .id(SharedString::from(format!("{slug}-font-option-{ix}")))
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("{} family: {}", kind.label(), family.label()))
                     .when(available, |row| {
                         row.on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -1857,6 +2086,9 @@ impl AppearancePage {
         let closing = self.font_menu(kind).closing_since();
         div()
             .id(SharedString::from(format!("{slug}-font-dropdown")))
+            .role(gpui::Role::Button)
+            .aria_label(format!("{} family: {}", kind.label(), effective.label()))
+            .tab_index(0)
             .relative()
             .w(px(220.0))
             .h(px(36.0))
@@ -1933,6 +2165,8 @@ impl AppearancePage {
                     format!("{slug}-font-size-option-{ix}"),
                 )
                 .id(SharedString::from(format!("{slug}-font-size-option-{ix}")))
+                .role(gpui::Role::Button)
+                .aria_label(format!("{} size: {}", kind.label(), label))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
                     this.set_selected_size_ix(kind, ix);
@@ -1964,6 +2198,9 @@ impl AppearancePage {
         let closing = self.size_menu(kind).closing_since();
         div()
             .id(SharedString::from(format!("{slug}-font-size-dropdown")))
+            .role(gpui::Role::Button)
+            .aria_label(format!("{} size: {}", kind.label(), labels[current]))
+            .tab_index(0)
             .relative()
             .w(px(128.0))
             .h(px(36.0))
@@ -2042,6 +2279,17 @@ impl AppearancePage {
                     "dark"
                 }
             )))
+            .role(gpui::Role::Button)
+            .aria_label(format!(
+                "{} theme: {}",
+                if appearance_kind.is_light() {
+                    "Light"
+                } else {
+                    "Dark"
+                },
+                selected_variant.name
+            ))
+            .tab_index(0)
             .relative()
             .flex_none()
             .w(px(218.0))
@@ -2081,6 +2329,13 @@ impl AppearancePage {
                     this.theme_menu_mut(appearance_kind).open(());
                 }
                 cx.notify();
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if is_activation_key(event) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    this.toggle_theme_menu(appearance_kind, cx);
+                }
             }))
             .child(palette_preview(&selected_theme))
             .child(
@@ -2122,6 +2377,7 @@ impl AppearancePage {
                         .enumerate()
                         .map(|(index, variant)| {
                             let id = variant.id.clone();
+                            let key_id = id.clone();
                             let name = variant.name.clone();
                             let active = id == selected_id;
                             let sample = Theme::for_selection(
@@ -2140,11 +2396,38 @@ impl AppearancePage {
                             .id(SharedString::from(format!(
                                 "appearance-theme-row-{appearance_kind:?}-{index}"
                             )))
+                            .role(gpui::Role::Button)
+                            .aria_label(format!(
+                                "{} theme: {}",
+                                if appearance_kind.is_light() {
+                                    "Light"
+                                } else {
+                                    "Dark"
+                                },
+                                name
+                            ))
+                            .aria_toggled(if active {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .tab_index(0)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 appearance::set_theme(appearance_kind, id.clone(), cx);
                                 this.close_theme_menu(appearance_kind, cx);
                                 cx.notify();
                             }))
+                            .on_key_down(cx.listener(
+                                move |this, event: &KeyDownEvent, window, cx| {
+                                    if is_activation_key(event) {
+                                        window.prevent_default();
+                                        cx.stop_propagation();
+                                        appearance::set_theme(appearance_kind, key_id.clone(), cx);
+                                        this.close_theme_menu(appearance_kind, cx);
+                                        cx.notify();
+                                    }
+                                },
+                            ))
                             .child(palette_preview(&sample))
                             .child(div().flex_1().min_w_0().truncate().child(name))
                             .when(active, |row| {
@@ -2206,6 +2489,14 @@ impl AppearancePage {
                     "theme-import-mode-{}",
                     slug(label)
                 )))
+                .role(gpui::Role::Button)
+                .aria_label(label)
+                .aria_toggled(if active {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .tab_index(0)
                 .flex_1()
                 .min_w_0()
                 .p(px(10.0))
@@ -2226,6 +2517,16 @@ impl AppearancePage {
                         dialog.mode = value;
                     }
                     cx.notify();
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if is_activation_key(event) {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        if let Some(dialog) = this.import_dialog.as_mut() {
+                            dialog.mode = value;
+                        }
+                        cx.notify();
+                    }
                 }))
                 .child(
                     div()
@@ -2356,6 +2657,7 @@ impl AppearancePage {
             );
             for variant in &compilation.family.variants {
                 let variant_id = variant.id.clone();
+                let key_variant_id = variant_id.clone();
                 let selected_now = selected.contains(&variant_id);
                 let review_open = review_variant.as_deref() == Some(variant_id.as_str());
                 let appearance = if variant.appearance.is_dark() {
@@ -2398,6 +2700,14 @@ impl AppearancePage {
                                         .id(SharedString::from(format!(
                                             "theme-import-select-{variant_id}"
                                         )))
+                                        .role(gpui::Role::Switch)
+                                        .aria_label(format!("Import {}", variant.name))
+                                        .aria_toggled(if selected_now {
+                                            gpui::Toggled::True
+                                        } else {
+                                            gpui::Toggled::False
+                                        })
+                                        .tab_index(0)
                                         .size(px(18.0))
                                         .rounded(px(5.0))
                                         .border_1()
@@ -2421,14 +2731,18 @@ impl AppearancePage {
                                         .on_click(cx.listener({
                                             let variant_id = variant_id.clone();
                                             move |this, _, _, cx| {
-                                                if let Some(dialog) = this.import_dialog.as_mut() {
-                                                    if !dialog.selected.remove(&variant_id) {
-                                                        dialog.selected.insert(variant_id.clone());
-                                                    }
-                                                }
-                                                cx.notify();
+                                                this.toggle_import_variant(&variant_id, cx)
                                             }
-                                        })),
+                                        }))
+                                        .on_key_down(cx.listener(
+                                            move |this, event: &KeyDownEvent, window, cx| {
+                                                if is_activation_key(event) {
+                                                    window.prevent_default();
+                                                    cx.stop_propagation();
+                                                    this.toggle_import_variant(&key_variant_id, cx);
+                                                }
+                                            },
+                                        )),
                                 )
                                 .child(palette_preview(&sample))
                                 .child(
@@ -2571,6 +2885,9 @@ impl AppearancePage {
             .child(
                 div()
                     .id("theme-import-close")
+                    .role(gpui::Role::Button)
+                    .aria_label("Close theme import")
+                    .tab_index(0)
                     .size(px(28.0))
                     .rounded(px(7.0))
                     .border_1()
@@ -2584,6 +2901,14 @@ impl AppearancePage {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.import_dialog = None;
                         cx.notify();
+                    }))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.import_dialog = None;
+                            cx.notify();
+                        }
                     }))
                     .child(
                         icons::icon(icons::CLOSE)
@@ -2609,6 +2934,14 @@ impl AppearancePage {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.import_dialog = None;
                         cx.notify();
+                    }))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.import_dialog = None;
+                            cx.notify();
+                        }
                     })),
             )
             .child(
@@ -2621,6 +2954,13 @@ impl AppearancePage {
                     },
                 )
                 .id("theme-import-action")
+                .role(gpui::Role::Button)
+                .aria_label(if compilation.is_some() {
+                    "Import selected"
+                } else {
+                    "Analyze theme"
+                })
+                .tab_index(0)
                 .h(px(34.0))
                 .px(px(14.0))
                 .py(px(0.0))
@@ -2630,17 +2970,33 @@ impl AppearancePage {
                     button.opacity(0.45)
                 })
                 .when(compilation.is_none() || ready, |button| {
-                    button.on_click(cx.listener(move |this, _, _, cx| {
-                        if this
-                            .import_dialog
-                            .as_ref()
-                            .is_some_and(|dialog| dialog.compilation.is_some())
-                        {
-                            this.finish_import(cx);
-                        } else {
-                            this.compile_import(cx);
-                        }
-                    }))
+                    button
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this
+                                .import_dialog
+                                .as_ref()
+                                .is_some_and(|dialog| dialog.compilation.is_some())
+                            {
+                                this.finish_import(cx);
+                            } else {
+                                this.compile_import(cx);
+                            }
+                        }))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if is_activation_key(event) {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                                if this
+                                    .import_dialog
+                                    .as_ref()
+                                    .is_some_and(|dialog| dialog.compilation.is_some())
+                                {
+                                    this.finish_import(cx);
+                                } else {
+                                    this.compile_import(cx);
+                                }
+                            }
+                        }))
                 }),
             );
 
@@ -2699,6 +3055,12 @@ impl AppearancePage {
             .find(|entry| &entry.id == entry_id)?;
         let mut card = popover::dialog_card(theme)
             .id("theme-review-card")
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    this.review_entry = None;
+                    cx.notify();
+                }
+            }))
             .w(px(660.0))
             .max_h(px(720.0))
             .overflow_y_scroll()
@@ -2725,14 +3087,97 @@ impl AppearancePage {
             div().mt(px(16.0)).flex().justify_end().child(
                 popover::btn_primary(theme, "Done")
                     .id("theme-review-close")
+                    .role(gpui::Role::Button)
+                    .aria_label("Done reviewing theme")
+                    .tab_index(0)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.review_entry = None;
                         cx.notify();
+                    }))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.review_entry = None;
+                            cx.notify();
+                        }
                     })),
             ),
         );
         Some(popover::modal(
             "theme-review-dialog",
+            viewport,
+            card.into_any_element(),
+        ))
+    }
+
+    fn render_reset_dialog(
+        &mut self,
+        viewport: gpui::Size<gpui::Pixels>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.reset_confirmation_open {
+            return None;
+        }
+        let card = popover::dialog_card(theme)
+            .id("appearance-reset-card")
+            .w(px(480.0))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    this.reset_confirmation_open = false;
+                    cx.notify();
+                }
+            }))
+            .child(popover::dialog_title(theme, "Reset appearance?"))
+            .child(
+                popover::dialog_body(
+                    theme,
+                    "Restore the first-install themes, fonts, accent, glass, width, wrapping, and diff choices. The new-thread image is removed. Imported themes stay in your library.",
+                )
+                .mt(px(8.0)),
+            )
+            .child(
+                div()
+                    .mt(px(20.0))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .child(
+                        compact_action(theme, "Cancel", "appearance-reset-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.reset_confirmation_open = false;
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if is_activation_key(event) {
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                    this.reset_confirmation_open = false;
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child(
+                        popover::btn_primary(theme, "Reset appearance")
+                            .id("appearance-reset-confirm")
+                            .role(gpui::Role::Button)
+                            .aria_label("Reset appearance to first-install defaults")
+                            .tab_index(0)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.reset_to_defaults(window, cx);
+                            }))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if is_activation_key(event) {
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                    this.reset_to_defaults(window, cx);
+                                }
+                            })),
+                    ),
+            );
+        Some(popover::modal(
+            "appearance-reset-dialog",
             viewport,
             card.into_any_element(),
         ))
@@ -2912,7 +3357,17 @@ impl AppearancePage {
                 .child(
                     popover::btn_primary(theme, "Add theme")
                         .id("theme-library-add")
-                        .on_click(cx.listener(|this, _, _, cx| this.open_import(cx))),
+                        .role(gpui::Role::Button)
+                        .aria_label("Add theme")
+                        .tab_index(0)
+                        .on_click(cx.listener(|this, _, _, cx| this.open_import(cx)))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if is_activation_key(event) {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                                this.open_import(cx);
+                            }
+                        })),
                 )
                 .into_any_element(),
         ];
@@ -2985,10 +3440,28 @@ impl Render for AppearancePage {
                     preview(mode, &current_themes, current_accent, current_surface),
                 )
                 .id(SharedString::from(format!("appearance-{}", mode.label())))
+                .role(gpui::Role::Button)
+                .aria_label(format!("Appearance: {}", mode.label()))
+                .aria_toggled(if mode == current_mode {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .tab_index(0)
                 .on_click(cx.listener(move |_, _, _, cx| {
                     appearance::set_mode(mode, cx);
                     cx.notify();
                 }))
+                .on_key_down(cx.listener(
+                    move |_, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            appearance::set_mode(mode, cx);
+                            cx.notify();
+                        }
+                    },
+                ))
             })
             .collect::<Vec<_>>();
 
@@ -3033,23 +3506,37 @@ impl Render for AppearancePage {
             .into_iter()
             .map(|selection| {
                 let selected = selection == current_accent;
-                accent_swatch(&theme, selection, selected).on_click(cx.listener(
-                    move |_, _, _, cx| {
+                accent_swatch(&theme, selection, selected)
+                    .on_click(cx.listener(move |_, _, _, cx| {
                         appearance::set_accent(selection, cx);
                         cx.notify();
-                    },
-                ))
+                    }))
+                    .on_key_down(cx.listener(move |_, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            appearance::set_accent(selection, cx);
+                            cx.notify();
+                        }
+                    }))
             })
             .collect::<Vec<_>>();
         let surface_controls = SurfacePreference::ALL
             .into_iter()
             .map(|surface| {
-                surface_choice(&theme, surface, surface == current_surface).on_click(cx.listener(
-                    move |_, _, _, cx| {
+                surface_choice(&theme, surface, surface == current_surface)
+                    .on_click(cx.listener(move |_, _, _, cx| {
                         appearance::set_surface(surface, cx);
                         cx.notify();
-                    },
-                ))
+                    }))
+                    .on_key_down(cx.listener(move |_, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            appearance::set_surface(surface, cx);
+                            cx.notify();
+                        }
+                    }))
             })
             .collect::<Vec<_>>();
         let mut settings_rows = theme_rows;
@@ -3181,8 +3668,17 @@ impl Render for AppearancePage {
                                         "Replace image",
                                         "new-thread-background-replace",
                                     )
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| this.choose_new_thread_background(cx),
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.choose_new_thread_background(cx)
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &KeyDownEvent, window, cx| {
+                                            if is_activation_key(event) {
+                                                window.prevent_default();
+                                                cx.stop_propagation();
+                                                this.choose_new_thread_background(cx);
+                                            }
+                                        },
                                     )),
                                 )
                                 .child(
@@ -3192,8 +3688,17 @@ impl Render for AppearancePage {
                                         "new-thread-background-remove",
                                     )
                                     .text_color(theme.danger)
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| this.remove_new_thread_background(cx),
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.remove_new_thread_background(cx)
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &KeyDownEvent, window, cx| {
+                                            if is_activation_key(event) {
+                                                window.prevent_default();
+                                                cx.stop_propagation();
+                                                this.remove_new_thread_background(cx);
+                                            }
+                                        },
                                     )),
                                 )
                         })
@@ -3204,8 +3709,17 @@ impl Render for AppearancePage {
                                     "Choose image",
                                     "new-thread-background-choose",
                                 )
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| this.choose_new_thread_background(cx),
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.choose_new_thread_background(cx)
+                                }))
+                                .on_key_down(cx.listener(
+                                    |this, event: &KeyDownEvent, window, cx| {
+                                        if is_activation_key(event) {
+                                            window.prevent_default();
+                                            cx.stop_propagation();
+                                            this.choose_new_thread_background(cx);
+                                        }
+                                    },
                                 )),
                             )
                         }),
@@ -3220,6 +3734,14 @@ impl Render for AppearancePage {
                         .on_click(cx.listener(move |_, _, _, cx| {
                             crate::settings::set_new_thread_background_effect(effect, cx);
                             cx.notify();
+                        }))
+                        .on_key_down(cx.listener(move |_, event: &KeyDownEvent, window, cx| {
+                            if is_activation_key(event) {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                                crate::settings::set_new_thread_background_effect(effect, cx);
+                                cx.notify();
+                            }
                         }))
                 })
                 .collect::<Vec<_>>();
@@ -3272,7 +3794,8 @@ impl Render for AppearancePage {
             .or_else(|| theme_library::load_warning(cx).map(SharedString::from));
         let modal = self
             .render_import_dialog(window.viewport_size(), &theme, window, cx)
-            .or_else(|| self.render_review_dialog(window.viewport_size(), &theme, cx));
+            .or_else(|| self.render_review_dialog(window.viewport_size(), &theme, cx))
+            .or_else(|| self.render_reset_dialog(window.viewport_size(), &theme, cx));
 
         let ui_picker =
             self.render_font_picker(FontKind::Ui, &theme, &availability, fixed.clone(), cx);
@@ -3350,6 +3873,223 @@ impl Render for AppearancePage {
             }
         }
 
+        let mut code_rows = Vec::new();
+        let focus_color = theme.accent;
+        code_rows.push(preference_row(
+            &theme,
+            true,
+            icons::WRAP_TEXT,
+            "Chat code wrapping",
+            "Fit long code lines to the conversation instead of scrolling sideways.",
+            widgets::toggle_switch(&theme, ui_settings.code_fences_fit_content)
+                .id("appearance-chat-code-wrap")
+                .role(gpui::Role::Switch)
+                .aria_label("Chat code wrapping")
+                .aria_toggled(if ui_settings.code_fences_fit_content {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .tab_index(0)
+                .focus_visible(move |style| style.border_2().border_color(focus_color))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_chat_code_wrap(cx)))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if is_activation_key(event) {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.toggle_chat_code_wrap(cx);
+                    }
+                }))
+                .into_any_element(),
+        ));
+        code_rows.push(preference_row(
+            &theme,
+            false,
+            icons::WRAP_TEXT,
+            "Diff wrapping",
+            "Wrap long source lines in open and future diff panes.",
+            widgets::toggle_switch(&theme, ui_settings.diff_wrap)
+                .id("appearance-diff-wrap")
+                .role(gpui::Role::Switch)
+                .aria_label("Diff wrapping")
+                .aria_toggled(if ui_settings.diff_wrap {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .tab_index(0)
+                .focus_visible(move |style| style.border_2().border_color(focus_color))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_wrap(cx)))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if is_activation_key(event) {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.toggle_diff_wrap(cx);
+                    }
+                }))
+                .into_any_element(),
+        ));
+        code_rows.push(preference_row(
+            &theme,
+            false,
+            icons::FILE_CODE,
+            "Workspace file wrapping",
+            "Wrap long lines in open and future file editors and previews.",
+            widgets::toggle_switch(&theme, ui_settings.files_word_wrap)
+                .id("appearance-file-wrap")
+                .role(gpui::Role::Switch)
+                .aria_label("Workspace file wrapping")
+                .aria_toggled(if ui_settings.files_word_wrap {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .tab_index(0)
+                .focus_visible(move |style| style.border_2().border_color(focus_color))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_file_wrap(cx)))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if is_activation_key(event) {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.toggle_file_wrap(cx);
+                    }
+                }))
+                .into_any_element(),
+        ));
+        let layout_controls = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                preference_choice(
+                    &theme,
+                    "Unified",
+                    "appearance-diff-unified",
+                    !ui_settings.diff_split,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.set_diff_layout(false, cx)))
+                .on_key_down(cx.listener(
+                    |this, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.set_diff_layout(false, cx);
+                        }
+                    },
+                )),
+            )
+            .child(
+                preference_choice(
+                    &theme,
+                    "Side by side",
+                    "appearance-diff-split",
+                    ui_settings.diff_split,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.set_diff_layout(true, cx)))
+                .on_key_down(cx.listener(
+                    |this, event: &KeyDownEvent, window, cx| {
+                        if is_activation_key(event) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.set_diff_layout(true, cx);
+                        }
+                    },
+                )),
+            );
+        code_rows.push(preference_row(
+            &theme,
+            false,
+            icons::LIST,
+            "Diff layout",
+            "Show changes in one column or compare old and new side by side.",
+            layout_controls.into_any_element(),
+        ));
+        let color_controls = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                preference_choice(
+                    &theme,
+                    "Red & green",
+                    "appearance-diff-red-green",
+                    ui_settings.diff_color_scheme == DiffColorScheme::RedGreen,
+                )
+                .on_click(cx.listener(|_, _, _, cx| {
+                    appearance::set_diff_color_scheme(DiffColorScheme::RedGreen, cx);
+                    cx.notify();
+                }))
+                .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
+                    if is_activation_key(event) {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        appearance::set_diff_color_scheme(DiffColorScheme::RedGreen, cx);
+                        cx.notify();
+                    }
+                })),
+            )
+            .child(
+                preference_choice(
+                    &theme,
+                    "Blue & orange",
+                    "appearance-diff-blue-orange",
+                    ui_settings.diff_color_scheme == DiffColorScheme::BlueOrange,
+                )
+                .on_click(cx.listener(|_, _, _, cx| {
+                    appearance::set_diff_color_scheme(DiffColorScheme::BlueOrange, cx);
+                    cx.notify();
+                }))
+                .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
+                    if is_activation_key(event) {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        appearance::set_diff_color_scheme(DiffColorScheme::BlueOrange, cx);
+                        cx.notify();
+                    }
+                })),
+            );
+        code_rows.push(preference_row(
+            &theme,
+            false,
+            icons::TUNING,
+            "Diff colors",
+            "Choose an addition and deletion pair that is easy for you to distinguish.",
+            color_controls.into_any_element(),
+        ));
+
+        let reset_section = div()
+            .mt(px(36.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(widgets::field_label(&theme, "Reset"))
+            .child(
+                widgets::section_card(&theme).child(preference_row(
+                    &theme,
+                    true,
+                    icons::TUNING,
+                    "Reset appearance",
+                    "Restore the first-install look without deleting imported themes.",
+                    compact_action(&theme, "Restore defaults", "appearance-reset-open")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.reset_confirmation_open = true;
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if is_activation_key(event) {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                                this.reset_confirmation_open = true;
+                                cx.notify();
+                            }
+                        }))
+                        .into_any_element(),
+                )),
+            );
+
         let scrollbar = popover::rail(self, "appearance-page-scrollbar", &theme, cx);
         div()
             .id("appearance-page-host")
@@ -3409,6 +4149,16 @@ impl Render for AppearancePage {
                             )
                             .child(widgets::section_card(&theme).children(settings_rows))
                             .child(font_section)
+                            .child(
+                                div()
+                                    .mt(px(36.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(12.0))
+                                    .child(widgets::field_label(&theme, "Code & diffs"))
+                                    .child(widgets::section_card(&theme).children(code_rows)),
+                            )
+                            .child(reset_section)
                             .when_some(library_warning, |page, warning| {
                                 page.child(
                                     div()
