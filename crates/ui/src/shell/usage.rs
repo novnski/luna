@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use luna_proto::{
-    CostQuality, LimitAvailability, USAGE_CONTRACT_VERSION, USAGE_LIMIT_FRESHNESS_MS, UsageBucket,
-    UsageLimitSnapshot, UsagePriceRate, UsageProvider, UsageResetState, UsageSnapshot,
-    UsageSourceStatus,
+    ChatIndicator, CostQuality, HarnessId, LimitAvailability, USAGE_CONTRACT_VERSION,
+    USAGE_LIMIT_FRESHNESS_MS, UsageBucket, UsageLimitSnapshot, UsagePriceRate, UsageProvider,
+    UsageResetState, UsageSnapshot, UsageSourceStatus,
 };
 use luna_rpc::methods;
 
@@ -861,27 +861,15 @@ impl Shell {
         };
         self.usage_environment_snapshots
             .iter()
-            .find(|snapshot| {
-                snapshot
-                    .summary
-                    .sources
-                    .iter()
-                    .any(|source| &source.environment_id == filter)
-            })
-            .cloned()
+            .find(|(device, _)| device == filter)
+            .map(|(_, snapshot)| snapshot.clone())
     }
 
     fn cycle_usage_environment(&mut self, cx: &mut Context<Self>) {
         let environments: Vec<_> = self
             .usage_environment_snapshots
             .iter()
-            .filter_map(|snapshot| {
-                snapshot
-                    .summary
-                    .sources
-                    .first()
-                    .map(|source| source.environment_id.clone())
-            })
+            .map(|(device, _)| device.clone())
             .collect();
         let next = match &self.usage_environment_filter {
             None => environments.first().cloned(),
@@ -892,6 +880,68 @@ impl Shell {
         };
         self.usage_environment_filter = next;
         cx.notify();
+    }
+
+    fn can_show_usage_alert(&self) -> bool {
+        !self.settings.usage_sidebar_hidden
+            && !self.settings.sidebar_collapsed
+            && matches!(&self.route, super::Route::Chat)
+    }
+
+    fn working_usage_targets(&self, cx: &Context<Self>) -> Vec<(String, UsageProvider)> {
+        let state = self.state.read(cx);
+        let now = Utc::now();
+        state
+            .visible_chats()
+            .filter(|chat| state.display_status_for(chat, now) == ChatIndicator::Working)
+            .filter_map(|chat| {
+                let provider = match chat.config.as_ref()?.harness {
+                    HarnessId::Codex => UsageProvider::Codex,
+                    HarnessId::Opencode => UsageProvider::OpenCodeGo,
+                    HarnessId::ClaudeCode => UsageProvider::Claude,
+                    _ => return None,
+                };
+                Some((chat.device_id.clone(), provider))
+            })
+            .collect()
+    }
+
+    fn maybe_open_low_usage_card(&mut self, cx: &mut Context<Self>) {
+        let active = self.working_usage_targets(cx);
+        let can_show = self.can_show_usage_alert();
+        let now_ms = Utc::now().timestamp_millis();
+        let mut alert = None;
+        for (device, snapshot) in &self.usage_environment_snapshots {
+            for limit in snapshot
+                .limits
+                .iter()
+                .filter(|limit| limit.is_fresh(now_ms))
+            {
+                let key = (device.clone(), limit.provider);
+                let low = limit.windows.iter().any(|window| {
+                    window.used_percent.is_finite()
+                        && window.used_percent > 95.0
+                        && window.used_percent <= 100.0
+                        && window.resets_at_ms.is_none_or(|reset| reset > now_ms)
+                });
+                if !low {
+                    self.usage_alerted.retain(|alerted| alerted != &key);
+                } else if can_show && active.contains(&key) && !self.usage_alerted.contains(&key) {
+                    self.usage_alerted.push(key.clone());
+                    if alert.is_none() {
+                        alert = Some(key);
+                    }
+                }
+            }
+        }
+        if let Some((device, provider)) = alert
+            && !self.usage_card_open
+        {
+            self.usage_card_open = true;
+            self.usage_environment_filter = Some(device);
+            self.usage_provider_filter = Some(provider);
+            cx.notify();
+        }
     }
 
     pub(super) fn refresh_usage(&mut self, cx: &mut Context<Self>) {
@@ -924,14 +974,15 @@ impl Shell {
                 let engine = engine.clone();
                 let price_overrides = price_overrides.clone();
                 async move {
-                    tokio::time::timeout(
+                    let result = tokio::time::timeout(
                         std::time::Duration::from_secs(8),
                         engine.client().call(
                             methods::GET_USAGE_SNAPSHOT,
                             serde_json::json!({"days": days, "targetDeviceId": device, "priceOverrides": price_overrides}),
                         ),
                     )
-                    .await
+                    .await;
+                    (device, result)
                 }
             }))
             .await
@@ -953,20 +1004,25 @@ impl Shell {
                 };
                 let mut snapshots = Vec::new();
                 let mut failures = 0;
-                for result in results {
+                for (device, result) in results {
                     match result {
                         Ok(Ok(value)) => match serde_json::from_value::<UsageSnapshot>(value) {
                             Ok(snapshot)
                                 if snapshot.summary.contract_version == USAGE_CONTRACT_VERSION =>
                             {
-                                snapshots.push(snapshot)
+                                snapshots.push((device, snapshot))
                             }
                             _ => failures += 1,
                         },
                         _ => failures += 1,
                     }
                 }
-                if let Some(mut merged) = luna_proto::merge_usage_snapshots(snapshots.clone()) {
+                if let Some(mut merged) = luna_proto::merge_usage_snapshots(
+                    snapshots
+                        .iter()
+                        .map(|(_, snapshot)| snapshot.clone())
+                        .collect(),
+                ) {
                     if failures > 0 {
                         merged.summary.partial = true;
                         merged
@@ -996,6 +1052,7 @@ impl Shell {
                             "{failures} environments unavailable; showing partial usage"
                         ));
                     }
+                    shell.maybe_open_low_usage_card(cx);
                 } else {
                     shell.usage_error = Some("Usage refresh failed; showing last good data".into());
                 }
@@ -1007,9 +1064,14 @@ impl Shell {
     }
 
     pub(super) fn maybe_auto_refresh_usage(&mut self, cx: &mut Context<Self>) {
+        self.maybe_open_low_usage_card(cx);
         let visible = (!self.settings.usage_sidebar_hidden && self.usage_card_open)
             || matches!(&self.route, super::Route::Settings(SettingsSection::Usage));
-        if !visible || self.usage_refreshing || self.state.read(cx).engine().is_none() {
+        let watching = self.can_show_usage_alert() && !self.working_usage_targets(cx).is_empty();
+        if (!visible && !watching)
+            || self.usage_refreshing
+            || self.state.read(cx).engine().is_none()
+        {
             return;
         }
         if self.usage_card_open

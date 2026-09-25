@@ -1,7 +1,7 @@
 //! Headless screenshots of the compact Usage card and optional local settings.
 
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
-use luna_proto::HarnessId;
+use luna_proto::{ChatConfig, HarnessId, PermissionMode, SandboxLevel, Session, SessionStatus};
 use luna_ui::*;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -200,9 +200,21 @@ fn main() -> anyhow::Result<()> {
                     .timer(Duration::from_millis(250))
                     .await;
                 let result = (|| -> anyhow::Result<()> {
-                    capture(window.into(), cx, &capture_output.join("usage-codex.png"))?;
+                    window.update(cx, |shell, _, _| {
+                        assert!(!shell.fixture_usage_card_is_open());
+                    })?;
+                    capture(
+                        window.into(),
+                        cx,
+                        &capture_output.join("usage-startup-closed.png"),
+                    )?;
                     // Exercise the footer action through the rendered window.
                     // The 600x500 fixture places Usage at (101, 474).
+                    click(window.into(), cx, 101.0, 474.0)?;
+                    window.update(cx, |shell, _, _| {
+                        assert!(shell.fixture_usage_card_is_open());
+                    })?;
+                    capture(window.into(), cx, &capture_output.join("usage-codex.png"))?;
                     click(window.into(), cx, 101.0, 474.0)?;
                     capture(window.into(), cx, &capture_output.join("usage-closed.png"))?;
                     click(window.into(), cx, 101.0, 474.0)?;
@@ -216,6 +228,67 @@ fn main() -> anyhow::Result<()> {
                         window.into(),
                         cx,
                         &capture_output.join("usage-opencode.png"),
+                    )?;
+                    click(window.into(), cx, 101.0, 474.0)?;
+                    window.update(cx, |shell, _, _| {
+                        assert!(!shell.fixture_usage_card_is_open());
+                    })?;
+                    state.update(cx, |state, cx| {
+                        let chat = state
+                            .chats
+                            .iter_mut()
+                            .find(|chat| chat.id == "usage-fixture")
+                            .unwrap();
+                        chat.config = Some(ChatConfig {
+                            harness: HarnessId::Codex,
+                            provider_account_id: None,
+                            model: None,
+                            reasoning: None,
+                            model_options: Default::default(),
+                            sandbox: SandboxLevel::ReadOnly,
+                            permission_mode: PermissionMode::Ask,
+                            effective_permission_mode: PermissionMode::Ask,
+                            permission_ceiling_source: None,
+                            permission_degradation_reason: None,
+                            permission_audit: Vec::new(),
+                        });
+                        state.sessions = vec![Session {
+                            last_completed_turn: None,
+                            chat_id: chat.id.clone(),
+                            device_id: chat.device_id.clone(),
+                            status: SessionStatus::Working,
+                            started_at: Some(chrono::Utc::now()),
+                            updated_at: chrono::Utc::now(),
+                            recovery: None,
+                        }];
+                        cx.notify();
+                    });
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_provider_usage(cx);
+                        shell.fixture_add_compact_usage_providers(cx);
+                        shell.fixture_poll_usage(cx);
+                        assert!(
+                            shell.fixture_usage_card_is_open(),
+                            "low quota on a working Codex task should open usage"
+                        );
+                    })?;
+                    capture(
+                        window.into(),
+                        cx,
+                        &capture_output.join("usage-low-auto-open.png"),
+                    )?;
+                    click(window.into(), cx, 101.0, 474.0)?;
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_poll_usage(cx);
+                        assert!(
+                            !shell.fixture_usage_card_is_open(),
+                            "dismissing a low-usage alert must stay dismissed"
+                        );
+                    })?;
+                    capture(
+                        window.into(),
+                        cx,
+                        &capture_output.join("usage-low-dismissed.png"),
                     )?;
                     if local_settings {
                         click(window.into(), cx, 29.0, 474.0)?;
@@ -241,9 +314,12 @@ fn main() -> anyhow::Result<()> {
     }
     if [
         "usage-codex.png",
+        "usage-startup-closed.png",
         "usage-closed.png",
         "usage-reopened.png",
         "usage-opencode.png",
+        "usage-low-auto-open.png",
+        "usage-low-dismissed.png",
     ]
     .iter()
     .any(|name| !output.join(name).is_file())

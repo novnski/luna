@@ -1725,11 +1725,12 @@ pub struct Shell {
     route: Route,
     /// One normalized service response shared by the full page and sidebar.
     usage_snapshot: Option<UsageSnapshot>,
-    usage_environment_snapshots: Vec<UsageSnapshot>,
+    usage_environment_snapshots: Vec<(String, UsageSnapshot)>,
     usage_environment_filter: Option<String>,
     usage_error: Option<String>,
     usage_refreshing: bool,
     usage_card_open: bool,
+    usage_alerted: Vec<(String, UsageProvider)>,
     usage_provider_filter: Option<UsageProvider>,
     usage_request_epoch: u64,
     usage_last_refresh_attempt_ms: Option<i64>,
@@ -2170,7 +2171,8 @@ impl Shell {
             usage_environment_filter: None,
             usage_error: None,
             usage_refreshing: false,
-            usage_card_open: true,
+            usage_card_open: false,
+            usage_alerted: Vec::new(),
             usage_provider_filter: None,
             usage_request_epoch: 0,
             usage_last_refresh_attempt_ms: None,
@@ -2407,6 +2409,7 @@ impl Shell {
             self.usage_refreshing = false;
             self.usage_snapshot = None;
             self.usage_environment_snapshots.clear();
+            self.usage_alerted.clear();
             self.usage_environment_filter = None;
             self.usage_error = Some("Engine changed · refresh usage for this environment".into());
         }
@@ -17480,6 +17483,14 @@ mod shortcut_focus_regressions {
 /// Native visual QA uses the production shell with isolated fixture data.
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
+    pub fn fixture_usage_card_is_open(&self) -> bool {
+        self.usage_card_open
+    }
+
+    pub fn fixture_poll_usage(&mut self, cx: &mut Context<Self>) {
+        self.maybe_auto_refresh_usage(cx);
+    }
+
     pub fn fixture_provider_usage(&mut self, cx: &mut Context<Self>) {
         let now = chrono::Utc::now().timestamp_millis();
         let environment_id = self
@@ -17530,7 +17541,7 @@ impl Shell {
             }],
         };
         self.usage_snapshot = Some(snapshot.clone());
-        self.usage_environment_snapshots = vec![snapshot];
+        self.usage_environment_snapshots = vec![(environment_id.clone(), snapshot)];
         self.usage_environment_filter = Some(environment_id);
         self.usage_provider_filter = Some(luna_proto::UsageProvider::Codex);
         self.provider_updates = vec![ProviderUpdateStatus {
@@ -17627,7 +17638,7 @@ impl Shell {
             snapshot.limits.push(limit.clone());
             snapshot.limits.push(claude_limit.clone());
         }
-        if let Some(snapshot) = self.usage_environment_snapshots.first_mut() {
+        if let Some((_, snapshot)) = self.usage_environment_snapshots.first_mut() {
             snapshot.summary.sources.push(source);
             snapshot.summary.sources.push(claude_source);
             snapshot.limits.push(limit);
