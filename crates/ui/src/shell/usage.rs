@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
-use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use gpui::{AnyElement, Context, PathBuilder, SharedString, canvas, div, point, prelude::*, px};
 use luna_proto::{
     ChatIndicator, CostQuality, HarnessId, LimitAvailability, USAGE_CONTRACT_VERSION,
     USAGE_LIMIT_FRESHNESS_MS, UsageBucket, UsageLimitSnapshot, UsagePriceRate, UsageProvider,
@@ -28,10 +28,504 @@ fn provider_mark(provider: UsageProvider) -> &'static str {
 
 fn provider_tone(provider: UsageProvider, theme: &Theme) -> gpui::Hsla {
     match provider {
-        UsageProvider::Codex => theme.accent,
-        UsageProvider::OpenCodeGo => theme.success,
-        UsageProvider::Claude => theme.text_muted,
+        UsageProvider::Codex => theme.text,
+        UsageProvider::OpenCodeGo => gpui::rgb(0x5b9bbd).into(),
+        UsageProvider::Claude => gpui::rgb(0xd97757).into(),
     }
+}
+
+fn compact_tokens(value: u64) -> String {
+    for (threshold, suffix) in [
+        (1_000_000_000_000, "T"),
+        (1_000_000_000, "B"),
+        (1_000_000, "M"),
+        (1_000, "K"),
+    ] {
+        if value >= threshold {
+            let scaled = value as f64 / threshold as f64;
+            let digits = if scaled >= 100.0 {
+                0
+            } else if scaled >= 10.0 {
+                1
+            } else {
+                2
+            };
+            let formatted = format!("{scaled:.digits$}");
+            let trimmed = if formatted.contains('.') {
+                formatted.trim_end_matches('0').trim_end_matches('.')
+            } else {
+                &formatted
+            };
+            return format!("{trimmed}{suffix}");
+        }
+    }
+    count(value)
+}
+
+fn usage_percent(value: f64) -> String {
+    let percent = value * 100.0;
+    if percent > 0.0 && percent < 0.1 {
+        "<0.1%".into()
+    } else {
+        format!("{percent:.1}%")
+    }
+}
+
+fn bucket_known_cost(bucket: &UsageBucket) -> f64 {
+    bucket
+        .known_cost_usd
+        .unwrap_or(bucket.api_equivalent_cost_usd.unwrap_or(0.0))
+}
+
+fn bucket_unpriced_records(bucket: &UsageBucket) -> u64 {
+    bucket.unpriced_records.unwrap_or_else(|| {
+        if bucket.api_equivalent_cost_usd.is_none() {
+            bucket.records
+        } else {
+            0
+        }
+    })
+}
+
+fn short_period_label(start_ms: i64, hourly: bool) -> String {
+    let Some(at) = Utc.timestamp_millis_opt(start_ms).single() else {
+        return "Unknown".into();
+    };
+    if hourly {
+        at.with_timezone(&Local).format("%-I %p").to_string()
+    } else {
+        at.with_timezone(&Local).format("%b %-d").to_string()
+    }
+}
+
+fn hover_period_label(start_ms: i64, hourly: bool) -> String {
+    let Some(start) = Utc.timestamp_millis_opt(start_ms).single() else {
+        return "Unknown period".into();
+    };
+    let local = start.with_timezone(&Local);
+    if hourly {
+        let end = (start + chrono::Duration::hours(1)).with_timezone(&Local);
+        format!(
+            "{}–{}",
+            local.format("%b %-d, %-I:%M %p"),
+            end.format("%-I:%M %p")
+        )
+    } else {
+        local.format("%a, %b %-d").to_string()
+    }
+}
+
+fn local_day_start(day: chrono::NaiveDate) -> Option<i64> {
+    (0..=3).find_map(|hour| {
+        let wall = day.and_hms_opt(hour, 0, 0)?;
+        Local
+            .from_local_datetime(&wall)
+            .earliest()
+            .map(|time| time.timestamp_millis())
+    })
+}
+
+fn usage_period_window(days: u32, now_ms: i64) -> (Vec<i64>, i64) {
+    if days == 1 {
+        let until = now_ms.div_euclid(60_000) * 60_000;
+        let first = until - 24 * 3_600_000;
+        return (
+            (0..24).map(|index| first + index * 3_600_000).collect(),
+            until,
+        );
+    }
+    let days = if [7, 30, 90].contains(&days) {
+        days
+    } else {
+        30
+    };
+    let today = Utc
+        .timestamp_millis_opt(now_ms)
+        .single()
+        .unwrap_or_else(Utc::now)
+        .with_timezone(&Local)
+        .date_naive();
+    let starts: Vec<_> = (0..days)
+        .rev()
+        .filter_map(|back| {
+            today
+                .checked_sub_signed(chrono::Duration::days(i64::from(back)))
+                .and_then(local_day_start)
+        })
+        .collect();
+    let until = today
+        .checked_add_signed(chrono::Duration::days(1))
+        .and_then(local_day_start)
+        .unwrap_or(now_ms + 86_400_000);
+    (starts, until)
+}
+
+fn usage_table_row(
+    theme: &Theme,
+    columns: [String; 4],
+    header: bool,
+    unpriced: bool,
+    provider: Option<UsageProvider>,
+) -> AnyElement {
+    let color = if header || unpriced {
+        theme.text_muted
+    } else {
+        theme.text
+    };
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .min_h(px(if header { 31.0 } else { 38.0 }))
+        .border_b_1()
+        .border_color(theme.border.opacity(if header { 1.0 } else { 0.55 }))
+        .text_size(crate::typography::ui_rems(if header { 11.0 } else { 13.0 }))
+        .child(
+            div()
+                .w(gpui::relative(0.40))
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(7.0))
+                .when_some(provider, |row, provider| {
+                    row.child(
+                        icon(provider_mark(provider))
+                            .size(px(14.0))
+                            .text_color(theme.text),
+                    )
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(color)
+                        .child(columns[0].clone()),
+                ),
+        )
+        .child(
+            div()
+                .w(gpui::relative(0.20))
+                .text_align(gpui::TextAlign::Right)
+                .text_color(color)
+                .child(columns[1].clone()),
+        )
+        .child(
+            div()
+                .w(gpui::relative(0.20))
+                .text_align(gpui::TextAlign::Right)
+                .text_color(theme.text_muted)
+                .child(columns[2].clone()),
+        )
+        .child(
+            div()
+                .w(gpui::relative(0.20))
+                .text_align(gpui::TextAlign::Right)
+                .text_color(theme.text_muted)
+                .child(columns[3].clone()),
+        )
+        .into_any_element()
+}
+
+fn monotone_usage_tangents(points: &[(f32, f32)]) -> Vec<f32> {
+    if points.len() < 2 {
+        return vec![0.0; points.len()];
+    }
+    let slopes: Vec<f32> = points
+        .windows(2)
+        .map(|pair| {
+            let dx = pair[1].0 - pair[0].0;
+            if dx == 0.0 {
+                0.0
+            } else {
+                (pair[1].1 - pair[0].1) / dx
+            }
+        })
+        .collect();
+    let mut tangents = vec![0.0; points.len()];
+    tangents[0] = slopes[0];
+    *tangents.last_mut().unwrap() = *slopes.last().unwrap();
+    for index in 1..points.len() - 1 {
+        let previous = slopes[index - 1];
+        let next = slopes[index];
+        tangents[index] = if previous * next <= 0.0 {
+            0.0
+        } else {
+            (previous + next) / 2.0
+        };
+    }
+    for (index, slope) in slopes.iter().copied().enumerate() {
+        if slope == 0.0 {
+            tangents[index] = 0.0;
+            tangents[index + 1] = 0.0;
+            continue;
+        }
+        let a = tangents[index] / slope;
+        let b = tangents[index + 1] / slope;
+        let magnitude = a * a + b * b;
+        if magnitude > 9.0 {
+            let scale = 3.0 / magnitude.sqrt();
+            tangents[index] = scale * a * slope;
+            tangents[index + 1] = scale * b * slope;
+        }
+    }
+    tangents
+}
+
+fn usage_chart(
+    theme: &Theme,
+    periods: Vec<(i64, [f64; 3])>,
+    tokens: bool,
+    hourly: bool,
+    hovered_start: Option<i64>,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let peak = periods
+        .iter()
+        .flat_map(|(_, values)| values)
+        .copied()
+        .fold(0.0_f64, f64::max);
+    let scale = if peak <= 0.0 {
+        1.0
+    } else {
+        let rough = peak / 2.0;
+        let magnitude = 10_f64.powf(rough.log10().floor());
+        let unit = [1.0, 2.0, 5.0, 10.0]
+            .into_iter()
+            .find(|step| step * magnitude >= rough)
+            .unwrap_or(10.0)
+            * magnitude;
+        (peak / unit).ceil() * unit
+    };
+    let labels = [scale, scale / 2.0, 0.0].map(|value| {
+        if value == 0.0 {
+            "0".into()
+        } else if tokens {
+            compact_tokens(value.round() as u64)
+        } else {
+            money(value)
+        }
+    });
+    let labels = if peak <= 0.0 {
+        [String::new(), String::new(), "0".into()]
+    } else {
+        labels
+    };
+    let colors = [
+        provider_tone(UsageProvider::Codex, theme),
+        provider_tone(UsageProvider::OpenCodeGo, theme),
+        provider_tone(UsageProvider::Claude, theme),
+    ];
+    let grid = theme.border;
+    let hover_color = theme.text_muted;
+    let drawing_periods = periods.clone();
+    let plot = canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            if width < 2.0 || height < 2.0 {
+                return;
+            }
+            let x0 = bounds.origin.x;
+            let y0 = bounds.origin.y;
+            for ratio in [0.0_f32, 0.5, 1.0] {
+                let mut path = PathBuilder::stroke(px(1.0));
+                let y = y0 + px(ratio * height);
+                path.move_to(point(x0, y));
+                path.line_to(point(x0 + px(width), y));
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, grid);
+                }
+            }
+            if drawing_periods.is_empty() {
+                return;
+            }
+            // The source chart layers each provider from zero; the largest series
+            // is painted first so smaller series and their lines remain visible.
+            let mut order = [0_usize, 1, 2];
+            order.sort_by(|a, b| {
+                let sum = |index| {
+                    drawing_periods
+                        .iter()
+                        .map(|(_, values)| values[index])
+                        .sum::<f64>()
+                };
+                sum(*b).total_cmp(&sum(*a))
+            });
+            for fill in [true, false] {
+                for index in order {
+                    if drawing_periods
+                        .iter()
+                        .all(|(_, values)| values[index] <= 0.0)
+                    {
+                        continue;
+                    }
+                    let mut path = if fill {
+                        PathBuilder::fill()
+                    } else {
+                        PathBuilder::stroke(px(2.0))
+                    };
+                    let length = drawing_periods.len();
+                    let coordinates: Vec<(f32, f32)> = drawing_periods
+                        .iter()
+                        .enumerate()
+                        .map(|(position, (_, values))| {
+                            let x = if length == 1 {
+                                width / 2.0
+                            } else {
+                                width * position as f32 / (length - 1) as f32
+                            };
+                            let y = height
+                                - (values[index] / scale).clamp(0.0, 1.0) as f32 * (height - 8.0);
+                            (x, y)
+                        })
+                        .collect();
+                    if coordinates.is_empty() {
+                        continue;
+                    }
+                    path.move_to(point(x0 + px(coordinates[0].0), y0 + px(coordinates[0].1)));
+                    // The T3 chart's monotone cubic curve avoids drawing a
+                    // false peak between two measured periods.
+                    let tangents = monotone_usage_tangents(&coordinates);
+                    for (index, pair) in coordinates.windows(2).enumerate() {
+                        let (xa, ya) = pair[0];
+                        let (xb, yb) = pair[1];
+                        let dx = (xb - xa) / 3.0;
+                        path.cubic_bezier_to(
+                            point(x0 + px(xb), y0 + px(yb)),
+                            point(x0 + px(xa + dx), y0 + px(ya + tangents[index] * dx)),
+                            point(x0 + px(xb - dx), y0 + px(yb - tangents[index + 1] * dx)),
+                        );
+                    }
+                    if fill {
+                        path.line_to(point(
+                            x0 + px(coordinates.last().unwrap().0),
+                            y0 + px(height),
+                        ));
+                        path.line_to(point(x0 + px(coordinates[0].0), y0 + px(height)));
+                        path.close();
+                    }
+                    if let Ok(path) = path.build() {
+                        window.paint_path(
+                            path,
+                            if fill {
+                                colors[index].opacity(0.12)
+                            } else {
+                                colors[index]
+                            },
+                        );
+                    }
+                }
+            }
+            if let Some(index) = drawing_periods
+                .iter()
+                .position(|(start, _)| Some(*start) == hovered_start)
+            {
+                let x = if drawing_periods.len() == 1 {
+                    width / 2.0
+                } else {
+                    width * index as f32 / (drawing_periods.len() - 1) as f32
+                };
+                let mut guide = PathBuilder::stroke(px(1.0));
+                guide.move_to(point(x0 + px(x), y0));
+                guide.line_to(point(x0 + px(x), y0 + px(height)));
+                if let Ok(guide) = guide.build() {
+                    window.paint_path(guide, hover_color);
+                }
+            }
+        },
+    )
+    .w_full()
+    .h(px(224.0));
+    let x_labels = if periods.is_empty() {
+        [String::new(), String::new(), String::new()]
+    } else {
+        [0, periods.len() / 2, periods.len() - 1]
+            .map(|index| short_period_label(periods[index].0, hourly).to_uppercase())
+    };
+    let hover_cells: Vec<_> = periods
+        .iter()
+        .map(|(start, values)| {
+            let start = *start;
+            let label = hover_period_label(start, hourly);
+            let values = *values;
+            let format = |value: f64| {
+                if tokens {
+                    compact_tokens(value.round() as u64)
+                } else {
+                    money(value)
+                }
+            };
+            let detail = format!(
+                "{label}\nCodex {}\nOpenCode Go {}\nClaude {}\nTotal {}",
+                format(values[0]),
+                format(values[1]),
+                format(values[2]),
+                format(values.iter().sum())
+            );
+            div()
+                .id(SharedString::from(format!("usage-chart-period-{start}")))
+                .flex_1()
+                .h_full()
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.usage_hover_period_start = Some(start);
+                    } else if this.usage_hover_period_start == Some(start) {
+                        this.usage_hover_period_start = None;
+                    }
+                    cx.notify();
+                }))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| super::SurfaceTabTooltip {
+                        text: detail.clone().into(),
+                    })
+                    .into()
+                })
+        })
+        .collect();
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(5.0))
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .w(px(64.0))
+                        .h(px(224.0))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .justify_between()
+                        .text_align(gpui::TextAlign::Right)
+                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_color(theme.text_muted)
+                        .children(labels),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .h(px(224.0))
+                        .child(plot)
+                        .child(div().absolute().inset_0().flex().children(hover_cells)),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .pl(px(72.0))
+                .flex()
+                .justify_between()
+                .text_size(crate::typography::ui_rems(10.0))
+                .text_color(theme.text_muted)
+                .children(x_labels),
+        )
+        .into_any_element()
 }
 
 fn metric_cell(theme: &Theme, label: &'static str, value: String) -> AnyElement {
@@ -74,11 +568,8 @@ fn count(value: u64) -> String {
 }
 
 fn money(value: f64) -> String {
-    if value < 0.01 {
-        format!("${value:.4}")
-    } else {
-        format!("${value:.2}")
-    }
+    let cents = (value.max(0.0) * 100.0).round() as u64;
+    format!("${}.{:02}", count(cents / 100), cents % 100)
 }
 
 fn cost_of(buckets: &[&UsageBucket]) -> Option<f64> {
@@ -261,174 +752,276 @@ fn limits_status(limit: &UsageLimitSnapshot, now_ms: i64) -> String {
     }
 }
 
-fn limit_window_row(
-    limit: &UsageLimitSnapshot,
-    window: &luna_proto::UsageLimitWindow,
-    theme: &Theme,
-    now_ms: i64,
-    compact: bool,
-) -> AnyElement {
-    let remaining = (100.0 - window.used_percent).clamp(0.0, 100.0);
-    let tone = if remaining <= 5.0 {
-        theme.danger
-    } else if remaining <= 20.0 {
-        theme.warning
-    } else {
-        theme.accent
-    };
-    let fresh = limit.is_fresh(now_ms);
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(5.0))
-        .child(
+/// T3's Limits hierarchy: provider sections, one pool card per quota window,
+/// and equal-width account segments. An unverified account keeps its own
+/// segment; only verified identities were de-duplicated by the snapshot merge.
+fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i64) -> AnyElement {
+    let mut sections = div().w_full().flex().flex_col().gap(px(28.0));
+    let mut has_section = false;
+    for provider in [
+        UsageProvider::Codex,
+        UsageProvider::Claude,
+        UsageProvider::OpenCodeGo,
+    ] {
+        let accounts: Vec<_> = limits
+            .iter()
+            .filter(|limit| limit.provider == provider)
+            .collect();
+        if accounts.is_empty() {
+            continue;
+        }
+        has_section = true;
+        let mut section = div().w_full().flex().flex_col().gap(px(12.0)).child(
             div()
                 .flex()
-                .flex_wrap()
-                .justify_between()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .min_w(px(100.0))
-                        .flex_1()
-                        .text_size(crate::typography::ui_rems(if compact {
-                            11.0
-                        } else {
-                            13.0
-                        }))
-                        .text_color(theme.text)
-                        .child(window.label.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(crate::typography::ui_rems(if compact {
-                            11.0
-                        } else {
-                            13.0
-                        }))
-                        .text_color(tone)
-                        .child(format!("{remaining:.0}% remaining")),
-                ),
-        )
-        .child(
-            div()
-                .h(px(4.0))
-                .w_full()
-                .rounded(px(2.0))
-                .bg(theme.border)
-                .child(
-                    div()
-                        .h_full()
-                        .w(gpui::relative(remaining / 100.0))
-                        .rounded(px(2.0))
-                        .bg(tone),
-                ),
-        )
-        .child(
-            div()
-                .text_size(crate::typography::ui_rems(10.0))
-                .text_color(theme.text_muted)
-                .child(format!(
-                    "{:.0}% used · {}{}",
-                    window.used_percent,
-                    reset_label(limit.reset_state(window, now_ms), now_ms),
-                    if fresh { "" } else { " · unverified now" }
-                )),
-        )
-        .when(!compact, |row| {
-            row.child(
-                div()
-                    .text_size(crate::typography::ui_rems(10.0))
-                    .text_color(theme.text_muted)
-                    .child(quota_pace(limit, window, now_ms).unwrap_or_else(|| {
-                        "Pace unavailable · quota window is unverified or incomplete".into()
-                    })),
-            )
-        })
-        .into_any_element()
-}
-
-fn limit_card(limit: &UsageLimitSnapshot, theme: &Theme, now_ms: i64, compact: bool) -> AnyElement {
-    let title = match (&limit.account_label, &limit.plan) {
-        (Some(account), Some(plan)) => format!("{} · {} · {plan}", limit.provider.label(), account),
-        (Some(account), None) => format!("{} · {account}", limit.provider.label()),
-        _ => limit.provider.label().to_owned(),
-    };
-    div()
-        .w_full()
-        .rounded(px(Theme::CONTROL_RADIUS))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.glass_hover().opacity(0.35))
-        .p(px(if compact { 10.0 } else { 14.0 }))
-        .flex()
-        .flex_col()
-        .gap(px(9.0))
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .justify_between()
-                .gap(px(6.0))
                 .items_center()
+                .gap(px(7.0))
+                .text_color(theme.text)
+                .text_size(crate::typography::ui_rems(14.0))
                 .child(
-                    div()
-                        .min_w(px(110.0))
-                        .flex_1()
-                        .text_size(crate::typography::ui_rems(if compact {
-                            12.0
-                        } else {
-                            15.0
-                        }))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(title),
+                    icon(provider_mark(provider))
+                        .size(px(17.0))
+                        .text_color(theme.text),
                 )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(if limit.availability == LimitAvailability::ProbeFailed {
-                            theme.warning
-                        } else {
-                            theme.text_muted
-                        })
-                        .child(limits_status(limit, now_ms)),
-                ),
-        )
-        .when_some(limit.detail.clone(), |card, detail| {
-            card.child(
-                div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .child(detail),
-            )
-        })
-        .children(
-            limit
-                .windows
+                .child(provider.label()),
+        );
+        let ready: Vec<_> = accounts
+            .iter()
+            .copied()
+            .filter(|limit| {
+                limit.availability == LimitAvailability::Ready && !limit.windows.is_empty()
+            })
+            .collect();
+        let mut windows: Vec<(String, String, Option<u64>)> = ready
+            .iter()
+            .flat_map(|limit| {
+                limit.windows.iter().map(|window| {
+                    (
+                        window.id.clone(),
+                        window.label.clone(),
+                        window.duration_minutes,
+                    )
+                })
+            })
+            .collect();
+        windows.sort_by(|left, right| {
+            left.2
+                .unwrap_or(u64::MAX)
+                .cmp(&right.2.unwrap_or(u64::MAX))
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        windows.dedup_by(|left, right| left.0 == right.0);
+        for (window_id, label, _) in windows {
+            let reported: Vec<_> = ready
                 .iter()
-                .map(|window| limit_window_row(limit, window, theme, now_ms, compact)),
-        )
-        .when_some(
-            if limit.provider == UsageProvider::Codex {
-                limit.reset_credits
+                .filter_map(|limit| {
+                    limit
+                        .windows
+                        .iter()
+                        .find(|window| window.id == window_id)
+                        .map(|window| (*limit, window))
+                })
+                .collect();
+            if reported.is_empty() {
+                continue;
+            }
+            let used = reported
+                .iter()
+                .map(|(_, window)| window.used_percent.clamp(0.0, 100.0))
+                .sum::<f32>()
+                / reported.len() as f32;
+            let remaining = (100.0 - used).round();
+            let color = provider_tone(provider, theme);
+            let next_reset = reported
+                .iter()
+                .filter_map(|(limit, window)| {
+                    (window.used_percent > 0.0)
+                        .then(|| window.resets_at_ms)
+                        .flatten()
+                        .filter(|at| *at > now_ms && limit.is_fresh(now_ms))
+                })
+                .min();
+            let reset = next_reset
+                .map(|at| {
+                    let delta = (at - now_ms) / 60_000;
+                    if delta < 60 {
+                        format!("Next reset in {delta}m")
+                    } else if delta < 24 * 60 {
+                        format!("Next reset in {}h {}m", delta / 60, delta % 60)
+                    } else {
+                        format!(
+                            "Next reset in {}d {}h",
+                            delta / (24 * 60),
+                            (delta % (24 * 60)) / 60
+                        )
+                    }
+                })
+                .unwrap_or_else(|| "Reset time unavailable".into());
+            let mut segments = div().w_full().flex().gap(px(4.0));
+            for limit in &ready {
+                if let Some(window) = limit.windows.iter().find(|window| window.id == window_id) {
+                    let left = (100.0 - window.used_percent).clamp(0.0, 100.0);
+                    let account = limit
+                        .account_label
+                        .clone()
+                        .unwrap_or_else(|| provider.label().into());
+                    let detail = format!(
+                        "{account} · {left:.0}% left · {} · {}",
+                        limit.plan.as_deref().unwrap_or("Plan unknown"),
+                        reset_label(limit.reset_state(window, now_ms), now_ms)
+                    );
+                    segments = segments.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "usage-limit-{}-{window_id}-{}",
+                                provider.label(),
+                                account
+                            )))
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(9.0))
+                            .rounded(px(4.0))
+                            .bg(theme.border)
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| super::SurfaceTabTooltip {
+                                    text: detail.clone().into(),
+                                })
+                                .into()
+                            })
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(gpui::relative(left / 100.0))
+                                    .rounded(px(4.0))
+                                    .bg(color),
+                            ),
+                    );
+                } else {
+                    segments =
+                        segments.child(div().flex_1().h(px(9.0)).rounded(px(4.0)).bg(theme.border));
+                }
+            }
+            let status = if ready.iter().all(|limit| limit.is_fresh(now_ms)) {
+                reset
             } else {
-                None
-            },
-            |card, credits| {
-                card.child(
-                    div()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .child(format!(
-                            "Reset credits: {credits} · redemption unavailable in this build"
-                        )),
-                )
-            },
-        )
-        .into_any_element()
+                format!("{reset} · some account values are last reported")
+            };
+            let status = if reported.len() == 1 {
+                quota_pace(reported[0].0, reported[0].1, now_ms)
+                    .map_or(status.clone(), |pace| format!("{status} · {pace}"))
+            } else {
+                status
+            };
+            section = section.child(
+                div()
+                    .w_full()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(theme.border.opacity(0.6))
+                    .p(px(15.0))
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(22.0))
+                    .child(
+                        div()
+                            .w(px(176.0))
+                            .flex_none()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .text_color(theme.text)
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .child(label),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_baseline()
+                                    .gap(px(6.0))
+                                    .child(
+                                        div()
+                                            .text_color(theme.text)
+                                            .text_size(crate::typography::ui_rems(29.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child(format!("{remaining:.0}%")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(theme.text_muted)
+                                            .text_size(crate::typography::ui_rems(12.0))
+                                            .child("left"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(220.0))
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(segments)
+                            .child(
+                                div()
+                                    .text_color(theme.text_muted)
+                                    .text_size(crate::typography::ui_rems(10.0))
+                                    .child(format!(
+                                        "{} · {} {}",
+                                        status,
+                                        ready.len(),
+                                        if ready.len() == 1 {
+                                            "account"
+                                        } else {
+                                            "accounts"
+                                        }
+                                    )),
+                            ),
+                    ),
+            );
+        }
+        let credits: u64 = ready.iter().filter_map(|limit| limit.reset_credits).sum();
+        if credits > 0 {
+            section = section.child(
+                div()
+                    .text_color(theme.text_muted)
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .child(format!(
+                        "{credits} reset {} banked · redemption unavailable in this build",
+                        if credits == 1 { "credit" } else { "credits" }
+                    )),
+            );
+        }
+        for limit in accounts.into_iter().filter(|limit| {
+            limit.availability != LimitAvailability::Ready || limit.windows.is_empty()
+        }) {
+            let detail = limit
+                .detail
+                .clone()
+                .unwrap_or_else(|| limits_status(limit, now_ms));
+            section = section.child(
+                div()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme.border.opacity(0.6))
+                    .p(px(12.0))
+                    .text_color(theme.text_muted)
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .child(format!("{}: {detail}", provider.label())),
+            );
+        }
+        sections = sections.child(section);
+    }
+    if !has_section {
+        sections = sections.child(
+            div()
+                .text_color(theme.text_muted)
+                .child("No provider on the selected environments reports subscription limits."),
+        );
+    }
+    sections.into_any_element()
 }
 
 fn compact_limit_status(limit: &UsageLimitSnapshot, now_ms: i64) -> Option<&'static str> {
@@ -865,6 +1458,53 @@ impl Shell {
             .map(|(_, snapshot)| snapshot.clone())
     }
 
+    fn page_usage_snapshot(&self) -> Option<UsageSnapshot> {
+        let Some(ids) = &self.usage_page_environment_ids else {
+            return self.usage_snapshot.clone();
+        };
+        luna_proto::merge_usage_snapshots(
+            self.usage_environment_snapshots
+                .iter()
+                .filter(|(device, _)| ids.contains(device))
+                .map(|(_, snapshot)| snapshot.clone())
+                .collect(),
+        )
+    }
+
+    fn usage_environment_name(&self, id: &str, cx: &Context<Self>) -> String {
+        let state = self.state.read(cx);
+        if state
+            .engine()
+            .is_some_and(|engine| engine.engine_info().device_id == id)
+        {
+            return "This machine".into();
+        }
+        state
+            .devices
+            .iter()
+            .find(|device| device.id == id)
+            .map(|device| device.name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Selected environment".into())
+    }
+
+    fn toggle_page_usage_environment(&mut self, id: &str, cx: &mut Context<Self>) {
+        let all: std::collections::HashSet<_> = self
+            .usage_environment_snapshots
+            .iter()
+            .map(|(device, _)| device.clone())
+            .collect();
+        let mut selected = self
+            .usage_page_environment_ids
+            .clone()
+            .unwrap_or_else(|| all.clone());
+        if !selected.remove(id) {
+            selected.insert(id.to_owned());
+        }
+        self.usage_page_environment_ids = (selected != all).then_some(selected);
+        cx.notify();
+    }
+
     fn cycle_usage_environment(&mut self, cx: &mut Context<Self>) {
         let environments: Vec<_> = self
             .usage_environment_snapshots
@@ -963,6 +1603,9 @@ impl Shell {
             }
         }
         let days = self.settings.usage_days;
+        let (period_starts_ms, until_ms) = usage_period_window(days, Utc::now().timestamp_millis());
+        let include_limits = !matches!(self.route, super::Route::Settings(SettingsSection::Usage))
+            || self.settings.usage_metric == "limits";
         let price_overrides = self.settings.usage_price_overrides.clone();
         self.usage_refreshing = true;
         self.usage_error = None;
@@ -973,12 +1616,13 @@ impl Shell {
             futures::future::join_all(targets.into_iter().map(|device| {
                 let engine = engine.clone();
                 let price_overrides = price_overrides.clone();
+                let period_starts_ms = period_starts_ms.clone();
                 async move {
                     let result = tokio::time::timeout(
-                        std::time::Duration::from_secs(8),
+                        std::time::Duration::from_secs(120),
                         engine.client().call(
                             methods::GET_USAGE_SNAPSHOT,
-                            serde_json::json!({"days": days, "targetDeviceId": device, "priceOverrides": price_overrides}),
+                            serde_json::json!({"days": days, "periodStartsMs": period_starts_ms, "untilMs": until_ms, "includeLimits": include_limits, "targetDeviceId": device, "priceOverrides": price_overrides}),
                         ),
                     )
                     .await;
@@ -1101,6 +1745,7 @@ impl Shell {
 
     fn set_usage_metric(&mut self, metric: &'static str, cx: &mut Context<Self>) {
         self.settings.usage_metric = metric.into();
+        self.usage_hover_period_start = None;
         self.schedule_save(cx);
         if metric == "limits" {
             self.refresh_usage(cx);
@@ -1110,6 +1755,7 @@ impl Shell {
 
     fn set_usage_days(&mut self, days: u32, cx: &mut Context<Self>) {
         self.settings.usage_days = days;
+        self.usage_hover_period_start = None;
         self.schedule_save(cx);
         self.refresh_usage(cx);
     }
@@ -1140,92 +1786,140 @@ impl Shell {
 
     pub(super) fn render_usage_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let environment_label = self.compact_usage_environment_label(cx);
         let now_ms = Utc::now().timestamp_millis();
         let metric = self.settings.usage_metric.clone();
         let limits_view = metric == "limits";
-        let provider_tabs = self.render_usage_provider_tabs(&theme, false, cx);
-        let snapshot = self.selected_usage_snapshot();
-        let stale = snapshot
-            .as_ref()
-            .is_some_and(|snapshot| now_ms - snapshot.summary.read_at_ms >= 5 * 60_000);
-        let headline = snapshot
-            .as_ref()
-            .map(|snapshot| {
-                let ready = snapshot.summary.sources.iter().any(|source| {
-                    matches!(
-                        source.status,
-                        UsageSourceStatus::Ready | UsageSourceStatus::Partial
-                    ) && self
-                        .usage_provider_filter
-                        .is_none_or(|provider| provider == source.provider)
-                });
-                let selected: Vec<_> = snapshot
-                    .summary
-                    .buckets
-                    .iter()
-                    .filter(|bucket| {
-                        self.usage_provider_filter
-                            .is_none_or(|provider| bucket.provider == provider)
-                    })
-                    .collect();
-                let tokens = selected
-                    .iter()
-                    .map(|bucket| bucket.tokens.total())
-                    .sum::<u64>();
-                if self.usage_provider_filter == Some(UsageProvider::OpenCodeGo) {
-                    "OpenCode Go history unavailable".into()
-                } else if !ready {
-                    "Historical usage unavailable".into()
-                } else if metric == "tokens" {
-                    format!("{} tokens", count(tokens))
-                } else if selected.is_empty() {
-                    "No usage in this window".into()
-                } else if let Some(cost) = cost_of(&selected) {
-                    format!("{} API-equivalent estimate", money(cost))
-                } else {
-                    let known: f64 = selected
-                        .iter()
-                        .filter_map(|bucket| bucket.api_equivalent_cost_usd)
-                        .sum();
-                    let unknown = selected
-                        .iter()
-                        .filter(|bucket| bucket.api_equivalent_cost_usd.is_none())
-                        .map(|bucket| bucket.records)
-                        .sum::<u64>();
-                    format!(
-                        "{} known API-equivalent · {} unpriced records",
-                        money(known),
-                        count(unknown)
-                    )
-                }
-            })
-            .unwrap_or_else(|| "Usage unavailable".into());
-        let toolbar = div()
+        let tokens_view = metric == "tokens";
+        let hourly = self.settings.usage_days == 1;
+        let compact = self.viewport_width < 1000.0;
+        let snapshot = self.page_usage_snapshot();
+        let environment_label = match &self.usage_page_environment_ids {
+            None => "All environments".to_string(),
+            Some(ids) if ids.len() == 1 => {
+                self.usage_environment_name(ids.iter().next().unwrap(), cx)
+            }
+            Some(ids) => format!("{} environments", ids.len()),
+        };
+        let mut environment_menu = div()
+            .w(px(300.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.bg)
+            .p(px(5.0))
             .flex()
-            .flex_wrap()
+            .flex_col()
+            .gap(px(2.0));
+        if self.usage_environment_menu_open {
+            environment_menu = environment_menu.child(
+                div()
+                    .id("usage-environment-all")
+                    .cursor_pointer()
+                    .rounded(px(6.0))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .text_color(theme.text)
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.usage_page_environment_ids = None;
+                        cx.notify();
+                    }))
+                    .child(format!(
+                        "{}  All environments",
+                        if self.usage_page_environment_ids.is_none() {
+                            "✓"
+                        } else {
+                            " "
+                        }
+                    )),
+            );
+            for (device, source) in &self.usage_environment_snapshots {
+                let id = device.clone();
+                let checked = self
+                    .usage_page_environment_ids
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(device));
+                let label = self.usage_environment_name(device, cx);
+                let status = if source.summary.partial {
+                    "Partial"
+                } else {
+                    "Ready"
+                };
+                environment_menu = environment_menu.child(
+                    div()
+                        .id(SharedString::from(format!("usage-environment-{id}")))
+                        .cursor_pointer()
+                        .rounded(px(6.0))
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .flex()
+                        .justify_between()
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_page_usage_environment(&id, cx)
+                        }))
+                        .child(
+                            div()
+                                .text_color(theme.text)
+                                .child(format!("{}  {label}", if checked { "✓" } else { " " })),
+                        )
+                        .child(div().text_color(theme.text_muted).child(status)),
+                );
+            }
+            if self.usage_environment_snapshots.is_empty() {
+                environment_menu = environment_menu.child(
+                    div()
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .text_color(theme.text_muted)
+                        .child("No environments connected."),
+                );
+            }
+            environment_menu = environment_menu.child(
+                div()
+                    .id("usage-prices-menu")
+                    .cursor_pointer()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .px(px(8.0))
+                    .py(px(7.0))
+                    .text_color(theme.text_muted)
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.usage_page_price_editor_open = true;
+                        this.usage_environment_menu_open = false;
+                        cx.notify();
+                    }))
+                    .child("Model prices"),
+            );
+        }
+
+        let metric_control = div()
+            .flex()
             .items_center()
-            .gap(px(6.0))
+            .rounded(px(10.0))
+            .bg(theme.glass_hover().opacity(0.25))
+            .p(px(2.0))
             .children(
                 [("cost", "Cost"), ("tokens", "Tokens"), ("limits", "Limits")]
                     .into_iter()
                     .map(|(key, label)| {
                         div()
                             .id(SharedString::from(format!("usage-metric-{key}")))
-                            .rounded(px(Theme::CONTROL_RADIUS))
                             .px(px(12.0))
-                            .py(px(7.0))
+                            .py(px(5.0))
+                            .rounded(px(8.0))
                             .bg(if metric == key {
-                                theme.accent_wash
+                                theme.glass_hover()
                             } else {
-                                theme.glass_hover().opacity(0.2)
+                                theme.glass_hover().opacity(0.0)
                             })
                             .text_color(if metric == key {
                                 theme.text
                             } else {
                                 theme.text_muted
                             })
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::ui_rems(13.0))
                             .cursor_pointer()
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.set_usage_metric(key, cx)),
@@ -1233,79 +1927,166 @@ impl Shell {
                             .child(label)
                     }),
             );
-        let periods = div().flex().flex_wrap().gap(px(5.0)).children(
-            [
-                (1, "Past 24h"),
-                (7, "7 days"),
-                (30, "30 days"),
-                (90, "90 days"),
-            ]
-            .into_iter()
-            .map(|(days, label)| {
+        let period_control = div()
+            .flex()
+            .items_center()
+            .rounded(px(10.0))
+            .bg(theme.glass_hover().opacity(0.25))
+            .p(px(2.0))
+            .children(
+                [
+                    (1, "Past 24h"),
+                    (7, "7 days"),
+                    (30, "30 days"),
+                    (90, "90 days"),
+                ]
+                .into_iter()
+                .map(|(days, label)| {
+                    div()
+                        .id(SharedString::from(format!("usage-days-{days}")))
+                        .px(px(if compact { 7.0 } else { 11.0 }))
+                        .py(px(5.0))
+                        .rounded(px(8.0))
+                        .bg(if self.settings.usage_days == days {
+                            theme.glass_hover()
+                        } else {
+                            theme.glass_hover().opacity(0.0)
+                        })
+                        .text_color(if limits_view {
+                            theme.text_faint
+                        } else if self.settings.usage_days == days {
+                            theme.text
+                        } else {
+                            theme.text_muted
+                        })
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .when(!limits_view, |element| {
+                            element.cursor_pointer().on_click(
+                                cx.listener(move |this, _, _, cx| this.set_usage_days(days, cx)),
+                            )
+                        })
+                        .child(label)
+                }),
+            );
+        let header = div()
+            .w_full()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
+            .child(
                 div()
-                    .id(SharedString::from(format!("usage-days-{days}")))
-                    .rounded(px(Theme::CONTROL_RADIUS))
-                    .px(px(9.0))
-                    .py(px(6.0))
-                    .bg(if self.settings.usage_days == days {
-                        theme.glass_hover()
-                    } else {
-                        theme.glass_hover().opacity(0.1)
+                    .id("usage-environment")
+                    .size(px(29.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_color(theme.text_muted)
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| super::SurfaceTabTooltip {
+                            text: environment_label.clone().into(),
+                        })
+                        .into()
                     })
-                    .text_color(if limits_view {
-                        theme.text_faint
-                    } else {
-                        theme.text_muted
-                    })
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .when(!limits_view, |el| {
-                        el.cursor_pointer().on_click(
-                            cx.listener(move |this, _, _, cx| this.set_usage_days(days, cx)),
-                        )
-                    })
-                    .child(label)
-            }),
-        );
-        let mut content = div().w_full().flex().flex_col().gap(px(14.0));
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.usage_environment_menu_open = !this.usage_environment_menu_open;
+                        cx.notify();
+                    }))
+                    .child(
+                        icon(icons::GLOBE)
+                            .size(px(16.0))
+                            .text_color(theme.text_muted),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(metric_control)
+                    .child(period_control)
+                    .child(
+                        div()
+                            .id("usage-refresh")
+                            .size(px(29.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.0))
+                            .cursor_pointer()
+                            .text_color(theme.text_muted)
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
+                            .tooltip(|_, cx| {
+                                cx.new(|_| super::SurfaceTabTooltip {
+                                    text: "Refresh usage".into(),
+                                })
+                                .into()
+                            })
+                            .child(
+                                icon(icons::REFRESH)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            ),
+                    ),
+            );
+
+        let mut content = div().w_full().flex().flex_col().gap(px(26.0));
         if let Some(snapshot) = snapshot {
             if limits_view {
-                content = content
-                    .child(div().text_size(crate::typography::ui_rems(17.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child("Subscription limits"))
-                    .child(div().text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted)
-                        .child("Account allowance and reset windows are separate from historical tokens and API-equivalent cost. Local OpenCode Go reports subscription windows; external servers do not expose their credentials here."));
-                for provider in [
-                    UsageProvider::Codex,
-                    UsageProvider::OpenCodeGo,
-                    UsageProvider::Claude,
-                ] {
-                    if self
-                        .usage_provider_filter
-                        .is_some_and(|filter| filter != provider)
-                    {
-                        continue;
-                    }
-                    for limit in snapshot
-                        .limits
-                        .iter()
-                        .filter(|limit| limit.provider == provider)
-                    {
-                        content = content.child(limit_card(limit, &theme, now_ms, false));
-                    }
-                }
+                content = content.child(pooled_limit_sections(&snapshot.limits, &theme, now_ms));
             } else {
-                let selected: Vec<_> = snapshot
-                    .summary
-                    .buckets
-                    .iter()
-                    .filter(|bucket| {
-                        self.usage_provider_filter
-                            .is_none_or(|provider| bucket.provider == provider)
-                    })
-                    .collect();
+                let buckets: Vec<&UsageBucket> = snapshot.summary.buckets.iter().collect();
+                let mut mix = luna_proto::UsageTokens::default();
+                let mut total_cost = 0.0;
+                let mut records = 0_u64;
+                let mut unpriced = 0_u64;
+                let mut cache_savings = 0.0;
+                let mut cache_savings_unknown = false;
+                let mut provider_tokens = [0_u64; 3];
+                let mut provider_cost = [0.0_f64; 3];
+                let mut provider_unpriced = [0_u64; 3];
+                let mut periods = BTreeMap::<i64, [f64; 3]>::new();
+                let mut period_costs = BTreeMap::<i64, [f64; 3]>::new();
+                let mut period_tokens = BTreeMap::<i64, u64>::new();
+                let mut models =
+                    BTreeMap::<(u8, String), (UsageProvider, f64, u64, u64, u64)>::new();
+                for bucket in &buckets {
+                    let index = match bucket.provider {
+                        UsageProvider::Codex => 0,
+                        UsageProvider::OpenCodeGo => 1,
+                        UsageProvider::Claude => 2,
+                    };
+                    let cost = bucket_known_cost(bucket);
+                    let tokens = bucket.tokens.total();
+                    mix.add(bucket.tokens);
+                    total_cost += cost;
+                    records += bucket.records;
+                    unpriced += bucket_unpriced_records(bucket);
+                    provider_tokens[index] += tokens;
+                    provider_cost[index] += cost;
+                    provider_unpriced[index] += bucket_unpriced_records(bucket);
+                    match bucket.cache_savings_usd {
+                        Some(value) => cache_savings += value,
+                        None if bucket.tokens.cached_input > 0 => cache_savings_unknown = true,
+                        None => {}
+                    }
+                    periods.entry(bucket.start_ms).or_default()[index] +=
+                        if tokens_view { tokens as f64 } else { cost };
+                    period_costs.entry(bucket.start_ms).or_default()[index] += cost;
+                    *period_tokens.entry(bucket.start_ms).or_default() += tokens;
+                    let model = models
+                        .entry((index as u8, bucket.model.clone()))
+                        .or_insert((bucket.provider, 0.0, 0, 0, 0));
+                    model.1 += cost;
+                    model.2 += tokens;
+                    model.3 += bucket.records;
+                    model.4 += bucket_unpriced_records(bucket);
+                }
+                let total_tokens = mix.total();
                 let sessions: u64 = snapshot
                     .summary
                     .sources
@@ -1314,467 +2095,585 @@ impl Shell {
                         matches!(
                             source.status,
                             UsageSourceStatus::Ready | UsageSourceStatus::Partial
-                        ) && self
-                            .usage_provider_filter
-                            .is_none_or(|provider| source.provider == provider)
+                        )
                     })
                     .map(|source| source.distinct_sessions)
                     .sum();
-                content = content.child(
+                let caption = if tokens_view {
+                    format!("{} sessions", count(sessions))
+                } else if records > 0 && unpriced > 0 {
+                    format!(
+                        "{} sessions · API estimate excludes {} unpriced records",
+                        count(sessions),
+                        usage_percent(unpriced as f64 / records as f64)
+                    )
+                } else {
+                    format!("{} sessions · API estimate", count(sessions))
+                };
+                let providers = [
+                    UsageProvider::Codex,
+                    UsageProvider::OpenCodeGo,
+                    UsageProvider::Claude,
+                ];
+                let mut left = div().min_w_0().flex().flex_col().gap(px(18.0));
+                left = left.child(
                     div()
-                        .text_size(crate::typography::ui_rems(23.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
-                        .child(headline),
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(36.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(theme.text)
+                                .child(if tokens_view {
+                                    compact_tokens(total_tokens)
+                                } else if total_cost == 0.0 && unpriced > 0 {
+                                    "Unpriced".into()
+                                } else {
+                                    money(total_cost)
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(theme.text_muted)
+                                .child(caption),
+                        ),
                 );
-                content = content.child(
-                    div()
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted)
-                        .child(format!(
-                            "{} sessions · {} records · UTC {} buckets",
-                            count(sessions),
-                            count(selected.iter().map(|bucket| bucket.records).sum()),
-                            snapshot.summary.resolution
-                        )),
-                );
-                if snapshot.summary.partial {
-                    content = content.child(
+                for (index, provider) in providers.into_iter().enumerate() {
+                    if provider_tokens[index] == 0 && provider_cost[index] == 0.0 {
+                        continue;
+                    }
+                    let provider_sessions: u64 = snapshot
+                        .summary
+                        .sources
+                        .iter()
+                        .filter(|source| {
+                            source.provider == provider
+                                && matches!(
+                                    source.status,
+                                    UsageSourceStatus::Ready | UsageSourceStatus::Partial
+                                )
+                        })
+                        .map(|source| source.distinct_sessions)
+                        .sum();
+                    let amount = if tokens_view {
+                        compact_tokens(provider_tokens[index])
+                    } else if provider_cost[index] == 0.0 && provider_unpriced[index] > 0 {
+                        "Unpriced".into()
+                    } else {
+                        money(provider_cost[index])
+                    };
+                    let share = if tokens_view {
+                        if total_tokens == 0 {
+                            0.0
+                        } else {
+                            provider_tokens[index] as f64 / total_tokens as f64
+                        }
+                    } else if total_cost == 0.0 {
+                        0.0
+                    } else {
+                        provider_cost[index] / total_cost
+                    };
+                    left = left.child(
                         div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.warning)
-                            .child("Partial coverage · totals may be incomplete"),
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(9.0))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(7.0))
+                                            .child(
+                                                div()
+                                                    .size(px(8.0))
+                                                    .rounded_full()
+                                                    .bg(provider_tone(provider, &theme)),
+                                            )
+                                            .child(
+                                                icon(provider_mark(provider))
+                                                    .size(px(16.0))
+                                                    .text_color(theme.text),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(theme.text)
+                                                    .text_size(crate::typography::ui_rems(13.0))
+                                                    .child(provider.label()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(theme.text_muted)
+                                                    .text_size(crate::typography::ui_rems(11.0))
+                                                    .child(format!(
+                                                        "{} sessions",
+                                                        count(provider_sessions)
+                                                    )),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(theme.text)
+                                            .text_size(crate::typography::ui_rems(13.0))
+                                            .child(amount),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme.text_muted)
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .child(if tokens_view {
+                                        format!(
+                                            "{} of tokens · {}",
+                                            usage_percent(share),
+                                            money(provider_cost[index])
+                                        )
+                                    } else if provider_cost[index] == 0.0
+                                        && provider_unpriced[index] > 0
+                                    {
+                                        format!(
+                                            "— of cost · {} tokens",
+                                            compact_tokens(provider_tokens[index])
+                                        )
+                                    } else {
+                                        format!(
+                                            "{} of cost · {} tokens",
+                                            usage_percent(share),
+                                            compact_tokens(provider_tokens[index])
+                                        )
+                                    }),
+                            ),
                     );
                 }
-                if selected.is_empty() {
-                    content = content.child(div()
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted)
-                        .child(if self.usage_provider_filter == Some(UsageProvider::OpenCodeGo) {
-                            "OpenCode Go historical tokens and Zen spending are not in the T3/BB history adapters. Its local subscription windows appear under Limits when the selected machine reports them."
-                        } else {
-                            "No historical buckets are available for this provider and window."
-                        }));
+                let starts = if snapshot.summary.period_starts_ms.is_empty() {
+                    usage_period_window(self.settings.usage_days, now_ms).0
                 } else {
-                    let mut mix = luna_proto::UsageTokens::default();
-                    for bucket in &selected {
-                        mix.add(bucket.tokens);
-                    }
-                    let all_tokens = selected
-                        .iter()
-                        .map(|bucket| bucket.tokens.total())
-                        .sum::<u64>();
-                    let all_cost = cost_of(&selected);
-                    for provider in [
+                    snapshot.summary.period_starts_ms.clone()
+                };
+                let chart_periods: Vec<_> = starts
+                    .into_iter()
+                    .map(|start| (start, periods.get(&start).copied().unwrap_or_default()))
+                    .collect();
+                let hover_readout = self.usage_hover_period_start.and_then(|start| {
+                    periods.get(&start).map(|values| {
+                        format!(
+                            "{} · Total {}",
+                            short_period_label(start, hourly),
+                            if tokens_view {
+                                compact_tokens(values.iter().sum::<f64>().round() as u64)
+                            } else {
+                                money(values.iter().sum())
+                            }
+                        )
+                    })
+                });
+                let hover_detail = self.usage_hover_period_start.and_then(|start| {
+                    periods.get(&start).map(|values| {
+                        let format = |value: f64| {
+                            if tokens_view {
+                                compact_tokens(value.round() as u64)
+                            } else {
+                                money(value)
+                            }
+                        };
+                        let providers = [
+                            ("Codex", values[0]),
+                            ("OpenCode Go", values[1]),
+                            ("Claude", values[2]),
+                        ]
+                        .into_iter()
+                        .filter(|(_, value)| *value > 0.0)
+                        .map(|(name, value)| format!("{name} {}", format(value)))
+                        .collect::<Vec<_>>();
+                        if providers.is_empty() {
+                            format!("{} · No activity", hover_period_label(start, hourly))
+                        } else {
+                            format!(
+                                "{} · {} · Total {}",
+                                hover_period_label(start, hourly),
+                                providers.join(" · "),
+                                format(values.iter().sum())
+                            )
+                        }
+                    })
+                });
+                let chart = div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_between()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_color(theme.text)
+                                    .text_size(crate::typography::ui_rems(14.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child(format!(
+                                        "{} {}",
+                                        if hourly { "Hourly" } else { "Daily" },
+                                        if tokens_view {
+                                            "processed tokens"
+                                        } else {
+                                            "cost"
+                                        }
+                                    )),
+                            )
+                            .when_some(hover_readout, |row, readout| {
+                                row.child(
+                                    div()
+                                        .text_color(theme.text_muted)
+                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .child(readout),
+                                )
+                            }),
+                    )
+                    .child(usage_chart(
+                        &theme,
+                        chart_periods,
+                        tokens_view,
+                        hourly,
+                        self.usage_hover_period_start,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .text_color(theme.text_muted)
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .child(hover_detail.unwrap_or_else(|| {
+                                if hourly {
+                                    "Each point covers one hour. Hover for provider values.".into()
+                                } else {
+                                    "Each point covers one day. Hover for provider values.".into()
+                                }
+                            })),
+                    );
+                content = content.child(if compact {
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap(px(22.0))
+                        .child(left)
+                        .child(chart)
+                        .into_any_element()
+                } else {
+                    div()
+                        .w_full()
+                        .flex()
+                        .gap(px(24.0))
+                        .child(div().w(px(288.0)).flex_none().child(left))
+                        .child(chart)
+                        .into_any_element()
+                });
+                let metric = |label, value: String| {
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(theme.text_muted)
+                                .child(label),
+                        )
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(15.0))
+                                .text_color(theme.text)
+                                .child(value),
+                        )
+                };
+                content = content.child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.0))
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(14.0))
+                                .text_color(theme.text)
+                                .child("Totals"),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .flex_wrap()
+                                .gap(px(14.0))
+                                .child(metric("Processed tokens", compact_tokens(total_tokens)))
+                                .child(metric("Cached input", compact_tokens(mix.cached_input)))
+                                .child(metric("Uncached input", compact_tokens(mix.uncached_input)))
+                                .child(metric("Output", compact_tokens(mix.output)))
+                                .child(metric(
+                                    "Cache savings",
+                                    if cache_savings_unknown {
+                                        format!("{} known", money(cache_savings))
+                                    } else {
+                                        money(cache_savings)
+                                    },
+                                )),
+                        ),
+                );
+                let by_time = self.usage_breakdown_by_time;
+                let breakdown_control = div()
+                    .flex()
+                    .rounded(px(10.0))
+                    .bg(theme.glass_hover().opacity(0.25))
+                    .p(px(2.0))
+                    .children(
+                        [
+                            (false, "Model"),
+                            (true, if hourly { "Hour" } else { "Day" }),
+                        ]
+                        .into_iter()
+                        .map(|(time, label)| {
+                            div()
+                                .id(SharedString::from(format!(
+                                    "usage-breakdown-{}",
+                                    if time { "time" } else { "model" }
+                                )))
+                                .rounded(px(8.0))
+                                .px(px(12.0))
+                                .py(px(5.0))
+                                .bg(if by_time == time {
+                                    theme.glass_hover()
+                                } else {
+                                    theme.glass_hover().opacity(0.0)
+                                })
+                                .text_color(if by_time == time {
+                                    theme.text
+                                } else {
+                                    theme.text_muted
+                                })
+                                .text_size(crate::typography::ui_rems(13.0))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.usage_breakdown_by_time = time;
+                                    cx.notify();
+                                }))
+                                .child(label)
+                        }),
+                    );
+                let mut breakdown = div().w_full().flex().flex_col().gap(px(12.0)).child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(14.0))
+                                .text_color(theme.text)
+                                .child("Breakdown"),
+                        )
+                        .child(breakdown_control),
+                );
+                if by_time {
+                    let active: Vec<_> = [
                         UsageProvider::Codex,
                         UsageProvider::OpenCodeGo,
                         UsageProvider::Claude,
-                    ] {
-                        let buckets: Vec<_> = selected
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(index, _)| provider_tokens[*index] > 0)
+                    .collect();
+                    let column_width = 0.60 / (active.len() + 2) as f32;
+                    let row = |label: String,
+                               provider_values: Vec<String>,
+                               total: String,
+                               tokens: String,
+                               header: bool| {
+                        div()
+                            .w_full()
+                            .min_h(px(if header { 31.0 } else { 38.0 }))
+                            .flex()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(theme.border.opacity(if header { 1.0 } else { 0.55 }))
+                            .text_size(crate::typography::ui_rems(if header { 11.0 } else { 13.0 }))
+                            .child(
+                                div()
+                                    .w(gpui::relative(0.40))
+                                    .text_color(if header { theme.text_muted } else { theme.text })
+                                    .child(label),
+                            )
+                            .children(provider_values.into_iter().map(|value| {
+                                div()
+                                    .w(gpui::relative(column_width))
+                                    .text_align(gpui::TextAlign::Right)
+                                    .text_color(theme.text_muted)
+                                    .child(value)
+                            }))
+                            .child(
+                                div()
+                                    .w(gpui::relative(column_width))
+                                    .text_align(gpui::TextAlign::Right)
+                                    .text_color(if header { theme.text_muted } else { theme.text })
+                                    .child(total),
+                            )
+                            .child(
+                                div()
+                                    .w(gpui::relative(column_width))
+                                    .text_align(gpui::TextAlign::Right)
+                                    .text_color(theme.text_muted)
+                                    .child(tokens),
+                            )
+                    };
+                    breakdown = breakdown.child(row(
+                        if hourly { "Hour" } else { "Day" }.into(),
+                        active
                             .iter()
-                            .copied()
-                            .filter(|bucket| bucket.provider == provider)
-                            .collect();
-                        if buckets.is_empty() {
-                            continue;
+                            .map(|(_, provider)| provider.label().to_string())
+                            .collect(),
+                        "Total".into(),
+                        "Tokens".into(),
+                        true,
+                    ));
+                    for start in periods.keys().rev() {
+                        let token_count = period_tokens.get(start).copied().unwrap_or(0);
+                        let costs = period_costs.get(start).copied().unwrap_or_default();
+                        breakdown = breakdown.child(row(
+                            short_period_label(*start, hourly),
+                            active
+                                .iter()
+                                .map(|(index, _)| money(costs[*index]))
+                                .collect(),
+                            money(costs.iter().sum()),
+                            compact_tokens(token_count),
+                            false,
+                        ));
+                    }
+                } else {
+                    breakdown = breakdown.child(usage_table_row(
+                        &theme,
+                        [
+                            "Model".into(),
+                            "Cost".into(),
+                            "Share".into(),
+                            "Tokens".into(),
+                        ],
+                        true,
+                        false,
+                        None,
+                    ));
+                    let mut models: Vec<_> = models.into_iter().collect();
+                    models.sort_by(|a, b| {
+                        let left = a.1;
+                        let right = b.1;
+                        if tokens_view {
+                            right
+                                .2
+                                .cmp(&left.2)
+                                .then_with(|| right.1.total_cmp(&left.1))
+                        } else {
+                            right
+                                .1
+                                .total_cmp(&left.1)
+                                .then_with(|| right.2.cmp(&left.2))
                         }
-                        let tokens = buckets
-                            .iter()
-                            .map(|bucket| bucket.tokens.total())
-                            .sum::<u64>();
-                        let value = if metric == "tokens" {
-                            format!("{} tokens", count(tokens))
-                        } else {
-                            cost_of(&buckets)
-                                .map_or("Cost unknown · unpriced records".into(), money)
-                        };
-                        let share = if metric == "tokens" && all_tokens > 0 {
-                            Some(tokens as f64 / all_tokens as f64)
-                        } else if metric == "cost" {
-                            all_cost
-                                .filter(|total| *total > 0.0)
-                                .and_then(|total| cost_of(&buckets).map(|cost| cost / total))
-                        } else {
-                            None
-                        };
-                        let provider_sessions: u64 = snapshot
-                            .summary
-                            .sources
-                            .iter()
-                            .filter(|source| {
-                                source.provider == provider
-                                    && matches!(
-                                        source.status,
-                                        UsageSourceStatus::Ready | UsageSourceStatus::Partial
-                                    )
-                            })
-                            .map(|source| source.distinct_sessions)
-                            .sum();
-                        content = content.child(
+                    });
+                    if models.is_empty() {
+                        breakdown = breakdown.child(
                             div()
                                 .w_full()
-                                .rounded(px(Theme::CONTROL_RADIUS))
-                                .border_1()
-                                .border_color(theme.border)
-                                .p(px(12.0))
-                                .flex()
-                                .flex_wrap()
-                                .justify_between()
-                                .gap(px(7.0))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(8.0))
-                                        .child(
-                                            icon(provider_mark(provider))
-                                                .size(px(15.0))
-                                                .text_color(provider_tone(provider, &theme)),
-                                        )
-                                        .child(div().text_color(theme.text).child(format!(
-                                            "{} · {} sessions · {}",
-                                            provider.label(),
-                                            count(provider_sessions),
-                                            share.map_or("share unknown".into(), |share| format!(
-                                                "{:.0}% share",
-                                                share * 100.0
-                                            ))
-                                        ))),
-                                )
-                                .child(div().text_color(theme.text_muted).child(value)),
-                        );
-                    }
-                    let mut periods = BTreeMap::<i64, Vec<&UsageBucket>>::new();
-                    for bucket in &selected {
-                        periods.entry(bucket.start_ms).or_default().push(bucket);
-                    }
-                    let period_value = |items: &Vec<&UsageBucket>| -> f64 {
-                        if metric == "tokens" {
-                            items
-                                .iter()
-                                .map(|bucket| bucket.tokens.total() as f64)
-                                .sum()
-                        } else {
-                            cost_of(items).unwrap_or(0.0)
-                        }
-                    };
-                    let max_value = periods
-                        .values()
-                        .map(period_value)
-                        .fold(0.0_f64, f64::max)
-                        .max(0.000_001);
-                    content = content.child(
-                        div()
-                            .text_size(crate::typography::ui_rems(14.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child("By time"),
-                    );
-                    for (start, buckets) in periods.into_iter().rev() {
-                        let tokens = buckets
-                            .iter()
-                            .map(|bucket| bucket.tokens.total())
-                            .sum::<u64>();
-                        let label = if metric == "tokens" {
-                            format!("{} tokens", count(tokens))
-                        } else {
-                            cost_of(&buckets).map_or("Unknown cost".into(), money)
-                        };
-                        let cost_known = metric == "tokens" || cost_of(&buckets).is_some();
-                        let detail = period_detail(
-                            start,
-                            snapshot.summary.days == 1,
-                            tokens,
-                            cost_of(&buckets),
-                        );
-                        let segments: Vec<AnyElement> = [
-                            UsageProvider::Codex,
-                            UsageProvider::OpenCodeGo,
-                            UsageProvider::Claude,
-                        ]
-                        .into_iter()
-                        .filter_map(|provider| {
-                            let amount: f64 = buckets
-                                .iter()
-                                .filter(|bucket| bucket.provider == provider)
-                                .map(|bucket| {
-                                    if metric == "tokens" {
-                                        bucket.tokens.total() as f64
-                                    } else {
-                                        bucket.api_equivalent_cost_usd.unwrap_or(0.0)
-                                    }
-                                })
-                                .sum();
-                            (cost_known && amount > 0.0).then(|| {
-                                div()
-                                    .h_full()
-                                    .w(gpui::relative((amount / max_value) as f32))
-                                    .bg(provider_tone(provider, &theme))
-                                    .into_any_element()
-                            })
-                        })
-                        .collect();
-                        content = content.child(
-                            div()
-                                .id(SharedString::from(format!("usage-period-{start}")))
-                                .tooltip(move |_, cx| {
-                                    cx.new(|_| super::SurfaceTabTooltip {
-                                        text: detail.clone().into(),
-                                    })
-                                    .into()
-                                })
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .justify_between()
-                                        .gap(px(5.0))
-                                        .text_size(crate::typography::ui_rems(11.0))
-                                        .text_color(theme.text_muted)
-                                        .child(period_label(start, snapshot.summary.days == 1))
-                                        .child(label),
-                                )
-                                .child(
-                                    div()
-                                        .h(px(5.0))
-                                        .w_full()
-                                        .rounded(px(3.0))
-                                        .bg(theme.border)
-                                        .flex()
-                                        .overflow_hidden()
-                                        .children(segments),
-                                ),
-                        );
-                    }
-                    let processed = mix
-                        .uncached_input
-                        .saturating_add(mix.cached_input)
-                        .saturating_add(mix.cache_creation);
-                    content = content.child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(6.0))
-                            .child(metric_cell(&theme, "Input processed", count(processed)))
-                            .child(metric_cell(&theme, "Cache reused", count(mix.cached_input)))
-                            .child(metric_cell(
-                                &theme,
-                                "Cache created",
-                                count(mix.cache_creation),
-                            ))
-                            .child(metric_cell(&theme, "Output", count(mix.output)))
-                            .child(metric_cell(
-                                &theme,
-                                "Cache savings",
-                                cache_savings_label(&selected),
-                            )),
-                    );
-                    content = content.child(div().text_size(crate::typography::ui_rems(10.0))
-                        .text_color(theme.text_muted)
-                        .child("Cache savings model the uncached-versus-cached input rate when known; subscription billing is separate."));
-                    if mix.reasoning > 0 {
-                        content = content.child(
-                            div()
-                                .text_size(crate::typography::ui_rems(11.0))
+                                .py(px(20.0))
+                                .text_align(gpui::TextAlign::Center)
                                 .text_color(theme.text_muted)
-                                .child(format!(
-                                    "{} reasoning tokens are included in output",
-                                    count(mix.reasoning)
-                                )),
+                                .child("No activity in this window."),
                         );
                     }
-                    let mut models = BTreeMap::<String, Vec<&UsageBucket>>::new();
-                    for bucket in &selected {
-                        models.entry(bucket.model.clone()).or_default().push(bucket);
-                    }
-                    content = content.child(
-                        div()
-                            .text_size(crate::typography::ui_rems(14.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child("By model"),
-                    );
-                    for (model, buckets) in models {
-                        let quality = buckets.first().map(|bucket| bucket.cost_quality);
-                        let quality = if quality.is_some_and(|quality| {
-                            buckets.iter().all(|bucket| bucket.cost_quality == quality)
-                        }) {
-                            quality.unwrap()
-                        } else {
-                            CostQuality::Mixed
-                        };
-                        let provenance = match quality {
-                            CostQuality::ProviderReported => "provider reported",
-                            CostQuality::ModelPriced => "LiteLLM model price",
-                            CostQuality::UserOverride => "your exact-model rate",
-                            CostQuality::Unpriced => "unpriced",
-                            CostQuality::Mixed => "mixed provenance",
-                        };
-                        content = content.child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .justify_between()
-                                .gap(px(12.0))
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
-                                .child(model)
-                                .child(format!(
-                                    "{} tokens · {} · {provenance}",
-                                    count(buckets.iter().map(|bucket| bucket.tokens.total()).sum()),
-                                    cost_of(&buckets).map_or("Unpriced".into(), money)
-                                )),
-                        );
+                    for ((_, name), (provider, cost, tokens, records, missing)) in models {
+                        let unknown = records > 0 && missing >= records;
+                        breakdown = breakdown.child(div().id(SharedString::from(format!("usage-model-{}-{name}", provider.label())))
+                            .tooltip(move |_, cx| cx.new(|_| super::SurfaceTabTooltip {
+                                text: if missing > 0 { format!("{missing} unpriced records; priced cost shown where available").into() }
+                                    else { "API-equivalent estimate".into() },
+                            }).into())
+                            .child(usage_table_row(&theme,
+                                [name, if unknown { "Unpriced".into() } else { money(cost) },
+                                 if unknown { "—".into() } else { usage_percent(if total_cost > 0.0 { cost / total_cost } else { 0.0 }) }, compact_tokens(tokens)], false, unknown, Some(provider))));
                     }
                 }
-            }
-            if !limits_view {
-                content = content.child(
-                    div()
-                        .text_size(crate::typography::ui_rems(14.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child("History coverage"),
-                );
-                for source in &snapshot.summary.sources {
-                    let status = match source.status {
-                        UsageSourceStatus::Ready => "Ready",
-                        UsageSourceStatus::Missing => "Missing",
-                        UsageSourceStatus::Partial => "Partial",
-                        UsageSourceStatus::Unsupported => "Unsupported",
-                        UsageSourceStatus::Duplicate => "Duplicate · excluded",
-                    };
-                    content = content.child(
-                        div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted)
-                            .child(format!(
-                                "{} history: {status} · {} scanned · {} cached{}",
-                                source.provider.label(),
-                                source.files_scanned,
-                                source.files_cached,
-                                source
-                                    .detail
-                                    .as_ref()
-                                    .map_or(String::new(), |detail| format!(" · {detail}"))
-                            )),
-                    );
+                content = content.child(breakdown);
+                if snapshot.summary.partial || !snapshot.summary.warnings.is_empty() {
+                    content = content.child(div().w_full().flex().flex_col().gap(px(4.0))
+                        .children(snapshot.summary.warnings.iter().cloned().chain(
+                            snapshot.summary.partial.then(|| "Some environments reported partial history; totals may be incomplete.".to_string())
+                        ).map(|warning| div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.warning).child(warning))));
                 }
-            }
-            for warning in &snapshot.summary.warnings {
-                content = content.child(
-                    div()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.warning)
-                        .child(warning.clone()),
-                );
             }
         } else {
-            content = content.child(div().text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text_muted)
-                .child("No readable Codex or Claude transcript source is available for this environment. Provider limits may still be reported separately."));
+            content = content.child(div().text_color(theme.text_muted).child(
+                if self.usage_refreshing {
+                    "Loading usage…"
+                } else {
+                    "Connect an environment to see usage and limits."
+                },
+            ));
         }
+        if let Some(error) = &self.usage_error {
+            content = content.child(div().text_color(theme.warning).child(error.clone()));
+        }
+        let price_open = self.usage_page_price_editor_open;
+        let content = content.when(price_open, |page| {
+            page.child(
+                div()
+                    .id("usage-model-prices-close")
+                    .cursor_pointer()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.usage_page_price_editor_open = false;
+                        cx.notify();
+                    }))
+                    .child("Hide model prices"),
+            )
+            .child(self.render_usage_price_editor(&theme, cx))
+        });
         div()
             .id("usage-page")
             .size_full()
+            .relative()
             .overflow_y_scroll()
+            .child(div().w_full().px(px(22.0)).py(px(12.0)).child(header))
             .child(
                 div()
                     .w_full()
-                    .max_w(px(820.0))
+                    .max_w(px(1024.0))
                     .mx_auto()
-                    .px(px(28.0))
-                    .py(px(28.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(18.0))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .justify_between()
-                            .gap(px(8.0))
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(19.0))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(theme.text)
-                                    .child("Usage"),
-                            )
-                            .child(
-                                div()
-                                    .id("usage-sidebar-visibility")
-                                    .cursor_pointer()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.settings.usage_sidebar_hidden =
-                                            !this.settings.usage_sidebar_hidden;
-                                        this.usage_card_open = false;
-                                        this.schedule_save(cx);
-                                        cx.notify();
-                                    }))
-                                    .child(if self.settings.usage_sidebar_hidden {
-                                        "Show sidebar action"
-                                    } else {
-                                        "Hide sidebar action"
-                                    }),
-                            ),
-                    )
-                    .child(toolbar)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(px(10.0))
-                            .child(periods)
-                            .child(
-                                div()
-                                    .id("usage-environment")
-                                    .cursor_pointer()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cycle_usage_environment(cx)
-                                    }))
-                                    .child(format!("Environment: {environment_label} · change")),
-                            )
-                            .child(
-                                div()
-                                    .id("usage-refresh")
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.0))
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
-                                    .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
-                                    .child(icon(icons::REFRESH).size(px(14.0)))
-                                    .child(if self.usage_refreshing {
-                                        "Refreshing…"
-                                    } else {
-                                        "Refresh"
-                                    }),
-                            ),
-                    )
-                    .child(provider_tabs)
-                    .when(stale, |el| {
-                        el.child(div().text_color(theme.warning).child("Snapshot is stale"))
-                    })
-                    .when_some(self.usage_error.clone(), |el, error| {
-                        el.child(div().text_color(theme.warning).child(error))
-                    })
-                    .child(content)
-                    .when(metric == "cost", |page| {
-                        page.child(self.render_usage_price_editor(&theme, cx))
-                    }),
+                    .px(px(24.0))
+                    .pt(px(22.0))
+                    .pb(px(48.0))
+                    .child(content),
             )
+            .when(self.usage_environment_menu_open, |page| {
+                page.child(
+                    div()
+                        .absolute()
+                        .left(px(22.0))
+                        .top(px(48.0))
+                        .child(environment_menu),
+                )
+            })
             .into_any_element()
     }
 
@@ -2159,6 +3058,8 @@ mod tests {
             records: 1,
             sessions: 1,
             api_equivalent_cost_usd: None,
+            known_cost_usd: None,
+            unpriced_records: None,
             cache_savings_usd: savings,
             cost_quality: CostQuality::Unpriced,
         };

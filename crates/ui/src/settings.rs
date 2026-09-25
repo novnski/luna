@@ -826,7 +826,7 @@ impl Default for UiSettings {
             sidebar_show_branch: true,
             sidebar_show_pull_request: true,
             usage_days: 30,
-            usage_metric: "cost".into(),
+            usage_metric: "limits".into(),
             usage_sidebar_hidden: false,
             usage_price_overrides: std::collections::HashMap::new(),
             last_space_id: None,

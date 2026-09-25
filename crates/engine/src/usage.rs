@@ -24,7 +24,10 @@ const MAX_FILES: usize = 10_000;
 // Codex rollouts can exceed 1 GiB. The scanner streams them and checkpoints
 // completed prefixes, so bound total file size without rejecting real history.
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_SCAN_TIME: Duration = Duration::from_secs(4);
+// A cold 30-day Codex home can contain several gigabytes of transcripts.
+// Four seconds returned only the oldest fraction of the window and omitted
+// recent models indefinitely until the user refreshed many times.
+const MAX_SCAN_TIME: Duration = Duration::from_secs(90);
 const LITELLM_RATES_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const RATES_TTL_MS: i64 = 24 * 60 * 60 * 1000;
@@ -478,6 +481,17 @@ fn scan_file(
     result.modified_ns = modified;
     (result.head_guard, result.tail_guard) = guard(path, result.complete_offset)?;
     Ok((result, false))
+}
+
+fn cached_file_is_unchanged(path: &Path, cached: &CachedFile) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    cached.complete_offset == metadata.len()
+        && cached.size == metadata.len()
+        && cached.modified_ns == modified_ns(&metadata)
+        && guard(path, cached.complete_offset)
+            .is_ok_and(|(head, tail)| head == cached.head_guard && tail == cached.tail_guard)
 }
 
 fn candidate_files(root: &Path, cutoff_ms: i64, deadline: Instant) -> (Vec<PathBuf>, bool) {
@@ -934,12 +948,15 @@ fn add_source_configured(
     source.fingerprint = fingerprint(provider, &root);
     source.status = UsageSourceStatus::Ready;
     source.detail = None;
-    let (files, partial) = candidate_files(&root, cutoff_ms - 86_400_000, deadline);
+    // T3 keeps 36h of mtime slack before the first requested period. A file
+    // modified around local midnight can still contain in-window records.
+    let (files, partial) = candidate_files(&root, cutoff_ms - 36 * 3_600_000, deadline);
     if partial {
         source.status = UsageSourceStatus::Partial;
         source.detail = Some("Scan time or file bound reached".into());
     }
     let mut sessions = HashSet::new();
+    let mut processed_keys = HashSet::new();
     for path in files {
         if Instant::now() >= deadline {
             source.status = UsageSourceStatus::Partial;
@@ -947,8 +964,29 @@ fn add_source_configured(
             break;
         }
         let key = format!("{:?}:{}", provider, path.display());
+        // Warm files are read straight from the in-memory cache. Cloning and
+        // replacing every CachedFile used to copy the entire history on each
+        // refresh even when no transcript byte had changed.
+        if let Some(cached) = cache
+            .files
+            .get(&key)
+            .filter(|cached| cached_file_is_unchanged(&path, cached))
+        {
+            processed_keys.insert(key.clone());
+            source.files_cached += 1;
+            for record in &cached.records {
+                if record.at_ms >= cutoff_ms {
+                    if !record.session.is_empty() {
+                        sessions.insert(record.session.clone());
+                    }
+                    all.push((provider, record.clone()));
+                }
+            }
+            continue;
+        }
         match scan_file(&path, provider, cache.files.get(&key), deadline) {
             Ok((scanned, warm)) => {
+                processed_keys.insert(key.clone());
                 source.files_scanned += (!warm) as u64;
                 source.files_cached += warm as u64;
                 if scanned.complete_offset < scanned.size {
@@ -969,6 +1007,27 @@ fn add_source_configured(
                 source.failed_files += 1;
                 source.status = UsageSourceStatus::Partial;
                 source.detail = Some("One or more transcript files could not be read".into());
+            }
+        }
+    }
+    // T3 continues to use cached records if a provider cleans up a rollout,
+    // or if an in-progress scan has not reached a previously parsed file.
+    // The cache is pruned by record time after this contribution is assembled.
+    let prefix = format!("{provider:?}:");
+    for (key, cached) in &cache.files {
+        let Some(path) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        if !Path::new(path).starts_with(&root) || processed_keys.contains(key) {
+            continue;
+        }
+        source.files_cached += 1;
+        for record in &cached.records {
+            if record.at_ms >= cutoff_ms {
+                if !record.session.is_empty() {
+                    sessions.insert(record.session.clone());
+                }
+                all.push((provider, record.clone()));
             }
         }
     }
@@ -1002,10 +1061,23 @@ fn add_live_source(
 fn live_cache_file(data_dir: &Path, name: &str) -> Option<PathBuf> {
     // The scan cache belongs to LUNA, never inside a provider's private home.
     let root = data_dir.canonicalize().ok()?;
-    if actual_provider_homes().iter().any(|home| {
-        let home = home.canonicalize().unwrap_or_else(|_| home.clone());
-        paths_overlap(&root, &home)
-    }) {
+    // Codex-managed checkouts live below ~/.codex/worktrees. Their own signed
+    // development app data is still LUNA-owned, not a provider transcript or
+    // credential directory. Keep this exception exact to that app bundle's
+    // data location; arbitrary children of a provider home remain forbidden.
+    let managed_dev_data = root.ends_with("target/luna-macos-dev/data")
+        && root.ancestors().any(|ancestor| {
+            ancestor.file_name().is_some_and(|name| name == "worktrees")
+                && ancestor
+                    .parent()
+                    .is_some_and(|parent| parent.file_name().is_some_and(|name| name == ".codex"))
+        });
+    if !managed_dev_data
+        && actual_provider_homes().iter().any(|home| {
+            let home = home.canonicalize().unwrap_or_else(|_| home.clone());
+            paths_overlap(&root, &home)
+        })
+    {
         return None;
     }
     let path = root.join(name);
@@ -1166,6 +1238,17 @@ fn aggregate_records(
     days: u32,
     prices: &HashMap<String, (UsagePriceRate, CostQuality)>,
 ) -> Vec<UsageBucket> {
+    aggregate_records_for_periods(records, sources, days, &[], None, prices)
+}
+
+fn aggregate_records_for_periods(
+    records: Vec<(UsageProvider, Record)>,
+    sources: &[UsageSource],
+    days: u32,
+    period_starts_ms: &[i64],
+    until_ms: Option<i64>,
+    prices: &HashMap<String, (UsagePriceRate, CostQuality)>,
+) -> Vec<UsageBucket> {
     let mut seen = HashSet::new();
     let mut buckets: BTreeMap<(i64, u8, String), (UsageBucket, HashSet<String>)> = BTreeMap::new();
     for (provider, record) in records {
@@ -1177,8 +1260,16 @@ fn aggregate_records(
         {
             continue;
         }
-        let width = if days == 1 { 3_600_000 } else { 86_400_000 };
-        let start = record.at_ms.div_euclid(width) * width;
+        let start = if let Some(&first) = period_starts_ms.first() {
+            if record.at_ms < first || until_ms.is_some_and(|until| record.at_ms >= until) {
+                continue;
+            }
+            let index = period_starts_ms.partition_point(|period| *period <= record.at_ms);
+            period_starts_ms[index - 1]
+        } else {
+            let width = if days == 1 { 3_600_000 } else { 86_400_000 };
+            record.at_ms.div_euclid(width) * width
+        };
         let key = (start, provider as u8, record.model.clone());
         let (bucket, sessions) = buckets.entry(key).or_insert_with(|| {
             (
@@ -1190,6 +1281,8 @@ fn aggregate_records(
                     records: 0,
                     sessions: 0,
                     api_equivalent_cost_usd: Some(0.0),
+                    known_cost_usd: Some(0.0),
+                    unpriced_records: Some(0),
                     cache_savings_usd: Some(0.0),
                     cost_quality: CostQuality::ProviderReported,
                 },
@@ -1224,6 +1317,7 @@ fn aggregate_records(
                 }),
         };
         if let Some((cost, quality)) = priced {
+            *bucket.known_cost_usd.get_or_insert(0.0) += cost;
             if let Some(total) = &mut bucket.api_equivalent_cost_usd {
                 *total += cost;
             }
@@ -1233,6 +1327,7 @@ fn aggregate_records(
                 bucket.cost_quality = CostQuality::Mixed;
             }
         } else {
+            *bucket.unpriced_records.get_or_insert(0) += 1;
             bucket.api_equivalent_cost_usd = None;
             bucket.cost_quality =
                 if bucket.records == 1 || bucket.cost_quality == CostQuality::Unpriced {
@@ -1279,6 +1374,7 @@ fn snapshot_impl(
     enabled: Option<Vec<UsageProvider>>,
 ) -> UsageSnapshot {
     static SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static SCAN_CACHES: OnceLock<Mutex<HashMap<PathBuf, ScanCache>>> = OnceLock::new();
     let _guard = SCAN_LOCK.get_or_init(|| Mutex::new(())).lock();
     let started = Instant::now();
     let read_at = now_ms();
@@ -1287,11 +1383,44 @@ fn snapshot_impl(
     } else {
         30
     };
-    let cutoff = read_at - i64::from(days) * 86_400_000;
+    let expected_periods = if days == 1 { 24 } else { days as usize };
+    let period_starts_ms = (request.period_starts_ms.len() == expected_periods
+        && request
+            .period_starts_ms
+            .windows(2)
+            .all(|pair| pair[0] < pair[1] && pair[1] - pair[0] <= 26 * 3_600_000)
+        && request
+            .period_starts_ms
+            .first()
+            .is_some_and(|first| *first > read_at - 93 * 86_400_000)
+        && request.until_ms.is_some_and(|until| {
+            until > *request.period_starts_ms.last().unwrap() && until <= read_at + 2 * 86_400_000
+        }))
+    .then(|| request.period_starts_ms.clone())
+    .unwrap_or_default();
+    let until_ms = (!period_starts_ms.is_empty())
+        .then_some(request.until_ms)
+        .flatten();
+    let cutoff = period_starts_ms
+        .first()
+        .copied()
+        .unwrap_or(read_at - i64::from(days) * 86_400_000);
     let cache_file = live
         .as_ref()
         .map_or_else(cache_path, |(_, _, data_dir)| live_cache_path(data_dir));
-    let mut cache = load_cache(cache_file.as_deref());
+    let mut cache_store = SCAN_CACHES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let mut uncached = ScanCache::default();
+    let cache = match cache_file.as_ref() {
+        Some(path) => cache_store
+            .entry(path.clone())
+            .or_insert_with(|| load_cache(Some(path))),
+        None => &mut uncached,
+    };
+    let cache_version = cache.version;
+    let cache_file_count = cache.files.len();
     let mut records = Vec::new();
     let deadline = started + MAX_SCAN_TIME;
     let (codex, claude) = if let Some((codex_home, claude_home, _)) = live.as_ref() {
@@ -1306,7 +1435,7 @@ fn snapshot_impl(
                 "sessions",
                 cutoff,
                 deadline,
-                &mut cache,
+                cache,
                 &mut records,
             ),
             add_live_source(
@@ -1317,8 +1446,8 @@ fn snapshot_impl(
                     .then_some(claude_home.as_path()),
                 "projects",
                 cutoff,
-                Instant::now() + MAX_SCAN_TIME,
-                &mut cache,
+                deadline,
+                cache,
                 &mut records,
             ),
         )
@@ -1329,15 +1458,15 @@ fn snapshot_impl(
                 "LUNA_USAGE_SYNTHETIC_CODEX_HOME",
                 cutoff,
                 deadline,
-                &mut cache,
+                cache,
                 &mut records,
             ),
             add_source(
                 UsageProvider::Claude,
                 "LUNA_USAGE_SYNTHETIC_CLAUDE_HOME",
                 cutoff,
-                Instant::now() + MAX_SCAN_TIME,
-                &mut cache,
+                deadline,
+                cache,
                 &mut records,
             ),
         )
@@ -1371,7 +1500,13 @@ fn snapshot_impl(
             || file.records.iter().any(|record| record.at_ms >= retention)
     });
     cache.version = CACHE_VERSION;
-    save_cache(cache_file.as_deref(), &cache);
+    if cache.version != cache_version
+        || cache.files.len() != cache_file_count
+        || sources.iter().any(|source| source.files_scanned > 0)
+    {
+        save_cache(cache_file.as_deref(), cache);
+    }
+    drop(cache_store);
 
     let mut price_rates = live
         .as_ref()
@@ -1381,7 +1516,14 @@ fn snapshot_impl(
             price_rates.insert(model, (rate, CostQuality::UserOverride));
         }
     }
-    let buckets = aggregate_records(records, &sources, days, &price_rates);
+    let buckets = aggregate_records_for_periods(
+        records,
+        &sources,
+        days,
+        &period_starts_ms,
+        until_ms,
+        &price_rates,
+    );
     let warnings = live
         .as_ref()
         .filter(|_| {
@@ -1399,9 +1541,16 @@ fn snapshot_impl(
         summary: UsageSummary {
             contract_version: USAGE_CONTRACT_VERSION,
             read_at_ms: read_at,
-            time_zone: "UTC".into(),
+            time_zone: if period_starts_ms.is_empty() {
+                "UTC"
+            } else {
+                "viewer-local"
+            }
+            .into(),
             days,
             resolution: if days == 1 { "hour" } else { "day" }.into(),
+            period_starts_ms,
+            until_ms,
             buckets,
             partial: sources
                 .iter()
@@ -1410,14 +1559,18 @@ fn snapshot_impl(
             scan_duration_ms: started.elapsed().as_millis() as u64,
             warnings,
         },
-        limits: limits()
-            .into_iter()
-            .filter(|limit| {
-                enabled
-                    .as_ref()
-                    .is_none_or(|items| items.contains(&limit.provider))
-            })
-            .collect(),
+        limits: (if request.include_limits {
+            limits()
+        } else {
+            Vec::new()
+        })
+        .into_iter()
+        .filter(|limit| {
+            enabled
+                .as_ref()
+                .is_none_or(|items| items.contains(&limit.provider))
+        })
+        .collect(),
     }
 }
 
@@ -2017,6 +2170,9 @@ mod tests {
         fs::write(claude.join("projects/fake.jsonl"), claude_row).unwrap();
         let request = UsageRequest {
             days: 7,
+            period_starts_ms: vec![],
+            until_ms: None,
+            include_limits: true,
             price_overrides: HashMap::new(),
         };
         let first = snapshot_live(
@@ -2091,6 +2247,9 @@ mod tests {
         let none_enabled = snapshot_live(
             UsageRequest {
                 days: 7,
+                period_starts_ms: vec![],
+                until_ms: None,
+                include_limits: true,
                 price_overrides: HashMap::new(),
             },
             None,
@@ -2122,6 +2281,9 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let request = UsageRequest {
             days: 7,
+            period_starts_ms: vec![],
+            until_ms: None,
+            include_limits: true,
             price_overrides: HashMap::new(),
         };
         let snapshot = snapshot_live(

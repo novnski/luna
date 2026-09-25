@@ -62,9 +62,24 @@ impl UsageTokens {
 pub struct UsageRequest {
     /// Supported: 1, 7, 30, 90. One day uses hourly buckets.
     pub days: u32,
+    /// Viewer-calculated period starts. Daily starts use the viewer's calendar
+    /// timezone, including DST; hourly starts anchor an exact rolling 24h.
+    #[serde(default)]
+    pub period_starts_ms: Vec<i64>,
+    /// Exclusive end of the final period.
+    #[serde(default)]
+    pub until_ms: Option<i64>,
+    /// Historical Cost/Tokens reads skip provider quota probes. Older clients
+    /// keep the original combined snapshot behavior.
+    #[serde(default = "default_include_limits")]
+    pub include_limits: bool,
     /// User supplied USD per million tokens, keyed by an exact model name.
     #[serde(default)]
     pub price_overrides: HashMap<String, UsagePriceRate>,
+}
+
+fn default_include_limits() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -100,6 +115,12 @@ pub struct UsageBucket {
     pub sessions: u64,
     /// Sum only when every record in this bucket is priced.
     pub api_equivalent_cost_usd: Option<f64>,
+    /// Priced portion of this bucket. Unlike the legacy all-or-nothing cost,
+    /// this remains available when other records in the bucket are unpriced.
+    #[serde(default)]
+    pub known_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub unpriced_records: Option<u64>,
     /// Modeled uncached-vs-cached input discount; unknown when any cached
     /// record lacks an exact model rate. Not a subscription billing amount.
     #[serde(default)]
@@ -150,6 +171,10 @@ pub struct UsageSummary {
     pub time_zone: String,
     pub days: u32,
     pub resolution: String,
+    #[serde(default)]
+    pub period_starts_ms: Vec<i64>,
+    #[serde(default)]
+    pub until_ms: Option<i64>,
     pub buckets: Vec<UsageBucket>,
     pub sources: Vec<UsageSource>,
     pub scan_duration_ms: u64,
@@ -257,6 +282,8 @@ pub fn merge_usage_snapshots(mut snapshots: Vec<UsageSnapshot>) -> Option<UsageS
             || snapshot.summary.days != merged.summary.days
             || snapshot.summary.resolution != merged.summary.resolution
             || snapshot.summary.time_zone != merged.summary.time_zone
+            || snapshot.summary.period_starts_ms != merged.summary.period_starts_ms
+            || snapshot.summary.until_ms != merged.summary.until_ms
         {
             merged.summary.partial = true;
             merged
@@ -435,6 +462,8 @@ mod tests {
                 time_zone: "UTC".into(),
                 days: 7,
                 resolution: "day".into(),
+                period_starts_ms: vec![],
+                until_ms: None,
                 buckets: vec![UsageBucket {
                     start_ms: 0,
                     provider: UsageProvider::Codex,
@@ -446,6 +475,8 @@ mod tests {
                     records: 1,
                     sessions: 1,
                     api_equivalent_cost_usd: None,
+                    known_cost_usd: None,
+                    unpriced_records: None,
                     cache_savings_usd: None,
                     cost_quality: CostQuality::Unpriced,
                 }],
@@ -503,6 +534,8 @@ mod tests {
                 time_zone: "UTC".into(),
                 days: 7,
                 resolution: "day".into(),
+                period_starts_ms: vec![],
+                until_ms: None,
                 buckets: vec![],
                 sources: vec![],
                 scan_duration_ms: 0,

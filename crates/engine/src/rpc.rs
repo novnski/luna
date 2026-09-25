@@ -7541,17 +7541,21 @@ impl RpcService for EngineRpc {
             }
             methods::GET_USAGE_SNAPSHOT => {
                 let request: UsageRequest = parse_params(params)?;
+                let include_limits = request.include_limits;
                 let synthetic = crate::usage::synthetic_mode_requested();
                 let enabled = Self::usage_providers_for(&self.registry.enabled_set());
                 let homes = (!synthetic).then(|| self.agent_accounts.usage_history_paths());
-                let opencode = (!synthetic
+                let opencode = (include_limits
+                    && !synthetic
                     && enabled.contains(&luna_proto::UsageProvider::OpenCodeGo))
                 .then(|| tokio::spawn(crate::usage_opencode::read_go_limits()));
                 let claude_accounts = self.agent_accounts.clone();
-                let claude = (!synthetic && enabled.contains(&luna_proto::UsageProvider::Claude))
-                    .then(|| {
-                        tokio::spawn(async move { claude_accounts.read_claude_usage_limit().await })
-                    });
+                let claude = (include_limits
+                    && !synthetic
+                    && enabled.contains(&luna_proto::UsageProvider::Claude))
+                .then(|| {
+                    tokio::spawn(async move { claude_accounts.read_claude_usage_limit().await })
+                });
                 if let Some((_, _, data_dir)) = homes.as_ref().filter(|_| {
                     enabled.contains(&luna_proto::UsageProvider::Codex)
                         || enabled.contains(&luna_proto::UsageProvider::Claude)
@@ -7567,7 +7571,7 @@ impl RpcService for EngineRpc {
                 })
                 .await
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
-                if enabled.contains(&luna_proto::UsageProvider::Codex) {
+                if include_limits && enabled.contains(&luna_proto::UsageProvider::Codex) {
                     self.attach_codex_live_limits(&mut snapshot).await;
                 }
                 if let Some(opencode) = opencode
@@ -9995,6 +9999,9 @@ mod tests {
         );
         let mut snapshot = crate::usage::snapshot(UsageRequest {
             days: 7,
+            period_starts_ms: vec![],
+            until_ms: None,
+            include_limits: true,
             price_overrides: std::collections::HashMap::new(),
         });
         assert_eq!(snapshot.summary.sources.len(), 3);
@@ -10007,6 +10014,8 @@ mod tests {
             records: 1,
             sessions: 1,
             api_equivalent_cost_usd: None,
+            known_cost_usd: None,
+            unpriced_records: None,
             cache_savings_usd: None,
             cost_quality: luna_proto::CostQuality::Unpriced,
         });

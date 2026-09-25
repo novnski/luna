@@ -318,6 +318,8 @@ impl AccountsPage {
                 time_zone: "UTC".into(),
                 days: 7,
                 resolution: "daily".into(),
+                period_starts_ms: vec![],
+                until_ms: None,
                 buckets: vec![],
                 sources: vec![],
                 scan_duration_ms: 0,
