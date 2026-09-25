@@ -136,7 +136,11 @@ fn main() -> anyhow::Result<()> {
             .start(Arc::new(move || vec![root.clone()]), None),
     );
     let ipc_port = port();
-    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(
+        ipc_port,
+        core.rpc_service(),
+        &temp.path().join("engine"),
+    ))?;
     let data = temp.path().join("ui");
     std::fs::create_dir(&data)?;
     let boot = EngineBootConfig {

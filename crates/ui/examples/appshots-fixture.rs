@@ -70,7 +70,11 @@ fn main() -> anyhow::Result<()> {
     core.workspace
         .rename_chat("appshots-fixture", "Review the workspace design")?;
     let ipc_port = port();
-    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(
+        ipc_port,
+        core.rpc_service(),
+        &temp.path().join("engine"),
+    ))?;
     let data = temp.path().join("ui");
     std::fs::create_dir(&data)?;
     let boot = EngineBootConfig {
@@ -140,6 +144,8 @@ fn main() -> anyhow::Result<()> {
             text: body,
             attachments: paths.clone(),
             hold_for_turn_end: true,
+            follow_up_behavior: luna_proto::FollowUpBehavior::Queue,
+            hold_reason: None,
             issued_by: device.clone(),
             issued_at: 1788900000000,
             edited_at: None,
@@ -153,6 +159,8 @@ fn main() -> anyhow::Result<()> {
             text: "Then check the spacing and keyboard navigation.".into(),
             attachments: vec![],
             hold_for_turn_end: true,
+            follow_up_behavior: luna_proto::FollowUpBehavior::Queue,
+            hold_reason: None,
             issued_by: device.clone(),
             issued_at: 1788900000001,
             edited_at: None,

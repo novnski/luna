@@ -89,6 +89,15 @@ impl ComposerDraft {
                 .flatten()
         })
     }
+
+    /// A later accepted send of the same content supersedes a rejected copy,
+    /// even when the user changed the execution model before retrying.
+    pub fn same_message_content(&self, other: &Self) -> bool {
+        self.text == other.text
+            && self.attachments == other.attachments
+            && self.appshots == other.appshots
+            && self.context == other.context
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

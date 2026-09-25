@@ -66,6 +66,9 @@ pub enum SteerOutcome {
     Accepted,
     /// No live steerable run.
     NotSteerable,
+    /// A prior native steer is unsettled or the mailbox is full; this prompt
+    /// was definitely not sent and must not start a competing turn.
+    Busy,
     /// The provider definitively rejected native in-turn steering.
     Rejected,
     /// Acceptance could not be proved; callers must preserve the durable row
@@ -501,8 +504,8 @@ impl RuntimeConfig {
 struct RunHandle {
     run_id: String,
     /// In-memory provider turn evidence for a future per-request LUNA grant.
-    /// This is separate from `active_turn_id()`, which intentionally returns
-    /// the engine run ID for the existing command fence.
+    /// Its presence also proves a turn is active, while `active_turn_id()`
+    /// returns the engine run ID for command fencing.
     provider_turn: Option<ProviderTurnFence>,
     /// The binding durably published for this provider run's SessionStarted.
     /// A warm steer may reuse it, but never adopt a changed generation.
@@ -1091,13 +1094,28 @@ impl SessionsEngine {
         lock(&self.inner.runs).contains_key(chat_id)
     }
 
-    /// The execution-lane fence for controls such as stop and steer. This is
-    /// intentionally the engine run id: a replacement provider runtime always
-    /// receives a new value even when it resumes the same native thread.
+    /// The execution-lane fence for an active turn. A steerable provider keeps
+    /// its run handle warm after Done, but that parked handle is not an active
+    /// turn and must not block history forks or other idle-only commands.
     pub fn active_turn_id(&self, chat_id: &str) -> Option<String> {
-        lock(&self.inner.runs)
-            .get(chat_id)
-            .map(|run| run.run_id.clone())
+        let (run_id, pending_steer, provider_turn) = {
+            let runs = lock(&self.inner.runs);
+            let run = runs.get(chat_id)?;
+            (
+                run.run_id.clone(),
+                !lock(&run.routed_steers).is_empty(),
+                run.provider_turn.is_some(),
+            )
+        };
+        let active_status = self.session_status(chat_id).is_some_and(|session| {
+            matches!(
+                session.status,
+                SessionStatus::Working
+                    | SessionStatus::AwaitingApproval
+                    | SessionStatus::AwaitingInput
+            )
+        });
+        (pending_steer || provider_turn || active_status).then_some(run_id)
     }
 
     /// Await this run's engine-observed binding and checkpoint, then reserve
@@ -1428,6 +1446,7 @@ impl SessionsEngine {
             return Err(EngineError::Other("cross-task approval expired".into()));
         }
         let binding = self.inner.current_codex_binding_key(&fence.source_task_id);
+        let target_active_turn = self.active_turn_id(&fence.request.task_id);
         let runs = lock(&self.inner.runs);
         let valid = runs.get(&fence.source_task_id).is_some_and(|run| {
             run.run_id == fence.source_run_id
@@ -1470,9 +1489,7 @@ impl SessionsEngine {
             target.binding_id = Some(binding.binding_id);
             target.binding_generation = Some(binding.generation);
         }
-        target.active_turn_id = runs
-            .get(&fence.request.task_id)
-            .map(|run| run.run_id.clone());
+        target.active_turn_id = target_active_turn;
         if target.task_revision != fence.target_snapshot.task_revision
             || target.binding_id != fence.target_snapshot.binding_id
             || target.binding_generation != fence.target_snapshot.binding_generation
@@ -3152,9 +3169,15 @@ impl SessionsEngine {
         prompt: &str,
         message_id: Option<String>,
     ) -> Result<SteerOutcome, EngineError> {
+        // A Codex/Claude run handle stays warm between turns. Its mailbox is
+        // still open, but RequireActiveTurn is invalid until another provider
+        // turn starts. Let the caller dispatch a follow-up turn instead.
+        let Some(active_turn_id) = self.active_turn_id(chat_id) else {
+            return Ok(SteerOutcome::NotSteerable);
+        };
         let target = lock(&self.inner.runs)
             .get(chat_id)
-            .filter(|h| h.steerable)
+            .filter(|h| h.steerable && h.run_id == active_turn_id)
             .map(|h| {
                 (
                     h.run_id.clone(),
@@ -3182,10 +3205,10 @@ impl SessionsEngine {
             // identity-free boundary retire the wrong durable receipt.
             let mut pending = lock(&ledger);
             if !pending.is_empty() {
-                return Ok(SteerOutcome::NotSteerable);
+                return Ok(SteerOutcome::Busy);
             }
             if steer_tx.try_send(message).is_err() {
-                return Ok(SteerOutcome::NotSteerable);
+                return Ok(SteerOutcome::Busy);
             }
             pending.push_back(RoutedSteer {
                 prompt: prompt.to_string(),

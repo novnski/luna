@@ -5479,7 +5479,7 @@ impl DocHost {
                         QueueHoldReason::ProviderRejected,
                     ));
                 }
-                SteerOutcome::NotSteerable => {
+                SteerOutcome::NotSteerable | SteerOutcome::Busy => {
                     return Ok(QueueProviderOutcome::Rejected(
                         QueueHoldReason::SteeringUnavailable,
                     ));
@@ -7080,10 +7080,28 @@ impl DocHost {
                     Some("queued as new turn".into()),
                 ))
             }
-            SteerOutcome::Rejected => Ok((
-                SessionCommandStatus::Rejected,
-                Some("the provider rejected native in-turn steering".into()),
-            )),
+            SteerOutcome::Rejected => {
+                if let Some(message_id) = message_id.as_deref() {
+                    handle
+                        .doc
+                        .remove_rejected_user_message(message_id, &prompt)?;
+                }
+                Ok((
+                    SessionCommandStatus::Rejected,
+                    Some("the provider rejected native in-turn steering".into()),
+                ))
+            }
+            SteerOutcome::Busy => {
+                if let Some(message_id) = message_id.as_deref() {
+                    handle
+                        .doc
+                        .remove_rejected_user_message(message_id, &prompt)?;
+                }
+                Ok((
+                    SessionCommandStatus::Rejected,
+                    Some("a previous native steer is still settling".into()),
+                ))
+            }
             SteerOutcome::Unknown => Ok((
                 SessionCommandStatus::Pending,
                 Some("native steer acceptance is unknown; it was not replayed".into()),

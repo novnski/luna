@@ -28,6 +28,8 @@ pub struct ProviderForkRequest {
     pub boundary: ProviderForkBoundary,
     pub cwd: String,
     pub model: Option<String>,
+    /// Exact native title for a newly named task; history rewrites leave this unset.
+    pub target_name: Option<String>,
     /// Engine-resolved provider home. Never accepted from UI/remote callers.
     pub provider_home: Option<String>,
     /// Engine-owned account isolation flag for providers whose CLI supports a

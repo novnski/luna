@@ -3245,16 +3245,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_stranger_on_the_ipc_port_does_not_wedge_the_window() {
-        // The port probe only proves *something* is listening. A process that
-        // accepts TCP and never speaks WebSocket used to hang the dial forever;
-        // now it times out and we embed instead, losing only the ability to
-        // serve other viewports.
+        // A foreign listener cannot claim LUNA's local-owner port. Fail
+        // closed, then prove boot succeeds once that listener is removed.
         let squatter = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
         let port = squatter.local_addr().unwrap().port();
         let dir = tempfile::tempdir().unwrap();
-        let handle = EngineHandle::bootstrap(EngineBootConfig {
+        let config = EngineBootConfig {
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3262,9 +3260,13 @@ mod tests {
             org_id: None,
             workos_client_id: None,
             default_harness: HarnessId::Mock,
-        })
-        .await
-        .expect("a taken port must not fail the boot");
+        };
+        let failure = EngineHandle::bootstrap(config.clone()).await;
+        assert!(failure.is_err(), "foreign IPC listener must not be adopted");
+        drop(squatter);
+        let handle = EngineHandle::bootstrap(config)
+            .await
+            .expect("released port must allow a fresh local boot");
         assert_eq!(handle.mode(), EngineMode::InProcess);
         assert!(
             handle
@@ -3275,7 +3277,6 @@ mod tests {
             "the window still works over its own transport"
         );
         handle.shutdown().await;
-        drop(squatter);
     }
 
     #[tokio::test]
@@ -3325,7 +3326,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn engine_info_is_available_while_cloud_onboarding_is_deferred() {
+    async fn invalid_legacy_session_starts_local_engine_without_cloud_onboarding() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("session.json"),
@@ -3350,25 +3351,21 @@ mod tests {
                 .expect("embedded lifecycle")
                 .borrow()
                 .clone(),
-            DeferredEngineState::Waiting
+            DeferredEngineState::Ready
         ));
 
         let info: EngineInfo = handle
             .client()
             .call_as(methods::ENGINE_INFO, serde_json::json!({}))
             .await
-            .expect("EngineInfo bypasses deferred cloud stores");
-        assert_eq!(info.workspace_scope, WorkspaceScope::Synced);
+            .expect("EngineInfo is available for the local profile");
+        assert_eq!(info.workspace_scope, WorkspaceScope::Local);
         assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                handle
-                    .client()
-                    .call(methods::LIST_HARNESSES, serde_json::json!({})),
-            )
-            .await
-            .is_err(),
-            "cloud data waits for organization onboarding"
+            handle
+                .client()
+                .call(methods::LIST_HARNESSES, serde_json::json!({}))
+                .await
+                .is_ok()
         );
         assert!(!dir.path().join("orgs").exists());
         handle.shutdown().await;

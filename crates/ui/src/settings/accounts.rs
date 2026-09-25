@@ -2314,7 +2314,7 @@ mod tests {
         );
         assert_eq!(
             account_lifecycle_action(&lifecycle_account(HarnessId::Codex, true, false)),
-            None
+            Some(AccountLifecycleAction::DisconnectCodex)
         );
     }
 

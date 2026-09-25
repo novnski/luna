@@ -621,13 +621,14 @@ struct SettleDraftSubmissionParams {
     queue_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum DraftSubmissionOutcome {
     Pending,
     Recoverable,
     Applied,
     Recovered,
+    Discarded,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3434,6 +3435,7 @@ impl EngineRpc {
         chat: &Chat,
         binding: &luna_proto::ExecutionBinding,
         boundary: luna_proto::ProviderForkBoundary,
+        target_name: Option<&str>,
         require_current_binding: bool,
     ) -> Result<luna_proto::ProviderForkResult, TaskProjectionError> {
         let config = chat.config.as_ref().ok_or_else(|| {
@@ -3511,6 +3513,7 @@ impl EngineRpc {
                     boundary,
                     cwd,
                     model: config.model.clone(),
+                    target_name: target_name.map(str::to_owned),
                     provider_home,
                     force_file_auth,
                 },
@@ -4435,12 +4438,21 @@ impl EngineRpc {
                         ))
                     })?;
 
+                let target_title = title
+                    .as_ref()
+                    .map(|title| title.trim().to_string())
+                    .filter(|title| !title.is_empty())
+                    .or_else(|| source.title.as_ref().map(|title| format!("{title} (fork)")));
+                let provider_name =
+                    format!("[LUNA] {}", target_title.as_deref().unwrap_or("New task"));
+
                 let provider_result = self
                     .fork_provider_history(
                         command_id,
                         &source,
                         &binding,
                         plan.provider_boundary.clone(),
+                        Some(&provider_name),
                         true,
                     )
                     .await?;
@@ -4535,10 +4547,6 @@ impl EngineRpc {
                     .export_snapshot()
                     .map_err(crate::EngineError::from)
                     .map_err(TaskProjectionError::ProviderUnknown)?;
-                let target_title = title
-                    .map(|title| title.trim().to_string())
-                    .filter(|title| !title.is_empty())
-                    .or_else(|| source.title.as_ref().map(|title| format!("{title} (fork)")));
                 let source_for_registry = source.clone();
                 let new_task_for_registry = new_task_id.clone();
                 let provider_for_identity = binding.provider_id;
@@ -4673,6 +4681,7 @@ impl EngineRpc {
                         &source,
                         &binding,
                         plan.provider_boundary.clone(),
+                        None,
                         true,
                     )
                     .await?;
@@ -4907,6 +4916,7 @@ impl EngineRpc {
                         luna_proto::ProviderForkBoundary::ThroughCheckpoint {
                             checkpoint_id: recovery_view.source_tip_checkpoint_id.clone(),
                         },
+                        None,
                         false,
                     )
                     .await?;
@@ -8100,6 +8110,8 @@ impl RpcService for EngineRpc {
             }
             methods::SETTLE_DRAFT_SUBMISSION => {
                 let p: SettleDraftSubmissionParams = parse_params(params)?;
+                let mut discarded = false;
+                let mut cleared_revision = None;
                 match p.outcome {
                     DraftSubmissionOutcome::Pending => {}
                     DraftSubmissionOutcome::Recoverable => self
@@ -8109,18 +8121,48 @@ impl RpcService for EngineRpc {
                             &p.command_id,
                         )
                         .map_err(|error| RpcError::Failed(error.to_string()))?,
+                    DraftSubmissionOutcome::Discarded => {
+                        let task_id = self
+                            .store
+                            .draft_submission_task_id(&self.engine_info.device_id, &p.command_id)
+                            .map_err(|error| RpcError::Failed(error.to_string()))?;
+                        (discarded, cleared_revision) = self
+                            .store
+                            .discard_recoverable_draft_submission(
+                                &self.engine_info.device_id,
+                                &p.command_id,
+                            )
+                            .map_err(|error| RpcError::Failed(error.to_string()))?;
+                        if cleared_revision.is_some()
+                            && let Some(task_id) = task_id
+                            && let Err(error) = self.refresh_appshot_history_for_task(&task_id)
+                        {
+                            tracing::warn!(task_id, %error, "Appshot history projection deferred after draft discard");
+                        }
+                    }
                     DraftSubmissionOutcome::Applied | DraftSubmissionOutcome::Recovered => {
                         let task_id = self
                             .store
                             .draft_submission_task_id(&self.engine_info.device_id, &p.command_id)
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
-                        self.store
-                            .accept_draft_submission(
-                                &self.engine_info.device_id,
-                                &p.command_id,
-                                p.queue_id.as_deref(),
-                            )
-                            .map_err(|error| RpcError::Failed(error.to_string()))?;
+                        if matches!(p.outcome, DraftSubmissionOutcome::Applied)
+                            && p.queue_id.is_none()
+                        {
+                            self.store
+                                .accept_applied_draft_submission(
+                                    &self.engine_info.device_id,
+                                    &p.command_id,
+                                )
+                                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                        } else {
+                            self.store
+                                .accept_draft_submission(
+                                    &self.engine_info.device_id,
+                                    &p.command_id,
+                                    p.queue_id.as_deref(),
+                                )
+                                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                        }
                         if let Some(task_id) = task_id
                             && let Err(error) = self.refresh_appshot_history_for_task(&task_id)
                         {
@@ -8128,7 +8170,11 @@ impl RpcService for EngineRpc {
                         }
                     }
                 }
-                RpcReply::value(&serde_json::json!({ "ok": true }))
+                RpcReply::value(&serde_json::json!({
+                    "ok": true,
+                    "discarded": discarded,
+                    "clearedRevision": cleared_revision,
+                }))
             }
             methods::GET_TASK_COMMAND_SNAPSHOT => {
                 let p: TaskCommandSnapshotParams = parse_params(params)?;

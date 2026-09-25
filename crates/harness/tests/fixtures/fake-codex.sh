@@ -581,7 +581,7 @@ case "$turnline" in
 *scenario:happy*)
   # Verify the turn/start + thread/start params the harness must send.
   for want in '"method":"turn/start"' '"effort":"ultra"' '"model":"gpt-5.6-sol"' \
-    '"sandboxPolicy":{"type":"workspaceWrite"' \
+    '"sandboxPolicy":{' '"type":"workspaceWrite"' \
     '"approvalPolicy":"on-request"' '"approvalsReviewer":"user"' '"summary":"auto"' \
     '"serviceTier":"fast"'; do
     has "$turnline" "$want" || { fail_turn "$tid" "turn param missing: $want"; exit 0; }

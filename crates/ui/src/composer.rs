@@ -637,7 +637,7 @@ fn wizard_number_shortcut(key: &str, modified: bool, answer_focused: bool) -> Op
         return None;
     }
     let digit = key.parse::<usize>().ok()?;
-    (1..=9).contains(&digit).then_some(digit - 1)
+    (1..=9).contains(&digit).then(|| digit - 1)
 }
 
 /// Find the unresolved input request the panel should serve, if any: an
@@ -5383,6 +5383,125 @@ impl Composer {
         self.schedule_draft_save(key.to_string(), Duration::ZERO, cx);
     }
 
+    fn forget_recoverable_submissions(&mut self, key: &str, command_ids: &[String]) {
+        if command_ids.is_empty() {
+            return;
+        }
+        if let Some(entries) = self.recoverable_submissions.get_mut(key) {
+            entries.retain(|entry| !command_ids.contains(&entry.command_id));
+            if entries.is_empty() {
+                self.recoverable_submissions.remove(key);
+            }
+        }
+        if !self.recoverable_submissions.contains_key(key)
+            && self.failure_key.as_deref() == Some(key)
+            && matches!(
+                self.failure.as_deref().map(|message| message.as_ref()),
+                Some(
+                    "A previously rejected message was restored as a recoverable draft."
+                        | "A previous unsent message was preserved separately from this newer draft."
+                        | "The previous message was rejected and preserved separately from your newer draft."
+                        | "The submitted message was rejected and its draft was preserved."
+                )
+            )
+        {
+            self.failure = None;
+            self.failure_key = None;
+        }
+    }
+
+    fn discard_latest_submission(&mut self, cx: &mut Context<Self>) {
+        let key = self.current_key.clone();
+        let Some(submission) = self
+            .recoverable_submissions
+            .get(&key)
+            .and_then(|entries| entries.last())
+            .cloned()
+        else {
+            return;
+        };
+        let command_id = submission.command_id.clone();
+        if self.draft_receipt_tasks.contains_key(&command_id) {
+            return;
+        }
+        let (engine, engine_generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
+            self.failure = Some("The saved copy cannot be discarded while offline.".into());
+            self.failure_key = Some(key);
+            cx.notify();
+            return;
+        };
+        let task_id = command_id.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = crate::drafts::discard_recoverable_submission(&engine, &command_id).await;
+            this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != engine_generation {
+                    return;
+                }
+                composer.draft_receipt_tasks.remove(&command_id);
+                match result {
+                    Ok((true, cleared_revision)) => {
+                        if let Some(revision) = cleared_revision {
+                            let current_text = if key == composer.current_key {
+                                composer.input.read(cx).text().to_string()
+                            } else {
+                                composer.drafts.get(&key).cloned().unwrap_or_default()
+                            };
+                            let matches_saved = composer
+                                .build_draft_record(&key, current_text, cx)
+                                .same_message_content(&submission.snapshot);
+                            if matches_saved {
+                                composer.draft_save_tasks.remove(&key);
+                                composer.draft_saves_in_flight.remove(&key);
+                                composer.drafts.insert(key.clone(), String::new());
+                                composer.attachments.remove(&key);
+                                composer.appshots.remove(&key);
+                                composer.draft_blobs.remove(&key);
+                                composer.draft_unavailable.remove(&key);
+                                composer.draft_unavailable_appshots.remove(&key);
+                                composer.draft_unavailable_appshot_metadata.remove(&key);
+                                composer.state.update(cx, |state, _| {
+                                    state.purge_review_comments(&key);
+                                });
+                                if key == composer.current_key {
+                                    composer.set_input_text_without_draft_edit(String::new(), cx);
+                                }
+                                composer.draft_revisions.insert(key.clone(), revision);
+                                composer.draft_saved_revisions.insert(key.clone(), revision);
+                            } else {
+                                let next = composer
+                                    .draft_revisions
+                                    .get(&key)
+                                    .copied()
+                                    .unwrap_or(0)
+                                    .max(revision)
+                                    .saturating_add(1);
+                                composer.draft_revisions.insert(key.clone(), next);
+                                composer.schedule_draft_save(key.clone(), Duration::ZERO, cx);
+                            }
+                        }
+                        composer.forget_recoverable_submissions(&key, &[command_id.clone()]);
+                    }
+                    Ok((false, _)) => {
+                        composer.draft_loaded.remove(&key);
+                        composer.load_draft(key.clone(), cx);
+                    }
+                    Err(error) => {
+                        composer.failure =
+                            Some(format!("Saved copy could not be discarded: {error}").into());
+                        composer.failure_key = Some(key.clone());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        self.draft_receipt_tasks.insert(task_id, task);
+    }
+
     /// Merge the newest recoverable submission into the live draft. The
     /// recoverable row is deleted only after the merged draft is durably
     /// saved, so a failed read/save remains retryable after restart.
@@ -5814,7 +5933,19 @@ impl Composer {
                     let mut record = match read.draft {
                         Some(record) => record,
                         None => match read.submissions.last() {
-                            Some(submission) => submission.snapshot.clone(),
+                            Some(submission) => {
+                                let mut record = submission.snapshot.clone();
+                                if submission.state == DraftSubmissionState::Recoverable {
+                                    // Recovery is an explicit choice. Keeping the
+                                    // submitted snapshot as the live draft here
+                                    // reinserted an already-sent prompt on reopen.
+                                    record.text.clear();
+                                    record.attachments.clear();
+                                    record.appshots.clear();
+                                    record.context = Default::default();
+                                }
+                                record
+                            }
                             None => {
                                 this.update(cx, |composer, cx| {
                                     if composer.state.read(cx).engine_generation()
@@ -6100,6 +6231,7 @@ impl Composer {
         task_id: String,
         draft_key: String,
         submitted_revision: u64,
+        superseded_recoverable: Vec<String>,
         engine: crate::state::EngineHandle,
         cx: &mut Context<Self>,
     ) {
@@ -6200,6 +6332,12 @@ impl Composer {
                         composer.load_draft(draft_key.clone(), cx);
                     } else {
                         composer.finish_applied_draft(&draft_key, submitted_revision, cx);
+                        if queue_id.is_none() {
+                            composer.forget_recoverable_submissions(
+                                &draft_key,
+                                &superseded_recoverable,
+                            );
+                        }
                         if composer.failure_key.as_deref() == Some(task_id.as_str()) {
                             composer.failure = None;
                             composer.failure_key = None;
@@ -8031,6 +8169,14 @@ impl Composer {
         // restoring the folded prompt would paste the comment block into the
         // input as literal text.
         let key = self.current_key.clone();
+        let superseded_recoverable: Vec<String> = self
+            .recoverable_submissions
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.snapshot.same_message_content(&draft_snapshot))
+            .map(|entry| entry.command_id.clone())
+            .collect();
         let comments = self.state.update(cx, |state, cx| {
             let taken = state.take_review_comments(&key);
             if !taken.is_empty() {
@@ -8694,6 +8840,12 @@ impl Composer {
                 ) {
                     composer.finish_applied_draft(&submitted_key, submitted_revision, cx);
                 }
+                if matches!(&result, Ok(ComposerSendOutcome::Applied)) {
+                    composer.forget_recoverable_submissions(
+                        &submitted_key,
+                        &superseded_recoverable,
+                    );
+                }
                 composer
                     .state
                     .update(cx, |s, _| s.end_upload_progress());
@@ -8705,16 +8857,16 @@ impl Composer {
                 }
                 match &result {
                     Ok(ComposerSendOutcome::Pending) => {
-                        composer.failure = Some(
-                            "Delivery is still pending or unknown. The submitted draft is preserved and will not be resent automatically."
-                                .into(),
-                        );
-                        composer.failure_key = Some(err_chat_id.clone());
+                        // Run commands are durably queued before the session
+                        // executor finalizes their receipts. Pending is normal
+                        // during that gap; the watcher settles the draft once
+                        // the authoritative receipt becomes terminal.
                         composer.watch_draft_receipt(
                             err_message_id.clone(),
                             err_chat_id.clone(),
                             submitted_key.clone(),
                             submitted_revision,
+                            superseded_recoverable.clone(),
                             engine.clone(),
                             cx,
                         );
@@ -8727,6 +8879,7 @@ impl Composer {
                             err_chat_id.clone(),
                             submitted_key.clone(),
                             submitted_revision,
+                            superseded_recoverable.clone(),
                             engine.clone(),
                             cx,
                         );
@@ -9829,6 +9982,13 @@ impl Render for Composer {
                         message,
                         NoticeChipIcon::Plain,
                     )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child("Dismiss"),
+                    )
                     .id("composer-failure")
                     .mx(px(4.0))
                     .mt(px(6.0))
@@ -9848,6 +10008,19 @@ impl Render for Composer {
                         "Recovery",
                         "Recover previous unsent message",
                         NoticeChipIcon::Plain,
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            div()
+                                .id("composer-discard-unsent")
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .cursor_pointer()
+                                .child("Discard saved copy")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.discard_latest_submission(cx);
+                                })),
+                        ),
                     )
                     .id("composer-recover-unsent")
                     .mx(px(4.0))
@@ -11286,13 +11459,7 @@ mod tests {
                 composer.draft_submitting.get(task),
                 Some(&submitted_revision)
             );
-            assert!(
-                composer
-                    .failure
-                    .as_deref()
-                    .unwrap()
-                    .contains("pending or unknown")
-            );
+            assert!(composer.failure.is_none());
         });
         composer.update(cx, |composer, cx| assert!(composer.prepare_close(cx)));
         assert_eq!(

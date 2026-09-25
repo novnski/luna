@@ -7803,7 +7803,16 @@ impl Shell {
                             this.sidebar_notice = None;
                             cx.notify();
                         }))
-                        .child(notice),
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().flex_1().min_w_0().child(notice))
+                        .child(
+                            div()
+                                .flex_none()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child("Dismiss"),
+                        ),
                 )
             })
             .when_some(self.render_activity_notice(theme, cx), |el, notice| {
@@ -13170,7 +13179,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signed_out_synced_runtime_stops_and_reboots_local() {
+    async fn rejected_legacy_session_stops_and_reboots_local() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("session.json"),
@@ -13189,19 +13198,19 @@ mod tests {
             workos_client_id: Some("client_test".into()),
             default_harness: luna_proto::HarnessId::Mock,
         };
-        let synced = crate::state::EngineHandle::bootstrap(boot.clone())
+        let local = crate::state::EngineHandle::bootstrap(boot.clone())
             .await
-            .expect("saved session opens its synced profile");
-        assert_eq!(synced.engine_info().workspace_scope, WorkspaceScope::Synced);
+            .expect("legacy plaintext session is rejected and local profile opens");
+        assert_eq!(local.engine_info().workspace_scope, WorkspaceScope::Local);
 
-        synced
+        local
             .client()
             .call(methods::SIGN_OUT, serde_json::json!({}))
             .await
             .expect("sign out clears credentials");
-        stop_synced_runtime(synced, port, dir.path())
+        stop_synced_runtime(local, port, dir.path())
             .await
-            .expect("synced runtime drains and releases ownership");
+            .expect("local runtime drains and releases ownership");
 
         assert!(!dir.path().join("session.json").exists());
         let local = crate::state::EngineHandle::bootstrap(boot)
@@ -14395,6 +14404,9 @@ mod exit_regressions {
             let _entered = runtime.enter();
             command_palette_test_window(cx, dir.path(), Some(service.clone()), vec![], None)
         };
+        window
+            .update(cx, |shell, _, _| shell.usage_card_open = false)
+            .unwrap();
         window
             .update(cx, |shell, _, cx| shell.toggle_usage_card(cx))
             .unwrap();

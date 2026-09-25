@@ -1712,7 +1712,11 @@ fn main() -> anyhow::Result<()> {
     }
 
     let ipc_port = unused_port();
-    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(
+        ipc_port,
+        core.rpc_service(),
+        &engine_data,
+    ))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,
@@ -2454,7 +2458,7 @@ mod tests {
         seed_l11_context_controls(&core, root.path()).await.unwrap();
 
         let port = unused_port();
-        let ipc = luna_engine::serve_ipc(port, core.rpc_service())
+        let ipc = luna_engine::serve_ipc(port, core.rpc_service(), &root.path().join("engine"))
             .await
             .unwrap();
         let client = luna_rpc::connect_ws(&format!("ws://127.0.0.1:{port}"))

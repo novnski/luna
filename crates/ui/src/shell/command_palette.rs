@@ -1060,6 +1060,7 @@ mod tests {
                 Entry::NewChat,
                 Entry::NewProject,
                 Entry::Settings,
+                Entry::Activity,
                 Entry::Theme(AppearanceMode::Light)
             ]
         );

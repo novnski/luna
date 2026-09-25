@@ -113,3 +113,27 @@ pub async fn settle_submission(
         .await?;
     Ok(())
 }
+
+pub async fn discard_recoverable_submission(
+    engine: &EngineHandle,
+    command_id: &str,
+) -> Result<(bool, Option<u64>), RpcError> {
+    let reply = engine
+        .client()
+        .call(
+            methods::SETTLE_DRAFT_SUBMISSION,
+            serde_json::json!({
+                "commandId": command_id,
+                "outcome": "discarded",
+            }),
+        )
+        .await?;
+    let discarded = reply
+        .get("discarded")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| RpcError::Failed("draft discard receipt is missing".into()))?;
+    let cleared_revision = reply
+        .get("clearedRevision")
+        .and_then(serde_json::Value::as_u64);
+    Ok((discarded, cleared_revision))
+}

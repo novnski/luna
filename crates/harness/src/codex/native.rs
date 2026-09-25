@@ -368,6 +368,28 @@ impl CodexNativeClient {
         }
         let fork_turns = self.thread_turns(&provider_session_id).await?;
         let checkpoint_map = map_codex_fork_history(&expected_source, &fork_turns)?;
+        if let Some(name) = request.target_name.as_deref() {
+            self.set_name(&provider_session_id, name).await?;
+            let mut renamed = false;
+            for attempt in 0..5 {
+                if self
+                    .observe_thread(&provider_session_id)
+                    .await?
+                    .is_some_and(|thread| thread.name.as_deref() == Some(name))
+                {
+                    renamed = true;
+                    break;
+                }
+                if attempt < 4 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+            if !renamed {
+                return Err(HarnessError::Protocol(
+                    "forked Codex thread title did not match after rename".into(),
+                ));
+            }
+        }
         Ok(ProviderForkResult {
             provider_session_id,
             checkpoint_map,
@@ -1204,6 +1226,7 @@ mod tests {
             boundary,
             cwd: "/workspace".into(),
             model: Some("gpt-5.6-sol".into()),
+            target_name: None,
             provider_home: None,
             force_file_auth: false,
         };

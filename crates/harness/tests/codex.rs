@@ -393,6 +393,7 @@ async fn native_fork_reports_acknowledged_id_before_mismatch_or_timeout_and_not_
         boundary: ProviderForkBoundary::Tip,
         cwd: "/tmp".into(),
         model: Some("gpt-5.6-sol".into()),
+        target_name: None,
         provider_home: None,
         force_file_auth: true,
     };

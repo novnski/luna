@@ -422,6 +422,45 @@ impl SessionDoc {
         Ok(())
     }
 
+    /// Remove a user echo only after the provider definitively rejected its
+    /// delivery. Match the exact text so a reused id cannot erase newer data.
+    pub fn remove_rejected_user_message(
+        &self,
+        message_id: &str,
+        text: &str,
+    ) -> Result<bool, DocError> {
+        let matches_echo = self.read_entries()?.into_iter().any(|entry| {
+            entry.id == message_id
+                && entry.role == MessageRole::User
+                && matches!(entry.parts.as_slice(), [MessagePart::Text { text: body, .. }] if body == text)
+        });
+        if !matches_echo {
+            return Ok(false);
+        }
+        let messages = self.doc.get_list("messages");
+        for i in 0..messages.len() {
+            let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
+                messages.get(i)
+            else {
+                continue;
+            };
+            let id_matches = matches!(
+                entry.get("id"),
+                Some(loro::ValueOrContainer::Value(LoroValue::String(id))) if id.as_str() == message_id
+            );
+            let role_matches = matches!(
+                entry.get("role"),
+                Some(loro::ValueOrContainer::Value(LoroValue::String(role))) if role.as_str() == "user"
+            );
+            if id_matches && role_matches {
+                messages.delete(i, 1)?;
+                self.doc.commit();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Read all entries (continuations NOT joined — see `join_continuation_entries`).
     ///
     /// Malformed entries are SKIPPED, not fatal: a torn intermediate state

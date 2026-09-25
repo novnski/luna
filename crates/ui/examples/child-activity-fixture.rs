@@ -457,7 +457,11 @@ fn main() -> anyhow::Result<()> {
     let ipc_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
         .port();
-    let _ipc = runtime.block_on(luna_engine::serve_ipc(ipc_port, core.rpc_service()))?;
+    let _ipc = runtime.block_on(luna_engine::serve_ipc(
+        ipc_port,
+        core.rpc_service(),
+        &engine_data,
+    ))?;
     let boot = EngineBootConfig {
         data_dir: ui_data.clone(),
         ipc_port,

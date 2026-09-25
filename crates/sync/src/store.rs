@@ -1906,6 +1906,99 @@ impl DocsStore {
             .map_err(StoreError::from)
     }
 
+    /// Discard only a confirmed recoverable submission. Pending delivery must
+    /// remain intact because its provider effect may still be unknown.
+    pub fn discard_recoverable_draft_submission(
+        &self,
+        device_id: &str,
+        command_id: &str,
+    ) -> Result<(bool, Option<u64>), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let submission: Option<(String, Vec<u8>)> = tx
+            .query_row(
+                "SELECT draft_id,record_json FROM composer_draft_submissions
+                 WHERE device_id=?1 AND command_id=?2 AND state='recoverable'",
+                params![device_id, command_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((draft_id, submission_bytes)) = submission else {
+            return Ok((false, None));
+        };
+        let submission: ComposerDraft = serde_json::from_slice(&submission_bytes)?;
+        let saved_draft: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT record_json FROM composer_drafts WHERE device_id=?1 AND draft_id=?2",
+                params![device_id, draft_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let matching_draft = saved_draft
+            .map(|bytes| serde_json::from_slice::<ComposerDraft>(&bytes))
+            .transpose()?
+            .filter(|draft| draft.same_message_content(&submission));
+        tx.execute(
+            "DELETE FROM composer_draft_submissions
+             WHERE device_id=?1 AND command_id=?2 AND state='recoverable'",
+            params![device_id, command_id],
+        )?;
+        tx.execute(
+            "DELETE FROM attachment_owners
+             WHERE device_id=?1 AND owner_kind='submission' AND owner_id=?2",
+            params![device_id, command_id],
+        )?;
+        let mut cleared_revision = None;
+        if let Some(mut draft) = matching_draft {
+            draft.revision = draft.revision.max(submission.revision).saturating_add(1);
+            draft.updated_at_ms = now_ms();
+            draft.text.clear();
+            draft.attachments.clear();
+            let removed_appshots = std::mem::take(&mut draft.appshots);
+            draft.context = Default::default();
+            tx.execute(
+                "UPDATE composer_drafts SET revision=?3,record_json=?4,updated_at=?5
+                 WHERE device_id=?1 AND draft_id=?2",
+                params![
+                    device_id,
+                    draft_id,
+                    draft.revision as i64,
+                    serde_json::to_vec(&draft)?,
+                    draft.updated_at_ms
+                ],
+            )?;
+            tx.execute(
+                "DELETE FROM attachment_owners
+                 WHERE device_id=?1 AND owner_kind='draft' AND owner_id=?2",
+                params![device_id, draft_id],
+            )?;
+            for shot in removed_appshots {
+                insert_appshot_activity_tx(
+                    &tx,
+                    &AppshotActivityRecord {
+                        event_id: format!(
+                            "appshot:{}:{}:removed:{}",
+                            draft.draft_id, shot.id, draft.revision
+                        ),
+                        draft_id: draft.draft_id.clone(),
+                        task_id: draft.task_id.clone(),
+                        capture_id: shot.id.clone(),
+                        screenshot_attachment_id: shot.screenshot_attachment_id.clone(),
+                        capture_device_id: device_id.into(),
+                        target_environment_id: None,
+                        kind: AppshotActivityKind::Removed,
+                        timestamp_ms: draft.updated_at_ms,
+                        app_name: shot.app_name.chars().take(128).collect(),
+                        message_id: None,
+                    },
+                )?;
+            }
+            cleared_revision = Some(draft.revision);
+        }
+        tx.commit()?;
+        Ok((true, cleared_revision))
+    }
+
     /// Accept one submission and clear only the exact draft revision it froze.
     /// A queue id transfers blob ownership in the same transaction.
     pub fn accept_draft_submission(
@@ -1913,6 +2006,26 @@ impl DocsStore {
         device_id: &str,
         command_id: &str,
         queue_id: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        self.accept_draft_submission_inner(device_id, command_id, queue_id, false)
+    }
+
+    /// A provider-accepted direct send also consumes any older recoverable
+    /// copy of the same message, atomically with its own draft settlement.
+    pub fn accept_applied_draft_submission(
+        &self,
+        device_id: &str,
+        command_id: &str,
+    ) -> Result<bool, StoreError> {
+        self.accept_draft_submission_inner(device_id, command_id, None, true)
+    }
+
+    fn accept_draft_submission_inner(
+        &self,
+        device_id: &str,
+        command_id: &str,
+        queue_id: Option<&str>,
+        supersede_recoverable: bool,
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -2006,6 +2119,40 @@ impl DocsStore {
                 "DELETE FROM composer_drafts WHERE device_id=?1 AND draft_id=?2",
                 params![device_id, draft_id],
             )?;
+        }
+        if supersede_recoverable {
+            if let Some(task_id) = task_id.as_deref() {
+                let matching_ids = {
+                    let mut statement = tx.prepare(
+                        "SELECT command_id,record_json FROM composer_draft_submissions
+                         WHERE device_id=?1 AND task_id=?2 AND state='recoverable'",
+                    )?;
+                    let rows = statement.query_map(params![device_id, task_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    })?;
+                    let mut matching_ids = Vec::new();
+                    for row in rows {
+                        let (older_id, bytes) = row?;
+                        let older: ComposerDraft = serde_json::from_slice(&bytes)?;
+                        if older.same_message_content(&snapshot) {
+                            matching_ids.push(older_id);
+                        }
+                    }
+                    matching_ids
+                };
+                for older_id in matching_ids {
+                    tx.execute(
+                        "DELETE FROM attachment_owners
+                         WHERE device_id=?1 AND owner_kind='submission' AND owner_id=?2",
+                        params![device_id, older_id],
+                    )?;
+                    tx.execute(
+                        "DELETE FROM composer_draft_submissions
+                         WHERE device_id=?1 AND command_id=?2 AND state='recoverable'",
+                        params![device_id, older_id],
+                    )?;
+                }
+            }
         }
         tx.commit()?;
         Ok(cleared)
