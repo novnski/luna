@@ -1805,27 +1805,42 @@ async fn run_session(session: Session) {
                             "input": [{ "type": "text", "text": text }],
                         });
                         match client.request_classified("turn/steer", steer_params).await {
-                            Ok(_) => {
+                            Ok(reply) => {
+                                // The response's turn id is the provider's
+                                // acknowledgement that this input joined the
+                                // expected turn. Split the assistant stream
+                                // here for explicit steers too: otherwise the
+                                // user input stays in the queue as unknown and
+                                // all later activity renders above it.
+                                if reply.get("turnId").and_then(Value::as_str)
+                                    != Some(expected.as_str())
+                                {
+                                    if let Some(tx) = acceptance.take() {
+                                        let _ = tx.send(SteerAcceptance::Unknown(
+                                            "Codex steer returned a different turn id".into(),
+                                        ));
+                                    }
+                                    continue 'main;
+                                }
                                 if require_active {
                                     explicit_steer_turn = Some(expected.clone());
+                                }
+                                let (prev, next) = rotate(&mut assistant_message_id);
+                                if !send(
+                                    &event_tx,
+                                    AgentEvent::Steered {
+                                        assistant_message_id: Some(prev),
+                                        next_assistant_message_id: Some(next),
+                                    },
+                                )
+                                .await
+                                {
+                                    break 'main;
+                                }
+                                if require_active {
+                                    clear_explicit_steer_turn(&mut explicit_steer_turn, &expected);
                                     if let Some(tx) = acceptance.take() {
                                         let _ = tx.send(SteerAcceptance::Accepted);
-                                    }
-                                } else {
-                                    // Ordinary warm routing retains its legacy
-                                    // segment boundary policy. It has no durable
-                                    // explicit-steer receipt to settle.
-                                    let (prev, next) = rotate(&mut assistant_message_id);
-                                    if !send(
-                                        &event_tx,
-                                        AgentEvent::Steered {
-                                            assistant_message_id: Some(prev),
-                                            next_assistant_message_id: Some(next),
-                                        },
-                                    )
-                                    .await
-                                    {
-                                        break 'main;
                                     }
                                 }
                             }

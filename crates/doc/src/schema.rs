@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::{SessionCommandEntry, SessionCommandStatus};
 use crate::constants::{SESSION_SCHEMA_VERSION, TAIL_MESSAGE_COUNT};
-use crate::parts::{MessagePart, MessageStatus, SubagentActivity, SubagentStatus};
+use crate::parts::{MessagePart, MessageStatus, SubagentActivity, SubagentStatus, ToolDiffStat};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocError {
@@ -878,6 +878,62 @@ impl SessionDoc {
                     return Ok(true);
                 }
             }
+        }
+        Ok(false)
+    }
+
+    /// Resolve a tool on its original assistant entry after a steer split the
+    /// stream. The tool's result belongs at the call site, before the new user
+    /// boundary, even when the provider reports completion afterward.
+    pub fn resolve_tool_in_entry(
+        &self,
+        message_id: &str,
+        part_id: &str,
+        is_error: bool,
+        diff_stats: Option<&[ToolDiffStat]>,
+    ) -> Result<bool, DocError> {
+        let messages = self.doc.get_list("messages");
+        for i in (0..messages.len()).rev() {
+            let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
+                messages.get(i)
+            else {
+                continue;
+            };
+            if !matches!(entry.get("id"),
+                Some(loro::ValueOrContainer::Value(LoroValue::String(id))) if id.as_str() == message_id)
+            {
+                continue;
+            }
+            let Some(loro::ValueOrContainer::Container(loro::Container::List(parts))) =
+                entry.get("parts")
+            else {
+                return Ok(false);
+            };
+            for j in 0..parts.len() {
+                let Some(loro::ValueOrContainer::Container(loro::Container::Map(part))) =
+                    parts.get(j)
+                else {
+                    continue;
+                };
+                if !matches!(part.get("kind"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(kind))) if kind.as_str() == "tool")
+                    || !matches!(part.get("id"),
+                        Some(loro::ValueOrContainer::Value(LoroValue::String(id))) if id.as_str() == part_id)
+                {
+                    continue;
+                }
+                part.insert("isError", is_error)?;
+                part.insert("resolved", true)?;
+                if let Some(stats) = diff_stats {
+                    part.insert(
+                        "diffStats",
+                        loro_value_from_json(&serde_json::to_value(stats)?),
+                    )?;
+                }
+                self.doc.commit();
+                return Ok(true);
+            }
+            return Ok(false);
         }
         Ok(false)
     }
