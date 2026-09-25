@@ -728,8 +728,9 @@ fn sidebar_key_order_changed(old: &[(String, f32)], new: &[(String, f32)]) -> bo
 pub(super) fn chat_row_height(_shows_branch: bool, _shows_pull_request: bool) -> f32 {
     63.0
 }
-/// Flex gap between sidebar list items.
-const SIDEBAR_LIST_GAP: f32 = 2.0;
+/// Keep adjacent task hitboxes contiguous so vertical pointer movement never
+/// crosses an arrow-cursor strip between clickable rows.
+const SIDEBAR_LIST_GAP: f32 = 0.0;
 /// Harness/title geometry follows the row hierarchy: active multi-line cards
 /// keep identity close on the standard 8px rhythm, while the one-line archived
 /// shelf gives its larger mark a little more separation.
@@ -7296,6 +7297,7 @@ impl Shell {
                             .items_center()
                             .justify_center()
                             .rounded(px(4.0))
+                            .cursor_pointer()
                             .hover(|s| s.bg(theme.glass_hover()))
                             .tooltip(|_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
@@ -7330,6 +7332,7 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .rounded(px(4.0))
+                        .cursor_pointer()
                         .hover(|s| s.bg(theme.glass_hover()))
                         .tooltip(move |_, cx| {
                             cx.new(|_| SurfaceTabTooltip {
@@ -8012,7 +8015,7 @@ impl Shell {
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(2.0))
+                            .gap(px(SIDEBAR_LIST_GAP))
                             .children(list_items)
                             .into_any_element()
                     } else {

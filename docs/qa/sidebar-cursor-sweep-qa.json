@@ -1,0 +1,22 @@
+{
+  "longHoverCursor": "PointingHand",
+  "expected": "PointingHand",
+  "pinned": {
+    "x": 100,
+    "yStart": 130,
+    "yEnd": 245,
+    "failures": []
+  },
+  "vertical": {
+    "x": 100,
+    "yStart": 280,
+    "yEnd": 520,
+    "failures": []
+  },
+  "horizontal": {
+    "y": 360,
+    "xStart": 20,
+    "xEnd": 235,
+    "failures": []
+  }
+}

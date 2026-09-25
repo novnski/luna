@@ -593,6 +593,20 @@ async fn seed_sidebar_scale(core: &EngineCore, root: &Path) -> anyhow::Result<()
         return Ok(());
     }
     let now = chrono::Utc::now();
+    // These tasks were created within the same millisecond on fast machines,
+    // making their sidebar order depend on the tie-breaker. Keep capture
+    // coordinates stable across native QA runs.
+    for (id, seconds_ago) in [(TASK_REMOTE, 10), (TASK_NON_GIT, 20), (TASK_PERSONAL, 30)] {
+        let at = now - chrono::Duration::seconds(seconds_ago);
+        anyhow::ensure!(
+            core.workspace.set_chat_activity(
+                id,
+                Some(at.timestamp_millis()),
+                Some(at.timestamp_millis())
+            )?,
+            "sidebar fixture task activity update did not apply"
+        );
+    }
     let mut ids = Vec::new();
     for index in 0..=60u16 {
         let id = format!("d349{index:04x}-64d7-4aeb-b686-a751fb570467");
@@ -1323,6 +1337,12 @@ fn main() -> anyhow::Result<()> {
                         })?;
                         cx.background_executor().timer(Duration::from_millis(3200)).await;
                         capture_hover_frame(window, cx, &hover_capture_output, "hover-3850ms.png")?;
+                        let long_hover_cursor =
+                            window.update(cx, |_, window, _| window.debug_cursor_style())?;
+                        anyhow::ensure!(
+                            long_hover_cursor == gpui::CursorStyle::PointingHand,
+                            "cursor changed after stationary tooltip: {long_hover_cursor:?}"
+                        );
                         window.update(cx, |_, window, cx| {
                             window.dispatch_event(
                                 gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
@@ -1397,6 +1417,80 @@ fn main() -> anyhow::Result<()> {
                             cx.background_executor().timer(Duration::from_millis(450)).await;
                             capture_hover_frame(window, cx, &hover_capture_output, name)?;
                         }
+                        let (pinned_failures, vertical_failures, horizontal_failures) =
+                            window.update(cx, |_, window, cx| {
+                                let mut pinned_failures = Vec::new();
+                                for y in 130..=245 {
+                                    window.dispatch_event(
+                                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                            position: gpui::point(px(100.0), px(y as f32)),
+                                            ..Default::default()
+                                        }),
+                                        cx,
+                                    );
+                                    window.draw(cx).clear();
+                                    let cursor = window.debug_cursor_style();
+                                    if cursor != gpui::CursorStyle::PointingHand {
+                                        pinned_failures.push(serde_json::json!({
+                                            "y": y,
+                                            "cursor": format!("{cursor:?}")
+                                        }));
+                                    }
+                                }
+                                let mut vertical_failures = Vec::new();
+                                for y in 280..=520 {
+                                    window.dispatch_event(
+                                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                            position: gpui::point(px(100.0), px(y as f32)),
+                                            ..Default::default()
+                                        }),
+                                        cx,
+                                    );
+                                    window.draw(cx).clear();
+                                    let cursor = window.debug_cursor_style();
+                                    if cursor != gpui::CursorStyle::PointingHand {
+                                        vertical_failures.push(serde_json::json!({
+                                            "y": y,
+                                            "cursor": format!("{cursor:?}")
+                                        }));
+                                    }
+                                }
+                                let mut horizontal_failures = Vec::new();
+                                for x in 20..=235 {
+                                    window.dispatch_event(
+                                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                            position: gpui::point(px(x as f32), px(360.0)),
+                                            ..Default::default()
+                                        }),
+                                        cx,
+                                    );
+                                    window.draw(cx).clear();
+                                    let cursor = window.debug_cursor_style();
+                                    if cursor != gpui::CursorStyle::PointingHand {
+                                        horizontal_failures.push(serde_json::json!({
+                                            "x": x,
+                                            "cursor": format!("{cursor:?}")
+                                        }));
+                                    }
+                                }
+                                (pinned_failures, vertical_failures, horizontal_failures)
+                            })?;
+                        std::fs::write(
+                            hover_capture_output.join("cursor-sweep.json"),
+                            serde_json::to_vec_pretty(&serde_json::json!({
+                                "longHoverCursor": format!("{long_hover_cursor:?}"),
+                                "expected": "PointingHand",
+                                "pinned": {"x": 100, "yStart": 130, "yEnd": 245, "failures": pinned_failures},
+                                "vertical": {"x": 100, "yStart": 280, "yEnd": 520, "failures": vertical_failures},
+                                "horizontal": {"y": 360, "xStart": 20, "xEnd": 235, "failures": horizontal_failures},
+                            }))?,
+                        )?;
+                        anyhow::ensure!(
+                            pinned_failures.is_empty()
+                                && vertical_failures.is_empty()
+                                && horizontal_failures.is_empty(),
+                            "sidebar cursor changed inside active thread list: pinned={pinned_failures:?} vertical={vertical_failures:?} horizontal={horizontal_failures:?}"
+                        );
                         std::fs::write(
                             hover_capture_output.join("readback.json"),
                             serde_json::to_vec_pretty(&serde_json::json!({
@@ -1404,6 +1498,7 @@ fn main() -> anyhow::Result<()> {
                                 "target": "Disconnected project task",
                                 "pointerLogical": {"x": 100, "y": SIDEBAR_HOVER_TARGET_Y},
                                 "forcedCachedFrames": 3,
+                                "cursorSweep": "cursor-sweep.json",
                                 "frames": ["before.png", "hover-650ms.png", "hover-3850ms.png", "body-right.png", "action.png", "settle.png", "archive.png", "left.png", "reenter.png", "git-project.png", "non-git-project.png", "projectless.png"],
                                 "status": "captured"
                             }))?,

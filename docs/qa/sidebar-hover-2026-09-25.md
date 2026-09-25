@@ -65,6 +65,12 @@ The captured target is the unselected **Disconnected project task**. The fixture
 
 ## Uniform active task height
 
-All active tasks reserve 63 logical pixels, including those without a branch or pull request. The same value feeds the rendered row and the sidebar reorder geometry. The fixture's three separate hovers show **Scale keyword recent thread 59** (Git project), **Non-Git workspace task**, and **Personal scratch task** (projectless) at the same size. At image x=30, their wash spans are respectively y=553–676, 813–936, and 943–1066: each is 124 physical pixels on a 2× display, with 130 physical pixels between adjacent row starts (63 logical pixels plus the 2-pixel list gap). The stable detail card and control strip remain inside each row.
+All active tasks reserve 63 logical pixels, including those without a branch or pull request. The same value feeds the rendered row and the sidebar reorder geometry. The fixture's three separate hovers show **Scale keyword recent thread 59** (Git project), **Non-Git workspace task**, and **Personal scratch task** (projectless) at the same size. At image x=30, their wash spans are respectively y=541–664, 793–916, and 919–1042: each is 124 physical pixels on a 2× display. Adjacent active row starts are 126 physical pixels apart, including the row between the Git and non-Git samples. The stable detail card and control strip remain inside each row.
 
 ![Git project, non-Git workspace, and projectless task, left to right](sidebar-hover-uniform-qa.png)
+
+## Cursor flicker follow-up
+
+The row already requested `PointingHand`, but two separate 2-pixel flex gaps in the active list left strips with no clickable hitbox. Moving vertically through tasks selected macOS's arrow cursor in those strips, then the hand again in the next row. The shared gap value and a hardcoded outer-list gap are now zero; Pin, Settle, and Archive explicitly request the hand cursor.
+
+The fixture reads GPUI's painted cursor choice after each native mouse move. An intermediate sweep with only the shared gap removed still returned `Arrow` at y=337–338, 402–403, and 467–468. After removing the outer gap, the final sweep returned `PointingHand` at all 116 pinned-row points (x=100, y=130–245), all 241 active-row points (x=100, y=280–520), and all 216 horizontal points (y=360, x=20–235), including text and the action strip. It was also `PointingHand` after the detail card had remained open for 3.85 seconds. The machine-readable [cursor sweep](sidebar-cursor-sweep-qa.json) comes from the same native fixture as the screenshots above.

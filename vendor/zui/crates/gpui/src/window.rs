@@ -4995,6 +4995,14 @@ impl Window {
         }
     }
 
+    /// The cursor chosen by the painted hitboxes, for native UI fixtures.
+    #[cfg(feature = "test-support")]
+    pub fn debug_cursor_style(&self) -> CursorStyle {
+        self.rendered_frame
+            .cursor_style(self)
+            .unwrap_or(CursorStyle::Arrow)
+    }
+
     /// Dispatch a given keystroke as though the user had typed it.
     /// You can create a keystroke with Keystroke::parse("").
     pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
