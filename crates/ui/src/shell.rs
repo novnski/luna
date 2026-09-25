@@ -9896,7 +9896,15 @@ impl Shell {
         } else if !has_spaces && !no_project {
             // Onboarding (first boot / after the destructive wipe): no folders
             // to work in yet — one clear affordance.
-            let _ = faint;
+            // NASA LRO Moon mosaic, converted on inkmeascii.com with the
+            // 72-column Blocky and Bold preset and inverted colors. Keep the
+            // result as actual text so the art stays sharp at every scale.
+            // Source: https://science.nasa.gov/resource/moon-mosaic/
+            let moon = include_str!("../assets/illustrations/moon-full-ascii.txt");
+            let moon_scale = (self.viewport_height / 900.0)
+                .min(main_content_width / 580.0)
+                .clamp(0.58, 1.0);
+            let moon_line_height = 11.0 * moon_scale;
             div()
                 .size_full()
                 .flex()
@@ -9910,24 +9918,34 @@ impl Shell {
                         .flex_col()
                         .items_center()
                         .child(
-                            icon(icons::LUNA_LOGO)
-                                .w(px(41.9))
-                                .h(px(48.0))
-                                .text_color(theme.text.opacity(0.09)),
+                            div()
+                                .w(px(448.0 * moon_scale))
+                                .h(px(39.0 * moon_line_height))
+                                .overflow_hidden()
+                                .font_family(theme.font_mono.clone())
+                                .text_size(px(10.0 * moon_scale))
+                                .line_height(px(moon_line_height))
+                                .text_color(theme.text.opacity(0.48))
+                                .children(moon.lines().map(|line| {
+                                    div()
+                                        .h(px(moon_line_height))
+                                        .whitespace_nowrap()
+                                        .child(SharedString::from(line.to_owned()))
+                                })),
                         )
                         .child(
                             div()
-                                .mt(px(24.0))
-                                .text_size(crate::typography::ui_rems(16.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .mt(px(22.0))
+                                .text_size(crate::typography::ui_rems(18.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(theme.text)
                                 .child(SharedString::from("Add a project to get started")),
                         )
                         .child(
                             div()
-                                .mt(px(6.0))
-                                .text_size(crate::typography::ui_rems(13.0))
-                                .text_color(theme.text_muted.opacity(0.7))
+                                .mt(px(8.0))
+                                .text_size(crate::typography::ui_rems(14.0))
+                                .text_color(theme.text_muted)
                                 .child(SharedString::from(
                                     "A project is a folder on one of your devices.",
                                 )),
@@ -9935,7 +9953,10 @@ impl Shell {
                         .child(
                             popover::btn_primary(&theme_owned, "Add a project")
                                 .id("onboarding-add-space")
-                                .mt(px(20.0))
+                                .mt(px(24.0))
+                                .px(px(20.0))
+                                .py(px(10.0))
+                                .text_size(crate::typography::ui_rems(14.0))
                                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
                         ),
                 ))
