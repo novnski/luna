@@ -1,4 +1,4 @@
-//! Headless screenshot of the production compact Usage card with isolated data.
+//! Headless screenshots of the compact Usage card and optional local settings.
 
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use luna_proto::HarnessId;
@@ -58,6 +58,7 @@ fn main() -> anyhow::Result<()> {
         .as_deref()
         .unwrap_or("300")
         .parse()?;
+    let local_settings = std::env::args().nth(3).as_deref() == Some("local-settings");
     std::fs::create_dir_all(&output)?;
     let temp = tempfile::tempdir()?;
     let data = temp.path().join("ui");
@@ -149,7 +150,11 @@ fn main() -> anyhow::Result<()> {
                 let mut state = state::AppState::new();
                 state.fixture_attachment_engine(handle);
                 state.connection = luna_proto::view::ConnectionStatus::Ready;
-                state.workspace_scope = Some(luna_proto::WorkspaceScope::Development);
+                state.workspace_scope = Some(if local_settings {
+                    luna_proto::WorkspaceScope::Local
+                } else {
+                    luna_proto::WorkspaceScope::Development
+                });
                 state.local_device_id = Some(device.clone());
                 state.devices = vec![
                     serde_json::from_value(serde_json::json!({
@@ -212,6 +217,14 @@ fn main() -> anyhow::Result<()> {
                         cx,
                         &capture_output.join("usage-opencode.png"),
                     )?;
+                    if local_settings {
+                        click(window.into(), cx, 29.0, 474.0)?;
+                        capture(
+                            window.into(),
+                            cx,
+                            &capture_output.join("settings-local.png"),
+                        )?;
+                    }
                     Ok(())
                 })();
                 if let Err(error) = result {
@@ -236,6 +249,9 @@ fn main() -> anyhow::Result<()> {
     .any(|name| !output.join(name).is_file())
     {
         anyhow::bail!("usage screenshots were not written");
+    }
+    if local_settings && !output.join("settings-local.png").is_file() {
+        anyhow::bail!("local settings screenshot was not written");
     }
     Ok(())
 }

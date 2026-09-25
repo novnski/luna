@@ -1297,8 +1297,8 @@ enum SyncFlow {
     Enabling,
     Canceling,
     /// Signed in on a local runtime: the wizard's choice step (bring local
-    /// work / start fresh / later). `notice_open: false` = postponed, badge
-    /// in the account menu.
+    /// work / start fresh / later). `notice_open: false` = postponed, with a
+    /// recovery action in Settings.
     SwitchOffer {
         notice_open: bool,
     },
@@ -1320,9 +1320,9 @@ enum SyncFlow {
     /// structural idempotence makes re-running safe (only missing rows copy).
     /// Details ride `runtime_change_error`. `notice_open: false` = postponed:
     /// the dialog is hidden but the failure stays pending, reachable through
-    /// the account menu — dismissal must never discard the only retry
-    /// entry point (under Synced scope the menu otherwise offers just
-    /// Sign out, and the local rows would be unreachable).
+    /// Settings — dismissal must never discard the only retry entry point
+    /// (under Synced scope Settings otherwise offers Sign out, and the local
+    /// rows would be unreachable).
     ImportFailed {
         notice_open: bool,
     },
@@ -1404,7 +1404,7 @@ fn resolve_shell_escape(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AccountMenuAction {
+enum AccountAction {
     EnableSync,
     SyncInProgress,
     /// Postponed switch wizard (or legacy restart fallback) — reopen it.
@@ -1514,18 +1514,21 @@ fn local_work_phrase(chats: usize, spaces: usize) -> Option<String> {
     }
 }
 
-fn account_menu_action(scope: Option<WorkspaceScope>, flow: SyncFlow) -> Option<AccountMenuAction> {
+fn account_action_for_scope(
+    scope: Option<WorkspaceScope>,
+    flow: SyncFlow,
+) -> Option<AccountAction> {
     match scope {
         Some(WorkspaceScope::Local) => match flow {
-            SyncFlow::Idle => Some(AccountMenuAction::EnableSync),
-            SyncFlow::Enabling | SyncFlow::Canceling => Some(AccountMenuAction::SyncInProgress),
+            SyncFlow::Idle => Some(AccountAction::EnableSync),
+            SyncFlow::Enabling | SyncFlow::Canceling => Some(AccountAction::SyncInProgress),
             SyncFlow::SwitchOffer { .. } | SyncFlow::RestartPending { .. } => {
-                Some(AccountMenuAction::RestartPending)
+                Some(AccountAction::RestartPending)
             }
-            SyncFlow::ImportFailed { .. } => Some(AccountMenuAction::RestartPending),
+            SyncFlow::ImportFailed { .. } => Some(AccountAction::RestartPending),
             SyncFlow::Switching { .. }
             | SyncFlow::Importing { .. }
-            | SyncFlow::ImportDone { .. } => Some(AccountMenuAction::SyncInProgress),
+            | SyncFlow::ImportDone { .. } => Some(AccountAction::SyncInProgress),
             SyncFlow::SignOutConfirm
             | SyncFlow::SigningOut
             | SyncFlow::SignedOutRestartRequired => None,
@@ -1534,9 +1537,9 @@ fn account_menu_action(scope: Option<WorkspaceScope>, flow: SyncFlow) -> Option<
             SyncFlow::SignedOutRestartRequired => None,
             // A pending import failure must stay reachable: this is the only
             // surface that can reopen the retry dialog on a synced runtime.
-            SyncFlow::ImportFailed { .. } => Some(AccountMenuAction::RestartPending),
-            _ if flow.is_switch_lifecycle() => Some(AccountMenuAction::SyncInProgress),
-            _ => Some(AccountMenuAction::SignOut),
+            SyncFlow::ImportFailed { .. } => Some(AccountAction::RestartPending),
+            _ if flow.is_switch_lifecycle() => Some(AccountAction::SyncInProgress),
+            _ => Some(AccountAction::SignOut),
         },
         Some(WorkspaceScope::Development) | None => None,
     }
@@ -1808,7 +1811,6 @@ pub struct Shell {
     keep_awake: crate::power::KeepAwake<crate::power::SystemPower>,
     /// `settings.last_space_id` applied once after the first spaces frame.
     space_boot_applied: bool,
-    user_menu: popover::Popup<()>,
     /// Inline sidebar error strip (mutation failures); click dismisses.
     sidebar_notice: Option<SharedString>,
     cleanup_summary_generation: Option<u64>,
@@ -2234,7 +2236,6 @@ impl Shell {
             activity: activity_center::ActivityUi::default(),
             keep_awake: crate::power::KeepAwake::new(crate::power::SystemPower),
             space_boot_applied: false,
-            user_menu: popover::Popup::default(),
             sidebar_notice: None,
             cleanup_summary_generation: None,
             cleanup_summary_last: None,
@@ -4074,14 +4075,6 @@ impl Shell {
 
     // ---- routes / settings ----
 
-    /// Close the user menu through the exit animation (no-op when closed).
-    fn close_user_menu(&mut self, cx: &mut Context<Self>) {
-        if self.user_menu.begin_close() {
-            popover::reap_popup(cx, |shell: &mut Self| &mut shell.user_menu);
-            cx.notify();
-        }
-    }
-
     /// Close the session-row context menu through the exit animation.
     fn close_chat_menu(&mut self, cx: &mut Context<Self>) {
         if self.chat_menu.begin_close() {
@@ -4165,7 +4158,6 @@ impl Shell {
             self.refresh_usage(cx);
         }
         self.nav.push(NavEntry::Settings(section));
-        self.close_user_menu(cx);
         self.close_chat_menu(cx);
         cx.notify();
     }
@@ -4209,7 +4201,6 @@ impl Shell {
                 self.route = Route::Settings(section);
             }
         }
-        self.close_user_menu(cx);
         self.close_chat_menu(cx);
         cx.notify();
     }
@@ -5492,7 +5483,6 @@ impl Shell {
     }
 
     fn request_sign_out(&mut self, cx: &mut Context<Self>) {
-        self.close_user_menu(cx);
         if self.state.read(cx).workspace_scope != Some(WorkspaceScope::Synced) {
             return;
         }
@@ -5624,7 +5614,6 @@ impl Shell {
     }
 
     fn reopen_sync_notice(&mut self, cx: &mut Context<Self>) {
-        self.close_user_menu(cx);
         match self.sync_flow {
             SyncFlow::RestartPending { .. } => {
                 self.sync_flow = SyncFlow::RestartPending { notice_open: true };
@@ -5903,7 +5892,6 @@ impl Shell {
         if scope == Some(WorkspaceScope::Development) {
             return;
         }
-        self.close_user_menu(cx);
         if scope == Some(WorkspaceScope::Local) {
             self.sync_flow = SyncFlow::Enabling;
         }
@@ -6771,6 +6759,49 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let focus_border = theme.border_strong;
+        let account_row = account_action_for_scope(
+            self.state.read(cx).workspace_scope,
+            self.sync_flow,
+        )
+        .and_then(|action| {
+            let (label, mark) = match action {
+                AccountAction::EnableSync => ("Enable sync", icons::GLOBAL),
+                AccountAction::RestartPending => ("Finish sync setup", icons::RESTART),
+                AccountAction::SignOut => ("Sign out", icons::LOGOUT_2),
+                AccountAction::SyncInProgress => return None,
+            };
+            Some(
+                div()
+                    .id("settings-account-action")
+                    .role(gpui::Role::Button)
+                    .aria_label(label)
+                    .tab_index(0)
+                    .focus_visible(move |style| style.border_2().border_color(focus_border))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded(px(8.0))
+                    .px(px(Theme::SPACE_SM))
+                    .py(px(6.0))
+                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_color(theme.text_muted)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.activate_account_action(action, cx)),
+                    )
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
+                            cx.stop_propagation();
+                            this.activate_account_action(action, cx);
+                        }
+                    }))
+                    .child(icon(mark).size(px(16.0)).text_color(theme.text_muted))
+                    .child(SharedString::from(label))
+                    .into_any_element(),
+            )
+        });
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::General => icons::SETTINGS_MINIMALISTIC,
             SettingsSection::Devices => icons::MONITOR,
@@ -6784,7 +6815,6 @@ impl Shell {
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
             SettingsSection::Usage => icons::CHART,
         };
-        let focus_border = theme.border_strong;
         // Match the user's dragged sidebar width — the pane container clips to
         // it, so a hardcoded default here left hover washes stopping short of
         // the sidebar's right edge (user-reported). Device identity lives on
@@ -6896,6 +6926,15 @@ impl Shell {
                             ),
                     ),
             )
+            .when_some(account_row, |el, row| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .px(px(Theme::SPACE_SM))
+                        .pb(px(4.0))
+                        .child(row),
+                )
+            })
             // Back pinned to the bottom (luna settings-sidebar.tsx).
             .child(
                 div()
@@ -6938,6 +6977,15 @@ impl Shell {
                     ),
             )
             .into_any_element()
+    }
+
+    fn activate_account_action(&mut self, action: AccountAction, cx: &mut Context<Self>) {
+        match action {
+            AccountAction::EnableSync => self.start_sign_in(cx),
+            AccountAction::RestartPending => self.reopen_sync_notice(cx),
+            AccountAction::SignOut => self.request_sign_out(cx),
+            AccountAction::SyncInProgress => {}
+        }
     }
 
     /// One session row: context + status on line one, harness + title on line
@@ -7336,7 +7384,7 @@ impl Shell {
 
     /// Chat-mode sidebar (spaces overhaul): window-control strip, the Spaces
     /// section (folder + device rows, add-space), the global Active sessions
-    /// list, the notice strip, and the UserMenu (§1.6).
+    /// list, the notice strip, and the footer actions (§1.6).
     /// The global connection line. `None` while healthy (`Connected`) or on
     /// local profiles (`Disabled`) — and the engine's degrade grace means it
     /// only exists during REAL outages, never join/wake blips. No surface,
@@ -7594,10 +7642,6 @@ impl Shell {
 
     fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let activity_view = self.activity.view_active;
-        let (user, workspace_scope) = {
-            let state = self.state.read(cx);
-            (state.auth_user().cloned(), state.workspace_scope)
-        };
 
         // Keyed rows: (stable key, estimated height, element) — the key + height
         // list drives the §1.6 resort FLIP diff below (attention-bucket
@@ -7669,39 +7713,6 @@ impl Shell {
         } else {
             self.render_archived_section(theme, cx)
         };
-
-        let (user_line, trigger_subline, menu_identity): (
-            SharedString,
-            Option<SharedString>,
-            SharedString,
-        ) = match workspace_scope {
-            Some(WorkspaceScope::Local) => {
-                let line = if matches!(self.sync_flow, SyncFlow::RestartPending { .. }) {
-                    "Sync ready after restart"
-                } else {
-                    "Local only"
-                };
-                (line.into(), None, "Stored on this device".into())
-            }
-            Some(WorkspaceScope::Development) => (
-                "Development".into(),
-                Some("Local development runtime".into()),
-                "Authentication disabled".into(),
-            ),
-            Some(WorkspaceScope::Synced) | None => {
-                let line: SharedString = user
-                    .as_ref()
-                    .map(|u| u.name.clone().unwrap_or_else(|| u.email.clone()).into())
-                    .unwrap_or_else(|| SharedString::from("Not signed in"));
-                let email = user
-                    .as_ref()
-                    .map(|u| SharedString::from(u.email.clone()))
-                    .unwrap_or_else(|| line.clone());
-                (line, Some("Alpha".into()), email)
-            }
-        };
-        let user_menu =
-            self.render_user_menu(user_line.clone(), trigger_subline, menu_identity, theme, cx);
 
         // The normal project filter and Activity toggle share the existing
         // fixed header row above the sidebar's scrolling task list.
@@ -7874,7 +7885,6 @@ impl Shell {
                     .when(!self.settings.usage_sidebar_hidden, |el| {
                         el.child(self.render_usage_action(theme, cx))
                     })
-                    .child(user_menu)
                     .child(div().flex_1())
                     .when_some(self.render_provider_update_badge(theme, cx), |el, badge| {
                         el.child(badge)
@@ -7982,7 +7992,7 @@ impl Shell {
         let mut strip = div()
             .id("update-strip")
             .mx(px(Theme::SPACE_SM))
-            // No bottom margin: the user-menu block below carries its own
+            // No bottom margin: the footer actions below carry their own
             // SPACE_SM padding — doubling it read as a hole (user report).
             .px(px(Theme::SPACE_SM))
             .py(px(6.0))
@@ -8073,163 +8083,6 @@ impl Shell {
                 cx.notify();
             }
         }
-    }
-
-    /// Scope-aware sidebar identity and account menu. Local runtimes advertise
-    /// their storage boundary and offer sync; synced runtimes offer sign-out.
-    fn render_user_menu(
-        &mut self,
-        _user_line: SharedString,
-        _trigger_subline: Option<SharedString>,
-        menu_identity: SharedString,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = &theme.for_popup();
-        let open = self.user_menu.is_open();
-        let action = account_menu_action(self.state.read(cx).workspace_scope, self.sync_flow);
-        let mut trigger = div()
-            .id("user-menu")
-            .role(gpui::Role::Button)
-            .aria_label("More and account options")
-            .flex_none()
-            .size(px(36.0))
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            // user-menu.tsx trigger: hover `bg-white/[0.04]`, open state
-            // (`data-[state=open]`) the slightly stronger `bg-white/[0.06]`;
-            // the hover wash fades over `transition-colors`.
-            .bg(if open {
-                theme.glass_hover()
-            } else {
-                motion::hover_blend(
-                    "user-menu-trigger",
-                    theme.glass_hover().opacity(0.0),
-                    theme.glass_hover().opacity(0.8),
-                )
-            })
-            .on_hover(motion::hover_listener("user-menu-trigger"))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| this.user_menu.note_trigger_press()),
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                // A press that found the menu open closes it (the card's
-                // mouse-down-out already began the close) — never reopen.
-                if this.user_menu.take_press_was_open() {
-                    this.close_user_menu(cx);
-                } else {
-                    this.user_menu.open(());
-                }
-                cx.notify();
-            }))
-            .child(
-                icon(icons::MORE_HORIZONTAL)
-                    .size(px(19.0))
-                    .text_color(theme.text_muted),
-            );
-        if self.user_menu.get().is_some() {
-            let closing = self.user_menu.closing_since();
-            // user-menu.tsx content: `w-[--radix-dropdown-menu-trigger-width]`
-            // (exactly as wide as the trigger row — sidebar minus its p-2
-            // gutters), `flex-col gap-0.5`, then: one small muted email line
-            // (`px-2 pb-1 pt-1.5 text-[11px] text-muted-foreground/70`),
-            // the action selected by the runtime scope, then "Settings".
-            let menu = popover::popover_card(theme)
-                .w(px(self.settings.sidebar_width - 2.0 * Theme::SPACE_SM))
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.close_user_menu(cx);
-                }))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(
-                    div()
-                        .px(px(8.0))
-                        .pt(px(6.0))
-                        .pb(px(4.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .truncate()
-                        .child(menu_identity),
-                )
-                .when_some(action, |menu, action| {
-                    let row = match action {
-                        AccountMenuAction::EnableSync => {
-                            popover::menu_row(theme, false, "user-menu-enable-sync")
-                                .id("user-menu-enable-sync")
-                                .on_click(cx.listener(|this, _, _, cx| this.start_sign_in(cx)))
-                                .child(
-                                    icon(icons::GLOBAL)
-                                        .size(px(16.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(SharedString::from("Enable sync"))
-                                .into_any_element()
-                        }
-                        AccountMenuAction::SyncInProgress => {
-                            popover::menu_row(theme, false, "user-menu-sync-progress")
-                                .id("user-menu-sync-progress")
-                                .opacity(0.6)
-                                .child(
-                                    icon(icons::GLOBAL)
-                                        .size(px(16.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(SharedString::from("Sync setup in progress"))
-                                .into_any_element()
-                        }
-                        AccountMenuAction::RestartPending => {
-                            popover::menu_row(theme, false, "user-menu-sync-restart")
-                                .id("user-menu-sync-restart")
-                                .on_click(cx.listener(|this, _, _, cx| this.reopen_sync_notice(cx)))
-                                .child(
-                                    icon(icons::RESTART)
-                                        .size(px(16.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(SharedString::from("Finish sync setup"))
-                                .into_any_element()
-                        }
-                        AccountMenuAction::SignOut => {
-                            popover::menu_row(theme, false, "user-menu-signout")
-                                .id("user-menu-signout")
-                                .on_click(cx.listener(|this, _, _, cx| this.request_sign_out(cx)))
-                                .child(
-                                    icon(icons::LOGOUT_2)
-                                        .size(px(16.0))
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(SharedString::from("Sign out"))
-                                .into_any_element()
-                        }
-                    };
-                    menu.child(row).child(popover::menu_separator())
-                })
-                .child(
-                    popover::menu_row(theme, false, "user-menu-settings")
-                        .id("user-menu-settings")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_settings(SettingsSection::DEFAULT, cx)
-                        }))
-                        .child(
-                            icon(icons::SETTINGS_MINIMALISTIC)
-                                .size(px(16.0))
-                                .text_color(theme.text_muted),
-                        )
-                        .child(SharedString::from("Settings")),
-                )
-                .into_any_element();
-            trigger = trigger.child(popover::anchored_menu_above(
-                "user-menu-popover",
-                menu,
-                closing,
-            ));
-        }
-        trigger.into_any_element()
     }
 
     fn render_sync_overlay(
@@ -8631,7 +8484,6 @@ impl Shell {
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
-            || self.user_menu.get().is_some()
         {
             return true;
         }
@@ -13248,15 +13100,15 @@ mod tests {
     #[test]
     fn account_actions_follow_the_attached_workspace_scope() {
         assert_eq!(
-            account_menu_action(Some(WorkspaceScope::Local), SyncFlow::Idle),
-            Some(AccountMenuAction::EnableSync)
+            account_action_for_scope(Some(WorkspaceScope::Local), SyncFlow::Idle),
+            Some(AccountAction::EnableSync)
         );
         assert_eq!(
-            account_menu_action(Some(WorkspaceScope::Synced), SyncFlow::Idle),
-            Some(AccountMenuAction::SignOut)
+            account_action_for_scope(Some(WorkspaceScope::Synced), SyncFlow::Idle),
+            Some(AccountAction::SignOut)
         );
         assert_eq!(
-            account_menu_action(Some(WorkspaceScope::Development), SyncFlow::Idle),
+            account_action_for_scope(Some(WorkspaceScope::Development), SyncFlow::Idle),
             None
         );
     }
@@ -13308,11 +13160,11 @@ mod tests {
             "the quit fallback survives shared auth updates too"
         );
         assert_eq!(
-            account_menu_action(
+            account_action_for_scope(
                 Some(WorkspaceScope::Local),
                 SyncFlow::SwitchOffer { notice_open: false },
             ),
-            Some(AccountMenuAction::RestartPending)
+            Some(AccountAction::RestartPending)
         );
         for notice_open in [true, false] {
             assert_eq!(
@@ -13392,27 +13244,27 @@ mod tests {
             "a postponed import failure survives auth/scope updates"
         );
 
-        // …and the account menu on the SYNCED runtime still exposes the
-        // re-entry point. This is the whole point: after the switch there is
-        // no local runtime left to re-derive an offer from, so this menu row
+        // …and Settings on the SYNCED runtime still exposes the re-entry
+        // point. This is the whole point: after the switch there is no local
+        // runtime left to re-derive an offer from, so this action
         // is the only path back to the retry dialog.
         assert_eq!(
-            account_menu_action(Some(WorkspaceScope::Synced), dismissed),
-            Some(AccountMenuAction::RestartPending),
+            account_action_for_scope(Some(WorkspaceScope::Synced), dismissed),
+            Some(AccountAction::RestartPending),
             "retry must remain reachable after dismissal"
         );
         assert_eq!(
-            account_menu_action(
+            account_action_for_scope(
                 Some(WorkspaceScope::Synced),
                 SyncFlow::ImportFailed { notice_open: true },
             ),
-            Some(AccountMenuAction::RestartPending)
+            Some(AccountAction::RestartPending)
         );
 
         // Resolving the failure restores the normal synced menu.
         assert_eq!(
-            account_menu_action(Some(WorkspaceScope::Synced), SyncFlow::Idle),
-            Some(AccountMenuAction::SignOut)
+            account_action_for_scope(Some(WorkspaceScope::Synced), SyncFlow::Idle),
+            Some(AccountAction::SignOut)
         );
     }
 
