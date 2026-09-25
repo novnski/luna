@@ -10619,14 +10619,16 @@ impl Render for Composer {
                                 .items_center()
                                 .opacity(session_chrome_opacity)
                                 .child(div().flex_1().min_w_0().children(footer.flatten()))
-                                .child(div().flex_none().pr(px(10.0)).child(
-                                    crate::context_usage::render(
-                                        usage,
-                                        compact_status,
-                                        self.state.clone(),
-                                        &theme,
-                                    ),
-                                )),
+                                .when(crate::settings::current(cx).show_context_usage, |slot| {
+                                    slot.child(div().flex_none().pr(px(10.0)).child(
+                                        crate::context_usage::render(
+                                            usage,
+                                            compact_status,
+                                            self.state.clone(),
+                                            &theme,
+                                        ),
+                                    ))
+                                }),
                         )
                     }),
             )

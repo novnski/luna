@@ -4228,25 +4228,58 @@ impl Shell {
         match section {
             SettingsSection::General => {
                 if self.general_page.is_none() {
-                    let behavior = self.settings.follow_up_behavior;
-                    let retries = self.settings.automatic_retries_enabled;
-                    let page = cx.new(|cx| GeneralPage::new(behavior, retries, cx));
+                    let preferences = self.settings.clone();
+                    let page = cx.new(|cx| GeneralPage::new(&preferences, cx));
                     self.general_sub = Some(cx.subscribe(
                         &page,
                         |this: &mut Shell, _, event: &GeneralEvent, cx| {
                             match event {
+                                GeneralEvent::ComposerSendBehaviorChanged(behavior) => {
+                                    this.settings.composer_send_behavior = *behavior;
+                                    apply_keymap(cx, &this.settings.keymap, *behavior);
+                                    if let Some(page) = &this.shortcuts_page {
+                                        page.update(cx, |page, cx| {
+                                            page.sync_composer_send_behavior(*behavior, cx)
+                                        });
+                                    }
+                                }
                                 GeneralEvent::FollowUpBehaviorChanged(behavior) => {
                                     this.settings.follow_up_behavior = *behavior;
                                 }
                                 GeneralEvent::AutomaticRetriesChanged(enabled) => {
                                     this.settings.automatic_retries_enabled = *enabled;
                                 }
+                                GeneralEvent::ShowContextUsageChanged(enabled) => {
+                                    this.settings.show_context_usage = *enabled;
+                                    cx.refresh_windows();
+                                }
+                                GeneralEvent::OpenWebLinksInLunaChanged(enabled) => {
+                                    // Transcript menus write the global store directly; keep
+                                    // that source current before Shell republishes its copy.
+                                    settings::update(SavePolicy::Debounced, cx, |settings| {
+                                        settings.open_web_links_in_luna = *enabled;
+                                    });
+                                    this.settings.open_web_links_in_luna = *enabled;
+                                }
+                                GeneralEvent::KeepAwakeWhileRunningChanged(enabled) => {
+                                    this.settings.keep_awake_while_running = *enabled;
+                                    this.reconcile_keep_awake(cx);
+                                }
                             }
                             this.schedule_save(cx);
+                            if matches!(event, GeneralEvent::AutomaticRetriesChanged(_)) {
+                                // The engine reads this flag from the settings file when a
+                                // failure arrives, so the change must not wait for debounce.
+                                settings::flush(cx);
+                            }
                             cx.notify();
                         },
                     ));
                     self.general_page = Some(page);
+                }
+                self.settings.open_web_links_in_luna = settings::current(cx).open_web_links_in_luna;
+                if let Some(page) = &self.general_page {
+                    page.update(cx, |page, cx| page.sync(&self.settings, cx));
                 }
                 self.general_page
                     .as_ref()
@@ -4446,6 +4479,9 @@ impl Shell {
                                 }
                                 ShortcutsEvent::ComposerSendBehaviorChanged(behavior) => {
                                     this.settings.composer_send_behavior = *behavior;
+                                    if let Some(page) = &this.general_page {
+                                        page.update(cx, |page, cx| page.sync(&this.settings, cx));
+                                    }
                                 }
                                 ShortcutsEvent::AppshotsChanged {
                                     enabled,

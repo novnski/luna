@@ -186,6 +186,19 @@ impl ShortcutsPage {
         }
     }
 
+    /// General can edit this same preference while Shortcuts remains cached.
+    pub fn sync_composer_send_behavior(
+        &mut self,
+        behavior: ComposerSendBehavior,
+        cx: &mut Context<Self>,
+    ) {
+        if self.composer_send_behavior != behavior {
+            self.composer_send_behavior = behavior;
+            self.conflict_notice = None;
+            cx.notify();
+        }
+    }
+
     fn commit_appshots(&self, cx: &mut Context<Self>) {
         cx.emit(ShortcutsEvent::AppshotsChanged {
             enabled: self.appshots_enabled,

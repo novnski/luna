@@ -145,14 +145,39 @@ impl Shell {
         let target = {
             let state = self.state.read(cx);
             if state.engine().is_some() {
-                crate::power::selected_active_task(
-                    state.selected_chat.as_deref(),
-                    &self.settings.keep_awake_task_ids,
-                    state.local_device_id.as_deref(),
-                    &state.sessions,
-                    Utc::now(),
-                )
-                .map(str::to_owned)
+                let now = Utc::now();
+                if self.settings.keep_awake_while_running {
+                    let is_local_working = |session: &luna_proto::Session| {
+                        Some(session.device_id.as_str()) == state.local_device_id.as_deref()
+                            && luna_proto::view::effective_indicator(Some(session), now)
+                                == luna_proto::view::Indicator::Working
+                    };
+                    state
+                        .selected_chat
+                        .as_deref()
+                        .and_then(|id| {
+                            state
+                                .sessions
+                                .iter()
+                                .find(|session| session.chat_id == id && is_local_working(session))
+                        })
+                        .or_else(|| {
+                            state
+                                .sessions
+                                .iter()
+                                .find(|session| is_local_working(session))
+                        })
+                        .map(|session| session.chat_id.clone())
+                } else {
+                    crate::power::selected_active_task(
+                        state.selected_chat.as_deref(),
+                        &self.settings.keep_awake_task_ids,
+                        state.local_device_id.as_deref(),
+                        &state.sessions,
+                        now,
+                    )
+                    .map(str::to_owned)
+                }
             } else {
                 None
             }

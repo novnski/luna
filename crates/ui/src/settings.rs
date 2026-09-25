@@ -661,6 +661,11 @@ pub struct UiSettings {
     /// automatic retries. Unknown delivery and action-required failures never
     /// retry regardless of this preference.
     pub automatic_retries_enabled: bool,
+    /// Show the current context window indicator in the conversation composer.
+    pub show_context_usage: bool,
+    /// Hold a macOS idle-sleep assertion while any local task is working.
+    /// Per-task keep-awake choices remain available when this is disabled.
+    pub keep_awake_while_running: bool,
     pub sidebar_width: f32,
     pub sidebar_collapsed: bool,
     /// Legacy: the grouped-by-project toggle predates spaces (which group by
@@ -847,6 +852,8 @@ impl Default for UiSettings {
             composer_send_behavior: ComposerSendBehavior::default(),
             follow_up_behavior: luna_proto::FollowUpBehavior::default(),
             automatic_retries_enabled: true,
+            show_context_usage: true,
+            keep_awake_while_running: false,
             appshots_enabled: false,
             appshot_sound_enabled: true,
             appshot_destination: crate::appshots::AppshotDestination::Automatic,
@@ -2067,6 +2074,8 @@ mod tests {
             composer_send_behavior: ComposerSendBehavior::ModEnter,
             follow_up_behavior: luna_proto::FollowUpBehavior::Steer,
             automatic_retries_enabled: false,
+            show_context_usage: false,
+            keep_awake_while_running: true,
             appshots_enabled: false,
             appshot_sound_enabled: true,
             // The destination is only persisted where Appshots exist (macOS and
