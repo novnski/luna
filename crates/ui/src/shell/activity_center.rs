@@ -808,6 +808,18 @@ impl Shell {
             })
             .cursor_pointer()
             .hover(|style| style.bg(theme.glass_hover()))
+            .tooltip(move |_, cx| {
+                cx.new(|_| SurfaceTabTooltip {
+                    text: (if active {
+                        "Turn off activity view"
+                    } else {
+                        "View activity"
+                    })
+                    .into(),
+                })
+                .into()
+            })
+            .tooltip_show_delay(Duration::from_millis(350))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") && !event.is_held {

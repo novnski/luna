@@ -23,6 +23,37 @@ struct ActiveChatRow {
     group: Option<(String, String)>,
 }
 
+fn sidebar_thread_tooltip(
+    chat: &luna_proto::Chat,
+    title: SharedString,
+    project: SharedString,
+    device: SharedString,
+    branch: Option<SharedString>,
+    status: Option<SharedString>,
+) -> SidebarThreadTooltip {
+    let model = chat.config.as_ref().map(|config| {
+        let provider = match config.harness {
+            luna_proto::HarnessId::Codex => "Codex",
+            luna_proto::HarnessId::ClaudeCode => "Claude Code",
+            luna_proto::HarnessId::Opencode => "OpenCode",
+            _ => "Provider",
+        };
+        match config.model.as_deref() {
+            Some(model) if !model.is_empty() => format!("{provider} · {model}").into(),
+            _ => SharedString::from(provider),
+        }
+    });
+    SidebarThreadTooltip {
+        title,
+        project,
+        device,
+        model,
+        branch,
+        status,
+        offset_from_pointer: 0.0,
+    }
+}
+
 pub(super) fn compare_sidebar_chats(
     sort: SidebarSort,
     left: &luna_proto::Chat,
@@ -1639,6 +1670,25 @@ impl Shell {
                 let time_ago: SharedString =
                     format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now).into();
                 let is_selected = selected.as_deref() == Some(chat.id.as_str());
+                let title: SharedString = transcript::single_line(
+                    &chat.title.clone().unwrap_or_else(|| "New session".into()),
+                )
+                .into();
+                let device: SharedString = self
+                    .state
+                    .read(cx)
+                    .device_name(&chat.device_id)
+                    .unwrap_or("Unknown device")
+                    .to_string()
+                    .into();
+                let details = sidebar_thread_tooltip(
+                    &chat,
+                    title.clone(),
+                    folder.clone().into(),
+                    device,
+                    branch.clone().map(SharedString::from),
+                    (status == ChatIndicator::Completed).then(|| "Done".into()),
+                );
                 let harness = self
                     .settings
                     .sidebar_show_harness
@@ -1656,10 +1706,7 @@ impl Shell {
                 slot += 1;
                 let element = self.render_chat_row(
                     chat.id.clone(),
-                    transcript::single_line(
-                        &chat.title.clone().unwrap_or_else(|| "New session".into()),
-                    )
-                    .into(),
+                    title,
                     time_ago,
                     folder.into(),
                     branch.map(SharedString::from),
@@ -1673,6 +1720,7 @@ impl Shell {
                     can_settle,
                     jump_label,
                     None,
+                    Some(details),
                     theme,
                     cx,
                 );
@@ -1869,6 +1917,26 @@ impl Shell {
             );
             let time_ago = format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now);
             let selected_row = selected.as_deref() == Some(id.as_str());
+            let details = {
+                let state = self.state.read(cx);
+                sidebar_thread_tooltip(
+                    &chat,
+                    title.clone().into(),
+                    state
+                        .space_for_chat(&chat)
+                        .map(|space| space.display_name().to_string())
+                        .unwrap_or_else(|| "~".into())
+                        .into(),
+                    state
+                        .device_name(&chat.device_id)
+                        .unwrap_or("Unknown device")
+                        .to_string()
+                        .into(),
+                    chat.branch.clone().map(SharedString::from),
+                    Some("Settled".into()),
+                )
+            };
+            let sidebar_width = self.sidebar_now();
             list = list.child(
                 div()
                     .id(SharedString::from(format!("settled-{id}")))
@@ -1880,6 +1948,11 @@ impl Shell {
                     .px(px(Theme::SPACE_SM))
                     .rounded(px(6.0))
                     .cursor_pointer()
+                    .tooltip(move |window, cx| {
+                        cx.new(|_| details.clone().beside_sidebar(window, sidebar_width))
+                            .into()
+                    })
+                    .tooltip_show_delay(Duration::from_millis(600))
                     .when(selected_row, |el| el.bg(crate::theme::glass_selected_bg()))
                     .hover(|el| el.bg(theme.glass_hover()))
                     .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)))
@@ -1899,7 +1972,7 @@ impl Shell {
                         true,
                         div()
                             .text_size(crate::typography::ui_rems(13.0))
-                            .text_color(theme.text.opacity(0.65))
+                            .text_color(theme.text.opacity(0.86))
                             .child(SharedString::from(title)),
                     ))
                     .child(
@@ -2044,6 +2117,25 @@ impl Shell {
                 .into();
                 let time_ago: SharedString =
                     format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now).into();
+                let details = {
+                    let state = self.state.read(cx);
+                    sidebar_thread_tooltip(
+                        &chat,
+                        title.clone(),
+                        state
+                            .space_for_chat(&chat)
+                            .map(|space| space.display_name().to_string())
+                            .unwrap_or_else(|| "~".into())
+                            .into(),
+                        state
+                            .device_name(&chat.device_id)
+                            .unwrap_or("Unknown device")
+                            .to_string()
+                            .into(),
+                        chat.branch.clone().map(SharedString::from),
+                        Some("Archived".into()),
+                    )
+                };
                 let brand = if self.settings.sidebar_show_harness {
                     chat.config
                         .as_ref()
@@ -2056,36 +2148,32 @@ impl Shell {
                 // yields to the settle affordance").
                 let right: AnyElement = if hovered {
                     let restore_id = id.clone();
-                    // Metrics match the active rows' Archive pill exactly
-                    // (18px pill, 11px icon, 10px label, padding bled right)
-                    // — two sizes of the same affordance read as a mistake.
                     div()
                         .id(SharedString::from(format!("archived-restore-{id}")))
+                        .role(gpui::Role::Button)
+                        .aria_label("Unarchive task")
                         .flex()
-                        .flex_row()
                         .items_center()
-                        .gap(px(4.0))
-                        .h(px(18.0))
-                        .px(px(4.0))
-                        .mr(px(-4.0))
-                        .rounded(px(5.0))
-                        .bg(crate::theme::wash(0.10))
-                        .hover(|s| s.bg(crate::theme::wash(0.18)))
+                        .justify_center()
+                        .size(px(20.0))
+                        .rounded(px(4.0))
+                        .hover(|s| s.bg(theme.glass_hover()))
+                        .tooltip(|_, cx| {
+                            cx.new(|_| SurfaceTabTooltip {
+                                text: "Unarchive task".into(),
+                            })
+                            .into()
+                        })
+                        .tooltip_show_delay(Duration::from_millis(350))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.set_chat_archived(restore_id.clone(), false, cx);
                         }))
                         .child(
                             crate::icons::icon(crate::icons::ARCHIVE_UP_MINIMALISTIC)
-                                .size(px(11.0))
+                                .size(px(13.0))
                                 .flex_none()
                                 .text_color(theme.text_muted),
-                        )
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(10.0))
-                                .text_color(theme.text_muted)
-                                .child(SharedString::from("Unarchive")),
                         )
                         .into_any_element()
                 } else {
@@ -2098,6 +2186,7 @@ impl Shell {
                 let hover_id = id.clone();
                 let open_id = id.clone();
                 let menu_id = id.clone();
+                let sidebar_width = self.sidebar_now();
                 list = list.child(
                     div()
                         .id(SharedString::from(format!("archived-{id}")))
@@ -2109,6 +2198,11 @@ impl Shell {
                         .px(px(Theme::SPACE_SM))
                         .rounded(px(6.0))
                         .cursor_pointer()
+                        .tooltip(move |window, cx| {
+                            cx.new(|_| details.clone().beside_sidebar(window, sidebar_width))
+                                .into()
+                        })
+                        .tooltip_show_delay(Duration::from_millis(600))
                         .when(is_selected, |el| el.bg(selected_wash))
                         .when(!is_selected, |el| el.hover(|s| s.bg(theme.glass_hover())))
                         .on_hover(cx.listener(move |this, entered: &bool, _, cx| {

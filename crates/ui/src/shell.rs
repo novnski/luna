@@ -860,6 +860,82 @@ struct SurfaceTabTooltip {
     text: SharedString,
 }
 
+#[derive(Clone)]
+struct SidebarThreadTooltip {
+    title: SharedString,
+    project: SharedString,
+    device: SharedString,
+    model: Option<SharedString>,
+    branch: Option<SharedString>,
+    status: Option<SharedString>,
+    offset_from_pointer: f32,
+}
+
+impl SidebarThreadTooltip {
+    fn beside_sidebar(mut self, window: &Window, sidebar_width: f32) -> Self {
+        self.offset_from_pointer =
+            (sidebar_width - f32::from(window.mouse_position().x) + 6.0).max(0.0);
+        self
+    }
+
+    fn detail(theme: &Theme, glyph: &'static str, label: SharedString) -> gpui::Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .min_w_0()
+            .child(
+                icon(glyph)
+                    .size(px(13.0))
+                    .flex_none()
+                    .text_color(theme.text_muted),
+            )
+            .child(div().min_w_0().truncate().child(label))
+    }
+}
+
+impl Render for SidebarThreadTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let card = div()
+            .w(px(244.0))
+            .px(px(12.0))
+            .py(px(11.0))
+            .flex()
+            .flex_col()
+            .gap(px(7.0))
+            .rounded(px(9.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .bg(crate::popover::surface_bg(theme))
+            .shadow_md()
+            .text_size(crate::typography::ui_rems(11.0))
+            .text_color(theme.text_muted)
+            .child(
+                div()
+                    .truncate()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text)
+                    .child(self.title.clone()),
+            )
+            .child(Self::detail(&theme, icons::FOLDER, self.project.clone()))
+            .child(Self::detail(&theme, icons::LAPTOP, self.device.clone()))
+            .when_some(self.model.clone(), |el, model| {
+                el.child(Self::detail(&theme, icons::WIDGET, model))
+            })
+            .when_some(self.branch.clone(), |el, branch| {
+                el.child(Self::detail(&theme, icons::GIT_BRANCH, branch))
+            })
+            .when_some(self.status.clone(), |el, status| {
+                el.child(Self::detail(&theme, icons::CHECK, status))
+            });
+        div()
+            .pl(px(self.offset_from_pointer))
+            .child(crate::frost::frosted(7.0, crate::frost::MENU_BLUR, card))
+    }
+}
+
 impl Render for SurfaceTabTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
@@ -7088,15 +7164,13 @@ impl Shell {
         // row is busy or under the pointer.
         jump_label: Option<SharedString>,
         search_query: Option<&str>,
+        details: Option<SidebarThreadTooltip>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Activity, not position (t3code Sidebar): status is a small colored
-        // word + glyph in the row's top-right corner — Working animates the
-        // composer-strip spinner, Done wears a check; Idle rows show the
-        // relative time instead. Hovering the ROW swaps the corner for the
-        // ARCHIVE button (UNARCHIVE on rows in the sidebar's archived
-        // accordion), t3code's settle-on-hover.
+        // The status and hover actions share a fixed-size corner. Changing its
+        // width used to squeeze the project label and make neighboring rows
+        // appear to jump when the pointer crossed them.
         // A chat can appear on both surfaces at once. Namespace every hover
         // key and child id so the palette never animates the sidebar copy.
         let row_id = if search_query.is_some() {
@@ -7112,7 +7186,7 @@ impl Shell {
                     .id(SharedString::from(format!("{row_id}-pin")))
                     .role(gpui::Role::Button)
                     .aria_label(if pinned { "Unpin task" } else { "Pin task" })
-                    .size(px(18.0))
+                    .size(px(20.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -7120,6 +7194,13 @@ impl Shell {
                     .rounded(px(4.0))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.glass_hover()))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| SurfaceTabTooltip {
+                            text: (if pinned { "Unpin task" } else { "Pin task" }).into(),
+                        })
+                        .into()
+                    })
+                    .tooltip_show_delay(Duration::from_millis(350))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.set_chat_pinned(pin_id.clone(), !pinned, cx);
@@ -7188,57 +7269,98 @@ impl Shell {
                     .child(label)
                     .into_any_element()
             }
-        } else if corner_hovered {
+        } else if corner_hovered && search_query.is_none() {
+            let archive_id = id.clone();
+            let settle_id = id.clone();
             div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .justify_center()
-                .gap(px(4.0))
+                .justify_end()
+                .gap(px(2.0))
                 .h(px(18.0))
-                .w(px(84.0))
-                .px(px(4.0))
-                .rounded(px(5.0))
-                .bg(crate::theme::wash(0.10))
-                .hover(|s| s.bg(crate::theme::wash(0.18)))
-                .child(
-                    icon(if can_settle {
-                        icons::CHECK
-                    } else if archived {
-                        icons::ARCHIVE_UP_MINIMALISTIC
-                    } else {
-                        icons::ARCHIVE_MINIMALISTIC
-                    })
-                    .size(px(11.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-                )
+                .when_some(pin_control, |el, control| el.child(control))
+                .when(can_settle, |el| {
+                    el.child(
+                        div()
+                            .id(SharedString::from(format!("{row_id}-settle")))
+                            .role(gpui::Role::Button)
+                            .aria_label("Settle task")
+                            .size(px(20.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.0))
+                            .hover(|s| s.bg(theme.glass_hover()))
+                            .tooltip(|_, cx| {
+                                cx.new(|_| SurfaceTabTooltip {
+                                    text: "Settle task".into(),
+                                })
+                                .into()
+                            })
+                            .tooltip_show_delay(Duration::from_millis(350))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.set_chat_settled(settle_id.clone(), true, cx);
+                            }))
+                            .child(
+                                icon(icons::CHECK)
+                                    .size(px(13.0))
+                                    .text_color(theme.text_muted),
+                            ),
+                    )
+                })
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(if can_settle {
-                            "Settle"
-                        } else if archived {
-                            "Unarchive"
+                        .id(SharedString::from(format!("{row_id}-archive")))
+                        .role(gpui::Role::Button)
+                        .aria_label(if archived {
+                            "Unarchive task"
                         } else {
-                            "Archive"
-                        })),
+                            "Archive task"
+                        })
+                        .size(px(20.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .hover(|s| s.bg(theme.glass_hover()))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| SurfaceTabTooltip {
+                                text: (if archived {
+                                    "Unarchive task"
+                                } else {
+                                    "Archive task"
+                                })
+                                .into(),
+                            })
+                            .into()
+                        })
+                        .tooltip_show_delay(Duration::from_millis(350))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.set_chat_archived(archive_id.clone(), !archived, cx);
+                        }))
+                        .child(
+                            icon(if archived {
+                                icons::ARCHIVE_UP_MINIMALISTIC
+                            } else {
+                                icons::ARCHIVE_MINIMALISTIC
+                            })
+                            .size(px(13.0))
+                            .text_color(theme.text_muted),
+                        ),
                 )
                 .into_any_element()
         } else {
-            match status_label {
+            let status_body: AnyElement = match status_label {
                 Some(label) => {
                     // Glyph slot: Working wears the preset's animated pixel
                     // glyph beside its label, Done wears the check, and the
                     // remaining statuses use a compact dot.
-                    let glyph: AnyElement = if status == luna_proto::ChatIndicator::Completed {
-                        icon(icons::CHECK)
-                            .size(px(11.0))
-                            .flex_none()
-                            .text_color(status_color)
-                            .into_any_element()
-                    } else if working {
+                    let glyph: AnyElement = if working {
                         loaders::mini_glyph_spinner(
                             format!("{row_id}-working"),
                             2.0,
@@ -7255,21 +7377,26 @@ impl Shell {
                             .bg(status_color)
                             .into_any_element()
                     };
-                    div()
+                    let status = div()
                         .h(px(18.0))
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap(px(4.0))
-                        .child(glyph)
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(10.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(status_color)
-                                .child(SharedString::from(label)),
-                        )
-                        .into_any_element()
+                        .child(glyph);
+                    if label == "Done" {
+                        status.into_any_element()
+                    } else {
+                        status
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(10.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(status_color)
+                                    .child(SharedString::from(label)),
+                            )
+                            .into_any_element()
+                    }
                 }
                 None => div()
                     .h(px(18.0))
@@ -7279,7 +7406,17 @@ impl Shell {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .child(time_ago.clone())
                     .into_any_element(),
-            }
+            };
+            div()
+                .h(px(18.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_end()
+                .gap(px(2.0))
+                .when_some(pin_control, |el, control| el.child(control))
+                .child(status_body)
+                .into_any_element()
         };
         // One stable wrapper across both states (identity keeps the hover
         // from flickering as the content swaps); the swap is driven by the
@@ -7287,38 +7424,14 @@ impl Shell {
         // archiving only clicks on the corner itself, so the row's own click
         // stays the selector.
         let corner: AnyElement = {
-            let action_id = id.clone();
             div()
                 .id(SharedString::from(format!("{row_id}-corner")))
                 .flex_none()
-                // At rest the pin sits beside the timestamp/status. The
-                // action expands this slot on hover and pushes the pin left,
-                // matching T3's pinned-card geometry.
-                .min_w(px(32.0))
-                .when(corner_hovered, |corner| corner.w(px(84.0)))
-                // Pin the corner to line 1's text height so the archive pill
-                // (taller, padded) overflows vertically instead of growing the
-                // row — the swap must not shift the card's content.
-                // NO occlude: the ROW's hover drives the swap, and an
-                // occluding corner un-hovered the row underneath it —
-                // pill mounts, steals the pointer, row un-hovers, pill
-                // unmounts, repeat (user-reported flicker). The pill's
-                // stop_propagation click is separation enough.
+                .w(px(96.0))
                 .h(px(14.0))
                 .flex()
                 .items_center()
                 .justify_end()
-                .cursor_pointer()
-                .when(corner_hovered, |el| {
-                    el.on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        if can_settle {
-                            this.set_chat_settled(action_id.clone(), true, cx);
-                        } else {
-                            this.set_chat_archived(action_id.clone(), !archived, cx);
-                        }
-                    }))
-                })
                 .child(corner_body)
                 .into_any_element()
         };
@@ -7346,6 +7459,8 @@ impl Shell {
         let hover_bg = if selected { selected_wash } else { hover };
         let rest_text = if selected || search_query.is_some() {
             text
+        } else if status == luna_proto::ChatIndicator::Completed {
+            text.opacity(0.95)
         } else {
             text.opacity(0.8)
         };
@@ -7407,7 +7522,15 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            // Line 1: project, pin control, status word / time-ago right.
+            .when_some(details, |row, details| {
+                let sidebar_width = self.sidebar_now();
+                row.tooltip(move |window, cx| {
+                    cx.new(|_| details.clone().beside_sidebar(window, sidebar_width))
+                        .into()
+                })
+                .tooltip_show_delay(Duration::from_millis(600))
+            })
+            // Line 1: project and one stable right-side status/action group.
             .child(
                 div()
                     .w_full()
@@ -7424,7 +7547,6 @@ impl Shell {
                             .text_color(subline)
                             .child(popover::search_highlight(space_name, search_query, theme)),
                     ))
-                    .when_some(pin_control, |line, control| line.child(control))
                     .child(div().text_color(subline).child(corner)),
             )
             // Line 2: harness identity belongs directly with the title,
@@ -7969,6 +8091,13 @@ impl Shell {
                             .rounded(px(Theme::CONTROL_RADIUS))
                             .cursor_pointer()
                             .hover(|el| el.bg(theme.glass_hover()))
+                            .tooltip(|_, cx| {
+                                cx.new(|_| SurfaceTabTooltip {
+                                    text: "Open settings".into(),
+                                })
+                                .into()
+                            })
+                            .tooltip_show_delay(Duration::from_millis(350))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -7990,6 +8119,13 @@ impl Shell {
                             .rounded(px(Theme::CONTROL_RADIUS))
                             .cursor_pointer()
                             .hover(|el| el.bg(theme.glass_hover()))
+                            .tooltip(|_, cx| {
+                                cx.new(|_| SurfaceTabTooltip {
+                                    text: "Open devices".into(),
+                                })
+                                .into()
+                            })
+                            .tooltip_show_delay(Duration::from_millis(350))
                             .flex()
                             .items_center()
                             .justify_center()
