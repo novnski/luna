@@ -5,6 +5,8 @@ Only the reserved Sidebar QA owner on 59787 is accepted. This uses a disposable
 projectless parent with Codex gpt-6-luna and one harmless side-chat question.
 An existing evidence directory is read-only verification; it never replays a
 create/send. UI screenshots and parent-draft insertion are separate native QA.
+New runs share one stable provider cwd; evidence output directories must not
+relocate the device's shared projectless workspace between acceptance drivers.
 """
 import argparse
 import asyncio
@@ -170,6 +172,12 @@ def digest(entries):
     return hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
 
 
+def provider_cwd(worktree):
+    cwd = (worktree / "target/qa/sidebar/provider-workspace").resolve()
+    cwd.mkdir(parents=True, exist_ok=True)
+    return str(cwd)
+
+
 async def main(args):
     worktree = Path(__file__).resolve().parent.parent
     data = (worktree / "target/luna-qa-data/sidebar").resolve()
@@ -194,11 +202,12 @@ async def main(args):
                 return
             task = str(uuid.uuid4())
             marker = "LUNA_SIDEBAR_" + uuid.uuid4().hex[:10]
-            run = {"parent_id": task, "marker": marker, "model": "gpt-6-luna", "created_at_ms": int(time.time() * 1000)}
+            cwd = provider_cwd(worktree)
+            run = {"parent_id": task, "marker": marker, "model": "gpt-6-luna", "cwd": cwd, "created_at_ms": int(time.time() * 1000)}
             save(out / "run.json", run)  # No replay even if a later response is lost.
             config = {"harness": "codex", "model": "gpt-6-luna", "reasoning": "high",
                       "sandbox": "read-only", "permissionMode": "ask", "effectivePermissionMode": "ask"}
-            await rpc.request("Mutate", {"op": "createChat", "chatId": task, "deviceId": info["deviceId"], "config": config, "cwd": str(out)})
+            await rpc.request("Mutate", {"op": "createChat", "chatId": task, "deviceId": info["deviceId"], "config": config, "cwd": cwd})
             await rpc.request("Mutate", {"op": "renameChat", "chatId": task, "title": "Sidebar QA · context and history"})
             await rpc.transcript(task)  # One subscription exists before provider work.
             snapshot = (await rpc.request("GetTaskCommandSnapshot", {"taskId": task}))["snapshot"]
@@ -208,7 +217,7 @@ async def main(args):
             run.update(parent_command_id=command_id, parent_message_id=parent_message_id)
             save(out / "run.json", run)
             request = {"prompt": prompt, "harness": "codex", "model": "gpt-6-luna", "reasoning": "high",
-                       "cwd": str(out), "sandbox": "read-only", "permissionMode": "ask", "resume": None}
+                       "cwd": cwd, "sandbox": "read-only", "permissionMode": "ask", "resume": None}
             receipt = await rpc.request("ExecuteTaskCommand", {"commandId": command_id, "taskId": task,
                 "expectedTaskRevision": snapshot["taskRevision"], "expectedBindingGeneration": snapshot.get("bindingGeneration"),
                 "intent": {"kind": "session", "command": {"kind": "run", "request": request, "messageId": parent_message_id}}})

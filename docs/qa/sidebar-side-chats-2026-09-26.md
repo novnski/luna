@@ -1,5 +1,25 @@
 # Sidebar agents and persistent side chats
 
+## Final handoff status
+
+The isolated Sidebar implementation passed 42 engine/storage integration cases,
+the existing RPC cancellation regression, compile/format/Clippy checks, and the
+native acceptance described at the end of this report. The signed **LUNA QA
+Sidebar** app is retained for inspection on IPC 59787 with its QA data and unsent
+parent draft. Product source is `e4788f6e`; the packaged checkout was report-only
+commit `c34cc0f5`. Subsequent changes are confined to the two QA drivers and this
+report. No primary LUNA Dev refresh, push, or main-branch change was performed.
+
+The native run also exposed shared projectless-workspace relocation between
+the two original QA output directories. The identity guard refused the stale
+parent's fork. That failure is preserved and reported separately; it was not
+replayed or bypassed. New QA runs now share a stable provider working directory.
+The broader workspace behavior is not fixed by this sidebar change.
+
+Earlier pending statements below describe intermediate checkpoints. The final
+native section and `target/qa/sidebar/native/acceptance.json` are the handoff
+record, including the limits of what was actually observed.
+
 ## Proposal and source evidence
 
 Reference checkouts were fetched without checking out or resetting local work.
@@ -309,3 +329,105 @@ returned guard exit 75. The slot was released immediately after the second
 check. No packaging, seed execution, or real-provider turn occurred in this
 grant. Native app/process/signature, fixture and real-provider screenshot/AX,
 restart, origin navigation and parent-draft handoff acceptance remain pending.
+
+## Final isolated native acceptance
+
+The seed fixture ran once against the empty reserved QA profile. The granted
+refresh used `CARGO_INCREMENTAL=0`, `scripts/run-macos-dev.sh --refresh`, and all
+four isolation overrides: `LUNA_DEV_APP_NAME=LUNA QA Sidebar`,
+`LUNA_DEV_BUNDLE_ID=com.novnski.luna.qa.sidebar`,
+`LUNA_DEV_IPC_PORT=59787`, and the absolute worktree-local
+`LUNA_DEV_DATA_DIR=target/luna-qa-data/sidebar` path. Packaging took **121 seconds**.
+The Cargo slot was released immediately afterward; native inspection and the
+final QA-only edits did not rebuild the app.
+
+`target/qa/sidebar/native/build-identity.json` records the original process,
+source, bundle, owner-root claim, device and strict code-sign verification.
+A graceful app-menu Quit and relaunch preserved the same binary:
+SHA-256 `d2a59f4d860b714451e4ccee2ecdd1fb4bf89560fa8422a14a9920549ec0428c`.
+`post-restart-identity.json` records PID **15166**, exact bundle executable,
+listening IPC 59787, the same root/device, `codesign --verify --deep --strict`
+exit 0 and zero working/approval/input provider sessions. The retained app is
+in Light appearance with the parent draft unsent.
+
+All following paths are under `target/qa/sidebar/native/`:
+
+| Acceptance | Evidence and observed result |
+| --- | --- |
+| Synthetic available/missing agent cards | `agents-fixture-dark.png`, `agents-fixture-light.png`, `agents-fixture-ax.txt`: available card is a named Button; missing-reference card is a non-interactive Group with visible transcript-unavailable reason. Both themes were visually inspected. |
+| Agent card opens actual referenced transcript | `fixture-child-open.png` shows the explicitly synthetic fixture result; `agents-native-child-result.png` separately shows the real child's exact result. |
+| One actual native agent | `agents/result.json`, `agents/native-observations.json`, `agents/parent-complete.json`, `agents/child-result.json`: exactly one native spawn, running then done, real `subagentRef`, and exact child marker. One persistent parent watch and one child watch. |
+| Actual running and completed presentation | `agents-native-running-ax.txt` records the named Working button; `agents-native-completed-light.png` shows Completed. The screenshot was captured after completion and is not presented as a running image. |
+| Native fork retains parent context | `side-fork/result.json`: `SIDEBAR_NATIVE_CONTEXT_HISTORY_PASS`, 31,371 ms, exact marker recalled, parent transcript unchanged. The applied fork receipt and provider child identity are retained beside it. |
+| Saved history and restart | `side-fork/history-readback.json`, `restart-history-readback.json`, `restart-history-driver.log`: unloaded side transcript retained and read-only after graceful restart; no side provider runtime registered. |
+| Read-only admission after unload | `side-fork/negative-after-unload.json`: SendSideChat denied with “This side chat is read-only or expired”; saved history unchanged and runtime absent. |
+| Actual Codex side-turn policy | `side-fork/side-native-wire-policy.json`: the exact forked child's post-fork turn context records `sandbox_policy.type=read-only`, `approval_policy=on-request`, model `gpt-6-luna`. This is policy-record evidence; no filesystem-write-denial experiment was performed. |
+| Message anchor and writable side | `side-writable-anchor.png`, `origin-handoff/anchored-native-fork-receipt.json`: selected parent message, frozen quote, native fork, writable deadline, one real side reply, and existing parent draft preserved. |
+| Explicit result handoff | `side-readonly-origin-draft.png`, `origin-handoff/result.json`: after unloading and reopening saved history, one click inserts the result into the existing main draft; submissions remain zero, queue items empty, parent transcript exactly unchanged, side runtime absent. |
+| Reveal origin | `side-origin-before-expanded.png` and `side-origin-after-reveal.png`: the expanded side pane hides the parent; clicking Show original message collapses the pane and reveals the exact anchored parent message plus unchanged unsent draft. Both images were inspected. |
+
+The real-agent parent is `e12ac2f7-2a79-46fe-bba9-6b5f1e4fd807`; its child result
+is `LUNA_NATIVE_CHILD_becfa73c5b`. Its separate anchored side chat is
+`1e2c40c3-114f-447a-a1f3-9ccfb67660bf`, with origin message
+`83428f5c-9572-47f3-9de6-d73b5affb6f0` and result
+`SIDE_UI_HANDOFF_1e2c40c3`. The parent draft retains
+“Existing parent draft — keep this.” followed by that result. Copy formatting
+adds two terminal newlines, preserved exactly in the evidence.
+
+Two initial saved-evidence verifier assertions were corrected without repeating
+the UI action: one incorrectly demanded no terminal formatting newlines; the
+other treated WatchQueue's `{items: []}` envelope as a bare list. The actual
+draft, zero submissions, empty queue and byte-equivalent parent transcript all
+pass the corrected verifier. Run this read-only check to reproduce the result:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 agent-python target/qa/sidebar/native/origin-handoff/verify.py
+```
+
+It prints `SIDEBAR_NATIVE_ORIGIN_DRAFT_HANDOFF_PASS`. The origin images establish
+reveal from an expanded pane; this short transcript does not establish scrolling
+through a long off-screen history. The native anchor exercise used a whole
+message, not a partial text selection. Engine integration covers bounded
+history, permission ceilings and lifecycle edge cases separately.
+
+### Preserved native failure and QA-driver correction
+
+The first anchored attempt against the older context/history parent failed with
+“task workspace changed; explicit resume refused”. Receipt
+`side-chat-create:b1587031-42b7-4254-b577-cf72de6153a2` is retained as
+`origin-handoff/failed-native-anchor-receipt.json`, with the error screenshot
+`origin-native-fork-failed.png` and workspace readback. It failed before native
+fork admission and did not alter the parent draft.
+
+The two drivers originally created projectless tasks with their respective
+evidence directories as cwd (`native/side-fork` and `native/agents`). Projectless
+tasks share the device's workspace identity, so the second creation moved its
+current path and fenced the first parent's explicit fork. Remaining UI checks
+used a fresh request on the already-current real-agent parent, as authorized;
+the rejected receipt was never replayed and the guard was not weakened.
+
+For future runs, both drivers use `target/qa/sidebar/provider-workspace` and save
+that cwd into the run record. Historical records keep their original cwd; an
+attempted agent run still refuses replay. This changes QA setup only, leaving
+the broader projectless identity behavior to its separate audit. Python syntax
+checks and the existing persistent-protocol loopback pass after this correction
+(`final-driver-syntax.json`, `final-driver-protocol.json` and its log), with zero
+provider calls. The new cwd setup was not used to replay native acceptance.
+
+### Native capture and handoff limits
+
+The Executor native bridge found the correct app but its worker lacked
+Accessibility permission; preparation refused without changing permissions.
+CUA supplied actual native accessibility/action readbacks. macOS Stage Manager
+initially supplied a small background thumbnail, so the user-approved exact QA
+`open -a` command and full-size app window were used with the screenshot skill.
+`current-window.png` is that old thumbnail and is excluded from acceptance.
+Capture failures are retained; no failed or unreceived screenshot is treated as
+visual evidence. The unused bridge session was released without closing the app.
+
+Artifact JSON stores hashes of the accepted images and readbacks. The QA profile,
+app and evidence remain available for coordinator review; no automatic parent
+send occurred. Final disk inspection: `target/debug` **11 GiB**, no
+`target/release` directory, and about **390 GiB** available. No extra target
+directory or disposable build fixture remains to clean, and the shared cache
+was preserved.

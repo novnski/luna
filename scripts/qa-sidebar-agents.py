@@ -5,6 +5,8 @@ prepare creates an inspectable disposable parent without provider work. Select
 that task and open Agents in the QA UI, then run once. One native child runs
 only /bin/sleep 20 and returns a marker. It never substitutes summaries for an
 agent. Retain the task for native click/AX/screenshots before archiving it.
+New runs use the same stable provider cwd as qa-sidebar.py. Historical run
+records retain their original output cwd and are never silently relocated.
 """
 import argparse
 import asyncio
@@ -48,10 +50,11 @@ async def main(args):
                 assert not path.exists(), "Existing run is inspectable; do not recreate it"
                 tag = uuid.uuid4().hex[:10]
                 run = {"parent_id": str(uuid.uuid4()), "child_marker": "LUNA_NATIVE_CHILD_" + tag,
-                       "parent_marker": "LUNA_NATIVE_PARENT_" + tag, "model": "gpt-6-luna", "executed": False}
+                       "parent_marker": "LUNA_NATIVE_PARENT_" + tag, "model": "gpt-6-luna", "executed": False,
+                       "cwd": driver.provider_cwd(worktree)}
                 driver.save(path, run)
                 info = await rpc.request("EngineInfo")
-                await rpc.request("Mutate", {"op": "createChat", "chatId": run["parent_id"], "deviceId": info["deviceId"], "config": config, "cwd": str(out)})
+                await rpc.request("Mutate", {"op": "createChat", "chatId": run["parent_id"], "deviceId": info["deviceId"], "config": config, "cwd": run["cwd"]})
                 await rpc.request("Mutate", {"op": "renameChat", "chatId": run["parent_id"], "title": "Sidebar QA · real native agent"})
                 print("SIDEBAR_NATIVE_AGENT_PREPARED " + run["parent_id"], flush=True)
                 return
@@ -68,7 +71,7 @@ async def main(args):
             command = {"commandId": str(uuid.uuid4()), "taskId": task,
                        "expectedTaskRevision": snapshot["taskRevision"], "expectedBindingGeneration": snapshot.get("bindingGeneration"),
                        "expectedTurnId": snapshot.get("activeTurnId"), "intent": {"kind": "session", "command": {"kind": "run", "messageId": str(uuid.uuid4()),
-                           "request": {**config, "prompt": prompt, "cwd": str(out), "resume": None}}}}
+                           "request": {**config, "prompt": prompt, "cwd": run.get("cwd", str(out)), "resume": None}}}}
             run.update(executed=True, command_id=command["commandId"])
             driver.save(path, run)
             driver.save(out / "request.json", command)
