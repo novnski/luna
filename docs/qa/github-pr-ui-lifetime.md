@@ -73,3 +73,41 @@ spacing and public backend contracts.
 Source report and matrix authored before test/runtime edits. Shared helper API
 and prerequisite commit requested from Commands. No Cargo/native run, production
 patch or claim of a runtime reproduction in this preparation checkpoint.
+
+## Immutable baseline source preparation
+
+Commands' generic-only prerequisite `3bc2fbf51e4d31cddd1b30077e69623da0ca7e4e`
+was cherry-picked as `e4eacd4f`. It contains only the cfg(test) held-RPC module,
+its registration, and a test-only proxy into the real AppState attachment path.
+No Commands/Defaults production feature code was imported; helper ownership
+remains with Commands.
+
+PR reproductions are in
+`crates/ui/src/changes/pull_requests/lifetime_tests.rs`, included only under
+cfg(test).22 independent GPUI cases retain the actual Changes entity, invoke
+its production PR/Git load and submit handlers, replace the engine via the real
+attachment path, and release RPC replies through the shared helper. No window
+is rendered; this explicitly covers hidden panes and skipped cleared-selection
+frames. Full before/after PR state and A/B traces are written before assertions.
+The cached-preview case also verifies that an explicit fresh B preview enables
+one B create using B's operation ID while preserving authored title/body.
+
+Exact command after an explicit serialized build grant:
+
+```bash
+scripts/verify-github-pr-ui-lifetime.sh
+```
+
+Equivalent command:
+
+```bash
+LUNA_EPOCH_QA_ARTIFACTS="$PWD/target/qa/github-pr-ui-lifetime-baseline" \
+  CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib \
+  pr_ui_lifetime_ -- --test-threads=1 --nocapture
+```
+
+The script preserves command status (including guard75) and retains test.log plus
+per-case JSON traces. Reproduction/runtime results are still unverified; only
+Rust formatting, shell syntax and source-diff checks ran during preparation.
+No production fences changed. Compiler or fixture setup errors, if any, must be
+reported separately from authentic callback/admission assertion failures.

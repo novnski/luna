@@ -495,3 +495,6 @@ impl Changes {
         panel.into_any_element()
     }
 }
+
+#[cfg(test)]
+mod lifetime_tests;
