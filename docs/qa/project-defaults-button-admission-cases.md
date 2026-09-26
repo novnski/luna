@@ -6,12 +6,13 @@ and no admission fix is authorized or implemented by this document. Existing
 Commands baseline source `0ef61afda7a4b9c173eafac642f906cdbb26ae84` remains an
 immutable Git object; this preparation changes only documentation.
 
-Commands' corrected window fixture currently has one passing fresh control and
-four failed retained-frame premises. That does **not** validate stale mouse
-admission or establish a behavioral bug. Defaults test code waits until the
-actual-window retained-frame pattern is validated and any shared test helper is
-agreed with its Commands owner. Do not copy or modify that owner's scaffolding
-independently, and do not weaken render/bounds assertions to produce a failure.
+Commands baseline-3 on `80bd8e08` now validates the single raw Window/App
+boundary: one fresh control passed, and four cases reached behavioral admission
+failures with retained bounds and unchanged delivery render counters. Earlier
+fixture failures remain preserved separately. Defaults still has no admission
+reproduction of its own. Its test code can now be written after agreeing minimal
+window-helper reuse with the Commands owner. Do not modify that owner's frozen
+assertions or shared scaffolding independently.
 
 ## Current source path at 0ef61afd
 

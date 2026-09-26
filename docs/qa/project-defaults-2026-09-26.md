@@ -316,3 +316,32 @@ coordinator-approved temporary 10 GiB reservation and unchanged 170 GiB ceiling.
 This target/debug measured 9.1 GiB; free disk was about 390 GiB. Cargo was released
 promptly and the Commands owner/coordinator received the results. No native
 app was packaged or launched in this grant.
+
+
+### Rendered Commands admission baseline (separate from the 17 passes)
+
+The accepted `04da0cf3` result-isolation/picker proof is unchanged. Subsequent
+source review identified an outbound rendered-input question, which Commands
+owned and specified before an admission fix. Its first five-case run on
+`896106a1` failed entirely on a root-view lease fixture panic before traces. A
+test-only raw-window correction was adopted at `0ef61afd`; that second run had
+one fresh-control pass and four failed retained-frame premises. Neither run
+established a behavioral admission defect; both complete artifact sets remain.
+
+Commands then modeled the native pre-redraw boundary inside one raw Window/App
+update, separating delivery-time counters from GPUI test-support's eager
+post-update repaint. On exact clean `80bd8e08`, the granted baseline-3 compiled
+and ran five cases: **1 passed / 4 failed**, exit 101, 52s wall. Every frame/bounds
+premise held. Fresh input passed; stale Run, Retry and Stop each dispatched once
+to engine B; an enabled old button admitted a target request while live busy.
+For each stale case, AppState generation was 2 while cached/painted origin was
+1; render counters remained 2 → 2 during input, then became 3 only after the
+outer update. These are genuine behavioral failures, independently accepted by
+the coordinator, not the earlier fixture failures.
+
+Evidence is under `target/qa/project-defaults/button-admission-baseline-3`, with
+five raw traces, `summary.json`, exact source/command/exit/log and actual budget.
+The default 25 GiB reservation was used; aggregate was 140.623 → 140.857 GiB.
+Cargo was explicitly released. Commands owns the admission fix; Defaults may now
+write its separately specified six-case suite using this validated boundary,
+before any Defaults admission guard. No native interaction occurred.
