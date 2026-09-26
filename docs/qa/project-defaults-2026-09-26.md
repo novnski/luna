@@ -123,3 +123,49 @@ changing cache policy. `commands.txt`, `source.txt`, `exits.tsv`, `result.txt`
 and before/after accounting are retained with that batch. Final aggregate was
 154,439,057,096 bytes (143.83 GiB); this target/debug was 9.0 GiB and available
 disk space 393 GiB. The compiler slot was released after the checks.
+
+## Combined Projects verification
+
+Commands source and the shared Projects card were adopted at `cca464e8`.
+Its 28-line composition preserves the existing defaults controls and keys the
+child card by project, owning device and engine identity. Batch 4 verified
+Defaults engine 2/2 and Commands engine 5/5, then preserved a UI compile failure:
+`gpui::Timer` was unavailable in the Commands panel. Commands owner corrected
+that UI-only call using the existing executor timer in `3e62cf03`.
+
+Batch 5 verified the exact clean runtime source
+`3e62cf0379209a2c9795aae372a8c491c7a1e234`:
+
+| Check | Result | Wall time |
+| --- | --- | --- |
+| Picker GPUI integration | 3 passed, 0 failed | 40s |
+| Full workspace format | Exit 0 | 5s |
+| Focused engine/UI check | Exit 0 | 41s |
+| Focused engine/UI Clippy | Exit 0 | 53s |
+
+The passing combined engine 2+5 cases at `cca464e8` were not needlessly rerun
+for the UI-only timer correction. The Commands module still has a nonblocking
+unused `AnyElement` import warning; it was relayed to its owner. No new defaults
+module warning appeared.
+
+Both combined batches used the coordinator-approved temporary
+`LUNA_BUILD_RESERVE_GIB=10`, `CARGO_INCREMENTAL=0`, `scripts/cargo.sh`, and
+`--locked`. This is a scoped warm-check reservation, not a policy change;
+the 170 GiB ceiling and 10 GiB growth guard remained enforced. Batch 5 grew
+aggregate usage from 153.688 to 154.056 GiB, with 389 GiB disk space available.
+No targets, apps, data or evidence were deleted. Cargo was released afterward.
+
+Evidence is retained under `target/qa/project-defaults/batch-4-combined` and
+`batch-5-combined`, including exact source, command lines, exits, logs and
+before/after budget JSON. Native/desktop QA remains separately gated.
+
+### Newly identified source concern, not covered by the passing cases
+
+Commands owner found that a retained terminal command panel can accept an old
+engine's response after same-chat engine replacement. Defaults source review
+also found its save callback matches only `space.id`, and model requests do not
+explicitly fence engine generation. An old result could therefore affect a
+new backend with the same project identity. These are source-derived findings,
+not runtime reproductions. The coordinator and Commands owner were notified;
+production source remains `3e62cf03` while scoped failure-first correction is
+coordinated. The ten focused passing cases do not establish this lifecycle path.
