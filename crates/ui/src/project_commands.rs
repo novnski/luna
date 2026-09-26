@@ -360,6 +360,11 @@ impl ProjectCommandPanel {
         cx: &mut Context<Self>,
     ) {
         self.sync_scope(cx);
+        // A still-painted enabled button is not admission authority while a
+        // request is already in flight. Preserve that request's UI waiter.
+        if self.busy {
+            return;
+        }
         let scope = self.scope.clone();
         let Some(chat) = scope.chat.clone() else {
             return;
@@ -443,6 +448,7 @@ impl Render for ProjectCommandPanel {
             }
             for action in snapshot.actions {
                 let action_id = action.id.clone();
+                let origin = self.scope.clone();
                 let mut row = div().flex().items_center().gap(px(8.0)).child(
                     widgets::ghost_action(&theme)
                         .id(SharedString::from(format!("run-command-{}", action.id)))
@@ -452,6 +458,9 @@ impl Render for ProjectCommandPanel {
                         .child(SharedString::from(action.name))
                         .when(!self.busy, |el| {
                             el.on_click(cx.listener(move |view, _, _, cx| {
+                                if !origin.is_current(view.state.read(cx)) {
+                                    return;
+                                }
                                 view.execute(
                                     methods::RUN_PROJECT_COMMAND,
                                     action_id.clone(),
@@ -476,6 +485,7 @@ impl Render for ProjectCommandPanel {
             }
             for run in snapshot.runs.into_iter().take(12) {
                 let id = run.id.clone();
+                let origin = self.scope.clone();
                 let active = run.status.is_active();
                 let mut row = div().flex().flex_col().gap(px(2.0)).child(
                     div()
@@ -504,6 +514,9 @@ impl Render for ProjectCommandPanel {
                                 .child(if active { "Stop" } else { "Retry" })
                                 .when(!self.busy, |el| {
                                     el.on_click(cx.listener(move |view, _, _, cx| {
+                                        if !origin.is_current(view.state.read(cx)) {
+                                            return;
+                                        }
                                         view.execute(
                                             if active {
                                                 methods::STOP_PROJECT_COMMAND
