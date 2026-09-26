@@ -774,3 +774,101 @@ async fn pending_setup_survives_both_checkout_publication_boundaries() {
     }
     restarted.shutdown().await;
 }
+
+/// Regression specification from source review, authored before the CAS guard.
+/// Baseline deliberately uses today's replacement-list RPC with no new fields.
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_project_command_editor_cannot_clobber_another_client() {
+    use luna_rpc::methods;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let core = EngineCore::assemble(
+        &root.join("data"),
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+    )
+    .unwrap();
+    core.workspace
+        .create_space("p", &core.device_id, root.to_str().unwrap(), None, false)
+        .unwrap();
+    let initial = vec![
+        action("build", "printf original-build", false),
+        action("test", "printf original-test", false),
+    ];
+    core.project_commands
+        .configure("p", initial.clone())
+        .unwrap();
+    let client_one = luna_rpc::memory_client(core.rpc_service());
+    let client_two = luna_rpc::memory_client(core.rpc_service());
+    let first_read: Vec<ProjectAction> = client_one
+        .call_as(
+            methods::GET_PROJECT_COMMANDS,
+            serde_json::json!({"projectId":"p"}),
+        )
+        .await
+        .unwrap();
+    let stale_read: Vec<ProjectAction> = client_two
+        .call_as(
+            methods::GET_PROJECT_COMMANDS,
+            serde_json::json!({"projectId":"p"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_read, initial);
+    assert_eq!(stale_read, initial);
+    let mut first_edit = first_read.clone();
+    first_edit[0].command = "printf first-client-build".into();
+    first_edit.push(action("dev", "printf first-client-added-dev", false));
+    let first_saved: Vec<ProjectAction> = client_one
+        .call_as(
+            methods::SAVE_PROJECT_COMMANDS,
+            serde_json::json!({"projectId":"p","actions":first_edit}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_saved, first_edit);
+    let mut stale_edit = stale_read.clone();
+    stale_edit[1].command = "printf second-client-test".into();
+    let stale_result = client_two
+        .call(
+            methods::SAVE_PROJECT_COMMANDS,
+            serde_json::json!({"projectId":"p","actions":stale_edit}),
+        )
+        .await;
+    let actual: Vec<ProjectAction> = client_one
+        .call_as(
+            methods::GET_PROJECT_COMMANDS,
+            serde_json::json!({"projectId":"p"}),
+        )
+        .await
+        .unwrap();
+    if let Ok(dir) = std::env::var("LUNA_COMMAND_QA_ARTIFACTS") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            Path::new(&dir).join("two-client-config-baseline.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "initial": initial,
+                "firstClientSaved": first_saved,
+                "secondClientOriginal": stale_read,
+                "secondClientSubmitted": stale_edit,
+                "secondClientAccepted": stale_result.is_ok(),
+                "secondClientError": stale_result.as_ref().err().map(ToString::to_string),
+                "readback": actual,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    drop(client_one);
+    drop(client_two);
+    core.shutdown().await;
+    assert!(
+        stale_result.is_err(),
+        "stale replacement must conflict instead of silently discarding the first client's changes; readback={actual:?}"
+    );
+    assert_eq!(
+        actual, first_edit,
+        "conflict must preserve the latest saved command list"
+    );
+}

@@ -33,3 +33,10 @@ receiving the coordinator's build slot. Keep its artifact directory for review.
 8. Native QA: editor save/edit/remove, two task navigation, run/output/stop/retry,
    preview through Luna's existing browser flow, and setup error discoverability.
    Verify isolated app bundle, PID, port 59789 and strict signature.
+9. Added after source review, before any configuration-CAS implementation: two
+   independent RPC clients read the same command list. Client one changes Build
+   and adds Dev; stale client two changes Test from its old snapshot. The stale
+   replacement must conflict, preserving both client-one changes. Capture the
+   current-API baseline in `two-client-config-baseline.json` before adding the
+   proposed required `expectedActions` field and comparison under the configure
+   gate. No new request field is sent in the baseline reproduction.
