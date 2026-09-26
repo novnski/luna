@@ -122,8 +122,10 @@ branches are consolidated. The reserved identity remains `LUNA QA Workspace`,
 No real provider sessions were created by this workspace audit.
 
 The final source-verification target occupies 3.6 GiB (`target/debug`); no release
-target or extra build directories were created. Disposable test roots were
-removed by their fixtures. Retain the target and QA artifacts for native QA and
+target or extra build directories were created. Normally terminated fixtures
+remove their disposable roots. The aborting baseline may leave anonymous OS
+temporary roots; no broad temp cleanup was attempted without ownership proof.
+Retain the target and QA artifacts for native QA and
 coordinator review. No push or merge to main was performed by this worker.
 
 This bounded audit is macOS filesystem/subprocess/RPC coverage. Windows/Linux
