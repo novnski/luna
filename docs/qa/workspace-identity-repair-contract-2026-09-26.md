@@ -104,6 +104,19 @@ unresolved until separately verified; no backup-internal patch is proposed here.
 
 ## Proposed API
 
+Implementation phase is now authorized on the clean composition with committed
+main `3a173e84`; builds, native/provider activity remain gated. The agreed private
+interfaces use `WorkspaceRepairFence { expected_task_revision,
+expected_workspace_repair_revision }`, store `workspace_repair_revision(task_id)`,
+`WorkspaceHost::commit_workspace_identity_repair(command_id, task_id, &fence,
+binding_id, binding_generation, identity_snapshot)` and
+`DocHost::prepare_workspace_identity_repair(task_id, repair_command_id)`. Preview
+passes None for the latter; apply exempts only its exact admitted pending repair
+command, verified against task and intent. The dedicated store commit requires
+that pending receipt; terminal duplicates return through existing command admission
+before any identity projection is prepared. The lifecycle owner owns these APIs
+and the single schema-15 migration; Workspace owns identity/RPC repair glue.
+
 `PreviewWorkspaceIdentityRepair { taskId, providerProof: "localOnly" }` is read-only
 and returns one task's result:
 
@@ -201,6 +214,15 @@ baseline, they would fail at the absent API, which must be classified separately
 from the three original aliasing failures. They have not been compiled or run.
 The original three-case target's authentic baseline remains separate and contains
 no proposed migration API tests.
+
+After interface review, these contracts are now wired only into the separate
+`workspace_identity_repair` target. The original three-case target remains frozen.
+This new target also contains failure-first canonical-root/source-scope, relative
+refusal, owner-home and UUID first-worktree materialization cases; an additional
+SQLite-trigger case checks failure after revision preparation cannot publish an
+identity snapshot. Test source was written before runtime edits and is not yet
+compiled/run. Child tests use disposable HOME/worktree roots and an in-process
+Mock harness only; they never discover an installed provider or credentials.
 
 After API review, explicitly wire the contract module in a separate source change
 before any runtime implementation. Its prospective filtered command is

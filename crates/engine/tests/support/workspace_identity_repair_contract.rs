@@ -1,6 +1,6 @@
 //! Proposed migration RPC contract, written before runtime implementation.
-//! Deliberately not linked into a Cargo test target until API review is complete.
-//! Shared helpers are from workspace_identity_roots.rs when later wired explicitly.
+//! Linked only by workspace_identity_repair.rs after API review; the original
+//! three-case workspace_identity_roots target stays frozen and independent.
 //! The baseline has no PreviewWorkspaceIdentityRepair/repairWorkspaceIdentity API:
 //! classify those missing-method failures separately from the root-alias repros.
 //! Fixtures seed only disposable offline state; no provider is called.
@@ -96,6 +96,9 @@ async fn seed_legacy(seed: Seed) -> Legacy {
             }
         }
     }
+    if let Some(first) = log["events"].as_array_mut().unwrap().first_mut() {
+        first["originalPayloadMarker"] = json!({"preserveUnknownV1Data":true});
+    }
     let prefix = log["events"].as_array().unwrap().clone();
     store
         .save_snapshot(LOG, &serde_json::to_vec(&log).unwrap())
@@ -126,6 +129,41 @@ async fn snapshot(client: &RpcClient, task: &str) -> TaskCommandSnapshot {
         .await
         .unwrap();
     read.snapshot
+}
+
+async fn open_legacy(legacy: &Legacy) -> EngineCore {
+    let core = legacy.fixture.open();
+    // Startup performs only a local Unsupported fold for Mock bindings. Wait
+    // for that deterministic fold before asserting preview has no side effects.
+    for task in [&legacy.task_a, &legacy.task_b] {
+        if core
+            .task_identity
+            .view(task)
+            .unwrap()
+            .current_binding
+            .is_some()
+        {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let binding = core
+                        .task_identity
+                        .view(task)
+                        .unwrap()
+                        .current_binding
+                        .unwrap();
+                    if binding.reconciliation.reason
+                        == "provider has no verified native-session metadata contract"
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("local mock reconciliation settled without provider calls");
+        }
+    }
+    core
 }
 
 async fn preview(client: &RpcClient, task: &str) -> Value {
@@ -190,7 +228,7 @@ fn log(core: &EngineCore) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repair_contract_revision_fence_duplicate_and_restart() {
     let legacy = seed_legacy(Seed::Unbound).await;
-    let core = legacy.fixture.open();
+    let core = open_legacy(&legacy).await;
     let client = luna_rpc::memory_client(core.rpc_service());
     let before = snapshot(&client, &legacy.task_a).await;
     let stale_rename = envelope(
@@ -239,7 +277,7 @@ async fn repair_contract_revision_fence_duplicate_and_restart() {
     );
     close(core, client).await;
 
-    let core = legacy.fixture.open();
+    let core = open_legacy(&legacy).await;
     let client = luna_rpc::memory_client(core.rpc_service());
     let reopened = identity(&client, &legacy.task_a).await;
     let reopened_snapshot = snapshot(&client, &legacy.task_a).await;
@@ -271,7 +309,7 @@ async fn repair_contract_revision_fence_duplicate_and_restart() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repair_contract_stale_preview_cannot_cross_a_real_root_edit() {
     let legacy = seed_legacy(Seed::Unbound).await;
-    let core = legacy.fixture.open();
+    let core = open_legacy(&legacy).await;
     let client = luna_rpc::memory_client(core.rpc_service());
     let before = snapshot(&client, &legacy.task_a).await;
     let plan = preview(&client, &legacy.task_a).await;
@@ -307,7 +345,7 @@ async fn repair_contract_stale_preview_cannot_cross_a_real_root_edit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repair_contract_unverifiable_bound_sibling_does_not_veto_unbound_repair() {
     let legacy = seed_legacy(Seed::BoundSibling).await;
-    let core = legacy.fixture.open();
+    let core = open_legacy(&legacy).await;
     let client = luna_rpc::memory_client(core.rpc_service());
     let sibling = identity(&client, &legacy.task_b).await;
     let sibling_snapshot = snapshot(&client, &legacy.task_b).await;
@@ -338,7 +376,7 @@ async fn repair_contract_unverifiable_bound_sibling_does_not_veto_unbound_repair
 async fn repair_contract_foreign_store_native_id_and_moved_root_remain_fenced() {
     for seed in [Seed::ForeignStore, Seed::NativeIdMismatch, Seed::MovedRoot] {
         let legacy = seed_legacy(seed).await;
-        let core = legacy.fixture.open();
+        let core = open_legacy(&legacy).await;
         let client = luna_rpc::memory_client(core.rpc_service());
         let before_log = log(&core);
         let before = snapshot(&client, &legacy.task_a).await;
@@ -366,7 +404,7 @@ async fn repair_contract_foreign_store_native_id_and_moved_root_remain_fenced() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repair_contract_pending_queued_work_is_preserved_and_blocks_correction() {
     let legacy = seed_legacy(Seed::Unbound).await;
-    let core = legacy.fixture.open();
+    let core = open_legacy(&legacy).await;
     let client = luna_rpc::memory_client(core.rpc_service());
     core.doc_host
         .fence_queue_for_stop(&legacy.task_a)
@@ -418,4 +456,59 @@ async fn repair_contract_pending_queued_work_is_preserved_and_blocks_correction(
     assert_eq!(after, before);
     assert_eq!(log(&core), before_log);
     close(core, client).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repair_contract_snapshot_failure_cannot_publish_mapping_or_revision() {
+    let legacy = seed_legacy(Seed::Unbound).await;
+    let core = open_legacy(&legacy).await;
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let before = snapshot(&client, &legacy.task_a).await;
+    let before_identity = identity(&client, &legacy.task_a).await;
+    let before_log = log(&core);
+    let plan = preview(&client, &legacy.task_a).await;
+    let command = repair_command(&legacy.task_a, &before, &plan);
+    let profile = EngineProfile::local(&legacy.fixture.data).unwrap();
+    let sql = rusqlite::Connection::open(profile.store_root().join("docs.sqlite3")).unwrap();
+    sql.execute_batch(
+        "CREATE TRIGGER qa_repair_abort BEFORE UPDATE ON snapshots
+        WHEN NEW.doc_id='luna-task-identity-events-v1'
+        BEGIN SELECT RAISE(ABORT,'fixture repair snapshot failure'); END;",
+    )
+    .unwrap();
+    let outcome = client.call(methods::EXECUTE_TASK_COMMAND, command).await;
+    sql.execute_batch("DROP TRIGGER qa_repair_abort;").unwrap();
+    drop(sql);
+    let after = snapshot(&client, &legacy.task_a).await;
+    let after_identity = identity(&client, &legacy.task_a).await;
+    let after_log = log(&core);
+    evidence(
+        "repair-contract-atomic-failure",
+        json!({
+            "response":outcome.as_ref().ok(),"error":outcome.as_ref().err().map(ToString::to_string),
+            "before":before,"after":after,"identityBefore":before_identity,"identityAfter":after_identity,
+            "logBefore":before_log,"logAfter":after_log,
+        }),
+    );
+    assert!(
+        !outcome
+            .as_ref()
+            .ok()
+            .is_some_and(|value| value["status"] == "applied")
+    );
+    assert_eq!(after.task_revision, before.task_revision);
+    assert_eq!(after_identity, before_identity);
+    assert_eq!(after_log, before_log);
+    close(core, client).await;
+    let core = open_legacy(&legacy).await;
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let reopened = identity(&client, &legacy.task_a).await;
+    let reopened_snapshot = snapshot(&client, &legacy.task_a).await;
+    evidence(
+        "repair-contract-atomic-failure-reopen",
+        json!({"identity":reopened,"snapshot":reopened_snapshot}),
+    );
+    close(core, client).await;
+    assert_eq!(reopened, before_identity);
+    assert_eq!(reopened_snapshot.task_revision, before.task_revision);
 }
