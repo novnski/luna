@@ -52,3 +52,36 @@ uses VisualTestContext::update (Window/App only) for explicit draw and mouse
 dispatch. Real rendered buttons, old-frame input timing, render/bounds provenance
 and every behavior assertion remain unchanged. No admission fix is included;
 the corrected fixture still requires an authorized baseline run.
+
+## Second baseline: eager test-frame painting invalidated the premise
+
+Combined `0ef61afd` produced five traces: the fresh control passed; three stale
+cases found their old bounds removed, and the busy case saw render count2→4.
+All requests prohibited by these cases remained zero, but their frame premises
+failed, so this is still zero authenticated admission defects. Evidence remains
+in Defaults' `button-admission-baseline-2/` directory.
+
+The source cause is GPUI app.rs flush_effects: under test/test-support/bench only,
+its end-of-update loop synchronously draws dirty windows. The fixture used one
+update for attach/busy and another for reading bounds/input, so that test-only
+paint replaced the old callbacks first. Production mouse dispatch itself does
+not perform the keyboard path's dirty redraw.
+
+The corrected fixture keeps the real attach (or real busy-start operation) and
+real Window mouse dispatch inside one raw Window/App update. It captures scope,
+live busy and render counts inside that region, before the eager test-support
+paint at update completion; post-update render count is recorded separately.
+Initial painted bounds and the same no-intervening-render/behavior assertions
+remain. No GPUI source, production guard, helper callback or runtime behavior is
+bypassed/modified; no direct call substitutes for the tested mouse callback.
+Baseline verification remains pending a separate grant.
+
+The coordinator reviewed and accepted the single-boundary direction before its
+commit. Delivery JSON is captured inside the closure: live AppState generation/
+device/chat and the Commands child's cached scope are distinct fields; an
+observer need not already have processed replacement. Painted bounds come from
+the real button's debug-bound query before entry, and unchanged render counters
+are asserted through actual MouseDown/Up delivery, establishing those bounds are
+still the delivered frame. Scope/busy/render observations before and after input
+are captured inside the same closure. Post-update eager drawing is recorded in
+a separate afterUpdateRender field and is not a stale-input premise.

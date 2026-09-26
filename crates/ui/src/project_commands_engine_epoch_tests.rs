@@ -108,7 +108,7 @@ impl Scene {
             _subscription: subscription,
         }
     }
-    fn commands(&self, cx: &TestAppContext) -> Entity<ProjectCommandPanel> {
+    fn commands<C: gpui::AppContext>(&self, cx: &C) -> Entity<ProjectCommandPanel> {
         self.parent
             .read_with(cx, |parent, _| parent.command_panel_for_epoch_fixture())
     }
@@ -135,10 +135,10 @@ impl Scene {
             .update(cx, |state, _| state.chats[0].device_id = device.into());
         fixture::attach(cx, &self.state, fixture::handle(runtime, rpc));
     }
-    fn view(&self, cx: &TestAppContext) -> Value {
+    fn view<C: gpui::AppContext>(&self, cx: &C) -> Value {
         let scope=self.state.read_with(cx,|state,_|json!({"generation":state.engine_generation(),"device":state.engine().map(|e|e.engine_info().device_id.clone()),"chat":state.selected_chat}));
         let commands = self.commands(cx);
-        commands.read_with(cx,|view,_|json!({"scope":scope,"entity":format!("{:?}",commands.entity_id()),"busy":view.busy,"snapshot":view.snapshot,"error":view.error,"outputs":self.outputs.lock().unwrap().clone()}))
+        commands.read_with(cx,|view,_|json!({"scope":scope,"cachedScope":{"generation":view.scope.engine_generation,"device":view.scope.engine_device,"chat":view.scope.chat},"entity":format!("{:?}",commands.entity_id()),"busy":view.busy,"snapshot":view.snapshot,"error":view.error,"outputs":self.outputs.lock().unwrap().clone()}))
     }
 }
 
@@ -405,6 +405,7 @@ fn button_window(
     gpui::WindowHandle<ButtonSurface>,
     gpui::Point<gpui::Pixels>,
     Arc<AtomicUsize>,
+    gpui::Bounds<gpui::Pixels>,
 ) {
     cx.update(|cx| {
         gpui_base::init(cx);
@@ -427,37 +428,28 @@ fn button_window(
     let bounds = visual
         .debug_bounds(selector)
         .expect("the actual enabled command button was painted");
-    (window, bounds.center(), renders)
+    (window, bounds.center(), renders, bounds)
 }
-fn mouse_click_old_frame(
-    cx: &mut TestAppContext,
-    window: gpui::WindowHandle<ButtonSurface>,
-    point: gpui::Point<gpui::Pixels>,
-) {
-    // Deliberately no scheduler/frame drain between replacement and input: this
-    // is the real mouse path's last-rendered-frame admission boundary.
-    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-    visual.update(|window, cx| {
-        window.dispatch_event(
-            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-                position: point,
-                button: gpui::MouseButton::Left,
-                modifiers: Default::default(),
-                click_count: 1,
-                first_mouse: false,
-            }),
-            cx,
-        );
-        window.dispatch_event(
-            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                position: point,
-                button: gpui::MouseButton::Left,
-                modifiers: Default::default(),
-                click_count: 1,
-            }),
-            cx,
-        );
-    });
+fn mouse_click_rendered(window: &mut Window, cx: &mut gpui::App, point: gpui::Point<gpui::Pixels>) {
+    window.dispatch_event(
+        gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+            position: point,
+            button: gpui::MouseButton::Left,
+            modifiers: Default::default(),
+            click_count: 1,
+            first_mouse: false,
+        }),
+        cx,
+    );
+    window.dispatch_event(
+        gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+            position: point,
+            button: gpui::MouseButton::Left,
+            modifiers: Default::default(),
+            click_count: 1,
+        }),
+        cx,
+    );
 }
 fn stale_button_admission(cx: &mut TestAppContext, method: &'static str) {
     let runtime = runtime(cx);
@@ -483,24 +475,46 @@ fn stale_button_admission(cx: &mut TestAppContext, method: &'static str) {
     fixture::pump_until(cx, &runtime, |cx| {
         scene.view(cx)["snapshot"]["cwd"] == "/A/checkout"
     });
-    let (window, point, renders) = button_window(cx, &scene, selector);
+    let (window, point, renders, painted_bounds) = button_window(cx, &scene, selector);
     let painted_render = renders.load(Ordering::SeqCst);
     let painted = scene.view(cx);
-    scene.replace(cx, &runtime, b.clone(), "same-device");
-    let before_click = scene.view(cx);
+    let replacement = fixture::handle(&runtime, b.clone());
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
     let old_bounds_retained = visual.debug_bounds(selector).is_some();
-    let before_input_render = renders.load(Ordering::SeqCst);
-    mouse_click_old_frame(cx, window, point);
-    let after_input_render = renders.load(Ordering::SeqCst);
+    // Test-support eagerly paints dirty windows when an outer App update
+    // finishes. Keep the actual connection transition and actual mouse input
+    // within one raw Window/App update, measuring before that test-only paint.
+    let (before_click, before_input_render, after_input_render, delivery) =
+        visual.update(|window, app| {
+            scene.state.update(app, |state, cx| {
+                state.chats[0].device_id = "same-device".into();
+                state.attach_engine_for_epoch_fixture(replacement, cx);
+            });
+            let before_click = scene.view(app);
+            let before_input_render = renders.load(Ordering::SeqCst);
+            mouse_click_rendered(window, app, point);
+            let after_input_render = renders.load(Ordering::SeqCst);
+            let delivery = json!({
+                "paintedBounds":format!("{painted_bounds:?}"),"inputPoint":format!("{point:?}"),
+                "liveBefore":before_click,"liveAfter":scene.view(app),
+                "renderBefore":before_input_render,"renderAfter":after_input_render,
+            });
+            (
+                before_click,
+                before_input_render,
+                after_input_render,
+                delivery,
+            )
+        });
+    let after_update_render = renders.load(Ordering::SeqCst);
     fixture::drain(cx, &runtime);
     let dispatched = b.calls(method);
     fixture::write_trace(
         &format!("commands-button-stale-{method}"),
         &json!({
-            "painted":painted,"beforeClick":before_click,"afterClick":scene.view(cx),
+            "painted":painted,"beforeClick":before_click,"afterClick":scene.view(cx),"delivery":delivery,
             "oldBoundsRetained":old_bounds_retained,"dispatchedToB":dispatched,"oldRpc":a.trace(),"newRpc":b.trace(),
-            "paintedRender":painted_render,"beforeInputRender":before_input_render,"afterInputRender":after_input_render,
+            "paintedRender":painted_render,"beforeInputRender":before_input_render,"afterInputRender":after_input_render,"afterUpdateRender":after_update_render,
             "mousePath":"Window::dispatch_event(MouseDown/MouseUp)","buttonCenter":format!("{point:?}"),
         }),
     );
@@ -552,19 +566,26 @@ fn commands_button_admission_live_busy_rejects_old_enabled_callback(cx: &mut Tes
     fixture::pump_until(cx, &runtime, |cx| {
         scene.view(cx)["snapshot"]["cwd"] == "/A/checkout"
     });
-    let (window, point, renders) = button_window(cx, &scene, "qa-command-run-build");
+    let (window, point, renders, painted_bounds) =
+        button_window(cx, &scene, "qa-command-run-build");
     let painted_render = renders.load(Ordering::SeqCst);
-    scene.commands(cx).update(cx, |view, cx| {
-        view.execute(
-            methods::RUN_PROJECT_COMMAND,
-            "already-starting".into(),
-            String::new(),
-            cx,
-        )
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let (before_click, input_render, delivery) = visual.update(|window, app| {
+        scene.commands(app).update(app, |view, cx| {
+            view.execute(
+                methods::RUN_PROJECT_COMMAND,
+                "already-starting".into(),
+                String::new(),
+                cx,
+            )
+        });
+        let before_click = scene.view(app);
+        mouse_click_rendered(window, app, point);
+        let input_render = renders.load(Ordering::SeqCst);
+        let delivery = json!({"paintedBounds":format!("{painted_bounds:?}"),"inputPoint":format!("{point:?}"),"liveBefore":before_click,"liveAfter":scene.view(app),"renderAtInput":input_render});
+        (before_click, input_render, delivery)
     });
-    let before_click = scene.view(cx);
-    mouse_click_old_frame(cx, window, point);
-    let input_render = renders.load(Ordering::SeqCst);
+    let after_update_render = renders.load(Ordering::SeqCst);
     fixture::drain(cx, &runtime);
     let trace = a.trace();
     let build_requests = trace
@@ -577,7 +598,7 @@ fn commands_button_admission_live_busy_rejects_old_enabled_callback(cx: &mut Tes
         .count();
     fixture::write_trace(
         "commands-button-live-busy",
-        &json!({"beforeClick":before_click,"afterClick":scene.view(cx),"buildRequests":build_requests,"rpc":trace,"paintedRender":painted_render,"inputRender":input_render,"mousePath":"Window::dispatch_event(MouseDown/MouseUp)"}),
+        &json!({"beforeClick":before_click,"afterClick":scene.view(cx),"buildRequests":build_requests,"delivery":delivery,"rpc":trace,"paintedRender":painted_render,"inputRender":input_render,"afterUpdateRender":after_update_render,"mousePath":"Window::dispatch_event(MouseDown/MouseUp)"}),
     );
     a.release(methods::RUN_PROJECT_COMMAND);
     assert_eq!(
@@ -606,15 +627,21 @@ fn commands_button_admission_fresh_same_engine_control(cx: &mut TestAppContext) 
     fixture::pump_until(cx, &runtime, |cx| {
         scene.view(cx)["snapshot"]["cwd"] == "/A/checkout"
     });
-    let (window, point, renders) = button_window(cx, &scene, "qa-command-run-build");
+    let (window, point, renders, painted_bounds) =
+        button_window(cx, &scene, "qa-command-run-build");
     let painted_render = renders.load(Ordering::SeqCst);
     let before_click = scene.view(cx);
-    mouse_click_old_frame(cx, window, point);
-    let input_render = renders.load(Ordering::SeqCst);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let (input_render, delivery) = visual.update(|window, app| {
+        mouse_click_rendered(window, app, point);
+        let input_render = renders.load(Ordering::SeqCst);
+        (input_render, json!({"paintedBounds":format!("{painted_bounds:?}"),"inputPoint":format!("{point:?}"),"liveAfter":scene.view(app),"renderAtInput":input_render}))
+    });
+    let after_update_render = renders.load(Ordering::SeqCst);
     fixture::pump_until(cx, &runtime, |_| a.calls(methods::RUN_PROJECT_COMMAND) == 1);
     fixture::write_trace(
         "commands-button-fresh-control",
-        &json!({"beforeClick":before_click,"afterClick":scene.view(cx),"rpc":a.trace(),"paintedRender":painted_render,"inputRender":input_render,"mousePath":"Window::dispatch_event(MouseDown/MouseUp)"}),
+        &json!({"beforeClick":before_click,"afterClick":scene.view(cx),"rpc":a.trace(),"delivery":delivery,"paintedRender":painted_render,"inputRender":input_render,"afterUpdateRender":after_update_render,"mousePath":"Window::dispatch_event(MouseDown/MouseUp)"}),
     );
     a.release(methods::RUN_PROJECT_COMMAND);
     assert_eq!(before_click["busy"], false);
