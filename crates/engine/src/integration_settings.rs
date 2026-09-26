@@ -888,7 +888,7 @@ fn resolved_skill(
 
 fn supporting_files(skill_dir: &Path) -> Vec<String> {
     fn walk(dir: &Path, prefix: &str, output: &mut Vec<String>, depth: usize) {
-        if depth > 4 || output.len() >= MAX_SKILL_FILES {
+        if depth > MAX_SKILL_DEPTH || output.len() >= MAX_SKILL_FILES {
             return;
         }
         let Ok(entries) = std::fs::read_dir(dir) else {
