@@ -24,9 +24,9 @@ use crate::motion::{self, AnimationExt as _, TAB_SLIDE};
 use crate::terminal::panel::{drop_index, slide_offset};
 use crate::theme::Theme;
 
-/// Queue rows are replicated CRDT state, so ordinary mutations deliberately
-/// land on the local engine. Delivery and cancellation must execute on the
-/// chat's owning device because they race over the same row.
+/// Mutations of existing queue rows must reach the owning device. A stale
+/// replica can still show Held after the owner has claimed delivery, so its
+/// local snapshot cannot authorize an edit or reorder safely.
 fn queue_action_needs_host(method: &str) -> bool {
     matches!(
         method,
@@ -36,6 +36,8 @@ fn queue_action_needs_host(method: &str) -> bool {
             | methods::BEGIN_QUEUED_MESSAGE_EDIT
             | methods::RENEW_QUEUED_MESSAGE_EDIT
             | methods::FINISH_QUEUED_MESSAGE_EDIT
+            | methods::UPDATE_QUEUED_MESSAGE
+            | methods::MOVE_QUEUED_MESSAGE
     )
 }
 
@@ -2459,8 +2461,120 @@ mod tests {
         assert!(queue_action_needs_host(methods::RENEW_QUEUED_MESSAGE_EDIT));
         assert!(queue_action_needs_host(methods::FINISH_QUEUED_MESSAGE_EDIT));
         assert!(!queue_action_needs_host(methods::QUEUE_MESSAGE));
-        assert!(!queue_action_needs_host(methods::UPDATE_QUEUED_MESSAGE));
-        assert!(!queue_action_needs_host(methods::MOVE_QUEUED_MESSAGE));
+        assert!(queue_action_needs_host(methods::UPDATE_QUEUED_MESSAGE));
+        assert!(queue_action_needs_host(methods::MOVE_QUEUED_MESSAGE));
+    }
+
+    /// Exercise the real composer -> memory RPC -> queue subscription flow.
+    /// Both false ACKs and owner/transport errors must undo optimistic moves
+    /// even when the underlying document emits no change notification.
+    #[gpui::test]
+    fn rejected_owner_queue_move_restores_the_watched_order(cx: &mut gpui::TestAppContext) {
+        struct RejectedMoveRpc {
+            items: Vec<QueuedMessage>,
+            deny: bool,
+            calls: Mutex<Vec<(String, serde_json::Value)>>,
+        }
+        #[async_trait]
+        impl RpcService for RejectedMoveRpc {
+            async fn handle(
+                &self,
+                method: &str,
+                params: serde_json::Value,
+            ) -> Result<RpcReply, RpcError> {
+                self.calls.lock().unwrap().push((method.into(), params));
+                match method {
+                    methods::MOVE_QUEUED_MESSAGE if self.deny => {
+                        Err(RpcError::Failed("synthetic owner denial".into()))
+                    }
+                    methods::MOVE_QUEUED_MESSAGE => {
+                        RpcReply::value(&serde_json::json!({"changed":false}))
+                    }
+                    methods::WATCH_QUEUE => {
+                        use futures::StreamExt as _;
+                        let frame = serde_json::json!({"items":self.items});
+                        Ok(RpcReply::Stream(Box::pin(
+                            futures::stream::once(async move { frame })
+                                .chain(futures::stream::pending()),
+                        )))
+                    }
+                    other => Err(RpcError::UnknownMethod(other.into())),
+                }
+            }
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        for deny in [false, true] {
+            let first = held_steer(QueueMessageStatus::Held);
+            let mut second = first.clone();
+            second.id = "second-row".into();
+            let original = vec![first, second];
+            let rpc = Arc::new(RejectedMoveRpc {
+                items: original.clone(),
+                deny,
+                calls: Mutex::default(),
+            });
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.set_test_engine(EngineHandle::from_authenticated_remote(
+                    luna_rpc::memory_client(rpc.clone()),
+                    luna_proto::EngineInfo {
+                        device_id: "local".into(),
+                        workspace_scope: luna_proto::WorkspaceScope::Local,
+                        capabilities: vec![luna_proto::capabilities::MESSAGE_QUEUE_V1.into()],
+                    },
+                    "memory://owner-rollback".into(),
+                ));
+                state.chats = vec![test_chat()];
+                state.devices = vec![Device {
+                    id: "host".into(),
+                    name: "Synthetic host".into(),
+                    platform: "macos".into(),
+                    last_seen_at: None,
+                    created_at: None,
+                    version: None,
+                    capabilities: vec![luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1.into()],
+                }];
+                state.selected_chat = Some("chat".into());
+                state.queue = original.clone();
+                state
+            });
+            let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+            composer.update(cx, |composer, cx| composer.move_queued(0, 1, cx));
+            assert_eq!(
+                state.read_with(cx, |state, _| state.queue[0].id.clone()),
+                "second-row",
+                "move starts optimistically"
+            );
+            for _ in 0..100 {
+                cx.run_until_parked();
+                runtime.block_on(tokio::task::yield_now());
+                if state.read_with(cx, |state, _| state.queue == original) {
+                    break;
+                }
+            }
+            assert_eq!(
+                state.read_with(cx, |state, _| state.queue.clone()),
+                original,
+                "rejected move must roll back; denial={deny}"
+            );
+            let calls = rpc.calls.lock().unwrap();
+            let moves = calls
+                .iter()
+                .filter(|(method, _)| method == methods::MOVE_QUEUED_MESSAGE)
+                .collect::<Vec<_>>();
+            assert_eq!(moves.len(), 1, "rejection must not replay the mutation");
+            assert_eq!(moves[0].1["targetDeviceId"], "host");
+            assert!(
+                calls
+                    .iter()
+                    .any(|(method, _)| method == methods::WATCH_QUEUE)
+            );
+        }
     }
 
     #[test]
