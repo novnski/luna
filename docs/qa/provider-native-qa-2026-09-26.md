@@ -72,6 +72,10 @@ after enqueue**. `drain_queue` also checks `turn_in_flight` before next-turn
 dispatch. This evidence supports a driver intent mismatch with a broad reason
 label; it does not demonstrate a held-row early-dispatch defect.
 
+**Coverage gap:** explicit native queued steering with a conformant
+`followUpBehavior=steer` row was not verified. The successful native steering
+evidence covers the direct active-turn command only.
+
 The eventual automatic dispatch's unknown acceptance is preserved as an
 unresolved observation for the task-audit owner. Its cause is not established
 here. Full command events, receipts, queue, transcript and native binding are
