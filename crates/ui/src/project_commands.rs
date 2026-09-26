@@ -7,6 +7,14 @@ use gpui::{
 use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandsSnapshot};
 use luna_rpc::methods;
 
+fn command_action(theme: &Theme, enabled: bool) -> gpui::Div {
+    widgets::ghost_action(theme)
+        .when(enabled, |el| {
+            el.hover(|style| widgets::ghost_hover(theme, style))
+        })
+        .when(!enabled, |el| el.opacity(0.5).cursor_default())
+}
+
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json)]
 pub struct OpenCommandPreview(pub String);
@@ -33,10 +41,13 @@ impl ProjectCommandSettings {
             space_id,
             actions: vec![],
             editing: None,
-            name: cx.new(|cx| ComposerInput::new("Build, Test, Start app…", cx).with_single_line()),
-            command: cx.new(|cx| ComposerInput::new("Shell command", cx)),
+            name: cx.new(|cx| {
+                ComposerInput::new("Command name (Build, Test, Start app…)", cx)
+                    .with_single_line()
+            }),
+            command: cx.new(|cx| ComposerInput::new("Command to run", cx)),
             preview: cx.new(|cx| {
-                ComposerInput::new("Optional http://localhost:3000", cx).with_single_line()
+                ComposerInput::new("Preview URL (optional)", cx).with_single_line()
             }),
             setup: false,
             wait: true,
@@ -127,8 +138,48 @@ impl ProjectCommandSettings {
 impl Render for ProjectCommandSettings {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
-        let mut card = widgets::section_card(&theme).mt(px(20.0)).p(px(16.0)).gap(px(8.0))
-            .child(widgets::row_title(&theme, "Project commands"))
+        let mut card = widgets::section_card(&theme)
+            .mt(px(20.0))
+            .p(px(16.0))
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .child(widgets::row_title(&theme, "Project commands"))
+                    .when(self.editing.is_none(), |row| {
+                        row.child(
+                            command_action(&theme, !self.busy)
+                                .id("add-project-command")
+                                .role(gpui::Role::Button)
+                                .aria_label("Add project command")
+                                .when(!self.busy, |el| el.tab_index(0))
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.surface_raised)
+                                .child(crate::icons::icon(crate::icons::PLUS).size(px(14.0)))
+                                .child(if self.busy { "Loading…" } else { "Add command" })
+                                .when(!self.busy, |el| {
+                                    el.on_click(cx.listener(|view, _, _, cx| view.edit(None, cx)))
+                                        .on_key_down(cx.listener(
+                                            |view, event: &gpui::KeyDownEvent, _, cx| {
+                                                if !event.is_held
+                                                    && matches!(
+                                                        event.keystroke.key.as_str(),
+                                                        "enter" | "space"
+                                                    )
+                                                {
+                                                    view.edit(None, cx);
+                                                    cx.stop_propagation();
+                                                }
+                                            },
+                                        ))
+                                }),
+                        )
+                    }),
+            )
             .child(widgets::page_subtitle(&theme, "Saved on this device. Run commands from Terminal → Commands in the selected task’s checkout. Foreground commands use /bin/sh; shell operators and environment variables are supported."));
         for action in self.actions.clone() {
             let edit = action.clone();
@@ -142,7 +193,7 @@ impl Render for ProjectCommandSettings {
                         div()
                             .flex_1()
                             .text_color(theme.text)
-                            .text_size(px(12.0))
+                            .text_size(crate::typography::ui_rems(12.0))
                             .child(SharedString::from(format!(
                                 "{}{}",
                                 action.name,
@@ -154,7 +205,7 @@ impl Render for ProjectCommandSettings {
                             ))),
                     )
                     .child(
-                        widgets::ghost_action(&theme)
+                        command_action(&theme, !self.busy)
                             .id(SharedString::from(format!("edit-command-{}", action.id)))
                             .child("Edit")
                             .when(!self.busy, |el| {
@@ -164,7 +215,7 @@ impl Render for ProjectCommandSettings {
                             }),
                     )
                     .child(
-                        widgets::ghost_action(&theme)
+                        command_action(&theme, !self.busy)
                             .id(SharedString::from(format!("remove-command-{}", action.id)))
                             .child("Remove")
                             .when(!self.busy, |el| {
@@ -185,31 +236,18 @@ impl Render for ProjectCommandSettings {
             card = card.child(widgets::field_label(&theme,"Name")).child(popover::dialog_field(self.name.clone().into_any_element()))
                 .child(widgets::field_label(&theme,"Command")).child(div().min_h(px(56.0)).child(popover::dialog_field(self.command.clone().into_any_element())))
                 .child(widgets::field_label(&theme,"Preview URL")).child(popover::dialog_field(self.preview.clone().into_any_element()))
-                .child(widgets::ghost_action(&theme).id("command-setup").child(if self.setup { "✓ Run on new worktree creation" } else { "Run on new worktree creation" }).on_click(cx.listener(|view,_,_,cx| { view.setup = !view.setup; cx.notify(); })))
-                .child(widgets::ghost_action(&theme).id("command-wait").child(if self.wait { "✓ Wait for setup before dependent work" } else { "Allow work while setup runs" }).on_click(cx.listener(|view,_,_,cx| { view.wait = !view.wait; cx.notify(); })))
+                .child(command_action(&theme, true).id("command-setup").child(if self.setup { "✓ Run on new worktree creation" } else { "Run on new worktree creation" }).on_click(cx.listener(|view,_,_,cx| { view.setup = !view.setup; cx.notify(); })))
+                .child(command_action(&theme, true).id("command-wait").child(if self.wait { "✓ Wait for setup before dependent work" } else { "Allow work while setup runs" }).on_click(cx.listener(|view,_,_,cx| { view.wait = !view.wait; cx.notify(); })))
                 .child(widgets::page_subtitle(&theme,"Setup runs only for newly created worktrees. Interrupted or failed setup stays visible and requires an explicit retry. Editing this command does not rerun existing setup."))
                 .child(div().flex().gap(px(8.0))
-                    .child(widgets::ghost_action(&theme).id("save-command").child(if self.busy { "Saving…" } else { "Save command" }).when(!self.busy, |el| el.on_click(cx.listener(|view,_,_,cx| view.save(cx)))))
-                    .child(widgets::ghost_action(&theme).id("cancel-command-edit").child("Cancel").on_click(cx.listener(|view,_,_,cx| { view.editing = None; cx.notify(); }))));
-        } else {
-            card = card.child(
-                widgets::ghost_action(&theme)
-                    .id("add-project-command")
-                    .child(if self.busy {
-                        "Loading…"
-                    } else {
-                        "Add command"
-                    })
-                    .when(!self.busy, |el| {
-                        el.on_click(cx.listener(|view, _, _, cx| view.edit(None, cx)))
-                    }),
-            );
+                    .child(command_action(&theme, !self.busy).id("save-command").child(if self.busy { "Saving…" } else { "Save command" }).when(!self.busy, |el| el.on_click(cx.listener(|view,_,_,cx| view.save(cx)))))
+                    .child(command_action(&theme, true).id("cancel-command-edit").child("Cancel").on_click(cx.listener(|view,_,_,cx| { view.editing = None; cx.notify(); }))));
         }
         if let Some(error) = &self.error {
             card = card
                 .child(widgets::error_strip(&theme, error.clone()))
                 .child(
-                    widgets::ghost_action(&theme)
+                    command_action(&theme, !self.busy)
                         .id("reload-project-commands")
                         .child("Reload saved commands (keep draft)")
                         .when(!self.busy, |el| {
@@ -417,7 +455,7 @@ impl Render for ProjectCommandPanel {
             .border_b_1()
             .border_color(theme.border)
             .child(
-                widgets::ghost_action(&theme)
+                command_action(&theme, true)
                     .id("toggle-project-commands")
                     .child(if self.expanded {
                         "▾ Commands"
@@ -445,8 +483,8 @@ impl Render for ProjectCommandPanel {
         if let Some(snapshot) = self.snapshot.clone() {
             rows = rows.child(
                 div()
-                    .text_size(px(11.0))
-                    .text_color(theme.text_faint)
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
                     .child(SharedString::from(snapshot.cwd)),
             );
             if snapshot.actions.is_empty() {
@@ -459,7 +497,7 @@ impl Render for ProjectCommandPanel {
                 let action_id = action.id.clone();
                 let origin = self.scope.clone();
                 let mut row = div().flex().items_center().gap(px(8.0)).child(
-                    widgets::ghost_action(&theme)
+                    command_action(&theme, !self.busy)
                         .id(SharedString::from(format!("run-command-{}", action.id)))
                         .when(cfg!(test), |el| {
                             el.debug_selector(|| format!("qa-command-run-{}", action.id))
@@ -481,7 +519,7 @@ impl Render for ProjectCommandPanel {
                 );
                 if let Some(url) = action.preview_url {
                     row = row.child(
-                        widgets::ghost_action(&theme)
+                        command_action(&theme, true)
                             .id(SharedString::from(format!("preview-command-{}", action.id)))
                             .child("Preview")
                             .on_click(move |_, window, cx| {
@@ -504,7 +542,7 @@ impl Render for ProjectCommandPanel {
                         .child(
                             div()
                                 .flex_1()
-                                .text_size(px(12.0))
+                                .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.text_muted)
                                 .child(SharedString::from(format!(
                                     "{}{} · {} · attempt {}",
@@ -515,7 +553,7 @@ impl Render for ProjectCommandPanel {
                                 ))),
                         )
                         .child(
-                            widgets::ghost_action(&theme)
+                            command_action(&theme, !self.busy)
                                 .id(SharedString::from(format!("control-command-{}", run.id)))
                                 .when(cfg!(test), |el| {
                                     el.debug_selector(|| format!("qa-command-control-{}", run.id))
@@ -544,7 +582,7 @@ impl Render for ProjectCommandPanel {
                     let chat = run.chat_id;
                     let scope = self.scope.clone();
                     row = row.child(
-                        widgets::ghost_action(&theme)
+                        command_action(&theme, true)
                             .id(SharedString::from(format!("output-command-{}", run.id)))
                             .child(if self.scope.chat.as_deref() == Some(chat.as_str()) {
                                 "Output"

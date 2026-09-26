@@ -604,9 +604,7 @@ impl Render for SideChatPanel {
                 .child(
                     div()
                         .px(px(16.0))
-                        .py(px(10.0))
-                        .text_color(theme.text)
-                        .child(error),
+                        .child(crate::settings::widgets::error_strip(&theme, error)),
                 )
                 .child(self.button(
                     "side-refresh",

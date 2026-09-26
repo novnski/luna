@@ -133,7 +133,7 @@ impl Shell {
             content = content.child(
                 div()
                     .id(SharedString::from(format!("agent-{id}")))
-                    .h(px(78.0))
+                    .min_h(px(78.0))
                     .flex_none()
                     .px(px(12.0))
                     .py(px(8.0))

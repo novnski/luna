@@ -135,7 +135,7 @@ impl ProjectsPage {
             cx.notify();
         });
         let model_search =
-            cx.new(|cx| ComposerInput::with_context("Search models…", "PaletteSearch", cx));
+            cx.new(|cx| ComposerInput::with_context("Search project models…", "PaletteSearch", cx));
         let search = cx.subscribe(&model_search, |_, _, event, cx| {
             if matches!(event, ComposerInputEvent::Edited) {
                 cx.notify();
@@ -366,6 +366,23 @@ impl ProjectsPage {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let label: SharedString = label.into();
+        let field = match &action {
+            Action::Project(_) => "Project",
+            Action::Provider(_) => "Provider and model",
+            Action::Model(_) | Action::Models | Action::RetryModels => "Model",
+            Action::Permission(_) => "Permissions",
+            Action::Checkout(_) => "Checkout",
+            Action::Reset => "Project defaults",
+        };
+        let is_choice = matches!(
+            &action,
+            Action::Project(_)
+                | Action::Provider(_)
+                | Action::Model(_)
+                | Action::Permission(_)
+                | Action::Checkout(_)
+        );
         let border = theme.border;
         let accent = theme.accent;
         let origin = self.current_request_scope(cx);
@@ -383,19 +400,41 @@ impl ProjectsPage {
                 |el| el.debug_selector(|| "qa-defaults-new-worktree".into()),
             )
             .role(gpui::Role::Button)
+            .aria_label(format!("{field}: {label}"))
             .tab_index(0)
-            .aria_selected(selected)
+            .when(is_choice, |el| {
+                el.aria_toggled(if selected {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+            })
+            .rounded(px(7.0))
+            .h(px(30.0))
             .border_1()
             .border_color(if selected { accent } else { border })
+            .bg(if selected {
+                theme.accent_wash
+            } else {
+                theme.surface_raised
+            })
+            .text_size(crate::typography::ui_rems(11.5))
+            .font_weight(if selected {
+                gpui::FontWeight::MEDIUM
+            } else {
+                gpui::FontWeight::NORMAL
+            })
             .text_color(if selected {
-                theme.text
+                theme.accent
             } else {
                 theme.text_muted
             })
             .when(self.busy, |el| el.opacity(0.5))
-            .focus_visible(move |style| style.border_color(accent))
-            .hover(|style| widgets::ghost_hover(theme, style))
-            .child(label.into())
+            .focus_visible(move |style| style.border_2().border_color(accent))
+            .when(!selected && !self.busy, |el| {
+                el.hover(|style| style.bg(theme.surface_raised_hover))
+            })
+            .child(label)
             .on_click(cx.listener({
                 let action = action.clone();
                 let origin = origin.clone();
@@ -570,7 +609,9 @@ impl Render for ProjectsPage {
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
-                        .child(self.model_search.clone());
+                        .child(popover::dialog_field(
+                            self.model_search.clone().into_any_element(),
+                        ));
                     match &self.models {
                         popover::Loadable::Ready(list) => {
                             let query = self.model_search.read(cx).text().to_lowercase();
