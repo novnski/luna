@@ -128,3 +128,40 @@ new context reads can recover without canceling old writes. Reads/results fence
 engine+selected-checkout scope and request identity. Missing-preview/error cards
 must expose a usable Refresh control; a newly shown valid context can request
 its current snapshot without an automatic error-retry loop.
+
+## Coherent source-only repair after reviewed baselines
+
+The coordinator reviewed all13 raw traces at6c486a8f: nine retired-context state
+mutations, four passing controls, and one reply/no cancellation/replay for all
+eight accepted write cases. Four retired success callbacks also launched reads
+in the replacement context. The separate9089 cold baseline retained busy on two
+old reads while its manual B-refresh control passed.
+
+Additional same-context ownership cases were recorded before the runtime change
+in adda82ba. A test-only setup refinement in367e98ee gives the new Commit fixture
+a valid staged-file request tuple; its assertions are unchanged. No execution
+result is claimed for those five new cases yet.
+
+The runtime correction keeps `git_task` and `checkpoint_task` read-only and
+cancelable. Accepted Commit/stage/push and Restore calls instead retain their
+original engine/RPC in detached operations. A scoped write owner identifies
+which operation may finish current-view busy state and apply a receipt/error.
+Engine/device/selected checkout/branch changes retire only UI authority; old
+write completion cannot alter another view or initiate its follow-up reads.
+Cached restore-preview admission is also scoped to its producing view.
+
+Cancelable reads have scope and request-generation guards. Context retirement
+clears their busy state and marks the current Git snapshot for refresh when the
+pane is next shown. That render initiates one current read; an error does not
+start a polling/retry loop. The None(preview) card also exposes the existing-style
+Refresh control, avoiding an inaccessible idle/error state. An accepted write
+blocks same-context refresh/reopen from replacing its operation or clearing busy;
+normal write receipt/readback supplies current state at completion. Newer user
+commit text is cleared only when it still equals the originally submitted draft.
+Identical scope/snapshot refresh preserves PR provenance and authored PR text.
+
+The existing38 cases and generic helper remain byte-unchanged, as do backend
+journal, Git implementation, permissions and providers. No theme tokens/layout
+redesign were introduced; the recovery action reuses the Git card's button.
+Source formatting/diff checks pass. Cargo/native verification is still gated;
+these are source changes, not a claimed passing runtime result.

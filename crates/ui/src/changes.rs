@@ -1700,11 +1700,19 @@ pub struct Changes {
     git_open: bool,
     git_preview: Option<GitActionPreview>,
     git_target: Option<String>,
+    git_scope: Option<git_actions::GitUiScope>,
+    git_needs_refresh: bool,
+    git_read_generation: u64,
+    git_write_generation: u64,
+    git_write_owner: Option<git_actions::GitWriteOwner>,
+    checkpoint_generation: u64,
+    checkpoint_restore_scope: Option<git_actions::GitUiScope>,
     git_selected: HashSet<String>,
     git_message: Entity<ComposerInput>,
     git_message_events: Subscription,
     git_busy: bool,
     git_notice: Option<String>,
+    /// Cancelable preview/message reads only; accepted writes are detached.
     git_task: Option<Task<()>>,
     git_pr_status: Option<GitPrStatus>,
     git_pr_task: Option<Task<()>>,
@@ -1713,6 +1721,7 @@ pub struct Changes {
     checkpoint_restore: Option<luna_proto::GitCheckpointRestorePreview>,
     checkpoint_notice: Option<String>,
     checkpoint_receipt: Option<String>,
+    /// Cancelable checkpoint reads only; restore has independent write ownership.
     checkpoint_task: Option<Task<()>>,
     _observe: Subscription,
 }
@@ -1834,6 +1843,13 @@ impl Changes {
             git_open: false,
             git_preview: None,
             git_target: None,
+            git_scope: None,
+            git_needs_refresh: false,
+            git_read_generation: 0,
+            git_write_generation: 0,
+            git_write_owner: None,
+            checkpoint_generation: 0,
+            checkpoint_restore_scope: None,
             git_selected: HashSet::new(),
             git_message,
             git_message_events,
@@ -2325,6 +2341,7 @@ impl Changes {
 
     /// Reconcile parsed content with the currently-active diff.
     fn sync(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_git_context(cx);
         self.reconcile_pr_context(cx);
         self.discard_stale_draft(cx);
         // The watch follows the selected chat's host device (idempotent when
@@ -4962,23 +4979,9 @@ impl Render for Changes {
             return div().size_full().child(history).into_any_element();
         }
         let theme = Theme::of(cx).clone();
-        if self.git_open {
-            let current = self.git_context(cx).map(|(_, _, key)| key);
-            if current != self.git_target {
-                self.reset_pr_panel(cx);
-                self.git_preview = None;
-                self.git_selected.clear();
-                self.git_pr_status = None;
-                self.git_pr_task = None;
-                self.checkpoints = None;
-                self.checkpoint_diff = None;
-                self.checkpoint_restore = None;
-                self.checkpoint_notice = None;
-                self.checkpoint_receipt = None;
-                self.checkpoint_task = None;
-                self.git_target = current;
-                self.load_git(cx);
-            }
+        self.reconcile_git_context(cx);
+        if self.git_open && self.git_needs_refresh && !self.git_busy {
+            self.load_git(cx);
         }
         let active = self.active_diff(cx);
         let scope = self.scope;

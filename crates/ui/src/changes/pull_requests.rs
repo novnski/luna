@@ -163,19 +163,6 @@ impl Changes {
         cx.notify();
     }
 
-    pub(super) fn reset_pr_panel(&mut self, cx: &mut Context<Self>) {
-        self.pr_panel.generation += 1;
-        self.pr_panel.task = None;
-        self.pr_panel.open = false;
-        self.pr_panel.busy = false;
-        self.pr_panel.creating = false;
-        self.pr_panel.preview = None;
-        self.pr_panel.details = None;
-        self.pr_panel.notice = None;
-        self.pr_panel.reconcile_only = false;
-        cx.notify();
-    }
-
     fn close_pr_panel(&mut self, cx: &mut Context<Self>) {
         if self.pr_panel.creating {
             self.pr_panel.reconcile_only = true;
@@ -269,6 +256,7 @@ impl Changes {
                                     .collect();
                                 pane.git_preview = Some(preview.checkout.clone());
                             }
+                            pane.git_needs_refresh = false;
                             pane.pr_panel.context = pane.pr_context(cx);
                             pane.pr_panel.details = None;
                             pane.pr_panel.preview = Some(preview);
