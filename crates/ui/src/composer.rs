@@ -10659,7 +10659,11 @@ impl Composer {
             .cursor_pointer()
             .hover(|style| style.bg(theme.surface_raised_hover))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_stash_menu(cx)))
-            .child(format!("Saved prompts {count}"));
+            .child(if count == 0 {
+                "Saved prompts".to_string()
+            } else {
+                format!("Saved prompts {count}")
+            });
         let mut controls = div().w_full().flex().flex_col().gap(px(4.0)).child(
             div()
                 .w_full()
