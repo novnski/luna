@@ -4,12 +4,14 @@ This is a source-only acceptance plan. It grants no build, app launch, desktop
 input or provider invocation. The coordinator must first approve the final
 combined source and transfer both the packaging and desktop QA slots.
 
-The accepted 17-case/check/format/Clippy proof remains tied to runtime source
-`04da0cf3` and report `27bec30c`. That proof covers the recorded stale-result
-paths; it does not cover the subsequently identified stale rendered
-Run/Retry/Stop admission path. Commands owns that failure-first reproduction and
-correction. Its actual rendered-action results and immutable correction must be
-accepted before native acceptance starts. Do not package known-unfenced source.
+The initial 17-case/check/format/Clippy proof remains tied to runtime source
+`04da0cf3` and report `27bec30c`. After separate failure-first reproductions,
+combined source `79deab99` passed 34 affected UI cases, the real UUID
+MoveProject control, format, focused UI check and Clippy. This includes stale
+rendered Run/Retry/Stop and Defaults choice admission in their tested scopes.
+The materialization engine companion is still excluded. Do not package until
+the coordinator reviews the current main/schema-14 composition and grants
+native packaging and desktop QA.
 Before packaging, the coordinator must also review/adopt the committed main
 composition and schema changes (current Sidebar runtime uses schema 14). Do
 not merge main or copy its uncommitted files as part of this preparation.

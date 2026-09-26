@@ -1,11 +1,11 @@
 # Project execution defaults — 26 September 2026
 
-Latest affected verification on `59fbe099`: **22 UI cases passed**, with full
-format, focused UI compile and Clippy all exiting 0. Defaults and Commands
-reject the previously evidenced stale results; Commands also rejects stale
-rendered action admission. Defaults' separate six-case rendered-choice suite is
-source-only, not yet executed or fixed. Native app acceptance remains pending
-composition review and its own grant. Exact-source proof and failures follow.
+Latest affected verification on `79deab99`: **34/34 UI cases** and the real
+UUID MoveProject control **1/1** passed. Full format, focused UI compile and
+Clippy exited 0. Both Defaults and Commands reject the evidenced stale results
+and rendered actions in their tested scopes. Native app acceptance remains
+pending the coordinator's main/schema-14 composition review and a separate
+packaging/desktop grant. Exact-source proof and earlier failures follow.
 
 Branch: `codex/project-execution-defaults`.
 Worktree: `/Users/iulian/.codex/worktrees/9f21/luna`.
@@ -401,3 +401,50 @@ mouse and keyboard callbacks before `action()`. Busy handling, backend CAS,
 request-result guards, draft state and all tests/helpers are unchanged.
 No fixed-run pass is claimed before revalidation. Commands' independently owned
 same-chat scope fix is composed only from its reviewed immutable checkpoint.
+
+
+### Independent context/admission repairs verified together
+
+The independent baseline on clean `ff7f5620` had UUID MoveProject1pass,
+Defaults rendered choices3controls/3authentic failures, and Commands
+same-chat2controls/4authentic failures. All reached assertions had valid
+frame/context premises. Source/test/helper bytes of that baseline were
+preserved before applying separate minimal fixes: Defaults `a857f72f` pins
+mouse/key choices to rendered project/owner/engine scope; Commands `70200e6f`
+adds selected task project/cwd/checkout to its existing scope. No frozen
+assertion or helper changed. The materialization engine companion remained
+excluded because the Workspace/Lifecycle bridge was not composed.
+
+These fixes were reviewed and combined as clean runtime source
+`79deab99d95d7c764d58153bc77b74d1b4cf7cea`. The coordinator's granted
+batch ran disjoint filters and observed:
+
+| Case group | Result | Wall time |
+| --- | --- | --- |
+| Defaults retained engine responses | 8/8 pass | 40s |
+| Commands retained engine responses | 6/6 pass | 5s |
+| Commands rendered action admission | 5/5 pass | 5s |
+| Original Defaults picker regression | 3/3 pass | 5s |
+| Defaults rendered choice admission | 6/6 pass | 5s |
+| Commands same-chat context | 6/6 pass | 5s |
+| Real UUID MoveProject current-target control | 1/1 pass | 5s |
+| Full format / focused `luna-ui --lib` check / Clippy | all exit 0 | 5s / 17s / 16s |
+
+Fixed raw evidence shows zero stale Defaults save requests after project or
+engine replacement, one fresh B save with current CAS, preserved live-busy
+first save, and one valid same-project keyboard save after metadata update.
+Commands' stale Run/status cases reject old project/checkout context while
+fresh/metadata controls and earlier epoch/Output behavior still pass. The
+real UUID control preserves task cwd during MoveProject, uses the destination
+project's command and rejects old Retry/Stop. This is not an end-to-end
+materialization result or native UI observation.
+
+Complete evidence is `target/qa/project-defaults/combined-fixed-2`: ten exact
+commands/exits/logs, 35 raw JSON artifacts, a compact `summary.json`,
+`sha256.json`, source and before/after budget. Default 25 GiB reservation was
+enforced; aggregate usage was 141.883 -> 142.209 GiB, with about 373 GiB free
+disk and `target/debug` at 9.2 GiB. No source changed during the batch; Cargo
+was explicitly released. Earlier authentic failure and fixture packets remain
+intact. Next required work is a reviewed main/schema-14 source composition,
+then the separately granted signed QA app and live settings/new-task/restart
+acceptance in `projects-native-acceptance-2026-09-26.md`.

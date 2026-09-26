@@ -1,18 +1,16 @@
 # Defaults rendered-choice admission — failure-first plan and source trace
 
-Status: source-derived concern; no Defaults rendered-choice reproduction has run
-and no admission fix is authorized or implemented by this document. Existing
-17-case result-isolation/picker proof remains tied to `04da0cf3`. Exact queued
-Commands baseline source `0ef61afda7a4b9c173eafac642f906cdbb26ae84` remains an
-immutable Git object; this preparation changes only documentation.
+Status: three authentic stale-choice failures and three passing controls on
+baseline `ff7f5620`; all six pass after the minimal guard in `a857f72f`,
+verified in combined source `79deab99`. The original 17-case proof remains tied
+to `04da0cf3`; later 22-case and 34-case evidence is recorded separately.
 
-Commands baseline-3 on `80bd8e08` now validates the single raw Window/App
-boundary: one fresh control passed, and four cases reached behavioral admission
-failures with retained bounds and unchanged delivery render counters. Earlier
-fixture failures remain preserved separately. Defaults still has no admission
-reproduction of its own. Its test code can now be written after agreeing minimal
-window-helper reuse with the Commands owner. Do not modify that owner's frozen
-assertions or shared scaffolding independently.
+At the failure-matrix stage, Commands baseline-3 on `80bd8e08` validated the
+single raw Window/App boundary: one fresh control passed and four cases reached
+behavioral admission failures with retained bounds and unchanged delivery
+render counters. Earlier fixture failures were preserved separately. Defaults
+subsequently added its own six cases using the agreed tiny page-specific paint
+and mouse wrappers; shared helpers and Commands assertions stayed unchanged.
 
 ## Current source path at 0ef61afd
 
@@ -151,3 +149,18 @@ frame cannot cross a connection replacement. The existing live busy guard,
 CAS payload, draft behavior, keyboard event consumption and all six/fixed-22
 assertions remain unchanged. Direct rustfmt/diff checks passed; fixed execution
 and native acceptance are still awaiting their own grants.
+
+
+## Corrected run and retained controls
+
+Combined fixed source `79deab99` passed all six Defaults admission cases.
+The three old-context inputs produced zero saves; the fresh choice produced
+exactly one B save with current `expectedDefaults`; the live-busy choice did
+not replace the first waiter; and same-project metadata plus actual keyboard
+focus/Enter updated only the intended checkout preference. Deliberate drafts
+stayed intact. The source/test/helper preservation packet is
+`target/qa/project-defaults/independent-fixed-source/preservation.json`.
+Raw fixed traces, render counts and request parameters are retained under
+`target/qa/project-defaults/combined-fixed-2/defaults-admission`. They are
+hash-listed in the combined packet's `sha256.json`. No native app was tested
+by this suite.
