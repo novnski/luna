@@ -196,13 +196,24 @@ try {
   const spaceId = 'github-pr-qa-space', chatId = 'github-pr-qa-chat';
   await mutate({ op: 'createSpace', spaceId, deviceId: owner.deviceId, path: checkout, name: 'Pull Request QA', gitDetected: true });
   await mutate({ op: 'createChat', chatId, spaceId, deviceId: owner.deviceId, cwd: checkout, branch: 'feature/pr', config: { harness: 'codex', model: 'gpt-6-luna', sandbox: 'workspace-write' } });
+  // A new task has no trusted checkout binding until the owner records one.
+  // The fixture root has its own .git marker, so this explicit selection is
+  // safe even before diff-sync's initial stamp.
+  await mutate({ op: 'setChatCwd', chatId, cwd: checkout });
+  const gitPreview = await client.call('GetGitActionPreview', { cwd: checkout, chatId });
+  const gitDir = realpathSync(git('rev-parse', '--path-format=absolute', '--git-dir'));
+  const expectedCheckoutId = createHash('sha256').update(owner.deviceId).update('\0').update(gitDir).digest('hex');
+  assert.equal(gitPreview.checkoutId, expectedCheckoutId, 'Owner did not bind the exact fixture checkout');
+  assert.equal(gitPreview.cwd, checkout);
+  assert.equal(gitPreview.branch, 'feature/pr');
   await mutate({ op: 'renameChat', chatId, title: 'Draft pull request acceptance' });
   const beforeCalls = fixtureLines('calls.jsonl').length;
   const beforeWrites = fixtureLines('writes.jsonl').length;
   if (mode === '--launch-and-seed') {
     assert.equal(beforeWrites, 0, 'Fixture POST appeared before initial preview');
   }
-  const preview = await client.call('GetGitHubPrPreview', { cwd: checkout });
+  const preview = await client.call('GetGitHubPrPreview', { cwd: checkout, chatId });
+  assert.equal(preview.checkout.checkoutId, expectedCheckoutId);
   assert.equal(preview.repository, 'github.com/acme/luna');
   assert.equal(preview.checkout.cwd, checkout);
   assert.equal(preview.head, 'feature/pr');
@@ -218,7 +229,7 @@ try {
   verifyBundle();
   mainUnchanged(mainPid, 'during QA preflight');
   const proof = { passed: true, at: new Date().toISOString(), pid, previousPid, executable, bundleId, dataRoot,
-    ...owner, mainPid, spaceId, chatId, checkout, operationId: preview.operationId,
+    ...owner, mainPid, spaceId, chatId, checkout, checkoutId: expectedCheckoutId, operationId: preview.operationId,
     callCountBefore: beforeCalls, callCountAfter: fixtureLines('calls.jsonl').length, freshCalls,
     fixturePostsBefore: beforeWrites, fixturePostsAfter: fixtureLines('writes.jsonl').length, hostedWrites: 0 };
   writeFileSync(join(root, 'native-preflight.json'), JSON.stringify(proof, null, 2));
