@@ -51,7 +51,10 @@ fn file_backed_provider_skill_lifecycle() {
     let source = skill_document(HarnessId::Codex, &roots, &source.identity).unwrap();
     assert_eq!(
         source.supporting_files,
-        ["references", "references/checklist.md"]
+        vec![
+            "references".to_string(),
+            "references/checklist.md".to_string()
+        ]
     );
 
     let installed = install_skill(
