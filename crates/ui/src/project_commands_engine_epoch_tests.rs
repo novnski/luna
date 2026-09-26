@@ -654,3 +654,112 @@ fn commands_button_admission_fresh_same_engine_control(cx: &mut TestAppContext) 
 
 #[path = "project_commands_same_chat_tests.rs"]
 mod same_chat_context_tests;
+
+#[gpui::test]
+fn commands_retry_current_stop_survives_status_poll(cx: &mut TestAppContext) {
+    let runtime = runtime(cx);
+    let _entered = runtime.enter();
+    let rpc = HeldRpc::new("retry-stop", "device-a");
+    let mut attempt_one = run("A", "device-a");
+    attempt_one["status"] = json!("canceled");
+    attempt_one["terminalId"] = json!("A-terminal-1");
+    let mut attempt_two = run("A", "device-a");
+    attempt_two["attempt"] = json!(2);
+    attempt_two["terminalId"] = json!("A-terminal-2");
+    attempt_two["previousTerminalIds"] = json!(["A-terminal-1"]);
+    let mut initial = status("A");
+    initial["runs"] = json!([attempt_one]);
+    let mut running = status("A");
+    running["runs"] = json!([attempt_two.clone()]);
+    rpc.reply(methods::PROJECT_COMMAND_STATUS, Ok(initial), false);
+    rpc.reply(
+        methods::RETRY_PROJECT_COMMAND,
+        Ok(attempt_two.clone()),
+        false,
+    );
+    let mut canceled = attempt_two.clone();
+    canceled["status"] = json!("canceled");
+    canceled["detail"] = json!("Stopped by you");
+    rpc.reply(methods::STOP_PROJECT_COMMAND, Ok(canceled.clone()), true);
+
+    let scene = Scene::new(cx, &runtime, rpc.clone(), "device-a");
+    scene.open(cx);
+    fixture::pump_until(cx, &runtime, |cx| {
+        scene.view(cx)["snapshot"]["runs"][0]["attempt"] == 1 && scene.view(cx)["busy"] == false
+    });
+    let (window, retry_point, _, _) = button_window(cx, &scene, "qa-command-control-A-run");
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    // The next status result belongs to the retried attempt, not the old
+    // snapshot. The actual Retry button must initiate exactly one write.
+    rpc.reply(methods::PROJECT_COMMAND_STATUS, Ok(running.clone()), false);
+    visual.update(|window, app| mouse_click_rendered(window, app, retry_point));
+    fixture::pump_until(cx, &runtime, |cx| {
+        let view = scene.view(cx);
+        view["snapshot"]["runs"][0]["attempt"] == 2 && view["busy"] == false
+    });
+    let after_retry = scene.view(cx);
+    let prior_status_calls = rpc.calls(methods::PROJECT_COMMAND_STATUS);
+    // Match N3's visible Running/Stop row while a production one-second
+    // status read is in flight. Its response remains held through the click.
+    rpc.reply(methods::PROJECT_COMMAND_STATUS, Ok(running), true);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    fixture::pump_until(cx, &runtime, |cx| {
+        rpc.calls(methods::PROJECT_COMMAND_STATUS) > prior_status_calls
+            && scene.view(cx)["busy"] == true
+    });
+    visual.update(|window, app| window.draw(app).clear());
+    let stop_bounds = visual
+        .debug_bounds("qa-command-control-A-run")
+        .expect("the Running attempt's Stop control remains painted");
+    let stop_point = stop_bounds.center();
+    let before_stop = scene.view(cx);
+    visual.update(|window, app| mouse_click_rendered(window, app, stop_point));
+    fixture::drain(cx, &runtime);
+    let first_stop_calls = rpc.calls(methods::STOP_PROJECT_COMMAND);
+    let mut after_stop = Value::Null;
+    if first_stop_calls > 0 {
+        // The same still-visible control must not send a duplicate write
+        // while Stop's reply is pending.
+        visual.update(|window, app| mouse_click_rendered(window, app, stop_point));
+        fixture::drain(cx, &runtime);
+        let mut canceled_snapshot = status("A");
+        canceled_snapshot["runs"] = json!([canceled]);
+        rpc.reply(
+            methods::PROJECT_COMMAND_STATUS,
+            Ok(canceled_snapshot),
+            false,
+        );
+        rpc.release(methods::STOP_PROJECT_COMMAND);
+        fixture::pump_until(cx, &runtime, |cx| {
+            scene.view(cx)["snapshot"]["runs"][0]["status"] == "canceled"
+                && scene.view(cx)["busy"] == false
+        });
+        after_stop = scene.view(cx);
+    }
+    let trace = json!({
+        "afterRetry":after_retry,"beforeStop":before_stop,"afterStop":after_stop,
+        "stopBounds":format!("{stop_bounds:?}"),"stopPoint":format!("{stop_point:?}"),
+        "statusCallsBeforeHeldPoll":prior_status_calls,
+        "statusCallsWithHeldPoll":rpc.calls(methods::PROJECT_COMMAND_STATUS),
+        "firstStopCalls":first_stop_calls,"totalStopCalls":rpc.calls(methods::STOP_PROJECT_COMMAND),
+        "retryCalls":rpc.calls(methods::RETRY_PROJECT_COMMAND),
+        "runCalls":rpc.calls(methods::RUN_PROJECT_COMMAND),"rpc":rpc.trace(),
+        "mousePath":"Window::dispatch_event(MouseDown/MouseUp)"
+    });
+    fixture::write_trace("commands-retry-stop-during-status-poll", &trace);
+    assert_eq!(after_retry["snapshot"]["runs"][0]["id"], "A-run");
+    assert_eq!(
+        after_retry["snapshot"]["runs"][0]["terminalId"],
+        "A-terminal-2"
+    );
+    assert_eq!(before_stop["snapshot"]["runs"][0]["status"], "running");
+    assert_eq!(rpc.calls(methods::RETRY_PROJECT_COMMAND), 1);
+    assert_eq!(rpc.calls(methods::RUN_PROJECT_COMMAND), 0);
+    assert_eq!(
+        first_stop_calls, 1,
+        "visible Stop was lost during a status read"
+    );
+    assert_eq!(rpc.calls(methods::STOP_PROJECT_COMMAND), 1);
+    assert_eq!(after_stop["snapshot"]["runs"][0]["status"], "canceled");
+}
