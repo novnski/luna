@@ -5080,7 +5080,10 @@ impl Composer {
     /// sent user prompts. An ordinary edit or caret move ends browsing, so
     /// multiline navigation and an in-progress draft are left alone.
     fn navigate_sent_prompts(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.current_key.is_empty() || self.editing_queued.is_some() {
+        if self.current_key.is_empty()
+            || self.editing_queued.is_some()
+            || self.queue_edit_draft.is_some()
+        {
             return;
         }
         let current = self.input.read(cx).text().to_string();
@@ -5245,6 +5248,7 @@ impl Composer {
         if self.stash_task.is_some()
             || !self.draft_loaded.contains(&key)
             || self.editing_queued.is_some()
+            || self.queue_edit_draft.is_some()
             || self.pending_draft_owner_stage.is_some()
             || self.is_sending()
         {
@@ -5405,6 +5409,7 @@ impl Composer {
             || !self.draft_loaded.contains(&key)
             || !self.current_prompt_is_empty(cx)
             || self.editing_queued.is_some()
+            || self.queue_edit_draft.is_some()
             || self.pending_draft_owner_stage.is_some()
             || self.is_sending()
             || self.draft_saves_in_flight.contains_key(&key)
