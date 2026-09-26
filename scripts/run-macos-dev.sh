@@ -44,7 +44,7 @@ mkdir -p "$DEV_ROOT"
 cd "$ROOT"
 echo "building LUNA Dev; full output: $BUILD_LOG" >&2
 build_start=$SECONDS
-if cargo build --locked -p luna >"$BUILD_LOG" 2>&1; then
+if "$ROOT/scripts/cargo.sh" build --locked -p luna --target-dir "$ROOT/target" >"$BUILD_LOG" 2>&1; then
   echo "build succeeded in $((SECONDS - build_start))s" >&2
 else
   result_code=$?

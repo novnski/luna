@@ -1,0 +1,7 @@
+# Keep Cargo's existing incremental state for frequently edited workspace crates.
+# Registry dependencies remain eligible for the shared compilation cache.
+incremental = true
+
+# Preserve source/debug paths and Cargo's original build-script output paths.
+share_workspace_root = false
+share_out_dir = false

@@ -11,7 +11,7 @@ Every device runs a small engine that stores sessions on that device. A new inst
 ## Build and run locally (Linux)
 
 ```bash
-cargo build --locked -p luna
+scripts/cargo.sh build --locked -p luna
 ./target/debug/luna daemon start
 ./target/debug/luna status
 ```
@@ -19,6 +19,12 @@ cargo build --locked -p luna
 The engine starts in local-only mode. Install a release from this project's [GitHub releases](https://github.com/novnski/luna/releases) when one is available. The build uses the GPUI source checked into `vendor/`; it does not fetch an older app fork.
 
 The desktop sidebar browser also needs the [Linux browser runtime](docs/reference/linux-browser.md).
+
+Local Rust commands use `scripts/cargo.sh`, which adds the optional
+[Mr Boxington compilation cache](docs/reference/build-cache.md) when installed.
+The wrapper keeps this checkout's `target/` and incremental builds, and falls
+back to Cargo if `mbx` is unavailable. Set `LUNA_BUILD_CACHE=0` to bypass it.
+See the guide for installation, cache limits and repeatable verification.
 
 Day-to-day:
 
