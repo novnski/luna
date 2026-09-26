@@ -98,7 +98,7 @@ impl ProjectCommands {
         self.inner
             .writes
             .try_admit()
-            .map_err(|e| error(e.to_string()))
+            .map_err(|e| error(format!("Project command storage is unavailable: {e:?}")))
     }
     fn project(&self, id: &str) -> Result<(), EngineError> {
         if self.inner.store.project_cleanup_state(id)?.is_some() {

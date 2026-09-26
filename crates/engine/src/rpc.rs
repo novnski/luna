@@ -9625,7 +9625,7 @@ impl RpcService for EngineRpc {
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Project commands unavailable".into()))?;
                 let p: ProjectCommandsParams = parse_params(params)?;
-                let failed = |e: EngineError| RpcError::Failed(e.to_string());
+                let failed = |e: crate::EngineError| RpcError::Failed(e.to_string());
                 match method {
                     methods::GET_PROJECT_COMMANDS => {
                         RpcReply::value(&commands.configuration(&p.project_id).map_err(failed)?)
