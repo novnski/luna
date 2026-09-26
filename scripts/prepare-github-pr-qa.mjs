@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Default: local fixture preparation only. --restart-and-seed is native QA and
-// requires the coordinator's native slot. It never builds or sends PR-create RPC.
+// Default: local fixture preparation only. Native modes need the coordinator's
+// desktop grant. They never build or send a PR-create RPC.
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -17,8 +17,8 @@ const executable = join(app, 'Contents/MacOS/luna');
 const bundleId = 'com.novnski.luna.qa.pullrequests';
 const port = 59790;
 const args = process.argv.slice(2);
-assert.ok(args.length <= 1 && args.every(a => ['--seed', '--restart-and-seed'].includes(a)),
-  'Usage: prepare-github-pr-qa.mjs [--seed|--restart-and-seed]');
+assert.ok(args.length <= 1 && args.every(a => ['--seed', '--restart-and-seed', '--launch-and-seed'].includes(a)),
+  'Usage: prepare-github-pr-qa.mjs [--seed|--restart-and-seed|--launch-and-seed]');
 const native = args.length > 0;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 mkdirSync(checkout, { recursive: true });
@@ -78,6 +78,14 @@ function qaProcesses() {
     return match && match[2] === executable ? [Number(match[1])] : [];
   });
 }
+function fixtureLines(name) {
+  return existsSync(join(root, name))
+    ? readFileSync(join(root, name), 'utf8').trim().split('\n').filter(Boolean)
+    : [];
+}
+function mainUnchanged(expected, phase) {
+  assert.equal(listener(59777), expected, `Main IPC changed ${phase}`);
+}
 function verifiedListener() {
   const pid = listener(port);
   assert.ok(pid, 'QA IPC is not listening');
@@ -127,12 +135,14 @@ async function ownership(client, expectedPid) {
 }
 const mainPid = listener(59777);
 verifyBundle();
+const mode = args[0];
+const launch = mode === '--restart-and-seed' || mode === '--launch-and-seed';
 let previousPid = null;
-if (args[0] === '--restart-and-seed') {
+if (mode === '--restart-and-seed') {
   previousPid = verifiedListener();
   const oldClient = await connect();
   try { await ownership(oldClient, previousPid); } finally { oldClient.close(); }
-  // A verified PID and executable URL make this a QA-only graceful quit.
+  // NSRunningApplication targets a verified PID and exact executable URL.
   execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import("AppKit"); function run(argv) {
     const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
     if (app.isNil() || ObjC.unwrap(app.executableURL.path) !== argv[1]) throw new Error("QA identity changed");
@@ -143,17 +153,36 @@ if (args[0] === '--restart-and-seed') {
   assert.notEqual(command(previousPid), executable, 'QA app refused graceful quit; left intact, no forced termination');
   assert.deepEqual(qaProcesses(), [], 'An existing QA process would ignore the launch environment');
   assert.equal(listener(port), null, 'QA port is occupied after graceful quit');
-  assert.equal(listener(59777), mainPid, 'Main IPC PID changed during QA restart');
+  mainUnchanged(mainPid, 'during QA restart');
+} else if (mode === '--launch-and-seed') {
+  assert.equal(listener(port), null, 'QA port is already occupied; stopped launch refused');
+  assert.deepEqual(qaProcesses(), [], 'QA executable is unexpectedly live without its listener; stopped launch refused');
+  assert.equal(fixtureLines('writes.jsonl').length, 0, 'Fixture has a PR POST before initial Create; stopped launch refused');
+}
+if (launch) {
+  mainUnchanged(mainPid, 'before QA launch');
+  const fakeGh = join(fixture, 'gh');
+  assert.ok(existsSync(fakeGh) && statSync(fakeGh).isFile() && (statSync(fakeGh).mode & 0o111), 'Fake gh is missing or not executable');
+  assert.equal(launchEnv.LUNA_PR_FIXTURE, root);
+  assert.equal(launchEnv.LUNA_NO_LOGIN_SHELL, '1');
+  assert.ok(launchEnv.PATH.startsWith(`${fixture}:`), 'Fake gh is not first in launch PATH');
+  assert.equal(launchEnv.LUNA_DATA_DIR, dataRoot);
+  assert.equal(launchEnv.LUNA_IPC_PORT, String(port));
   const envArgs = Object.entries(launchEnv).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
   execFileSync('open', ['-g', '-n', ...envArgs, app], { stdio: 'pipe' });
   const launchDeadline = Date.now() + 45000;
   while (Date.now() < launchDeadline && !listener(port)) await pause(250);
+  mainUnchanged(mainPid, 'during QA launch');
 }
 const pid = verifiedListener();
 if (previousPid !== null) assert.notEqual(pid, previousPid, 'Fixture environment requires a fresh QA process');
 const client = await connect();
 try {
   const owner = await ownership(client, pid); // before any local seed mutation
+  mainUnchanged(mainPid, 'before QA seed');
+  if (mode === '--launch-and-seed') {
+    assert.equal(fixtureLines('writes.jsonl').length, 0, 'Fixture POST appeared before QA seed');
+  }
   const mutate = async params => {
     const result = await client.call('Mutate', params);
     let receipt = result.receipt;
@@ -168,28 +197,30 @@ try {
   await mutate({ op: 'createSpace', spaceId, deviceId: owner.deviceId, path: checkout, name: 'Pull Request QA', gitDetected: true });
   await mutate({ op: 'createChat', chatId, spaceId, deviceId: owner.deviceId, cwd: checkout, branch: 'feature/pr', config: { harness: 'codex', model: 'gpt-6-luna', sandbox: 'workspace-write' } });
   await mutate({ op: 'renameChat', chatId, title: 'Draft pull request acceptance' });
-  const lines = name => existsSync(join(root, name)) ? readFileSync(join(root, name), 'utf8').trim().split('\n').filter(Boolean) : [];
-  const beforeCalls = lines('calls.jsonl').length;
-  const beforeWrites = lines('writes.jsonl').length;
+  const beforeCalls = fixtureLines('calls.jsonl').length;
+  const beforeWrites = fixtureLines('writes.jsonl').length;
+  if (mode === '--launch-and-seed') {
+    assert.equal(beforeWrites, 0, 'Fixture POST appeared before initial preview');
+  }
   const preview = await client.call('GetGitHubPrPreview', { cwd: checkout });
   assert.equal(preview.repository, 'github.com/acme/luna');
   assert.equal(preview.checkout.cwd, checkout);
   assert.equal(preview.head, 'feature/pr');
   assert.equal(preview.checkout.head, git('rev-parse', 'HEAD'));
-  const freshCalls = lines('calls.jsonl').slice(beforeCalls).map(line => JSON.parse(line));
+  const freshCalls = fixtureLines('calls.jsonl').slice(beforeCalls).map(line => JSON.parse(line));
   assert.ok(freshCalls.length >= 2, 'Native preview did not append fresh fake-gh calls');
   assert.ok(freshCalls.every(call => call.cwd === checkout), 'Fixture call used a different checkout');
   assert.ok(freshCalls.some(call => call.args.includes('repos/acme/luna')), 'Missing fixture repository read');
   assert.ok(freshCalls.some(call => call.args.includes('repos/acme/luna/branches/feature%2Fpr')), 'Missing exact fixture head read');
   assert.ok(freshCalls.every(call => !call.args.includes('POST')), 'Preflight must be read-only at GitHub boundary');
-  assert.equal(lines('writes.jsonl').length, beforeWrites, 'A preflight must not create a PR');
+  assert.equal(fixtureLines('writes.jsonl').length, beforeWrites, 'A preflight must not create a PR');
   await ownership(client, pid);
   verifyBundle();
-  assert.equal(listener(59777), mainPid, 'Main IPC PID changed during QA preflight');
+  mainUnchanged(mainPid, 'during QA preflight');
   const proof = { passed: true, at: new Date().toISOString(), pid, previousPid, executable, bundleId, dataRoot,
     ...owner, mainPid, spaceId, chatId, checkout, operationId: preview.operationId,
-    callCountBefore: beforeCalls, callCountAfter: lines('calls.jsonl').length, freshCalls,
-    fixturePostsBefore: beforeWrites, fixturePostsAfter: lines('writes.jsonl').length, hostedWrites: 0 };
+    callCountBefore: beforeCalls, callCountAfter: fixtureLines('calls.jsonl').length, freshCalls,
+    fixturePostsBefore: beforeWrites, fixturePostsAfter: fixtureLines('writes.jsonl').length, hostedWrites: 0 };
   writeFileSync(join(root, 'native-preflight.json'), JSON.stringify(proof, null, 2));
   console.log(JSON.stringify({ passed: true, pid, spaceId, chatId, proof: join(root, 'native-preflight.json'), fixtureReadCount: freshCalls.length, hostedWrites: 0 }));
 } finally { client.close(); }
