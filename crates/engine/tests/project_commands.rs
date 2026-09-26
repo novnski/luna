@@ -124,7 +124,7 @@ async fn checkout_commands_and_setup_lifecycle() {
     let saved: Vec<ProjectAction> = client
         .call_as(
             luna_rpc::methods::SAVE_PROJECT_COMMANDS,
-            serde_json::json!({"projectId":"p","actions":actions}),
+            serde_json::json!({"projectId":"p","expectedActions":[],"actions":actions}),
         )
         .await
         .unwrap();
@@ -142,7 +142,7 @@ async fn checkout_commands_and_setup_lifecycle() {
 
     assert!(
         core.project_commands
-            .configure("p", vec![action("x", "", false)])
+            .configure("p", &actions, vec![action("x", "", false)])
             .is_err()
     );
     assert!(
@@ -298,9 +298,11 @@ async fn checkout_commands_and_setup_lifecycle() {
             .count(),
         2
     );
-    let mut changed = actions;
+    let mut changed = actions.clone();
     changed[3].command = "echo must-not-rerun >> setup-count".into();
-    core.project_commands.configure("p", changed).unwrap();
+    core.project_commands
+        .configure("p", &actions, changed)
+        .unwrap();
     core.project_commands
         .setup_new_worktree("a", a.to_str().unwrap())
         .await
@@ -326,7 +328,7 @@ async fn checkout_commands_and_setup_lifecycle() {
         .await
         .unwrap();
     core.terminals.shutdown();
-    core.workspace.flush_checked().unwrap();
+    core.workspace.flush();
     drop(client);
     core.shutdown().await;
     drop(core);
@@ -415,7 +417,7 @@ async fn generation_ownership_deletion_and_backup() {
         .unwrap();
     assert!(
         core.project_commands
-            .configure("foreign", vec![action("x", "true", false)])
+            .configure("foreign", &[], vec![action("x", "true", false)])
             .is_err()
     );
     core.workspace
@@ -428,7 +430,7 @@ async fn generation_ownership_deletion_and_backup() {
         )
         .unwrap();
     core.project_commands
-        .configure("p", vec![action("setup", "echo prepared", true)])
+        .configure("p", &[], vec![action("setup", "echo prepared", true)])
         .unwrap();
     let first = core
         .project_commands
@@ -451,7 +453,7 @@ async fn generation_ownership_deletion_and_backup() {
     assert_ne!(first.checkout_generation, replacement.checkout_generation);
     assert_ne!(first.id, replacement.id);
     completed(&core, "a", &replacement.id).await;
-    core.workspace.flush_checked().unwrap();
+    core.workspace.flush();
     core.terminals.shutdown();
     core.shutdown().await;
     drop(core);
@@ -504,7 +506,7 @@ async fn generation_ownership_deletion_and_backup() {
     assert!(
         reopened
             .project_commands
-            .configure("p", vec![action("x", "true", false)])
+            .configure("p", &[], vec![action("x", "true", false)])
             .is_err()
     );
     reopened.shutdown().await;
@@ -556,6 +558,7 @@ async fn durable_task_run_waits_for_setup_and_records_failure() {
     core.project_commands
         .configure(
             "p",
+            &[],
             vec![action(
                 "setup",
                 "echo attempted >> setup-attempts; test -f allow-setup",
@@ -673,6 +676,7 @@ async fn pending_setup_survives_both_checkout_publication_boundaries() {
     core.project_commands
         .configure(
             "p",
+            &[],
             vec![action("setup", "echo launched >> launches", true)],
         )
         .unwrap();
@@ -695,7 +699,7 @@ async fn pending_setup_survives_both_checkout_publication_boundaries() {
     core.workspace
         .set_chat_cwd("after", b.to_str().unwrap())
         .unwrap();
-    core.workspace.flush_checked().unwrap();
+    core.workspace.flush();
     core.shutdown().await;
     drop(core);
     let restarted = EngineCore::assemble(&data, registry, HarnessId::Mock, None).unwrap();
@@ -776,7 +780,8 @@ async fn pending_setup_survives_both_checkout_publication_boundaries() {
 }
 
 /// Regression specification from source review, authored before the CAS guard.
-/// Baseline deliberately uses today's replacement-list RPC with no new fields.
+/// The actions-only baseline and lost-update JSON were captured before the
+/// guard; each client now supplies the snapshot it originally read.
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_project_command_editor_cannot_clobber_another_client() {
     use luna_rpc::methods;
@@ -797,7 +802,7 @@ async fn stale_project_command_editor_cannot_clobber_another_client() {
         action("test", "printf original-test", false),
     ];
     core.project_commands
-        .configure("p", initial.clone())
+        .configure("p", &[], initial.clone())
         .unwrap();
     let client_one = luna_rpc::memory_client(core.rpc_service());
     let client_two = luna_rpc::memory_client(core.rpc_service());
@@ -817,13 +822,21 @@ async fn stale_project_command_editor_cannot_clobber_another_client() {
         .unwrap();
     assert_eq!(first_read, initial);
     assert_eq!(stale_read, initial);
+    let missing_snapshot = client_two
+        .call(
+            methods::SAVE_PROJECT_COMMANDS,
+            serde_json::json!({"projectId":"p", "actions":initial}),
+        )
+        .await
+        .unwrap_err();
+    assert!(missing_snapshot.to_string().contains("expectedActions"));
     let mut first_edit = first_read.clone();
     first_edit[0].command = "printf first-client-build".into();
     first_edit.push(action("dev", "printf first-client-added-dev", false));
     let first_saved: Vec<ProjectAction> = client_one
         .call_as(
             methods::SAVE_PROJECT_COMMANDS,
-            serde_json::json!({"projectId":"p","actions":first_edit}),
+            serde_json::json!({"projectId":"p","expectedActions":first_read,"actions":first_edit}),
         )
         .await
         .unwrap();
@@ -833,7 +846,7 @@ async fn stale_project_command_editor_cannot_clobber_another_client() {
     let stale_result = client_two
         .call(
             methods::SAVE_PROJECT_COMMANDS,
-            serde_json::json!({"projectId":"p","actions":stale_edit}),
+            serde_json::json!({"projectId":"p","expectedActions":stale_read,"actions":stale_edit}),
         )
         .await;
     let actual: Vec<ProjectAction> = client_one
@@ -846,7 +859,7 @@ async fn stale_project_command_editor_cannot_clobber_another_client() {
     if let Ok(dir) = std::env::var("LUNA_COMMAND_QA_ARTIFACTS") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            Path::new(&dir).join("two-client-config-baseline.json"),
+            Path::new(&dir).join("two-client-config-result.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "initial": initial,
                 "firstClientSaved": first_saved,

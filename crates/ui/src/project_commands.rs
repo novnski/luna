@@ -53,12 +53,13 @@ impl ProjectCommandSettings {
         };
         self.busy = true;
         self.error = None;
-        let method = if actions.is_some() {
+        let saving = actions.is_some();
+        let method = if saving {
             methods::SAVE_PROJECT_COMMANDS
         } else {
             methods::GET_PROJECT_COMMANDS
         };
-        let params = serde_json::json!({"projectId": self.space_id, "actions": actions});
+        let params = serde_json::json!({"projectId": self.space_id, "actions": actions, "expectedActions": self.actions});
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
@@ -69,7 +70,9 @@ impl ProjectCommandSettings {
                 match result {
                     Ok(actions) => {
                         view.actions = actions;
-                        view.editing = None;
+                        if saving {
+                            view.editing = None;
+                        }
                     }
                     Err(error) => view.error = Some(error.to_string()),
                 }
@@ -203,7 +206,16 @@ impl Render for ProjectCommandSettings {
             );
         }
         if let Some(error) = &self.error {
-            card = card.child(widgets::error_strip(&theme, error.clone()));
+            card = card
+                .child(widgets::error_strip(&theme, error.clone()))
+                .child(
+                    widgets::ghost_action(&theme)
+                        .id("reload-project-commands")
+                        .child("Reload saved commands (keep draft)")
+                        .when(!self.busy, |el| {
+                            el.on_click(cx.listener(|view, _, _, cx| view.request(None, cx)))
+                        }),
+                );
         }
         card.child(widgets::page_subtitle(&theme,"Configuration and receipts are included in backups. Terminal output follows local terminal retention and is excluded from backups. Stop controls foreground processes; commands that detach themselves must manage their own lifecycle."))
     }

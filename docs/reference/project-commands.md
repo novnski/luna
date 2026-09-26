@@ -14,6 +14,11 @@ Interactive login profiles are not sourced. POSIX hosts are supported; Windows
 reports an explicit unsupported-host error. Use foreground dev servers: detached
 processes that escape their process group cannot be controlled by Stop.
 
+Saving requires the original action list as an `expectedActions` snapshot.
+The engine compares it while holding the configuration gate; stale editors get
+a conflict instead of replacing newer work. The settings card preserves the
+unsaved draft and lets the user reload current commands before saving again.
+
 Configuration and immutable command snapshots live in separate tables in the
 existing `docs.sqlite3` (schema13). Device admission protects mutations. The
 existing backup VACUUM snapshot includes both tables; terminal logs keep their

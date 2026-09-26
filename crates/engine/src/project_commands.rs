@@ -125,7 +125,12 @@ impl ProjectCommands {
             .store
             .project_command_config(project, &self.inner.device)?)
     }
-    pub fn configure(&self, project: &str, actions: Vec<ProjectAction>) -> Result<(), EngineError> {
+    pub fn configure(
+        &self,
+        project: &str,
+        expected: &[ProjectAction],
+        actions: Vec<ProjectAction>,
+    ) -> Result<(), EngineError> {
         let _gate = self
             .inner
             .gate
@@ -133,6 +138,16 @@ impl ProjectCommands {
             .unwrap_or_else(PoisonError::into_inner);
         let permit = self.admit()?;
         self.project(project)?;
+        if self
+            .inner
+            .store
+            .project_command_config(project, &self.inner.device)?
+            != expected
+        {
+            return Err(error(
+                "Project commands changed in another window. Reload the saved commands before saving your edits.",
+            ));
+        }
         if actions.len() > 24 {
             return Err(error("A project supports up to 24 saved commands"));
         }

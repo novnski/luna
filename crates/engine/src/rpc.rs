@@ -817,6 +817,7 @@ struct ProjectCommandsParams {
     #[serde(default)]
     run_id: String,
     actions: Option<Vec<luna_proto::ProjectAction>>,
+    expected_actions: Option<Vec<luna_proto::ProjectAction>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -9644,6 +9645,7 @@ impl RpcService for EngineRpc {
                         commands
                             .configure(
                                 &p.project_id,
+                                &p.expected_actions.ok_or_else(|| RpcError::Failed("Missing expectedActions snapshot; reload project commands before saving".into()))?,
                                 p.actions
                                     .ok_or_else(|| RpcError::Failed("Missing actions".into()))?,
                             )
