@@ -504,6 +504,7 @@ impl RuntimeConfig {
 
 struct RunHandle {
     run_id: String,
+    workspace_repair_revision: u64,
     /// Positive evidence that a parked adapter stream reached EOF. A terminal
     /// Done or removal after an error does not prove its child released native
     /// writer ownership yet.
@@ -2284,6 +2285,66 @@ impl SessionsEngine {
             .clone()
     }
 
+    pub(crate) fn prepare_workspace_repair_execution(
+        &self,
+        chat_id: &str,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        let guard = self
+            .transition_gate(chat_id)
+            .try_lock_owned()
+            .map_err(|_| {
+                EngineError::Other("task dispatch or runtime mutation is in progress".into())
+            })?;
+        // First repair version blocks even idle warm handles. Reusing or
+        // retiring a provider runtime is outside association-only correction.
+        if self.has_live_run(chat_id) || self.active_turn_id(chat_id).is_some() {
+            return Err(EngineError::Other(
+                "task has an active or idle warm runtime".into(),
+            ));
+        }
+        if self.inner.recovery.current(chat_id)?.is_some() {
+            return Err(EngineError::Other(
+                "task recovery must be resolved before workspace repair".into(),
+            ));
+        }
+        Ok(guard)
+    }
+
+    pub(crate) async fn prepare_workspace_materialization(
+        &self,
+        task_id: &str,
+        spec: &luna_proto::WorktreeSpec,
+    ) -> Result<Option<crate::task_identity::WorkspaceMaterializationContext>, EngineError> {
+        self.inner
+            .task_identity
+            .get()
+            .ok_or_else(|| {
+                EngineError::Other("task identity is unavailable for worktree preparation".into())
+            })?
+            .prepare_workspace_materialization(task_id, spec)
+            .await
+    }
+
+    pub(crate) async fn commit_workspace_materialization(
+        &self,
+        context: crate::task_identity::WorkspaceMaterializationContext,
+        command_id: &str,
+        fence: &luna_sync::WorkspaceMaterializationFence,
+        resolved_cwd: &str,
+        branch: Option<&str>,
+    ) -> Result<(), crate::workspace_host::TaskProjectionError> {
+        self.inner
+            .task_identity
+            .get()
+            .ok_or_else(|| {
+                crate::workspace_host::TaskProjectionError::Mutation(EngineError::Other(
+                    "task identity is unavailable for worktree commit".into(),
+                ))
+            })?
+            .commit_workspace_materialization(context, command_id, fence, resolved_cwd, branch)
+            .await
+    }
+
     /// Release only this task's idle native writer, keeping dispatch excluded
     /// through the caller's metadata operation and durable registry commit.
     pub(crate) async fn prepare_native_archive(
@@ -2694,8 +2755,16 @@ impl SessionsEngine {
         let harness = request
             .harness
             .ok_or_else(|| EngineError::Other("Side chat provider missing".into()))?;
-        self.dispatch_with_context(chat_id, harness, request, message_id, None)
-            .await
+        let workspace_revision = self.inner.recovery.workspace_repair_revision(chat_id)?;
+        self.dispatch_with_context(
+            chat_id,
+            harness,
+            request,
+            message_id,
+            None,
+            workspace_revision,
+        )
+        .await
     }
 
     pub async fn dispatch(
@@ -2715,8 +2784,47 @@ impl SessionsEngine {
                 "Side chats require an active side-panel lease".into(),
             ));
         }
-        self.dispatch_with_context(chat_id, harness_id, request, message_id, None)
-            .await
+        let workspace_revision = self.inner.recovery.workspace_repair_revision(chat_id)?;
+        self.dispatch_at_workspace_revision(
+            chat_id,
+            harness_id,
+            request,
+            message_id,
+            workspace_revision,
+        )
+        .await
+    }
+
+    /// Server-side original admission evidence, never read from RunRequest or
+    /// caller-controlled model options. Deferred executable rows retain W.
+    #[doc(hidden)]
+    pub async fn dispatch_at_workspace_revision(
+        &self,
+        chat_id: &str,
+        harness_id: HarnessId,
+        request: RunRequest,
+        message_id: Option<String>,
+        workspace_repair_revision: u64,
+    ) -> Result<String, EngineError> {
+        if self
+            .inner
+            .side_chat_lookup
+            .get()
+            .is_some_and(|lookup| lookup(chat_id))
+        {
+            return Err(EngineError::Other(
+                "Side chats require an active side-panel lease".into(),
+            ));
+        }
+        self.dispatch_with_context(
+            chat_id,
+            harness_id,
+            request,
+            message_id,
+            None,
+            workspace_repair_revision,
+        )
+        .await
     }
 
     fn dispatch_with_context<'a>(
@@ -2726,8 +2834,16 @@ impl SessionsEngine {
         request: RunRequest,
         message_id: Option<String>,
         recovery: Option<RecoveryAttemptContext>,
+        workspace_repair_revision: u64,
     ) -> futures::future::BoxFuture<'a, Result<String, EngineError>> {
-        Box::pin(self.dispatch_inner(chat_id, harness_id, request, message_id, recovery))
+        Box::pin(self.dispatch_inner(
+            chat_id,
+            harness_id,
+            request,
+            message_id,
+            recovery,
+            workspace_repair_revision,
+        ))
     }
 
     async fn dispatch_inner(
@@ -2737,6 +2853,7 @@ impl SessionsEngine {
         mut request: RunRequest,
         mut message_id: Option<String>,
         recovery: Option<RecoveryAttemptContext>,
+        workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
         if recovery.is_some()
             && self
@@ -2762,6 +2879,9 @@ impl SessionsEngine {
         let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
+        if self.inner.recovery.workspace_repair_revision(chat_id)? != workspace_repair_revision {
+            return Err(EngineError::Other("Workspace association changed after dispatch admission; review and submit a new message.".into()));
+        }
         // A queue drain or already accepted command may have waited behind
         // native archive after freezing its request. Read the committed row
         // now, before starting a provider. A deliberate new user send revives
@@ -2774,6 +2894,14 @@ impl SessionsEngine {
                     .into(),
             ));
         }
+        let original_message_id = message_id.get_or_insert_with(new_id).clone();
+        self.inner
+            .recovery
+            .record_execution_workspace_repair_revision(
+                chat_id,
+                &original_message_id,
+                workspace_repair_revision,
+            )?;
         // Runtime contracts are host authority, never client-provided model
         // options. Strip even a syntactically valid forged contract before any
         // request snapshot, recovery record, or provider dispatch.
@@ -2995,7 +3123,8 @@ impl SessionsEngine {
             (
                 h.run_id.clone(),
                 h.steerable,
-                h.runtime_config.can_route(harness_id, &request),
+                h.workspace_repair_revision == workspace_repair_revision
+                    && h.runtime_config.can_route(harness_id, &request),
                 h.steer_tx.clone(),
                 h.routed_steers.clone(),
             )
@@ -3268,6 +3397,7 @@ impl SessionsEngine {
         lock(&self.inner.runs).insert(
             chat_id.to_string(),
             RunHandle {
+                workspace_repair_revision,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: run_id.clone(),
                 provider_turn: None,
@@ -3364,6 +3494,22 @@ impl SessionsEngine {
         prompt: &str,
         message_id: Option<String>,
     ) -> Result<SteerOutcome, EngineError> {
+        let revision = self.inner.recovery.workspace_repair_revision(chat_id)?;
+        self.steer_at_workspace_revision(chat_id, prompt, message_id, revision)
+            .await
+    }
+
+    pub(crate) async fn steer_at_workspace_revision(
+        &self,
+        chat_id: &str,
+        prompt: &str,
+        message_id: Option<String>,
+        workspace_repair_revision: u64,
+    ) -> Result<SteerOutcome, EngineError> {
+        let _transition = self.transition_gate(chat_id).lock_owned().await;
+        if self.inner.recovery.workspace_repair_revision(chat_id)? != workspace_repair_revision {
+            return Err(EngineError::Other("Workspace association changed after steer admission; review and submit a new message.".into()));
+        }
         // A Codex/Claude run handle stays warm between turns. Its mailbox is
         // still open, but RequireActiveTurn is invalid until another provider
         // turn starts. Let the caller dispatch a follow-up turn instead.
@@ -3372,7 +3518,11 @@ impl SessionsEngine {
         };
         let target = lock(&self.inner.runs)
             .get(chat_id)
-            .filter(|h| h.steerable && h.run_id == active_turn_id)
+            .filter(|h| {
+                h.steerable
+                    && h.run_id == active_turn_id
+                    && h.workspace_repair_revision == workspace_repair_revision
+            })
             .map(|h| {
                 (
                     h.run_id.clone(),
@@ -3384,6 +3534,13 @@ impl SessionsEngine {
             return Ok(SteerOutcome::NotSteerable);
         };
         let user_id = message_id.unwrap_or_else(new_id);
+        self.inner
+            .recovery
+            .record_execution_workspace_repair_revision(
+                chat_id,
+                &user_id,
+                workspace_repair_revision,
+            )?;
         let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
         let message = SteerMessage {
             prompt: prompt.to_string(),
@@ -3930,7 +4087,14 @@ impl SessionsEngine {
         let jitter_seed = chain_id.bytes().fold(attempt_count as u64, |state, byte| {
             state.wrapping_mul(131).wrapping_add(byte as u64)
         });
-        let decision = recovery_decision(
+        let original_w = if let Some(record) = existing.as_ref() {
+            record.workspace_repair_revision
+        } else {
+            self.inner
+                .recovery
+                .execution_workspace_repair_revision(chat_id, &message_id)?
+        };
+        let mut decision = recovery_decision(
             effective_acceptance,
             &failure,
             now,
@@ -3940,6 +4104,13 @@ impl SessionsEngine {
             safe_continuation,
             jitter_seed,
         );
+        if original_w != self.inner.recovery.workspace_repair_revision(chat_id)? {
+            decision.status = RecoveryStatus::Held;
+            decision.action = luna_proto::RecoveryAction::ObserveOnly;
+            decision.automatic = false;
+            decision.retry_at_ms = None;
+            decision.detail = "Workspace association changed. Review the preserved request and use a new explicit message.".into();
+        }
         let view = TaskRecovery {
             chain_id: chain_id.clone(),
             task_id: chat_id.to_string(),
@@ -3976,6 +4147,7 @@ impl SessionsEngine {
             updated_at_ms: now,
         };
         let record = RecoveryRecord {
+            workspace_repair_revision: original_w,
             view: view.clone(),
             harness: existing
                 .as_ref()
@@ -4018,6 +4190,22 @@ impl SessionsEngine {
     }
 
     fn arm_recovery(&self, record: RecoveryRecord) {
+        match self
+            .inner
+            .recovery
+            .workspace_repair_revision(&record.view.task_id)
+        {
+            Ok(current) if current != record.workspace_repair_revision => {
+                let _ = self.hold_recovery(&record.view.task_id,
+                    "Workspace association changed; review the preserved request before a new explicit send.");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(task = %record.view.task_id, %error, "recovery workspace authority unavailable");
+                return;
+            }
+            _ => {}
+        }
         let Some(retry_at_ms) = record.view.retry_at_ms else {
             return;
         };
@@ -4122,6 +4310,11 @@ impl SessionsEngine {
         let Some(current) = self.inner.recovery.latest(task_id)? else {
             return Ok(None);
         };
+        if current.workspace_repair_revision
+            != self.inner.recovery.workspace_repair_revision(task_id)?
+        {
+            return Err(EngineError::Other("Recovery belongs to an earlier workspace association; review and send a new message.".into()));
+        }
         if current.view.chain_id != chain_id
             || !matches!(
                 current.view.status,
@@ -4165,6 +4358,14 @@ impl SessionsEngine {
     ) -> Result<(), EngineError> {
         let task_id = record.view.task_id.as_str();
         let chain_id = record.view.chain_id.as_str();
+        if record.workspace_repair_revision
+            != self.inner.recovery.workspace_repair_revision(task_id)?
+        {
+            return self.hold_recovery(
+                task_id,
+                "Workspace association changed; the original recovery was not dispatched.",
+            );
+        }
         let current = self.inner.recovery.latest(task_id)?;
         if !current.as_ref().is_some_and(|current| {
             current.view.chain_id == chain_id
@@ -4250,6 +4451,7 @@ impl SessionsEngine {
                 request.clone(),
                 Some(record.view.original_message_id.clone()),
                 Some(context.clone()),
+                record.workspace_repair_revision,
             )
             .await
         {
@@ -7404,6 +7606,17 @@ async fn drive_run(
                     tracing::warn!(chat = %chat, "orphaned steer lost: doc host unavailable");
                     break;
                 };
+                let original_w = match engine
+                    .inner
+                    .recovery
+                    .execution_workspace_repair_revision(&chat, &steer.message_id)
+                {
+                    Ok(revision) => revision,
+                    Err(error) => {
+                        tracing::warn!(chat = %chat, %error, "orphaned steer lost its original workspace authority");
+                        break;
+                    }
+                };
                 if let Err(err) = host
                     .dispatch_with_source_context(
                         &engine,
@@ -7411,6 +7624,7 @@ async fn drive_run(
                         harness_id,
                         request,
                         Some(steer.message_id.clone()),
+                        original_w,
                     )
                     .await
                 {
@@ -8559,6 +8773,7 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-a".into(),
             RunHandle {
+                workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
@@ -8666,6 +8881,7 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-a".into(),
             RunHandle {
+                workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
@@ -8748,6 +8964,7 @@ mod tests {
         lock(&core.sessions.inner.runs).insert(
             task_id.clone(),
             RunHandle {
+                workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
@@ -12690,6 +12907,7 @@ mod tests {
         frozen.prompt = "newer frozen request".into();
         frozen.attachments = vec!["/tmp/newer.png".into()];
         let current = RecoveryRecord {
+            workspace_repair_revision: 0,
             view: TaskRecovery {
                 chain_id: "new-chain".into(),
                 task_id: "chat".into(),
@@ -12823,6 +13041,7 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-active".into(),
             RunHandle {
+                workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-active".into(),
                 provider_turn: None,

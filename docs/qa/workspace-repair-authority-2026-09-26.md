@@ -2,7 +2,8 @@
 
 Base: committed main `3a173e84a0d6f775499ef19e833e31709cf1ac74`.
 Lifecycle branch: `codex/workspace-repair-authority` in `c906/luna`.
-Status: failure-first preparation; **no builds, providers or runtime changes yet**.
+Status: failure-first cases committed before runtime edits; runtime source is
+prepared but **not compiled or executed**. No Cargo, provider or native app calls.
 Storage migration **15** is reserved to this owner. Workspace owns the identity
 allocation/proof/association event and repair intent. Shared interfaces must be
 agreed before runtime implementation; the old audit ref and artifacts are retained.
@@ -92,3 +93,40 @@ that path, backup_restore integration source was extended with actual SQLite
 archive/stage/activation lineage preservation and incomplete-schema refusal.
 The existing future-version case now targets 16, and table-presence coverage
 includes the schema-15 execution-lineage table. These cases remain unrun.
+
+## Prepared lifecycle implementation
+
+- Schema 15 adds task W, original command-receipt/grant W, and immutable private
+  task/message execution lineage. Receipt JSON/public task snapshots are not
+  extended. Legacy absence means 0, never the current repair revision.
+- Durable grant matching includes W; ordinary projection changes carry the old
+  stamp or revoke stale authority. A cross-W replacement requires the exact
+  pending current-W Send/Steer receipt for that task/row inside the transaction.
+- Admission, queue/command execution, explicit steering, warm reuse, fallback
+  sends and orphan redispatch preserve original W. The final comparison occurs
+  after the task transition gate; execution lineage is persisted before provider
+  work so receipt-less trusted dispatch also remains recoverable after restart.
+- Recovery records freeze W, reject attempts to reseal a chain, and hold old
+  lineage before timer/manual retry or final dispatch. Acceptance/receipts and
+  attempt budgets are not converted into fresh authority.
+- Quiescence uses a stable per-task drain gate even for cold documents, then
+  fail-fast execution admission. It checks executing command ownership, live
+  doc rows and durable command/recovery/side-send state without opening a cold
+  handle. Final storage completion rechecks durable state plus R/W CAS.
+- The association wrapper persists unchanged registry bytes with the staged
+  identity snapshot and R/W/receipt. Pending-Run materialization has a separate
+  original-hash/W-validated snapshot-only wrapper and does not advance R/W.
+- The materialization bridge calls Workspace-owned context preparation before
+  physical checkout creation, then atomic identity/registry commit instead of
+  separately publishing managed cwd/branch. Truly unmanaged behavior is retained.
+- Backup compatibility is limited to accepting schema 15 and requiring its
+  lineage table/W columns in existing database/manifest/restore validation.
+  Full-profile rollback protection is not claimed.
+
+Failure-first source checkpoints: `6a9cb093` (nine original boundary cases),
+`bdfb3692` (pending-Run materialization case), `2d823b57` (backup/schema and
+pending side-send compatibility, plus formatting). Runtime source depends on
+the agreed Workspace identity context/helper methods and the fresh-fork RPC
+authority initializer update. Those belong to the Workspace branch; they are
+not duplicated here. Composition is required before validation. Source parsing
+with rustfmt and diff-whitespace checks pass; no compile/test success is claimed.

@@ -273,11 +273,14 @@ struct DocHostInner {
     /// ledger but dead" (a crash between mark and resolve): the drain
     /// terminalizes the latter as Rejected instead of leaving a forever-
     /// Pending entry no retry could ever reach (2026-08-19 swallowed-send).
-    executing: Mutex<HashSet<String>>,
+    executing: Mutex<HashMap<String, String>>,
     /// L07 execution lanes. SQLite receipts are the correctness boundary; this
     /// gate only prevents avoidable local interleaving between acceptance and
     /// effect finalization.
     task_command_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Stable across cold opens/LRU replacement, so repair admission never
+    /// needs to open a document (and run its recovery hooks) just to fence it.
+    queue_drain_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Receipts publish only after their SQLite transaction commits.
     task_receipts: broadcast::Sender<CommandReceipt>,
     #[cfg(test)]
@@ -288,6 +291,13 @@ struct DocHostInner {
     /// Shared client for sidecar blob PUT/GET (30s timeout, uploads.rs
     /// discipline — diff_sync's untimed client hung on dead links).
     http: reqwest::Client,
+}
+
+/// Held only around a local workspace association transaction. No provider
+/// work or document-open recovery is performed while acquiring it.
+pub struct WorkspaceRepairGuard {
+    _drain: OwnedMutexGuard<()>,
+    _execution: OwnedMutexGuard<()>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -660,7 +670,7 @@ pub struct ChatDocHandle {
     /// It also covers the gap a send-now's interrupt opens — between stopping
     /// the turn and starting its own the chat reads Idle, and an idle chat with
     /// a queue is exactly what the flush drains.
-    drain_lock: tokio::sync::Mutex<()>,
+    drain_lock: Arc<tokio::sync::Mutex<()>>,
     /// Serializes candidate queue projections through durable commit and
     /// post-commit installation. Queue mutations are built off-doc, so a
     /// failed SQLite transaction is never observable through this handle.
@@ -922,8 +932,9 @@ impl DocHost {
                 connectivity_started: AtomicBool::new(false),
                 transfers: watch::channel(Vec::new()).0,
                 connectivity_grace: Mutex::new(DegradeGrace::default()),
-                executing: Mutex::new(HashSet::new()),
+                executing: Mutex::new(HashMap::new()),
                 task_command_gates: Mutex::new(HashMap::new()),
+                queue_drain_gates: Mutex::new(HashMap::new()),
                 task_receipts: broadcast::channel(256).0,
                 #[cfg(test)]
                 approved_queue_postcommit_fail_once: AtomicBool::new(false),
@@ -983,6 +994,80 @@ impl DocHost {
 
     pub async fn task_command_gate(&self, task_id: &str) -> OwnedMutexGuard<()> {
         self.task_gate(task_id).lock_owned().await
+    }
+
+    fn queue_drain_gate(&self, task_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        lock(&self.inner.queue_drain_gates)
+            .entry(task_id.into())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    fn claim_executing(&self, chat_id: &str, command_id: &str) -> bool {
+        let mut executing = lock(&self.inner.executing);
+        if executing.contains_key(command_id) {
+            return false;
+        }
+        executing.insert(command_id.into(), chat_id.into());
+        true
+    }
+
+    /// Read-only admission check. Apply already owns the task-command lane;
+    /// preview may acquire/drop this same guard without opening a cold doc.
+    pub async fn prepare_workspace_identity_repair(
+        &self,
+        task_id: &str,
+        repair_command_id: Option<&str>,
+    ) -> Result<WorkspaceRepairGuard, EngineError> {
+        if !self.is_host(task_id) {
+            return Err(EngineError::Other(
+                "workspace repair requires the task's local owner".into(),
+            ));
+        }
+        let drain = self
+            .queue_drain_gate(task_id)
+            .try_lock_owned()
+            .map_err(|_| EngineError::Other("task queue delivery is in progress".into()))?;
+        let sessions = self
+            .sessions()
+            .ok_or_else(|| EngineError::Other("task runtime is unavailable".into()))?;
+        let execution = sessions.prepare_workspace_repair_execution(task_id)?;
+        if lock(&self.inner.executing)
+            .values()
+            .any(|owner| owner == task_id)
+        {
+            return Err(EngineError::Other(
+                "task command execution is in progress".into(),
+            ));
+        }
+        if let Some(handle) = lock(&self.inner.handles).get(task_id).cloned() {
+            if !handle.doc.read_queue()?.is_empty() {
+                return Err(EngineError::Other(
+                    "task has queued or uncertain messages".into(),
+                ));
+            }
+            if handle
+                .doc
+                .read_commands()?
+                .iter()
+                .any(|row| row.status == SessionCommandStatus::Pending)
+            {
+                return Err(EngineError::Other(
+                    "task has pending or executing commands".into(),
+                ));
+            }
+        }
+        if let Some(blocker) = self
+            .inner
+            .store
+            .workspace_repair_blocker(task_id, repair_command_id)?
+        {
+            return Err(EngineError::Other(blocker));
+        }
+        Ok(WorkspaceRepairGuard {
+            _drain: drain,
+            _execution: execution,
+        })
     }
 
     fn task_gate(&self, task_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -1161,6 +1246,11 @@ impl DocHost {
                 row_id,
                 expected_hash: None,
                 replacement_hash: Some(hash),
+                expected_workspace_repair_revision: None,
+                replacement_workspace_repair_revision: self
+                    .inner
+                    .store
+                    .command_workspace_repair_revision(command_id)?,
             });
         }
         let mut snapshots = vec![(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
@@ -2053,7 +2143,7 @@ impl DocHost {
             transcript_import: Mutex::default(),
             transcript_history,
             queue_tx,
-            drain_lock: tokio::sync::Mutex::new(()),
+            drain_lock: self.queue_drain_gate(chat_id),
             queue_projection_lock: Mutex::new(()),
             durable_projection_uninstalled: AtomicBool::new(false),
             queue_paused: AtomicBool::new(recovered_queue_pending),
@@ -3239,6 +3329,11 @@ impl DocHost {
         payload: SessionCommandPayload,
         transfers: Vec<crate::uploads::AttachmentTransfer>,
     ) -> Result<(), EngineError> {
+        let admission_w = self
+            .inner
+            .store
+            .command_workspace_repair_revision(command_id)?
+            .unwrap_or(self.inner.store.workspace_repair_revision(chat_id)?);
         let handle = self.open(chat_id)?;
         let now = now_ms();
         let based_on = handle.doc.read_entries()?.last().map(|m| CommandBasedOn {
@@ -3259,13 +3354,18 @@ impl DocHost {
             status: SessionCommandStatus::Pending,
             resolution: None,
         };
-        if !self.inner.store.record_local_executable(
-            chat_id,
-            LocalExecutableKind::Command,
-            command_id,
-            &executable_row_hash(&entry)?,
-            None,
-        )? {
+        if !self
+            .inner
+            .store
+            .record_local_executable_at_workspace_revision(
+                chat_id,
+                LocalExecutableKind::Command,
+                command_id,
+                &executable_row_hash(&entry)?,
+                None,
+                admission_w,
+            )?
+        {
             return Err(EngineError::Other(
                 "command id already has different local authority".into(),
             ));
@@ -3407,6 +3507,15 @@ impl DocHost {
         batch_key: &str,
         mutation: impl FnOnce(&SessionDoc) -> Result<T, EngineError>,
     ) -> Result<PreparedQueueProjection<T>, EngineError> {
+        let admission_w = self
+            .inner
+            .store
+            .command_workspace_repair_revision(batch_key)?
+            .unwrap_or(
+                self.inner
+                    .store
+                    .workspace_repair_revision(&handle.chat_id)?,
+            );
         let live_snapshot = handle.doc.export_snapshot()?;
         let base = if handle.retired.load(Ordering::Acquire) {
             match self
@@ -3456,13 +3565,15 @@ impl DocHost {
             if after == Some(before) {
                 continue;
             }
-            let previous = self.inner.store.local_executable_hash(
+            let previous = self.inner.store.local_executable_authority(
                 &handle.chat_id,
                 LocalExecutableKind::Queue,
                 &before.id,
             )?;
             if let Some(previous) = previous {
-                let replacement = if previous == executable_row_hash(before)? {
+                let replacement = if previous.payload_hash == executable_row_hash(before)?
+                    && previous.workspace_repair_revision == admission_w
+                {
                     after.map(executable_row_hash).transpose()?
                 } else {
                     None
@@ -3471,7 +3582,11 @@ impl DocHost {
                     doc_id: handle.chat_id.clone(),
                     kind: LocalExecutableKind::Queue,
                     row_id: before.id.clone(),
-                    expected_hash: Some(previous),
+                    expected_hash: Some(previous.payload_hash),
+                    expected_workspace_repair_revision: Some(previous.workspace_repair_revision),
+                    replacement_workspace_repair_revision: replacement
+                        .as_ref()
+                        .map(|_| previous.workspace_repair_revision),
                     replacement_hash: replacement,
                 });
             }
@@ -3484,6 +3599,8 @@ impl DocHost {
                     row_id: after.id.clone(),
                     expected_hash: None,
                     replacement_hash: Some(executable_row_hash(after)?),
+                    expected_workspace_repair_revision: None,
+                    replacement_workspace_repair_revision: Some(admission_w),
                 });
             }
         }
@@ -3495,7 +3612,7 @@ impl DocHost {
             if next_commands.contains_key(before.id.as_str()) {
                 continue;
             }
-            if let Some(previous) = self.inner.store.local_executable_hash(
+            if let Some(previous) = self.inner.store.local_executable_authority(
                 &handle.chat_id,
                 LocalExecutableKind::Command,
                 &before.id,
@@ -3504,8 +3621,10 @@ impl DocHost {
                     doc_id: handle.chat_id.clone(),
                     kind: LocalExecutableKind::Command,
                     row_id: before.id.clone(),
-                    expected_hash: Some(previous),
+                    expected_hash: Some(previous.payload_hash),
                     replacement_hash: None,
+                    expected_workspace_repair_revision: Some(previous.workspace_repair_revision),
+                    replacement_workspace_repair_revision: None,
                 });
             }
         }
@@ -3534,6 +3653,11 @@ impl DocHost {
                     row_id: after.id.clone(),
                     expected_hash: None,
                     replacement_hash: Some(hash),
+                    expected_workspace_repair_revision: None,
+                    replacement_workspace_repair_revision: self
+                        .inner
+                        .store
+                        .command_workspace_repair_revision(&after.id)?,
                 });
             } else {
                 unreceipted_new_commands.push((after.id.clone(), hash));
@@ -3832,6 +3956,15 @@ impl DocHost {
             return Ok((outcome, None));
         }
         if admit_hash.is_some() {
+            let consent_w = self
+                .inner
+                .store
+                .command_workspace_repair_revision(command_id)?
+                .ok_or_else(|| {
+                    EngineError::Other(
+                        "explicit queue action has no original workspace authority".into(),
+                    )
+                })?;
             let raw = loro::LoroDoc::new();
             raw.import(&prepared.snapshot).map_err(|error| {
                 EngineError::Other(format!("reviewed queue projection import failed: {error}"))
@@ -3846,17 +3979,22 @@ impl DocHost {
                 change.kind == LocalExecutableKind::Queue && change.row_id == correlation_id
             }) {
                 change.replacement_hash = Some(new_hash);
+                change.replacement_workspace_repair_revision = Some(consent_w);
             } else {
+                let previous = self.inner.store.local_executable_authority(
+                    &handle.chat_id,
+                    LocalExecutableKind::Queue,
+                    correlation_id,
+                )?;
                 prepared.authority_changes.push(LocalExecutableChange {
                     doc_id: handle.chat_id.clone(),
                     kind: LocalExecutableKind::Queue,
                     row_id: correlation_id.to_owned(),
-                    expected_hash: self.inner.store.local_executable_hash(
-                        &handle.chat_id,
-                        LocalExecutableKind::Queue,
-                        correlation_id,
-                    )?,
+                    expected_hash: previous.as_ref().map(|grant| grant.payload_hash.clone()),
                     replacement_hash: Some(new_hash),
+                    expected_workspace_repair_revision: previous
+                        .map(|grant| grant.workspace_repair_revision),
+                    replacement_workspace_repair_revision: Some(consent_w),
                 });
             }
         }
@@ -5514,6 +5652,14 @@ impl DocHost {
         item: &QueuedMessage,
         send: QueueSend,
     ) -> Result<QueueProviderOutcome, EngineError> {
+        let original_w = self
+            .inner
+            .store
+            .local_executable_authority(&handle.chat_id, LocalExecutableKind::Queue, &item.id)?
+            .ok_or_else(|| {
+                EngineError::Other("queued row has no original workspace authority".into())
+            })?
+            .workspace_repair_revision;
         let hash = executable_row_hash(item)?;
         if !self.inner.store.local_executable_matches(
             &handle.chat_id,
@@ -5537,7 +5683,7 @@ impl DocHost {
         let prompt = queued_message_prompt(&item.text, &item.attachments);
         if send == QueueSend::Steer {
             match sessions
-                .steer(chat_id, &prompt, Some(message_id.clone()))
+                .steer_at_workspace_revision(chat_id, &prompt, Some(message_id.clone()), original_w)
                 .await?
             {
                 SteerOutcome::Accepted => return Ok(QueueProviderOutcome::Accepted),
@@ -5588,8 +5734,15 @@ impl DocHost {
         request.resume = None; // dispatch re-derives the harness session
         request.attachments = item.attachments.clone();
         let harness = self.harness_for_request(chat_id, &request);
-        self.dispatch_with_source_context(&sessions, chat_id, harness, request, Some(message_id))
-            .await?;
+        self.dispatch_with_source_context(
+            &sessions,
+            chat_id,
+            harness,
+            request,
+            Some(message_id),
+            original_w,
+        )
+        .await?;
         Ok(QueueProviderOutcome::Accepted)
     }
 
@@ -5912,7 +6065,7 @@ impl DocHost {
                 SessionCommandStatus::Rejected | SessionCommandStatus::Expired => true,
                 SessionCommandStatus::Pending => {
                     self.inner.store.is_processed(&c.id).unwrap_or(false)
-                        && !lock(&self.inner.executing).contains(&c.id)
+                        && !lock(&self.inner.executing).contains_key(&c.id)
                 }
                 _ => false,
             };
@@ -6052,7 +6205,7 @@ impl DocHost {
         }
         // In-flight claim first (the drain's dead-command sweep must see this
         // id as alive, not crashed, while the execute below runs).
-        if !lock(&self.inner.executing).insert(entry.id.clone()) {
+        if !self.claim_executing(chat_id, &entry.id) {
             return Ok("duplicate");
         }
         // Claim BEFORE executing (the drain's own mark-before-execute rule).
@@ -6403,7 +6556,7 @@ impl DocHost {
                 if c.status == SessionCommandStatus::Pending
                     && !skipped.contains(&c.id)
                     && is_processed(&c.id)
-                    && !lock(&self.inner.executing).contains(&c.id)
+                    && !lock(&self.inner.executing).contains_key(&c.id)
                 {
                     tracing::warn!(chat = %handle.chat_id, command = %c.id,
                         "command consumed but never resolved (crash mid-execute?); rejecting");
@@ -6480,7 +6633,7 @@ impl DocHost {
             // In-flight claim: guards the dead-command sweep (an id in
             // `executing` is alive, not crashed) and serializes racing
             // drains on the same entry.
-            if !lock(&self.inner.executing).insert(entry.id.clone()) {
+            if !self.claim_executing(&handle.chat_id, &entry.id) {
                 skipped.insert(entry.id.clone());
                 continue;
             }
@@ -6772,6 +6925,20 @@ impl DocHost {
         entry: &SessionCommandEntry,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
+        let original_w = self
+            .inner
+            .store
+            .command_workspace_repair_revision(&entry.id)?
+            .or(self
+                .inner
+                .store
+                .local_executable_authority(chat_id, LocalExecutableKind::Command, &entry.id)?
+                .map(|grant| grant.workspace_repair_revision))
+            .unwrap_or(0);
+        if original_w != self.inner.store.workspace_repair_revision(chat_id)? {
+            return Ok((SessionCommandStatus::Rejected,
+                Some("workspaceRepairChanged: this command belongs to an earlier workspace association".into())));
+        }
         if let Some(receipt) = self.task_command_receipt(&entry.id)? {
             if let Some(expected) = receipt.snapshot.binding_generation {
                 let current = sessions.task_binding_generation(chat_id);
@@ -6818,9 +6985,30 @@ impl DocHost {
                 // `take()` resolves the request before dispatch, so the journal
                 // and steer→new-turn fallbacks reuse the created path instead of
                 // minting another checkout.
+                let mut managed_materialization = false;
                 let fresh_worktree = match request.worktree.take() {
                     Some(spec) => {
+                        let context = sessions
+                            .prepare_workspace_materialization(chat_id, &spec)
+                            .await?;
                         let (cwd, fresh) = self.materialize_worktree(chat_id, &spec).await?;
+                        if let Some(context) = context {
+                            let fence = luna_sync::WorkspaceMaterializationFence {
+                                expected_workspace_repair_revision: original_w,
+                                original_command_hash: executable_row_hash(entry)?,
+                            };
+                            sessions
+                                .commit_workspace_materialization(
+                                    context,
+                                    &entry.id,
+                                    &fence,
+                                    &cwd,
+                                    fresh.as_ref().map(|worktree| worktree.branch.as_str()),
+                                )
+                                .await
+                                .map_err(|error| EngineError::Other(error.message()))?;
+                            managed_materialization = true;
+                        }
                         request.cwd = cwd;
                         fresh
                     }
@@ -6834,7 +7022,7 @@ impl DocHost {
                     // still carries the repo folder — repoint it at the fresh
                     // worktree, and stamp the actual `luna/<name>` branch so
                     // the footer and the title-rename flow see it.
-                    if let Some(wt) = &fresh_worktree {
+                    if !managed_materialization && let Some(wt) = &fresh_worktree {
                         if let Err(err) = ws.set_chat_cwd(chat_id, &wt.path) {
                             tracing::warn!(chat = %chat_id, error = %err, "worktree cwd stamp failed");
                         }
@@ -6898,6 +7086,7 @@ impl DocHost {
                     harness,
                     request,
                     Some(message_id.clone()),
+                    original_w,
                 )
                 .await?;
                 // A fresh user-authored turn is the deliberate action that
@@ -6913,6 +7102,7 @@ impl DocHost {
                     prompt,
                     message_id.clone(),
                     entry.issued_at,
+                    original_w,
                 )
                 .await
             }
@@ -7036,8 +7226,10 @@ impl DocHost {
                         "orphaned input resolve failed");
                 }
                 let harness = self.harness_for_request(chat_id, &request);
-                self.dispatch_with_source_context(sessions, chat_id, harness, request, None)
-                    .await?;
+                self.dispatch_with_source_context(
+                    sessions, chat_id, harness, request, None, original_w,
+                )
+                .await?;
                 Ok((
                     SessionCommandStatus::Applied,
                     Some("answered as new turn".into()),
@@ -7086,6 +7278,7 @@ impl DocHost {
                         &prompt,
                         Some(entry.id.clone()),
                         entry.issued_at,
+                        original_w,
                     )
                     .await?;
                 if status == SessionCommandStatus::Applied {
@@ -7112,6 +7305,7 @@ impl DocHost {
         prompt: &str,
         message_id: Option<String>,
         issued_at: i64,
+        original_w: u64,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
         // Keep upstream's queued-attachment rewrite and send-time canonical
@@ -7129,7 +7323,10 @@ impl DocHost {
         {
             tracing::warn!(chat = %chat_id, error = %err, "canonical user-message write failed");
         }
-        match sessions.steer(chat_id, &prompt, message_id.clone()).await? {
+        match sessions
+            .steer_at_workspace_revision(chat_id, &prompt, message_id.clone(), original_w)
+            .await?
+        {
             SteerOutcome::Accepted => {
                 handle.queue_paused.store(false, Ordering::Release);
                 Ok((SessionCommandStatus::Applied, None))
@@ -7150,8 +7347,10 @@ impl DocHost {
                 // images; this prompt's own refs (if any) ride its text.
                 request.attachments = Vec::new();
                 let harness = self.harness_for_request(chat_id, &request);
-                self.dispatch_with_source_context(sessions, chat_id, harness, request, message_id)
-                    .await?;
+                self.dispatch_with_source_context(
+                    sessions, chat_id, harness, request, message_id, original_w,
+                )
+                .await?;
                 handle.queue_paused.store(false, Ordering::Release);
                 Ok((
                     SessionCommandStatus::Applied,
@@ -7271,6 +7470,7 @@ impl DocHost {
         harness: HarnessId,
         request: luna_proto::RunRequest,
         message_id: Option<String>,
+        original_w: u64,
     ) -> Result<String, EngineError> {
         if let Some(workspace) = self.workspace()
             && let Some(context) = self.capture_source_context(&request.cwd).await
@@ -7279,7 +7479,7 @@ impl DocHost {
             tracing::warn!(chat = %chat_id, error = %err, "conversation source stamp failed");
         }
         sessions
-            .dispatch(chat_id, harness, request, message_id)
+            .dispatch_at_workspace_revision(chat_id, harness, request, message_id, original_w)
             .await
     }
 
