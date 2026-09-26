@@ -25,9 +25,11 @@ agreed before runtime implementation; the old audit ref and artifacts are retain
 | Old recovery lineage restored after repair | Its original W remains in private frozen-request storage/CAS. Neither a timer nor an explicit retry silently replaces W. Reject/hold before provider dispatch, retaining original receipt and unknown-delivery semantics. |
 | Lock order and final state | Task-command lane precedes drain and execution gates. Never hold the task transition gate and then await drain. Quiescence recheck and R/W commit must exclude fresh executable admission; SQLite/projection locks contain no provider await. |
 | Nonquiescent or unrelated sibling | A blocked task changes nothing. Another task's repair/admission may proceed, and an unrelated identity-log append is preserved. |
+| Side-panel send in its separate no-replay ledger | `side_chat_sends.state='unknown'` is admitted/in-flight or uncertain work for that task and blocks repair. Existing accepted/unknown replay policy remains unchanged; no Sidebar policy or wire changes. |
 | Fresh post-repair work | New explicit admission captures current W and executes exactly once. Unrelated rename/queue edits advancing R do not invalidate otherwise current grants because W changes only on repair. |
 | Legacy compatibility before first repair | Existing unstamped grants/recovery have W=0 and remain usable while task W=0, subject to all existing owner/hash/binding/replay fences. |
 | Full-profile restore/rollback | No claim of anti-replay when the high-water state and authority are rolled back together. Restore/rebuild must retain v2/W or fence unresolved legacy task state; existing restore behavior/tests must remain intact. |
+| Schema 15 backup compatibility | Real SQLite archive/stage/activation retains the archive's current W and older grant/recovery/message lineage. Refuse version 16, missing execution-lineage table or missing W columns before accepting an unusable archive. No backup architecture or full rollback protection change. |
 | Authorized new-v2/unbound WorktreeSpec initialization | A separate pending-Run transaction verifies task, original command row hash/W, current W and pending Run intent. It atomically publishes registry/identity metadata without marking Run Applied or advancing R/W. Bad hash/W/task or terminal receipt refuses; legacy/bound/history reassociation is excluded. |
 
 ## Agreed narrow contract
@@ -75,7 +77,7 @@ synthetic provider homes only. Proposed-interface compile failures must be kept
 separate from runtime assertion evidence. No result will be reported as a
 baseline defect until execution reaches the intended behavioral assertion.
 
-`crates/engine/tests/workspace_repair_authority.rs` contains nine prewritten
+`crates/engine/tests/workspace_repair_authority.rs` contains ten prewritten
 integration cases using the agreed new interfaces and synthetic provider homes.
 It records JSON via `LUNA_WORKSPACE_AUTHORITY_REPORT_DIR` when later run. The
 isolated transaction cases use an opaque proof snapshot; actual v2 identity
@@ -83,3 +85,10 @@ evidence and API semantics remain in the Workspace owner's suite. These sources
 have not been compiled or run. New interface/schema absence is not a runtime
 baseline defect. Subsequent implementation and focused verification must retain
 separate logs for interface/fixture errors and reached behavioral assertions.
+
+Coordinator approved the minimal schema-15 backup compatibility extension after
+source inspection found `backup.rs::CURRENT_SCHEMA` fixed at 14. Before changing
+that path, backup_restore integration source was extended with actual SQLite
+archive/stage/activation lineage preservation and incomplete-schema refusal.
+The existing future-version case now targets 16, and table-presence coverage
+includes the schema-15 execution-lineage table. These cases remain unrun.
