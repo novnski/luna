@@ -518,6 +518,21 @@ impl LocalImporter {
             }
         }
 
+        // Copy side-chat ownership before publishing native child chat rows,
+        // so they never flash into the main sidebar during profile import.
+        if ledger_ok {
+            let target_profile = self
+                .inner
+                .target_journals
+                .parent()
+                .ok_or_else(|| EngineError::Other("target profile unavailable".into()))?;
+            if let Err(error) = crate::side_chats::import_saved(
+                &self.source_root().join("docs.sqlite3"),
+                &target_profile.join("docs.sqlite3"),
+            ) {
+                errors.push(format!("side chat history: {error}"));
+            }
+        }
         let source_journals = self.source_root().join("journals");
         let total = pending_chats.len();
         let mut imported_chats = 0;
@@ -530,7 +545,13 @@ impl LocalImporter {
                     chat_id: chat.id.clone(),
                     title: chat.title.clone(),
                 });
-                match self.import_chat(&source_store, chat, &source_journals, permit.as_ref()) {
+                match self.import_chat(
+                    &source_store,
+                    chat,
+                    &source_journals,
+                    permit.as_ref(),
+                    registry.side_chat_parent(&chat.id).as_deref(),
+                ) {
                     Ok(journal) => {
                         imported_chats += 1;
                         if journal {
@@ -587,6 +608,7 @@ impl LocalImporter {
         chat: &luna_proto::Chat,
         source_journals: &Path,
         permit: Option<&DeviceWritePermit>,
+        side_parent: Option<&str>,
     ) -> Result<bool, EngineError> {
         // Doc bytes may be absent (a chat row created but never opened) — the
         // row alone is still worth carrying; a doc materializes on first open.
@@ -630,12 +652,18 @@ impl LocalImporter {
         // s2 adopt branch.
         let mut row = chat.clone();
         row.room_gen = Some(CHAT2_DOC_EPOCH);
-        match permit {
-            Some(permit) => self
-                .inner
+        if let Some(parent) = side_parent {
+            self.inner
                 .workspace
-                .import_chat_row_admitted(&row, permit)?,
-            None => self.inner.workspace.import_chat_row(&row)?,
+                .import_side_chat_row(&row, parent, permit)?;
+        } else {
+            match permit {
+                Some(permit) => self
+                    .inner
+                    .workspace
+                    .import_chat_row_admitted(&row, permit)?,
+                None => self.inner.workspace.import_chat_row(&row)?,
+            }
         }
         Ok(copied)
     }

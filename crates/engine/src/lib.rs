@@ -149,6 +149,7 @@ pub mod rpc;
 pub mod run_journal;
 pub mod runtime_contract;
 pub mod sessions;
+pub mod side_chats;
 pub mod source_control;
 pub mod spaces;
 pub mod task_identity;
@@ -286,6 +287,7 @@ pub struct EngineCore {
     backup_control: Option<backup_control::BackupControl>,
     pub store: Arc<DocsStore>,
     pub sessions: SessionsEngine,
+    pub side_chats: side_chats::SideChats,
     pub doc_host: DocHost,
     pub workspace: WorkspaceHost,
     pub registry: Arc<HarnessRegistry>,
@@ -568,6 +570,14 @@ impl EngineCore {
         doc_host.set_sessions(sessions.clone());
         sessions.set_doc_host(doc_host.clone());
         sessions.set_task_identity(task_identity.clone());
+        let side_chats = side_chats::SideChats::open(
+            &profile.store_root(),
+            device_write.handle(),
+            sessions.clone(),
+            doc_host.clone(),
+            workspace.clone(),
+        )
+        .map_err(|error| EngineError::Other(error.to_string()))?;
         match sessions.recover_stale() {
             Ok(0) => {}
             Ok(recovered) => tracing::info!(recovered, "stale sessions recovered on boot"),
@@ -652,6 +662,7 @@ impl EngineCore {
         ));
         Ok(Self {
             github_pr,
+            side_chats,
             backup_control,
             store,
             sessions,
@@ -861,7 +872,8 @@ impl EngineCore {
         )
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
-        .with_github_pr(self.github_pr.clone());
+        .with_github_pr(self.github_pr.clone())
+        .with_side_chats(self.side_chats.clone());
         if let Some(remote_auth) = &self.remote_auth {
             rpc = rpc.with_remote_auth(remote_auth.clone());
         }
@@ -932,7 +944,8 @@ impl EngineCore {
         // releases the next queued row. Freeze first so quitting never starts
         // recovered work while the engine is being torn down.
         self.doc_host.pause_all_queues();
-        let mut clean = self.sessions.shutdown().await;
+        let mut clean = self.side_chats.shutdown().await;
+        clean &= self.sessions.shutdown().await;
         self.terminals.shutdown();
         self.agent_accounts.shutdown();
         self.change_requests.shutdown();

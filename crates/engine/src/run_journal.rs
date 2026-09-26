@@ -428,6 +428,15 @@ impl RunJournal {
     /// Crash-recovery scan: chat ids whose journal's last event is NOT a `Done` — their
     /// runs died mid-stream and need recovery (stamp `aborted`, close the journal).
     pub fn stale_sessions(&self) -> Result<Vec<String>, JournalError> {
+        self.stale_sessions_filtered(|_| true)
+    }
+
+    /// Apply metadata ownership before opening any journal payload. Sealed
+    /// side-chat history is recovered lazily, never scanned at startup.
+    pub(crate) fn stale_sessions_filtered(
+        &self,
+        include: impl Fn(&str) -> bool,
+    ) -> Result<Vec<String>, JournalError> {
         let mut stale = Vec::new();
         for entry in std::fs::read_dir(&self.dir)? {
             let entry = entry?;
@@ -438,6 +447,9 @@ impl RunJournal {
             let Some(chat_id) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
+            if !include(chat_id) {
+                continue;
+            }
             let last = read_lines(&path)?.into_iter().next_back();
             match last {
                 Some((_, AgentEvent::Done { .. })) | None => {}

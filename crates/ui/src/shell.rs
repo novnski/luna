@@ -69,7 +69,9 @@ use crate::transcript::{self, Transcript, TranscriptEvent};
 use crate::workspace_links::resolve_workspace_file_link;
 
 mod activity_center;
+mod agents;
 mod command_palette;
+mod side_chats;
 mod spaces;
 mod tabs;
 mod usage;
@@ -531,6 +533,8 @@ pub enum RightSurface {
     /// A subagent's transcript, read-only (per-subagent viz) — the handle
     /// keys [`Shell::subagent_tabs`].
     Subagent(u64),
+    Agents,
+    SideChats,
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
@@ -1679,6 +1683,9 @@ struct OrgGateUi {
 /// read-only transcript entity whose drop tears the view down.
 struct SubagentTab {
     doc_id: String,
+    chat_id: String,
+    frozen: bool,
+    paused: bool,
     title: SharedString,
     transcript: Entity<Transcript>,
     /// Keeps a frozen-blob fetch alive (it falls back to a live doc watch).
@@ -1795,6 +1802,8 @@ pub struct Shell {
     /// [`Transcript`] pinned to its subagent doc.
     subagent_tabs: std::collections::HashMap<u64, SubagentTab>,
     subagent_seq: u64,
+    side_chat_panel: Option<Entity<side_chats::SideChatPanel>>,
+    side_chat_events: Option<Subscription>,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
@@ -2254,6 +2263,8 @@ impl Shell {
             diff_seq: 0,
             subagent_tabs: std::collections::HashMap::new(),
             subagent_seq: 0,
+            side_chat_panel: None,
+            side_chat_events: None,
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
@@ -2700,6 +2711,13 @@ impl Shell {
         // Healing a persisted, deleted filter above changes the effective
         // Project scope without changing AppState again.
         self.reconcile_session_history_scope(false, cx);
+        if self
+            .side_chat_panel
+            .as_ref()
+            .is_some_and(|panel| !panel.read(cx).is_current(cx))
+        {
+            self.release_side_chat(cx);
+        }
         // Chat switch: restore THAT chat's panel state (per-session open flags;
         // snap, no tween — the panels belong to the destination chat).
         let selected = state.read(cx).selected_chat.clone().unwrap_or_default();
@@ -2707,6 +2725,8 @@ impl Shell {
             self.last_appshot_chat = Some(selected.clone());
         }
         if selected != self.active_chat {
+            self.release_side_chat(cx);
+            self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             self.active_chat = selected;
             // Route history: a chat switch is a navigation. The very first
@@ -2854,6 +2874,8 @@ impl Shell {
         let key = self.panel_key(cx);
         let open = self.panels.toggle_changes(&key);
         if !open {
+            self.release_side_chat(cx);
+            self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             // Closing always leaves takeover mode — reopening at full bleed
             // with the conversation gone read as a broken chat.
@@ -3012,6 +3034,8 @@ impl Shell {
                         browser.page.url.clone().map(Into::into),
                     )
                 }),
+                RightSurface::Agents => Some((*surface, "Agents".into(), false, None)),
+                RightSurface::SideChats => Some((*surface, "Side chats".into(), false, None)),
                 RightSurface::Picker => None,
             })
             .collect()
@@ -3031,6 +3055,8 @@ impl Shell {
             RightSurface::Picker
             | RightSurface::Diff(_)
             | RightSurface::Terminal(_)
+            | RightSurface::Agents
+            | RightSurface::SideChats
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_) => {
                 return None;
@@ -3103,6 +3129,8 @@ impl Shell {
 
     fn set_right_active(&mut self, surface: RightSurface, cx: &mut Context<Self>) {
         if self.resolved_right_active(cx) != surface {
+            self.release_side_chat(cx);
+            self.suspend_subagent_watches(Some(surface), cx);
             self.suspend_file_images(cx);
         }
         let key = self.panel_key(cx);
@@ -3134,7 +3162,10 @@ impl Shell {
             }
             // The tab's feed (watch or snapshot) runs from open to close —
             // activation needs no revalidation.
-            RightSurface::Subagent(_) | RightSurface::Browser(_) => {}
+            RightSurface::Subagent(_)
+            | RightSurface::Browser(_)
+            | RightSurface::Agents
+            | RightSurface::SideChats => {}
             RightSurface::Picker => {}
         }
         cx.notify();
@@ -3621,6 +3652,18 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match event {
+            TranscriptEvent::StartSideChat {
+                task_id,
+                message_id,
+                text,
+            } => {
+                if self.active_chat == *task_id {
+                    self.release_side_chat(cx);
+                    self.add_work_surface(RightSurface::SideChats, cx);
+                    self.create_side_chat_panel(Some((message_id.clone(), text.clone())), cx);
+                }
+            }
+            TranscriptEvent::SideChatResult { .. } => {}
             TranscriptEvent::OpenSubagent {
                 chat_id,
                 doc_id,
@@ -3703,6 +3746,9 @@ impl Shell {
             id,
             SubagentTab {
                 doc_id,
+                chat_id,
+                frozen,
+                paused: false,
                 title: title.into(),
                 transcript,
                 _fetch: fetch,
@@ -3715,6 +3761,38 @@ impl Shell {
             .or_default()
             .push(RightSurface::Subagent(id));
         self.set_right_active(RightSurface::Subagent(id), cx);
+    }
+
+    fn suspend_subagent_watches(&mut self, except: Option<RightSurface>, cx: &mut Context<Self>) {
+        for (id, tab) in &mut self.subagent_tabs {
+            if except == Some(RightSurface::Subagent(*id)) || tab.paused {
+                continue;
+            }
+            tab._fetch = None;
+            tab.paused = true;
+            self.state.update(cx, |state, cx| {
+                state.unwatch_subagent_doc(&tab.doc_id);
+                cx.notify();
+            });
+        }
+    }
+
+    fn resume_subagent_watch(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.subagent_tabs.get(&id).filter(|tab| tab.paused) else {
+            return;
+        };
+        let (chat, doc, frozen) = (tab.chat_id.clone(), tab.doc_id.clone(), tab.frozen);
+        let fetch = if frozen {
+            self.spawn_subagent_snapshot_fetch(&chat, &doc, cx)
+        } else {
+            self.state
+                .update(cx, |state, cx| state.watch_subagent_doc(doc, cx));
+            None
+        };
+        if let Some(tab) = self.subagent_tabs.get_mut(&id) {
+            tab._fetch = fetch;
+            tab.paused = false;
+        }
     }
 
     /// Fetch a finished subagent's frozen transcript blob
@@ -3815,7 +3893,8 @@ impl Shell {
                         .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
                 }
             }
-            RightSurface::Picker => {}
+            RightSurface::SideChats => self.release_side_chat(cx),
+            RightSurface::Agents | RightSurface::Picker => {}
         }
         self.panels.update(&key, |p| {
             if p.right_active == surface {
@@ -10646,6 +10725,8 @@ impl Shell {
         let content: AnyElement = if self.right_pane_open(cx) || self.tween_active(self.right_tween)
         {
             match self.resolved_right_active(cx) {
+                RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
+                RightSurface::SideChats if self.right_pane_open(cx) => self.render_side_chats(cx),
                 // Rendering a Files surface activates its image. Keep it unmounted
                 // throughout the closing animation after suspending its resources.
                 RightSurface::Files | RightSurface::File(_) if !self.right_pane_open(cx) => {
@@ -10703,7 +10784,10 @@ impl Shell {
                     });
                     panel.into_any_element()
                 }
-                RightSurface::Subagent(id) if self.subagent_tabs.contains_key(&id) => {
+                RightSurface::Subagent(id)
+                    if self.right_pane_open(cx) && self.subagent_tabs.contains_key(&id) =>
+                {
+                    self.resume_subagent_watch(id, cx);
                     let transcript = self
                         .subagent_tabs
                         .get(&id)
@@ -10807,6 +10891,10 @@ impl Shell {
         let row = |id: &'static str, icon_path: &'static str, title: &'static str| {
             div()
                 .id(id)
+                .role(gpui::Role::Button)
+                .aria_label(title)
+                .tab_index(0)
+                .focus_visible(move |style| style.border_color(border_strong))
                 .w_full()
                 .h(px(44.0))
                 .px(px(14.0))
@@ -10842,6 +10930,42 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
+                    .when(!self.active_chat.is_empty(), |el| {
+                        el.child(
+                            row("surface-card-agents", icons::BOT, "Agents")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.add_work_surface(RightSurface::Agents, cx)
+                                }))
+                                .on_key_down(cx.listener(
+                                    |this, event: &gpui::KeyDownEvent, _, cx| {
+                                        if is_settings_nav_activation(
+                                            &event.keystroke.key,
+                                            event.is_held,
+                                        ) {
+                                            this.add_work_surface(RightSurface::Agents, cx);
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                )),
+                        )
+                        .child(
+                            row("surface-card-side-chats", icons::PLUS, "Side chats")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.add_work_surface(RightSurface::SideChats, cx)
+                                }))
+                                .on_key_down(cx.listener(
+                                    |this, event: &gpui::KeyDownEvent, _, cx| {
+                                        if is_settings_nav_activation(
+                                            &event.keystroke.key,
+                                            event.is_held,
+                                        ) {
+                                            this.add_work_surface(RightSurface::SideChats, cx);
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                )),
+                        )
+                    })
                     .child(
                         row("surface-card-files", icons::FOLDER_WITH_FILES, "Files").on_click(
                             cx.listener(|this, _, window, cx| {
@@ -11074,7 +11198,8 @@ impl Shell {
                         }
                     })
                     .unwrap_or(icons::LIST),
-                RightSurface::Subagent(_) => icons::BOT,
+                RightSurface::Subagent(_) | RightSurface::Agents => icons::BOT,
+                RightSurface::SideChats => icons::PLUS,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Browser(_) => icons::GLOBE,
                 RightSurface::Picker => icons::PLUS,
@@ -11389,6 +11514,66 @@ impl Shell {
                                 )
                                 .child(SharedString::from("Browser")),
                         )
+                        .when(!self.active_chat.is_empty(), |menu| {
+                            menu.child(
+                                popover::menu_row(&theme, false, "right-plus-agents")
+                                    .id("right-plus-agents-row")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Agents")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_work_surface(RightSurface::Agents, cx);
+                                        this.close_right_plus(cx);
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, _, cx| {
+                                            if is_settings_nav_activation(
+                                                &event.keystroke.key,
+                                                event.is_held,
+                                            ) {
+                                                this.add_work_surface(RightSurface::Agents, cx);
+                                                this.close_right_plus(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        icon(icons::BOT)
+                                            .size(px(13.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Agents"),
+                            )
+                            .child(
+                                popover::menu_row(&theme, false, "right-plus-side-chats")
+                                    .id("right-plus-side-chats-row")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Side chats")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_work_surface(RightSurface::SideChats, cx);
+                                        this.close_right_plus(cx);
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, _, cx| {
+                                            if is_settings_nav_activation(
+                                                &event.keystroke.key,
+                                                event.is_held,
+                                            ) {
+                                                this.add_work_surface(RightSurface::SideChats, cx);
+                                                this.close_right_plus(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        icon(icons::PLUS)
+                                            .size(px(13.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Side chats"),
+                            )
+                        })
                         .child(
                             popover::menu_row(&theme, false, "right-plus-terminal")
                                 .id("right-plus-terminal-row")
