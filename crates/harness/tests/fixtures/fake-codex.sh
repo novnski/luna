@@ -694,13 +694,27 @@ case "$turnline" in
   read -r steerline || exit 1
   sid=$(rid "$steerline")
   has "$steerline" '"method":"turn/steer"' || exit 1
-  emit "{\"id\":$sid,\"result\":{}}"
+  emit "{\"id\":$sid,\"result\":{\"turnId\":\"t-1\"}}"
   # None of these identity-free text echoes can prove which durable request
   # was incorporated: one is stale, two are duplicate same-turn content.
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-stale","item":{"id":"u-stale","type":"userMessage","text":"same prompt"}}}'
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"id":"u-first","type":"userMessage","text":"same prompt"}}}'
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"id":"u-duplicate","type":"userMessage","text":"same prompt"}}}'
   emit '{"method":"item/agentMessage/delta","params":{"threadId":"th-1","turnId":"t-1","itemId":"m1","delta":"ambiguous-echoes-observed"}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  ;;
+
+*scenario:steer-wrong-turn*|*scenario:steer-missing-turn*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  read -r steerline || exit 1
+  sid=$(rid "$steerline")
+  has "$steerline" '"method":"turn/steer"' || exit 1
+  if has "$turnline" 'scenario:steer-wrong-turn'; then
+    emit "{\"id\":$sid,\"result\":{\"turnId\":\"t-other\"}}"
+  else
+    emit "{\"id\":$sid,\"result\":{}}"
+  fi
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
   ;;
 
@@ -721,9 +735,8 @@ case "$turnline" in
   read -r steerline || exit 1
   sid=$(rid "$steerline")
   has "$steerline" '"method":"turn/steer"' || exit 1
-  emit "{\"id\":$sid,\"result\":{}}"
-  # No echoed userMessage: accepted for steering is not proof that the model
-  # incorporated the prompt.
+  emit "{\"id\":$sid,\"result\":{\"turnId\":\"t-1\"}}"
+  # The correlated ACK settles this input without needing a userMessage echo.
   emit '{"method":"item/agentMessage/delta","params":{"itemId":"m1","delta":"accepted-without-incorporation"}}'
   emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
   ;;
@@ -760,7 +773,7 @@ case "$turnline" in
   if has "$steerline" '"method":"turn/steer"' &&
     has "$steerline" '"expectedTurnId":"t-1"' &&
     has "$steerline" 'redirect please'; then
-    emit "{\"id\":$sid,\"result\":{}}"
+    emit "{\"id\":$sid,\"result\":{\"turnId\":\"t-1\"}}"
     emit '{"method":"item/completed","params":{"item":{"id":"u-steer","type":"userMessage","text":"redirect please"}}}'
     emit '{"method":"item/agentMessage/delta","params":{"itemId":"m1","delta":"steered"}}'
     emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'

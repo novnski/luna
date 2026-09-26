@@ -1613,20 +1613,13 @@ async fn run_session(session: Session) {
         let session_id = match &request.resume {
             Some(resume) => {
                 // Sessions are durable server-side: resume = reuse the id.
-                match server.session_info(resume, dir).await {
-                    Ok(info) => info
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or(resume)
-                        .to_owned(),
-                    Err(e) => {
-                        tracing::debug!(
-                            target: "luna_harness::opencode",
-                            "session resume failed (starting fresh): {e}"
-                        );
-                        create_session(&server, dir, &permission_rules).await?
-                    }
-                }
+                // A failed lookup (including a transient server failure) is
+                // not authorization to discard this conversation's history.
+                let info = server.session_info(resume, dir).await?;
+                info.get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(resume)
+                    .to_owned()
             }
             None => create_session(&server, dir, &permission_rules).await?,
         };

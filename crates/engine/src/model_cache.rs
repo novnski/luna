@@ -55,6 +55,7 @@ pub(crate) struct ModelCache {
     accounts: AgentAccounts,
     in_flight: tokio::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     bootstrap_started: AtomicBool,
+    background_cancel: tokio_util::sync::CancellationToken,
 }
 
 impl ModelCache {
@@ -71,6 +72,7 @@ impl ModelCache {
             accounts,
             in_flight: tokio::sync::Mutex::new(HashMap::new()),
             bootstrap_started: AtomicBool::new(false),
+            background_cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 
@@ -260,6 +262,10 @@ impl ModelCache {
         Ok(())
     }
 
+    pub(crate) fn shutdown(&self) {
+        self.background_cancel.cancel();
+    }
+
     /// Starts once per engine, after an RPC service exists. Two probes at most
     /// run concurrently; a slow or unavailable provider cannot block startup.
     pub(crate) fn start_background_refresh(self: &Arc<Self>) {
@@ -270,9 +276,20 @@ impl ModelCache {
             return;
         }
         let cache = self.clone();
+        let cancel = self.background_cancel.clone();
         runtime.spawn(async move {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {}
+                _ = cache.refresh_periodically() => {}
+            }
+        });
+    }
+
+    async fn refresh_periodically(self: Arc<Self>) {
+        let cache = self;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        loop {
             let mut targets = Vec::new();
             for descriptor in cache.registry.descriptors() {
                 if !descriptor.installed
@@ -303,8 +320,7 @@ impl ModelCache {
                     }
                 })
                 .await;
-                tokio::time::sleep(Duration::from_secs(2 * 60 * 60)).await;
-            }
-        });
+            tokio::time::sleep(Duration::from_secs(2 * 60 * 60)).await;
+        }
     }
 }

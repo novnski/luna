@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const CACHE_VERSION: u32 = 2;
+// Reparse existing transcripts after changing Codex notification identities.
+const CACHE_VERSION: u32 = 3;
 const MAX_FILES: usize = 10_000;
 // Codex rollouts can exceed 1 GiB. The scanner streams them and checkpoints
 // completed prefixes, so bound total file size without rejecting real history.
@@ -329,11 +330,23 @@ fn parse_codex(line: &str, state: &mut CodexState) -> Option<Record> {
     if state.model.is_empty() {
         return None;
     }
-    let signature = serde_json::to_string(usage).ok()?;
+    // Equal per-call counts do not identify the same call. Codex also emits
+    // repeated snapshots, so use the advancing cumulative count to distinguish
+    // new work from a duplicate notification. Older rows without totals can
+    // only be correlated by their timestamp and per-call usage.
+    let signature = serde_json::to_string(&(
+        usage,
+        payload.pointer("/info/total_token_usage"),
+        payload
+            .pointer("/info/total_token_usage")
+            .is_none()
+            .then_some(at_ms),
+    ))
+    .ok()?;
     if state.last_signature.as_deref() == Some(&signature) {
         return None;
     }
-    state.last_signature = Some(signature);
+    state.last_signature = Some(signature.clone());
     if state.suppress_fork_copy {
         if at_ms.saturating_sub(state.fork_anchor_ms) < 1_000 {
             state.fork_anchor_ms = at_ms;
@@ -358,7 +371,10 @@ fn parse_codex(line: &str, state: &mut CodexState) -> Option<Record> {
         session: state.session.clone(),
         tokens,
         cost_usd: None,
-        dedupe: None,
+        // The same rollout can move from sessions to archived_sessions while
+        // its old path is still cached. Its records remain the same work.
+        dedupe: (!state.session.is_empty())
+            .then(|| serde_json::to_string(&(&state.session, at_ms, &signature)).unwrap()),
     })
 }
 
@@ -1049,6 +1065,37 @@ fn add_live_source(
         root.canonicalize().unwrap_or(root)
     });
     let mut source = add_source_configured(provider, Ok(root), cutoff_ms, deadline, cache, all);
+    if provider == UsageProvider::Codex
+        && let Some(home) = home
+    {
+        let archive = home.join("archived_sessions");
+        // This directory is optional until the first native archive. A missing
+        // archive is not a scan failure, and archive-only homes are valid.
+        if archive.exists() {
+            let archive = archive.canonicalize().unwrap_or(archive);
+            let archived =
+                add_source_configured(provider, Ok(Some(archive)), cutoff_ms, deadline, cache, all);
+            source.files_scanned += archived.files_scanned;
+            source.files_cached += archived.files_cached;
+            source.failed_files += archived.failed_files;
+            if source.status != UsageSourceStatus::Partial {
+                source.status = archived.status;
+                source.detail = archived.detail;
+            }
+            source.distinct_sessions = all
+                .iter()
+                .filter(|(held_provider, record)| {
+                    *held_provider == provider && !record.session.is_empty()
+                })
+                .map(|(_, record)| record.session.as_str())
+                .collect::<HashSet<_>>()
+                .len() as u64;
+        }
+        source.fingerprint = fingerprint(
+            provider,
+            &home.canonicalize().unwrap_or_else(|_| home.to_path_buf()),
+        );
+    }
     source.environment_id = "local".into();
     if source.status == UsageSourceStatus::Unsupported {
         source.detail = Some("Selected provider home is unavailable".into());
@@ -1385,10 +1432,11 @@ fn snapshot_impl(
     };
     let expected_periods = if days == 1 { 24 } else { days as usize };
     let period_starts_ms = (request.period_starts_ms.len() == expected_periods
-        && request
-            .period_starts_ms
-            .windows(2)
-            .all(|pair| pair[0] < pair[1] && pair[1] - pair[0] <= 26 * 3_600_000)
+        && request.period_starts_ms.windows(2).all(|pair| {
+            pair[1]
+                .checked_sub(pair[0])
+                .is_some_and(|width| width > 0 && width <= 26 * 3_600_000)
+        })
         && request
             .period_starts_ms
             .first()

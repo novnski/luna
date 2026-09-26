@@ -225,6 +225,16 @@ async fn non_codex_managed_tasks_continue_and_keep_local_metadata_behavior() {
     );
     wait_for_done(&mut events).await;
 
+    // The journal event is published before drive_run settles its live handle.
+    // Archive is correctly fenced while that handle still owns an active turn.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while core.sessions.active_turn_id(&task_id).is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("provider turn settled before metadata mutations");
+
     for mutation in [
         serde_json::json!({
             "op": "renameChat",
@@ -237,10 +247,15 @@ async fn non_codex_managed_tasks_continue_and_keep_local_metadata_behavior() {
             "archived": true
         }),
     ] {
-        core.rpc_service()
+        let reply = core
+            .rpc_service()
             .handle(methods::MUTATE, mutation)
             .await
             .unwrap();
+        let luna_rpc::RpcReply::Value(value) = reply else {
+            panic!("expected mutation receipt")
+        };
+        assert_eq!(value["receipt"]["status"], "applied", "{value}");
     }
     let chat = core.workspace.chat(&task_id).unwrap().unwrap();
     assert_eq!(chat.title.as_deref(), Some("Local metadata still works"));

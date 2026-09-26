@@ -908,6 +908,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) -> bool {
+        self.model_cache.shutdown();
         self.cleanup_cancel.cancel();
         let cleanup = self
             .cleanup_worker
@@ -967,6 +968,7 @@ impl EngineCore {
 
 impl Drop for EngineCore {
     fn drop(&mut self) {
+        self.model_cache.shutdown();
         self.cleanup_cancel.cancel();
         if let Some((_, task)) = self
             .cleanup_worker

@@ -890,7 +890,8 @@ impl SessionDoc {
         message_id: &str,
         part_id: &str,
         is_error: bool,
-        diff_stats: Option<&[ToolDiffStat]>,
+        output: Option<&str>,
+        diff: Option<&luna_proto::ToolDiff>,
     ) -> Result<bool, DocError> {
         let messages = self.doc.get_list("messages");
         for i in (0..messages.len()).rev() {
@@ -922,14 +923,24 @@ impl SessionDoc {
                 {
                     continue;
                 }
-                part.insert("isError", is_error)?;
-                part.insert("resolved", true)?;
-                if let Some(stats) = diff_stats {
-                    part.insert(
-                        "diffStats",
-                        loro_value_from_json(&serde_json::to_value(stats)?),
-                    )?;
+                // Use the normal fold so delayed results get the same bounded
+                // preview, private-tool handling and lazy output/diff refs.
+                let stored: DocPartJson =
+                    serde_json::from_value(part.get_deep_value().to_json_value())?;
+                let mut folded = vec![from_doc_part(stored)];
+                crate::parts::fold_event_into_parts(
+                    &mut folded,
+                    &luna_proto::AgentEvent::ToolResult {
+                        id: part_id.to_owned(),
+                        is_error,
+                        output: output.map(str::to_owned),
+                        diff: diff.cloned(),
+                    },
+                );
+                if let Some(chat_id) = self.chat_id() {
+                    crate::parts::apply_journal_output_refs(&chat_id, &mut folded);
                 }
+                update_part_fields(&part, &folded[0])?;
                 self.doc.commit();
                 return Ok(true);
             }

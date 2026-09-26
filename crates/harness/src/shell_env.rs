@@ -135,10 +135,12 @@ mod unix {
         }
     }
 
-    /// Run `<shell> <flags> 'echo BEGIN; env; echo END'` per flag set until one
+    /// Run `<shell> <flags> 'echo BEGIN; /usr/bin/env; echo END'` per flag set until one
     /// yields a parseable PATH.
     pub(super) fn snapshot_path(shell: &Path, timeout: Duration) -> Option<OsString> {
-        let script = format!("echo {BEGIN_MARKER}; env; echo {END_MARKER}");
+        // The PATH being discovered may intentionally exclude /usr/bin. Do
+        // not depend on that PATH to locate the command that reads it.
+        let script = format!("echo {BEGIN_MARKER}; /usr/bin/env; echo {END_MARKER}");
         for flags in attempt_flag_sets(shell) {
             let output = run_and_capture(shell, &flags, &script, timeout);
             if let Some(path) = parse_snapshot_path(&output) {

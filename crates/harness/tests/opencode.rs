@@ -222,6 +222,11 @@ impl FakeOpencode {
                 }
             }
             ("GET", "/session/ses_resume") => ("200 OK", json!({ "id": "ses_resume" })),
+            ("PATCH", "/session/ses_resume") => ("200 OK", json!({ "id": "ses_resume" })),
+            ("GET", "/session/ses_unavailable") => (
+                "503 Service Unavailable",
+                json!({"message":"temporarily unavailable"}),
+            ),
             ("GET", p) if p.starts_with("/session/") => ("404 Not Found", json!({})),
             ("POST", p) if p.ends_with("/prompt_async") => ("204 No Content", json!({})),
             ("POST", p) if p.ends_with("/abort") => ("200 OK", json!(true)),
@@ -849,6 +854,46 @@ async fn resume_reuses_the_durable_session() {
     assistant_message(&fake, "ses_resume", "msg_1");
     idle(&fake, "ses_resume");
     drain_to_done(&mut stream).await;
+}
+
+#[tokio::test]
+async fn failed_resume_never_silently_starts_a_fresh_session() {
+    // Both an unavailable server and a missing durable session must leave the
+    // user's history binding intact. Neither authorizes a new conversation.
+    for session in ["ses_missing", "ses_unavailable"] {
+        let fake = FakeOpencode::start().await;
+        let (controls, _steer, _token) = controls();
+        let mut req = request("continue existing work");
+        req.resume = Some(session.into());
+        let mut stream = harness(&fake)
+            .run(req, controls)
+            .await
+            .expect("stream starts");
+        let first = next_event(&mut stream).await;
+        assert!(
+            !matches!(&first, AgentEvent::SessionStarted { .. }),
+            "failed resume must not silently publish a new binding: {first:?}"
+        );
+        let mut events = vec![first];
+        if !matches!(events.last(), Some(AgentEvent::Done { .. })) {
+            events.extend(drain_to_done(&mut stream).await);
+        }
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Errored,
+                    ..
+                })
+            ),
+            "{events:?}"
+        );
+        assert!(
+            fake.posts_to("/session").is_empty(),
+            "failed resume must not create a session"
+        );
+        assert!(fake.posts_to("/session/ses_test/prompt_async").is_empty());
+    }
 }
 
 #[tokio::test]

@@ -1177,7 +1177,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
 }
 
 #[tokio::test]
-async fn explicit_steer_ack_does_not_claim_incorporation_from_a_text_echo() {
+async fn explicit_steer_correlated_ack_emits_one_boundary_despite_text_echo() {
     let (controls, steer, _token) = controls("Yes");
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
@@ -1195,11 +1195,13 @@ async fn explicit_steer_ack_does_not_claim_incorporation_from_a_text_echo() {
         accepted_rx.await.expect("acceptance response"),
         SteerAcceptance::Accepted
     );
-    assert!(
-        !events
+    assert_eq!(
+        events
             .iter()
-            .any(|event| matches!(event, AgentEvent::Steered { .. })),
-        "an identity-free user echo cannot settle an explicit steer: {events:?}"
+            .filter(|event| matches!(event, AgentEvent::Steered { .. }))
+            .count(),
+        1,
+        "only the correlated ACK, not the text echo, splits the transcript: {events:?}"
     );
     assert!(events.contains(&AgentEvent::TextDelta {
         text: "steered".into()
@@ -1207,11 +1209,10 @@ async fn explicit_steer_ack_does_not_claim_incorporation_from_a_text_echo() {
 }
 
 #[tokio::test]
-async fn explicit_steers_are_single_flight_across_stale_and_duplicate_echoes() {
+async fn explicit_steer_ignores_stale_and_duplicate_echoes() {
     let (controls, steer, _token) = controls("Yes");
     let (first_tx, first_rx) = oneshot::channel();
-    let (second_tx, second_rx) = oneshot::channel();
-    for (message_id, acceptance) in [("queued-steer-a", first_tx), ("queued-steer-b", second_tx)] {
+    for (message_id, acceptance) in [("queued-steer-a", first_tx)] {
         steer
             .send(SteerMessage {
                 prompt: "same prompt".into(),
@@ -1234,15 +1235,13 @@ async fn explicit_steers_are_single_flight_across_stale_and_duplicate_echoes() {
         first_rx.await.expect("first acceptance"),
         SteerAcceptance::Accepted
     );
-    assert!(matches!(
-        second_rx.await.expect("second acceptance"),
-        SteerAcceptance::Rejected(_)
-    ));
-    assert!(
-        !events
+    assert_eq!(
+        events
             .iter()
-            .any(|event| matches!(event, AgentEvent::Steered { .. })),
-        "stale/duplicate identity-free echoes must not prove incorporation: {events:?}"
+            .filter(|event| matches!(event, AgentEvent::Steered { .. }))
+            .count(),
+        1,
+        "stale/duplicate echoes must not create extra transcript boundaries: {events:?}"
     );
     assert_eq!(
         events
@@ -1250,8 +1249,43 @@ async fn explicit_steers_are_single_flight_across_stale_and_duplicate_echoes() {
             .filter(|event| matches!(event, AgentEvent::Done { .. }))
             .count(),
         1,
-        "single-flight rejection must not create a fallback turn: {events:?}"
+        "duplicate echoes must not create a fallback turn: {events:?}"
     );
+}
+
+#[tokio::test]
+async fn explicit_steer_uncorrelated_ack_stays_unknown_without_replay() {
+    for scenario in ["scenario:steer-wrong-turn", "scenario:steer-missing-turn"] {
+        let (controls, steer, _token) = controls("Yes");
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        steer
+            .send(SteerMessage {
+                prompt: "redirect please".into(),
+                message_id: Some("uncorrelated-steer".into()),
+                delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                acceptance: Some(accepted_tx),
+            })
+            .await
+            .unwrap();
+        drop(steer);
+        let events = run_to_end(&harness(), request(scenario), controls).await;
+        assert!(matches!(
+            accepted_rx.await.unwrap(),
+            SteerAcceptance::Unknown(_)
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Steered { .. }))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::Done { .. }))
+                .count(),
+            1
+        );
+    }
 }
 
 #[tokio::test]
@@ -1328,7 +1362,7 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
 }
 
 #[tokio::test]
-async fn explicit_steer_ack_without_provider_echo_is_not_incorporated() {
+async fn explicit_steer_correlated_ack_settles_without_provider_echo() {
     let (controls, steer, _token) = controls("Yes");
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
@@ -1352,11 +1386,13 @@ async fn explicit_steer_ack_without_provider_echo_is_not_incorporated() {
         accepted_rx.await.expect("acceptance response"),
         SteerAcceptance::Accepted
     );
-    assert!(
-        !events
+    assert_eq!(
+        events
             .iter()
-            .any(|event| matches!(event, AgentEvent::Steered { .. })),
-        "an RPC ACK alone must not synthesize incorporation: {events:?}"
+            .filter(|event| matches!(event, AgentEvent::Steered { .. }))
+            .count(),
+        1,
+        "the matching turnId acknowledges steering without requiring an echo: {events:?}"
     );
 }
 
@@ -2607,6 +2643,8 @@ async fn live_real_app_server_single_turn() {
     let harness = CodexHarness::new();
     let mut req = request("Reply with exactly the word: pong");
     req.cwd = std::env::temp_dir().display().to_string();
+    req.model = Some("gpt-6-luna".into());
+    req.reasoning = Some(ReasoningLevel::High);
     let (controls, _steer, _token) = controls("Yes");
     let mut stream = harness.run(req, controls).await.expect("run starts");
     // The session parks after the turn (steering mailbox open) — collect up
@@ -2638,6 +2676,89 @@ async fn live_real_app_server_single_turn() {
             ..
         })
     ));
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text.trim(),
+        "pong",
+        "real provider must return the requested reply"
+    );
+    println!("LIVE_CODEX_AUDIT model=gpt-6-luna reply=pong status=completed");
+}
+
+#[tokio::test]
+#[ignore = "real GPT-6 Luna command and steering; consumes quota and creates a QA session"]
+async fn live_real_app_server_tool_and_steer() {
+    let harness = CodexHarness::new();
+    let mut req = request(
+        "Run the shell command `sleep 4; printf 'LUNA_AUDIT_TOOL_OK\\n'`. After it finishes reply with exactly LUNA_AUDIT_FIRST_OK. Do not use other tools or change any files.",
+    );
+    req.cwd = std::env::temp_dir().display().to_string();
+    req.model = Some("gpt-6-luna".into());
+    req.reasoning = Some(ReasoningLevel::High);
+    let (controls, steer, _token) = controls("Yes");
+    let mut stream = harness.run(req, controls).await.expect("real run starts");
+    let mut sent = false;
+    let mut acceptance = None;
+    let mut events = Vec::new();
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(event) = stream.next().await {
+            let event = event.expect("real provider event");
+            if !sent && matches!(&event, AgentEvent::ToolCall { call: ToolCall::Exec { command }, .. } if command.contains("sleep")) {
+                let (tx, rx) = oneshot::channel();
+                steer.send(SteerMessage {
+                    prompt: "After the command completes, change the final reply to exactly LUNA_AUDIT_STEER_OK.".into(),
+                    message_id: Some("luna-audit-live-steer".into()),
+                    delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                    acceptance: Some(tx),
+                }).await.unwrap();
+                acceptance = Some(rx);
+                sent = true;
+            }
+            let done = matches!(&event, AgentEvent::Done { .. });
+            events.push(event);
+            if done { break; }
+        }
+    }).await.expect("real command and steer finish within budget");
+    assert!(sent, "provider must actually execute the requested command");
+    assert_eq!(
+        acceptance.unwrap().await.unwrap(),
+        SteerAcceptance::Accepted
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::Steered { .. }))
+            .count(),
+        1
+    );
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolResult { output: Some(output), .. } if output.contains("LUNA_AUDIT_TOOL_OK"))));
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        text.trim().ends_with("LUNA_AUDIT_STEER_OK"),
+        "actual reply: {text}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+    println!(
+        "LIVE_CODEX_AUDIT model=gpt-6-luna tool=LUNA_AUDIT_TOOL_OK steer=accepted boundaries=1 reply=LUNA_AUDIT_STEER_OK status=completed"
+    );
 }
 
 // ---------------------------------------------------------------------------

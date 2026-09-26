@@ -4653,6 +4653,10 @@ async fn model_change_waits_for_safe_turn_and_keeps_binding_generation() {
     )
     .await;
     assert_eq!(run.status, CommandReceiptStatus::Pending);
+    // Binding publication precedes the applied receipt and its final task
+    // revision. Wait for admission to settle before testing the active-turn
+    // fence; otherwise a legitimate stale-revision conflict wins the race.
+    wait_for_receipt(&client, "model-change-run", CommandReceiptStatus::Applied).await;
     let active = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let current = snapshot(&client, &task_id).await;

@@ -23,7 +23,6 @@ use luna_proto::{
 use luna_sync::DocsStore;
 
 const CHAT: &str = "chat-e2e";
-const VIEWER: &str = "viewer-device";
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
@@ -223,29 +222,12 @@ fn assemble(dir: &std::path::Path, harness: Arc<dyn Harness>) -> EngineCore {
         .expect("engine core assembles")
 }
 
-/// Queue a command into the chat doc the way a REMOTE viewer device would: an immutable
-/// pending entry appended under the viewer's device id (ledger rule 1).
-fn queue_as_viewer(doc: &SessionDoc, id: &str, payload: SessionCommandPayload) {
-    let now = chrono::Utc::now().timestamp_millis();
-    let based_on =
-        doc.read_entries()
-            .expect("read entries")
-            .last()
-            .map(|m| luna_doc::CommandBasedOn {
-                turn_id: Some(m.id.clone()),
-                frontier: None,
-            });
-    doc.queue_command(&SessionCommandEntry {
-        id: id.into(),
-        payload,
-        issued_by: VIEWER.into(),
-        issued_at: now,
-        based_on,
-        expires_at: None,
-        status: SessionCommandStatus::Pending,
-        resolution: None,
-    })
-    .expect("queue command");
+/// Submit through the same owner admission path as the composer. Raw synced
+/// rows intentionally cannot execute; remote authority has its own E2E suite.
+fn queue_as_owner(core: &EngineCore, doc: &SessionDoc, id: &str, payload: SessionCommandPayload) {
+    core.doc_host
+        .queue_command_with_id_and_transfers(&doc.chat_id().unwrap(), id, payload, Vec::new())
+        .expect("admit owner command");
 }
 
 async fn wait_for<F>(mut predicate: F, what: &str)
@@ -314,7 +296,8 @@ async fn queued_run_command_executes_end_to_end() {
     assert!(replayed.is_empty());
 
     // A viewer device queues the run command into the doc.
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-1",
         SessionCommandPayload::Run {
@@ -424,7 +407,8 @@ async fn session_status_transitions_idle_working_idle() {
     assert!(watch.borrow().is_empty(), "no sessions before dispatch");
 
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-status",
         SessionCommandPayload::Run {
@@ -467,7 +451,8 @@ async fn interrupt_stamps_streaming_entry_aborted() {
         }),
     );
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-hang",
         SessionCommandPayload::Run {
@@ -487,7 +472,8 @@ async fn interrupt_stamps_streaming_entry_aborted() {
         "streaming entry",
     )
     .await;
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-int-1",
         SessionCommandPayload::Interrupt {},
@@ -498,6 +484,7 @@ async fn interrupt_stamps_streaming_entry_aborted() {
             entries(&core)
                 .iter()
                 .any(|e| e.status == Some(MessageStatus::Aborted))
+                && command_status(&core, "cmd-int-1") == Some((SessionCommandStatus::Applied, None))
         },
         "aborted stamp",
     )
@@ -545,7 +532,8 @@ async fn interrupt_is_scoped_to_the_target_chat() {
         (CHAT_B, "cmd-run-b", "message-b", "run-b"),
     ] {
         let handle = core.doc_host.open(chat_id).unwrap();
-        queue_as_viewer(
+        queue_as_owner(
+            &core,
             handle.doc(),
             command_id,
             SessionCommandPayload::Run {
@@ -626,7 +614,8 @@ async fn steer_with_no_live_run_falls_back_to_new_turn() {
     );
     let handle = core.doc_host.open(CHAT).unwrap();
 
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-1",
         SessionCommandPayload::Run {
@@ -652,7 +641,8 @@ async fn steer_with_no_live_run_falls_back_to_new_turn() {
 
     // No live run anymore (mock finishes instantly): a steer command must fall back to
     // dispatch-as-next-turn, per luna's executor.
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-steer-1",
         SessionCommandPayload::Steer {
@@ -713,7 +703,8 @@ async fn processed_commands_are_skipped_on_redelivery() {
         }),
     );
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-crashed",
         SessionCommandPayload::Run {
@@ -781,7 +772,8 @@ async fn retry_reissues_a_swallowed_send() {
         }),
     );
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-dead",
         SessionCommandPayload::Run {
@@ -978,7 +970,9 @@ async fn rpc_surface_over_in_memory_transport() {
     // Delta protocol: the stream opens with a full reset frame.
     assert_eq!(
         initial,
-        serde_json::json!({ "reset": [], "contextUsage": null })
+        serde_json::json!({ "reset": [], "contextUsage": null,
+            "contextControl": { "schemaVersion": 1, "compact": { "status": "idle" } },
+            "replayBaseline": { "entries": {} } })
     );
 
     // QueueCommand (as this device's composer would over IPC).
@@ -1217,7 +1211,8 @@ async fn respond_input_resolves_pending_question() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(AskingHarness));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-ask",
         SessionCommandPayload::Run {
@@ -1263,7 +1258,8 @@ async fn respond_input_resolves_pending_question() {
             })
         })
         .unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-answer-1",
         SessionCommandPayload::RespondInput {
@@ -1378,7 +1374,8 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(ApprovalHarness));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-approval",
         SessionCommandPayload::Run {
@@ -1425,7 +1422,8 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
         })
         .unwrap();
 
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-approval-bypass",
         SessionCommandPayload::RespondInput {
@@ -1467,7 +1465,8 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
             )))
     );
 
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-approval-right",
         SessionCommandPayload::RespondApproval {
@@ -1502,7 +1501,8 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
         }),
     );
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-seed-run",
         SessionCommandPayload::Run {
@@ -1540,7 +1540,8 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
             continuation_of: None,
         })
         .unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-recovered-ordinary",
         SessionCommandPayload::RespondInput {
@@ -1606,7 +1607,8 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
             continuation_of: None,
         })
         .unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-recovered-bypass",
         SessionCommandPayload::RespondInput {
@@ -1645,7 +1647,8 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
         })
     }));
 
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-recovered-deny",
         SessionCommandPayload::RespondApproval {
@@ -1981,7 +1984,8 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
         }),
     );
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "async-run",
         SessionCommandPayload::Run {
@@ -2022,7 +2026,8 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
     )
     .await;
 
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "skip-call-1",
         SessionCommandPayload::RespondAsyncQuestion {
@@ -2067,7 +2072,8 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
             continuation_of: None,
         })
         .unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "answer-call-2",
         SessionCommandPayload::RespondAsyncQuestion {
@@ -2096,7 +2102,8 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
         matches!(part, MessagePart::Text { text, .. } if text.contains("Choose a later option: B"))
     )
     }));
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "duplicate-answer-call-2",
         SessionCommandPayload::RespondAsyncQuestion {
@@ -2231,7 +2238,8 @@ async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
         }),
     );
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "boundary-run",
         SessionCommandPayload::Run {
@@ -2250,7 +2258,8 @@ async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
         "in-flight tool published",
     )
     .await;
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "boundary-answer",
         SessionCommandPayload::RespondAsyncQuestion {
@@ -2359,7 +2368,8 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(AskingHarness));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-wrong",
         SessionCommandPayload::Run {
@@ -2394,7 +2404,8 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
     .await;
 
     // A wrong-id answer: rejected with a resolution, question still live.
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-answer-bogus",
         SessionCommandPayload::RespondInput {
@@ -2441,7 +2452,8 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
         .expect("question still live after rejected answer");
 
     // The correct answer still resumes and completes the run.
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-answer-right",
         SessionCommandPayload::RespondInput {
@@ -2543,7 +2555,8 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(BlockingHarness));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-block",
         SessionCommandPayload::Run {
@@ -2608,7 +2621,8 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
     }));
 
     // And the session is usable: the next run completes.
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-second",
         SessionCommandPayload::Run {
@@ -2708,7 +2722,8 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(DoubleEmitHarness));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-twin",
         SessionCommandPayload::Run {
@@ -2771,7 +2786,8 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
             })
         })
         .unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-answer-twin",
         SessionCommandPayload::RespondInput {
@@ -2912,7 +2928,8 @@ async fn attachment_upload_then_run_threads_refs_and_paths() {
     let mut request = run_request(&prompt);
     request.attachments = vec![path.clone()];
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-att-1",
         SessionCommandPayload::Run {
@@ -3133,7 +3150,8 @@ async fn empty_reasoning_deltas_are_heartbeats_not_journal_noise() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(MockHarness { script }));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-hb-1",
         SessionCommandPayload::Run {
@@ -3189,7 +3207,8 @@ async fn parked_session_ignores_trailing_frames_and_stays_idle() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(MockHarness { script }));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-parked",
         SessionCommandPayload::Run {
@@ -3231,6 +3250,7 @@ async fn stale_tool_echo_after_steer_boundary_does_not_split_text() {
     // events. Once a steer boundary reset the fold, such an echo for a
     // PRIOR segment's tool must not mint a chip mid-text in the new segment
     // (the mid-word transcript splits).
+    let full_output = "completed before follow-up\n".repeat(80);
     let script = vec![
         AgentEvent::SessionStarted {
             harness: HarnessId::Mock,
@@ -3267,8 +3287,13 @@ async fn stale_tool_echo_after_steer_boundary_does_not_split_text() {
         AgentEvent::ToolResult {
             id: "tool-long".into(),
             is_error: false,
-            output: None,
-            diff: None,
+            output: Some(full_output.clone()),
+            diff: Some(luna_proto::ToolDiff {
+                path: "synthetic.txt".into(),
+                old_text: Some("before\n".into()),
+                new_text: "after\n".into(),
+                unified_diff: None,
+            }),
         },
         AgentEvent::TextDelta { text: "two".into() },
         done(DoneStatus::Completed),
@@ -3276,7 +3301,8 @@ async fn stale_tool_echo_after_steer_boundary_does_not_split_text() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(MockHarness { script }));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-echo",
         SessionCommandPayload::Run {
@@ -3296,6 +3322,41 @@ async fn stale_tool_echo_after_steer_boundary_does_not_split_text() {
     let all = entries(&core);
     // Segment one: text + the (unresolved-at-boundary) tool chip.
     assert_eq!(all[1].parts.len(), 2, "{:#?}", all[1].parts);
+    let MessagePart::Tool {
+        resolved,
+        output,
+        output_ref,
+        output_bytes,
+        diff_ref,
+        diff_stats,
+        ..
+    } = &all[1].parts[1]
+    else {
+        panic!("original tool chip missing")
+    };
+    assert!(*resolved);
+    assert!(
+        output
+            .as_deref()
+            .is_some_and(|text| text.contains("completed before follow-up"))
+    );
+    assert_eq!(output_bytes, &Some(full_output.len() as u64));
+    assert_eq!(output_ref.as_deref(), Some("chat-e2e/tool-long"));
+    assert_eq!(diff_ref.as_deref(), Some("chat-e2e/tool-long.diff"));
+    assert_eq!(diff_stats.as_ref().unwrap()[0].additions, 1);
+    assert_eq!(
+        core.sessions
+            .tool_output(CHAT, "tool-long")
+            .unwrap()
+            .as_deref(),
+        Some(full_output.as_str())
+    );
+    let restored = SessionDoc::from_snapshot(&handle.doc().export_snapshot().unwrap()).unwrap();
+    assert_eq!(
+        restored.read_entries().unwrap(),
+        all,
+        "late result must survive persistence"
+    );
     // Segment two: ONE contiguous text part, no spliced chip.
     assert_eq!(
         all[2].parts,
@@ -3378,7 +3439,8 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path(), Arc::new(ParkingHarness));
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-run-park-timer",
         SessionCommandPayload::Run {
@@ -3398,7 +3460,8 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
     );
 
     let before_steer = chrono::Utc::now();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "cmd-steer-park-timer",
         SessionCommandPayload::Steer {
@@ -3458,7 +3521,8 @@ async fn context_usage_settles_after_done_without_reopening_the_turn() {
         }),
     );
     let handle = core.doc_host.open(CHAT).unwrap();
-    queue_as_viewer(
+    queue_as_owner(
+        &core,
         handle.doc(),
         "context-run",
         SessionCommandPayload::Run {
@@ -3527,10 +3591,20 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
             controls: RunControls,
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
             let rx = self.0.lock().unwrap().take().unwrap();
-            // Keep the mailbox alive but let the test control confirmation.
+            // Acknowledge mailbox delivery, while the test controls the
+            // distinct transcript boundary and terminal provider events.
             Ok(
-                futures::stream::unfold((rx, controls), |(mut rx, controls)| async move {
-                    rx.recv().await.map(|event| (Ok(event), (rx, controls)))
+                futures::stream::unfold((rx, controls), |(mut rx, mut controls)| async move {
+                    loop {
+                        tokio::select! {
+                            event = rx.recv() => return event.map(|event| (Ok(event), (rx, controls))),
+                            Some(message) = controls.steering.recv() => {
+                                if let Some(acceptance) = message.acceptance {
+                                    let _ = acceptance.send(SteerAcceptance::Accepted);
+                                }
+                            }
+                        }
+                    }
                 })
                 .boxed(),
             )
@@ -3544,7 +3618,8 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
             Arc::new(ControlledHarness(std::sync::Mutex::new(Some(rx)))),
         );
         let handle = core.doc_host.open(CHAT).unwrap();
-        queue_as_viewer(
+        queue_as_owner(
+            &core,
             handle.doc(),
             "cmd-completion",
             SessionCommandPayload::Run {
@@ -3583,13 +3658,26 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
             "internal handoff",
         )
         .await;
-        assert_eq!(
-            core.sessions
-                .session_status(CHAT)
-                .unwrap()
-                .last_completed_turn,
-            None
-        );
+        let completion = core
+            .sessions
+            .session_status(CHAT)
+            .unwrap()
+            .last_completed_turn;
+        assert_eq!(completion.is_some(), !routed_dispatch);
+        if !routed_dispatch {
+            // An explicit steer without an incorporation boundary is retired
+            // as unknown at Done; it must never create a follow-up turn.
+            assert_eq!(
+                entries(&core)
+                    .iter()
+                    .filter(|entry| entry.role == MessageRole::User)
+                    .count(),
+                1
+            );
+            drop(tx);
+            core.shutdown().await;
+            continue;
+        }
         tx.send(AgentEvent::Steered {
             assistant_message_id: Some("a-1".into()),
             next_assistant_message_id: Some("a-steered".into()),
@@ -3710,7 +3798,7 @@ async fn generated_image_is_materialized_before_publication_and_survives_reopen(
         })
         .collect();
     assert_eq!(images.len(), 1);
-    assert!(std::path::Path::new(&images[0]).starts_with(uploads.dir()));
+    assert!(std::path::Path::new(&images[0]).starts_with(uploads.dir().canonicalize().unwrap()));
     let serialized = serde_json::to_string(&journal.replay(CHAT, 0).unwrap()).unwrap();
     assert!(!serialized.contains(source.to_str().unwrap()));
     assert!(!serialized.contains("BASE64_SENTINEL"));

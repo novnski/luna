@@ -6499,7 +6499,10 @@ async fn drive_run(
                     .or_insert_with(|| entry_id.clone());
             }
             AgentEvent::ToolResult {
-                id, is_error, diff, ..
+                id,
+                is_error,
+                output,
+                diff,
             } if !in_segment(&folded, id) && seen_tools.contains(id) => {
                 if let Some(original_entry) = tool_entry_by_id.get(id) {
                     // The provider completed a call that predates the steer.
@@ -6509,12 +6512,12 @@ async fn drive_run(
                         journal_failure = Some(error);
                         break SessionStatus::Errored;
                     }
-                    let stats = diff.as_ref().map(|diff| vec![luna_doc::diff_stat(diff)]);
                     match doc_ref.resolve_tool_in_entry(
                         original_entry,
                         id,
                         *is_error,
-                        stats.as_deref(),
+                        output.as_deref(),
+                        diff.as_ref(),
                     ) {
                         Ok(true) => {}
                         Ok(false) => tracing::warn!(chat = %chat_id, tool = %id,
