@@ -291,3 +291,21 @@ observed running status, a real child transcript reference and the child result;
 unsupported capability is a failure to report, never a simulated agent. The
 driver retains observations and never retries an attempted run. Both real-agent
 and native-fork drivers remain unexecuted pending the separate native grant.
+
+## Final source checks before native grant
+
+The bounded final compile block ran on clean
+`e4788f6e422eb6657a742a3fc8f7476fa5574f04`, without source repairs:
+
+- `CARGO_INCREMENTAL=0 scripts/cargo.sh clippy --locked -p luna-ui --lib --no-deps`
+  passed in 13.41s. The four new side-panel style warnings are gone; 253 existing
+  UI warnings remain. Log: `final-ui-clippy-e4788f6e.log`.
+- `CARGO_INCREMENTAL=0 scripts/cargo.sh check --locked -p luna-engine --example seed_sidebar_qa`
+  passed in 22.91s. Log: `seed-fixture-check-e4788f6e.log`.
+
+`target/qa/sidebar/final-source-checks.json` records exact commands, source and
+log hashes. Both builds used the default 25 GiB growth reservation; neither
+returned guard exit 75. The slot was released immediately after the second
+check. No packaging, seed execution, or real-provider turn occurred in this
+grant. Native app/process/signature, fixture and real-provider screenshot/AX,
+restart, origin navigation and parent-draft handoff acceptance remain pending.
