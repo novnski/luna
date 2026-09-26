@@ -20,6 +20,8 @@ pub const MAX_AUTO_WAIT_MS: i64 = 6 * 60 * 60 * 1_000;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryRecord {
+    #[serde(default)]
+    pub workspace_repair_revision: u64,
     pub view: TaskRecovery,
     pub harness: HarnessId,
     /// Immutable original request. Continuation prompts and cleared
@@ -321,6 +323,31 @@ pub(crate) struct RecoveryStore {
 }
 
 impl RecoveryStore {
+    pub fn workspace_repair_revision(&self, task_id: &str) -> Result<u64, EngineError> {
+        Ok(self.store.workspace_repair_revision(task_id)?)
+    }
+
+    pub fn execution_workspace_repair_revision(
+        &self,
+        task_id: &str,
+        message_id: &str,
+    ) -> Result<u64, EngineError> {
+        Ok(self
+            .store
+            .execution_workspace_repair_revision(task_id, message_id)?
+            .unwrap_or(0))
+    }
+
+    pub fn record_execution_workspace_repair_revision(
+        &self,
+        task_id: &str,
+        message_id: &str,
+        revision: u64,
+    ) -> Result<(), EngineError> {
+        Ok(self
+            .store
+            .record_execution_workspace_repair_revision(task_id, message_id, revision)?)
+    }
     pub fn new(store: Arc<DocsStore>) -> Self {
         Self { store }
     }

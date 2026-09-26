@@ -41,7 +41,7 @@ const CHUNK: usize = 64 * 1024;
 // the copied SQLite snapshot. v9 Appshot sources still rebuild the activity index.
 // v13 adds device-owned project commands and their execution receipts.
 // v14 adds local side-chat metadata, transcript pages and send admission records.
-const CURRENT_SCHEMA: i64 = 14;
+const CURRENT_SCHEMA: i64 = 15;
 
 const EXCLUDED: &[&str] = &[
     "OS Keychain and LUNA credential vault",
@@ -1162,11 +1162,33 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         (14, "side_chats"),
         (14, "side_chat_entries"),
         (14, "side_chat_sends"),
+        (15, "task_execution_lineage"),
     ] {
         if schema_version >= introduced && !has_table(conn, table)? {
             return Err(BackupError::Invalid(format!(
                 "database schema requires missing table {table}"
             )));
+        }
+    }
+    if schema_version >= 15 {
+        for table in [
+            "task_command_state",
+            "task_command_receipts",
+            "local_executable_authority",
+            "task_execution_lineage",
+        ] {
+            let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if !columns
+                .iter()
+                .any(|name| name == "workspace_repair_revision")
+            {
+                return Err(BackupError::Invalid(format!(
+                    "database schema requires missing column {table}.workspace_repair_revision"
+                )));
+            }
         }
     }
     Ok(DatabaseCounts {
