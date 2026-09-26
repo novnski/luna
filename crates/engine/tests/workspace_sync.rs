@@ -695,6 +695,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
             .unwrap();
         legacy
             .upsert_space(&Space {
+                execution_defaults: Default::default(),
                 id: "space-legacy".into(),
                 device_id: "dev-a".into(),
                 path: "/tmp/legacy".into(),

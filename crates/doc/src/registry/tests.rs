@@ -288,6 +288,7 @@ fn chat(id: &str, device_id: &str) -> Chat {
 
 fn space(id: &str, device_id: &str, path: &str) -> Space {
     Space {
+        execution_defaults: Default::default(),
         id: id.into(),
         device_id: device_id.into(),
         path: path.into(),

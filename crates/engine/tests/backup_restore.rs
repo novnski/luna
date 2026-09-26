@@ -421,6 +421,7 @@ fn add_synthetic_task(root: &Path, room_gen: Option<u32>) {
     let mut registry = RegistryDoc::new("synthetic-device");
     registry
         .upsert_space(&Space {
+            execution_defaults: Default::default(),
             id: "synthetic-project".into(),
             device_id: "synthetic-device".into(),
             path: root.display().to_string(),

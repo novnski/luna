@@ -989,6 +989,12 @@ enum MutateParams {
         #[serde(default)]
         name: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    SetProjectExecutionDefaults {
+        space_id: String,
+        defaults: luna_proto::ProjectExecutionDefaults,
+        expected_defaults: luna_proto::ProjectExecutionDefaults,
+    },
     /// Permanent local deletion; the UI supplies the exact reviewed child set.
     #[serde(rename_all = "camelCase")]
     DeleteSpace {
@@ -2478,6 +2484,19 @@ impl EngineRpc {
                 .rename_space(&space_id, name.as_deref())
                 .map_err(failed)
                 .map(drop),
+            MutateParams::SetProjectExecutionDefaults {
+                space_id,
+                defaults,
+                expected_defaults,
+            } => self
+                .workspace
+                .set_project_execution_defaults(
+                    &space_id,
+                    &self.engine_info.device_id,
+                    &defaults,
+                    &expected_defaults,
+                )
+                .map_err(failed),
             MutateParams::DeleteSpace {
                 space_id,
                 expected_chat_ids,
@@ -6154,6 +6173,7 @@ fn task_intent_from_mutation(mutation: MutateParams) -> Option<(String, TaskComm
         MutateParams::MarkChatSeen { chat_id, at } => (chat_id, TaskCommandIntent::MarkSeen { at }),
         MutateParams::CreateSpace { .. }
         | MutateParams::RenameSpace { .. }
+        | MutateParams::SetProjectExecutionDefaults { .. }
         | MutateParams::DeleteSpace { .. }
         | MutateParams::RenameDevice { .. } => return None,
     })
@@ -7395,7 +7415,10 @@ impl RpcService for EngineRpc {
         }
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
-        if forwardable(method)
+        let project_defaults_mutation = method == methods::MUTATE
+            && params.get("op").and_then(|value| value.as_str())
+                == Some("setProjectExecutionDefaults");
+        if (forwardable(method) || project_defaults_mutation)
             && let Some(target) = params.get("targetDeviceId").and_then(|v| v.as_str())
             && target != self.doc_host.device_id()
         {
@@ -10441,6 +10464,7 @@ mod tests {
 
     fn move_test_space(path: &str) -> luna_proto::Space {
         luna_proto::Space {
+            execution_defaults: Default::default(),
             id: "destination".into(),
             device_id: "device".into(),
             path: path.into(),

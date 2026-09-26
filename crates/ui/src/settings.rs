@@ -24,6 +24,7 @@ pub mod files;
 pub mod general;
 pub mod harnesses;
 pub mod notifications;
+pub mod project_defaults;
 pub mod shortcuts;
 pub mod widgets;
 

@@ -3559,6 +3559,7 @@ mod tests {
             .unwrap()
             .to_utc();
         Space {
+            execution_defaults: Default::default(),
             id: id.into(),
             device_id: device_id.into(),
             path: path.into(),

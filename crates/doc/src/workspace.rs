@@ -162,6 +162,10 @@ impl WorkspaceDoc {
         row.insert("gitDetected", space.git_detected)?;
         set_opt_ms(&row, "gitCheckedAt", space.git_checked_at)?;
         set_opt_str(&row, "checkoutId", space.checkout_id.as_deref())?;
+        row.insert(
+            "executionDefaults",
+            LoroValue::from(serde_json::to_value(&space.execution_defaults)?),
+        )?;
         row.insert("createdAt", space.created_at.timestamp_millis())?;
         self.doc.commit();
         Ok(())
@@ -700,6 +704,8 @@ impl From<RawDevice> for Device {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RawSpace {
+    #[serde(default)]
+    execution_defaults: luna_proto::ProjectExecutionDefaults,
     id: String,
     device_id: String,
     path: String,
@@ -718,6 +724,7 @@ pub(crate) struct RawSpace {
 impl From<RawSpace> for Space {
     fn from(raw: RawSpace) -> Self {
         Space {
+            execution_defaults: raw.execution_defaults,
             id: raw.id,
             device_id: raw.device_id,
             path: raw.path,
@@ -914,6 +921,7 @@ mod tests {
 
     fn space(id: &str, device_id: &str, path: &str) -> Space {
         Space {
+            execution_defaults: Default::default(),
             id: id.into(),
             device_id: device_id.into(),
             path: path.into(),
