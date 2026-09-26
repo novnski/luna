@@ -247,14 +247,14 @@ fn managed_offline_backup_refuses_unreviewed_future_schema() {
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
     conn.execute(
-        "INSERT INTO schema_migrations(version,applied_at) VALUES (13,1)",
+        "INSERT INTO schema_migrations(version,applied_at) VALUES (14,1)",
         [],
     )
     .unwrap();
     drop(conn);
     let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
     assert!(
-        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 12"))
+        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 13"))
     );
 }
 
@@ -273,13 +273,15 @@ fn managed_offline_backup_refuses_missing_v12_authority_table() {
 }
 
 #[test]
-fn managed_offline_v9_archive_remains_restorable_after_v12_migrations() {
+fn managed_offline_v9_archive_remains_restorable_after_v13_migrations() {
     let (_parent, root, _backups) = fixture();
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     let db = root.join("profiles/local/docs.sqlite3");
     let conn = Connection::open(&db).unwrap();
     conn.execute_batch(
-        "DROP TABLE local_executable_authority;
+        "DROP TABLE project_command_runs;
+         DROP TABLE project_command_configs;
+         DROP TABLE local_executable_authority;
          DROP TABLE task_cleanup_paths;
          DROP TABLE task_cleanup;
          DROP TABLE project_cleanup;
