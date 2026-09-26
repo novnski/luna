@@ -436,7 +436,7 @@ async fn identical_old_hash_and_local_edit_cannot_renew_pre_repair_authority() {
 
 #[tokio::test]
 async fn restored_old_queue_is_inert_until_a_new_explicit_current_consent() {
-    let (root, core, harness, task) = fixture().await;
+    let (root, core, harness, task) = legacy_unbound_for_repair().await;
     let handle = core.doc_host.open(&task).unwrap();
     core.doc_host.pause_all_queues();
     core.doc_host
@@ -462,8 +462,12 @@ async fn restored_old_queue_is_inert_until_a_new_explicit_current_consent() {
             .await
             .unwrap()
     );
-    let fence = begin_repair(&core, &task, "repair-before-restored-row");
-    let receipt = commit_repair(&core, &task, "repair-before-restored-row", &fence).unwrap();
+    // The positive re-consent case needs a complete repair: store W and the
+    // identity v2 event must agree after restart.
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let preview = repair_preview(&client, &task).await;
+    let receipt = apply_repair(&client, &task, &preview).await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
     core.shutdown().await;
     drop(handle);
     drop(core);
