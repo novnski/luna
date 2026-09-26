@@ -25,6 +25,7 @@ impl Changes {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        let engine_generation = self.state.read(cx).engine_generation();
         self.git_target = Some(key.clone());
         self.git_busy = true;
         self.git_pr_status = None;
@@ -39,7 +40,10 @@ impl Changes {
                 .call(methods::GET_GIT_ACTION_PREVIEW, params)
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(key.as_str()) {
+                if pane.state.read(cx).engine_generation() != engine_generation
+                    || pane.git_context(cx).map(|(_, _, key)| key).as_deref() != Some(key.as_str())
+                    || pane.git_target.as_deref() != Some(key.as_str())
+                {
                     return;
                 }
                 pane.git_busy = false;
@@ -55,12 +59,14 @@ impl Changes {
                             .map(|file| file.path.clone())
                             .collect();
                         pane.git_preview = Some(preview);
+                        pane.reconcile_pr_context(cx);
                         pane.git_notice = None;
                         pane.load_git_pr(cx);
                         pane.load_checkpoints(cx);
                     }
                     Err(error) => {
                         pane.git_preview = None;
+                        pane.reconcile_pr_context(cx);
                         pane.git_pr_status = None;
                         pane.git_notice = Some(error.to_string());
                     }
@@ -248,6 +254,7 @@ impl Changes {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        let engine_generation = self.state.read(cx).engine_generation();
         let expected_token = preview.token.clone();
         let request = GitPrStatusRequest {
             cwd,
@@ -267,7 +274,9 @@ impl Changes {
                 .call(methods::GET_GIT_PR_STATUS, params)
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(key.as_str())
+                if pane.state.read(cx).engine_generation() != engine_generation
+                    || pane.git_context(cx).map(|(_, _, key)| key).as_deref() != Some(key.as_str())
+                    || pane.git_target.as_deref() != Some(key.as_str())
                     || pane
                         .git_preview
                         .as_ref()
@@ -349,6 +358,7 @@ impl Changes {
                             .map(|file| file.path.clone())
                             .collect();
                         pane.git_preview = Some(receipt.preview);
+                        pane.reconcile_pr_context(cx);
                         pane.load_git_pr(cx);
                         pane.git_notice = receipt.error.or_else(|| {
                             Some(if receipt.pushed {

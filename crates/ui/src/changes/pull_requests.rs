@@ -4,10 +4,46 @@ use luna_proto::{
     GitPrCreateOutcome, GitPrCreateReceipt, GitPrCreateRequest, GitPrDetails, GitPrDraftPreview,
 };
 
+/// UI provenance, separate from the backend's durable operation identity.
+#[derive(Clone, PartialEq, Eq)]
+struct PrContext {
+    engine_generation: u64,
+    engine_device: String,
+    selection: String,
+    selected_checkout: Option<String>,
+    git: Option<PrGitContext>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PrGitContext {
+    checkout_id: String,
+    cwd: String,
+    branch: String,
+    head: String,
+    remote: Option<String>,
+    token: String,
+}
+
+impl From<&GitActionPreview> for PrGitContext {
+    fn from(preview: &GitActionPreview) -> Self {
+        Self {
+            checkout_id: preview.checkout_id.clone(),
+            cwd: preview.cwd.clone(),
+            branch: preview.branch.clone(),
+            head: preview.head.clone(),
+            remote: preview.remote.clone(),
+            token: preview.token.clone(),
+        }
+    }
+}
+
 pub(super) struct PullRequestPanel {
     open: bool,
     busy: bool,
     generation: u64,
+    context: Option<PrContext>,
+    draft_selection: Option<String>,
+    creating: bool,
     preview: Option<GitPrDraftPreview>,
     details: Option<GitPrDetails>,
     notice: Option<String>,
@@ -43,6 +79,9 @@ impl PullRequestPanel {
             open: false,
             busy: false,
             generation: 0,
+            context: None,
+            draft_selection: None,
+            creating: false,
             preview: None,
             details: None,
             notice: None,
@@ -68,11 +107,68 @@ impl Changes {
             .aria_label(label)
     }
 
+    fn pr_context(&self, cx: &App) -> Option<PrContext> {
+        let (_, _, selection) = self.git_context(cx)?;
+        let state = self.state.read(cx);
+        let engine = state.engine()?;
+        Some(PrContext {
+            engine_generation: state.engine_generation(),
+            engine_device: engine.engine_info().device_id.clone(),
+            selection,
+            selected_checkout: state.selected_chat_row()?.checkout_id.clone(),
+            git: self.git_preview.as_ref().map(PrGitContext::from),
+        })
+    }
+
+    /// Runs from state observation and Git-result application, even when the
+    /// retained Changes surface is hidden and never sees a render transition.
+    pub(super) fn reconcile_pr_context(&mut self, cx: &mut Context<Self>) {
+        let context = self.pr_context(cx);
+        if self.pr_panel.context == context {
+            return;
+        }
+        if let Some(current) = &context {
+            if self
+                .pr_panel
+                .draft_selection
+                .as_ref()
+                .is_some_and(|key| key != &current.selection)
+            {
+                for input in [
+                    &self.pr_panel.title,
+                    &self.pr_panel.body,
+                    &self.pr_panel.base,
+                    &self.pr_panel.head,
+                ] {
+                    input.update(cx, |input, cx| input.set_text("", cx));
+                }
+            }
+            // Preserve authored text across the empty-selection interval of a
+            // same-task runtime replacement, but never carry it to another task.
+            self.pr_panel.draft_selection = Some(current.selection.clone());
+        }
+        self.pr_panel.context = context;
+        self.pr_panel.generation += 1;
+        self.pr_panel.task = None; // Only read waiters are stored/cancelable here.
+        self.pr_panel.busy = false;
+        self.pr_panel.creating = false;
+        self.pr_panel.preview = None;
+        self.pr_panel.details = None;
+        self.pr_panel.reconcile_only = false;
+        self.pr_panel.notice = self
+            .pr_panel
+            .open
+            .then(|| "Checkout or engine changed. Refresh the PR preview before creating.".into());
+        self.git_pr_status = None;
+        cx.notify();
+    }
+
     pub(super) fn reset_pr_panel(&mut self, cx: &mut Context<Self>) {
         self.pr_panel.generation += 1;
         self.pr_panel.task = None;
         self.pr_panel.open = false;
         self.pr_panel.busy = false;
+        self.pr_panel.creating = false;
         self.pr_panel.preview = None;
         self.pr_panel.details = None;
         self.pr_panel.notice = None;
@@ -81,28 +177,34 @@ impl Changes {
     }
 
     fn close_pr_panel(&mut self, cx: &mut Context<Self>) {
-        if self.pr_panel.busy && self.pr_panel.preview.is_some() {
+        if self.pr_panel.creating {
             self.pr_panel.reconcile_only = true;
         }
         self.pr_panel.generation += 1;
         self.pr_panel.task = None;
         self.pr_panel.open = false;
         self.pr_panel.busy = false;
+        self.pr_panel.creating = false;
         cx.notify();
     }
 
     fn load_pr_panel(&mut self, number: Option<u64>, cx: &mut Context<Self>) {
+        self.reconcile_pr_context(cx);
         if self.pr_panel.busy {
             return;
         }
-        let Some((cwd, target, key)) = self.git_context(cx) else {
+        let Some((cwd, target, _)) = self.git_context(cx) else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        let Some(context) = self.pr_context(cx) else {
+            return;
+        };
         self.pr_panel.open = true;
         self.pr_panel.busy = true;
+        self.pr_panel.creating = false;
         self.pr_panel.notice = None;
         self.pr_panel.generation += 1;
         let generation = self.pr_panel.generation;
@@ -119,7 +221,7 @@ impl Changes {
             let result = engine.client().call(method, params).await;
             this.update(cx, |pane, cx| {
                 if pane.pr_panel.generation != generation
-                    || pane.git_context(cx).map(|(_, _, key)| key).as_deref() != Some(&key)
+                    || pane.pr_context(cx).as_ref() != Some(&context)
                 {
                     return;
                 }
@@ -141,12 +243,11 @@ impl Changes {
                         Ok(preview) => {
                             let first = pane.pr_panel.preview.is_none();
                             if first {
-                                pane.pr_panel
-                                    .title
-                                    .update(cx, |input, cx| input.set_text(&preview.title, cx));
-                                pane.pr_panel
-                                    .body
-                                    .update(cx, |input, cx| input.set_text("", cx));
+                                if pane.pr_panel.title.read(cx).text().trim().is_empty() {
+                                    pane.pr_panel
+                                        .title
+                                        .update(cx, |input, cx| input.set_text(&preview.title, cx));
+                                }
                                 pane.pr_panel
                                     .base
                                     .update(cx, |input, cx| input.set_text(&preview.base, cx));
@@ -154,6 +255,21 @@ impl Changes {
                                     .head
                                     .update(cx, |input, cx| input.set_text(&preview.head, cx));
                             }
+                            // This response is a fresh snapshot from the still-current
+                            // engine. Keep the Git card and preview provenance aligned.
+                            if pane.git_preview.as_ref().map(PrGitContext::from)
+                                != Some(PrGitContext::from(&preview.checkout))
+                            {
+                                pane.git_selected = preview
+                                    .checkout
+                                    .files
+                                    .iter()
+                                    .filter(|file| file.staged)
+                                    .map(|file| file.path.clone())
+                                    .collect();
+                                pane.git_preview = Some(preview.checkout.clone());
+                            }
+                            pane.pr_panel.context = pane.pr_context(cx);
                             pane.pr_panel.details = None;
                             pane.pr_panel.preview = Some(preview);
                         }
@@ -171,16 +287,20 @@ impl Changes {
     }
 
     fn submit_draft_pr(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_pr_context(cx);
         if self.pr_panel.busy || self.git_busy {
             return;
         }
         let Some(preview) = self.pr_panel.preview.clone() else {
             return;
         };
-        let Some((_, target, key)) = self.git_context(cx) else {
+        let Some((_, target, _)) = self.git_context(cx) else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let Some(context) = self.pr_context(cx) else {
             return;
         };
         let request = GitPrCreateRequest {
@@ -197,10 +317,14 @@ impl Changes {
             return;
         }
         self.pr_panel.busy = true;
+        self.pr_panel.creating = true;
         self.pr_panel.notice = None;
         self.pr_panel.generation += 1;
         let generation = self.pr_panel.generation;
-        self.pr_panel.task = Some(cx.spawn(async move |this, cx| {
+        self.pr_panel.task = None;
+        // A submitted create owns its original engine/RPC until completion.
+        // Retiring or closing the UI must neither kill gh nor replay through B.
+        cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).expect("PR request serializes");
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
@@ -211,11 +335,12 @@ impl Changes {
                 .await;
             this.update(cx, |pane, cx| {
                 if pane.pr_panel.generation != generation
-                    || pane.git_context(cx).map(|(_, _, key)| key).as_deref() != Some(&key)
+                    || pane.pr_context(cx).as_ref() != Some(&context)
                 {
                     return;
                 }
                 pane.pr_panel.busy = false;
+                pane.pr_panel.creating = false;
                 match result.and_then(|v| {
                     serde_json::from_value::<GitPrCreateReceipt>(v).map_err(|_| {
                         luna_rpc::RpcError::Failed("Could not read the create result".into())
@@ -247,7 +372,8 @@ impl Changes {
                 cx.notify();
             })
             .ok();
-        }));
+        })
+        .detach();
         cx.notify();
     }
 

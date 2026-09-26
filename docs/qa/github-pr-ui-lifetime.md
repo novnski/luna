@@ -146,3 +146,39 @@ reissue a previously accepted create to achieve that retirement.
 These corrections modify only the PR test module/report. The generic helper and
 all production request/response guards are unchanged. Rustfmt, shell syntax and
 source-diff checks ran; Cargo/native/baseline execution remain unrun and gated.
+
+## Source-only repair after reviewed authentic baseline
+
+The coordinator reviewed all22 traces from
+`target/qa/github-pr-ui-lifetime-baseline-af381689/`:8 controls passed and14
+behavioral assertions failed, with no compiler errors or fixture timeouts.
+The13 stale state applications and one cached-A-preview dispatch through B
+established the repair scope. Every admitted A create completed once without
+cancellation; that invariant is retained.
+
+The narrow correction adds private PR provenance containing live engine
+identity/generation, selected device/chat/cwd/checkout and the defining Git
+checkout/branch/head/remote/token. `Changes::sync` reconciles it from AppState
+observation even for hidden panes. PR admission and completion also compare live
+provenance directly. Git-preview and PR-badge read callbacks reject old-engine
+responses; actual Git snapshot changes notify the PR provenance reconciler.
+Identical snapshots are a no-op for PR drafts and in-flight authority.
+
+On retirement, cached preview/details and their authority are invalidated.
+Authored title/body survive a same-task/cwd engine replacement, including its
+empty-selection gap; another task/cwd does not inherit those drafts. A fresh
+same-context preview fills an empty title from its suggestion and preserves
+already-authored title/body. A new authoritative PR snapshot keeps the Git card
+metadata aligned without resetting staged selection for an identical snapshot.
+
+Read waiters remain cancelable. A submitted create is detached from the pane's
+cancelable read-task slot and retains its original engine handle until its RPC
+completion. Closing/retiring the view changes only its authority to apply the
+result; generation/provenance checks ignore a stale completion and never replay
+it through another engine. Backend journal/operation behavior is unchanged.
+
+Only `changes.rs`, `changes/git_actions.rs`, `changes/pull_requests.rs`, and this
+report change in the source correction. The22-case reproduction and generic
+helper are frozen. No styling/layout/token changes, new tests, Cargo invocation,
+or native launch occurred in this source-only step. Verification remains gated
+on the coordinator's next explicit build slot; no pass is claimed for this fix.
