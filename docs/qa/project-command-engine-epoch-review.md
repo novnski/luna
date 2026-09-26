@@ -82,3 +82,33 @@ Carry the origin epoch/device in Output, and reject stale origin at the parent
 listener before selecting a task or loading a terminal. Keep the existing
 one-second timer and entity-owned cancellation. No new execution path or backend
 command cancellation is required.
+
+## Executable reproduction prepared (uncompiled)
+
+`crates/ui/src/project_commands_engine_epoch_tests.rs` contains six held-RPC GPUI
+integration cases: two delayed-status cases, same-device/different-device delayed
+execute cases, stuck-busy replacement, and unchanged same-engine operation/drop.
+The fixture drives real AppState.attach_engine through a test-only proxy, obtains
+the actual retained child from TerminalPanel, invokes its production load/execute
+methods, and observes the existing parent listener issuing LIST_TERMINALS. No
+completion callback or scope predicate is mirrored. Replacement keeps the task
+ID while supplying a controlled current-owner projection. B's held status response
+provides a deterministic completion boundary for the execute cases.
+
+Shared generic helper is independently available as
+`3bc2fbf51e4d31cddd1b30077e69623da0ca7e4e` for PR/Defaults workers without importing
+Commands runtime code. All helper/proxy/getter additions are cfg(test). Runtime
+behavior is still `3e62cf03`; no epoch fence has been added.
+
+After the coordinator grants the single warm-cache baseline slot, run:
+
+```sh
+LUNA_EPOCH_QA_ARTIFACTS="$PWD/target/qa/commands-engine-epoch-baseline" \
+CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib \
+commands_engine_epoch -- --nocapture --test-threads=1
+```
+
+The six JSON traces record engine generation/device, retained entity ID, snapshot,
+busy/error state, emitted Output events and request/reply/cancellation envelopes.
+The same-engine case must pass; the stale cases are expected to fail before any
+production correction. This expectation is not a runtime observation yet.
