@@ -61,9 +61,11 @@ API references: [create pull request](https://docs.github.com/en/rest/pulls/pull
 
 Native fixture preparation: `node scripts/prepare-github-pr-qa.mjs` creates only
 `target/qa/github-pr-native/checkout` and writes a launch environment JSON. After
-building/refreshing the assigned unique app, launch that same app with these
-environment entries via `open --env`; then run the script with `--seed` to add
-one synthetic project/task through port59790. The fixture gh requires its
+building/refreshing the assigned unique app, run the script with
+`--restart-and-seed`. It gracefully quits the verified QA PID, proves that
+process exited and port59790 is free, then uses `open -n --env` to start a fresh
+QA process with the fixture environment. It verifies LocalOwnerRootClaim and
+the exact bundle before adding one synthetic project/task through port59790. The fixture gh requires its
 fixture directory and never accesses the network. Change the `mode` file to
 `auth`, `invalid`, `oversized`, `diverged`, `reject`, `lost`, or `success` for
 repeatable UI checks. Preserve QA data while the coordinator reviews the app.
@@ -115,3 +117,42 @@ still require the reviewed Git token, live published SHA and final target check.
 
 Native app and screenshot QA remain a separate coordinator-gated step. This
 checkpoint does not claim the UI has been visually verified or an app refreshed.
+
+### Native environment preflight failure cases (before driver change)
+
+The later native run must fail closed before any PR-create action if the IPC
+listener is not the exact QA executable, bundle ID/port/data root differs,
+LocalOwnerRootClaim or device-id readback differs, the QA process refuses graceful
+quit, the old PID survives, or the new process cannot prove fixture-gh usage.
+The driver must not send a PR-create RPC. Seed mutations occur only after owner
+claim verification. A harmless fresh preview must append exact-repository/branch
+fake-gh calls without increasing fixture POST count; save that proof with PID,
+root claim, timestamp and operation ID. AppKit quit targets a verified QA PID
+and executable, never an app name/main process. An existing process cannot be
+reused for injecting the fixture environment. Main IPC PID must remain unchanged.
+
+
+Native launch sequence (only after the coordinator grants the native slot):
+
+```bash
+export CARGO_INCREMENTAL=0
+export LUNA_DEV_APP_NAME='LUNA QA Pull Requests'
+export LUNA_DEV_BUNDLE_ID='com.novnski.luna.qa.pullrequests'
+export LUNA_DEV_IPC_PORT=59790
+export LUNA_DEV_DATA_DIR="$PWD/target/luna-qa-data/pullrequests"
+scripts/run-macos-dev.sh --refresh
+node scripts/prepare-github-pr-qa.mjs --restart-and-seed
+```
+
+Before any UI Create action, inspect
+`target/qa/github-pr-native/native-preflight.json`: `passed` must be true for the
+current exact QA PID, root claim and bundle. It records fresh read-only
+fake-gh calls for `repos/acme/luna` and `branches/feature%2Fpr`, the preview's
+operation ID, and unchanged fixture POST count/main PID. `--seed` can recheck
+and reseed an already verified fixture process but cannot inject its environment;
+it fails without fresh fake-gh proof. A refusal to quit never triggers a force
+quit. No PR-create RPC is present in this driver.
+
+This preflight driver change was syntax-checked with `node --check` and reviewed
+against the live Rust root-claim algorithm. No native launch/build was performed
+while preparing it; actual runtime readback remains gated.
