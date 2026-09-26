@@ -1727,6 +1727,69 @@ enum PendingExit {
     InstallUpdate(PathBuf),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarNoticeTone {
+    Status,
+    Error,
+}
+
+/// Clones retain ownership; every newly published notice has its own identity,
+/// including consecutive progress messages with identical text.
+#[derive(Clone, Debug)]
+struct SidebarNotice {
+    id: uuid::Uuid,
+    tone: SidebarNoticeTone,
+    message: SharedString,
+}
+
+impl SidebarNotice {
+    fn new(tone: SidebarNoticeTone, message: impl Into<SharedString>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            tone,
+            message: message.into(),
+        }
+    }
+
+    fn status(message: impl Into<SharedString>) -> Self {
+        Self::new(SidebarNoticeTone::Status, message)
+    }
+}
+
+// Existing error-strip callers keep their current presentation. Status is
+// explicit at the side-chat progress and confirmation call sites.
+impl From<SharedString> for SidebarNotice {
+    fn from(message: SharedString) -> Self {
+        Self::new(SidebarNoticeTone::Error, message)
+    }
+}
+
+impl From<String> for SidebarNotice {
+    fn from(message: String) -> Self {
+        Self::new(SidebarNoticeTone::Error, message)
+    }
+}
+
+impl From<&'static str> for SidebarNotice {
+    fn from(message: &'static str) -> Self {
+        Self::new(SidebarNoticeTone::Error, message)
+    }
+}
+
+impl std::fmt::Display for SidebarNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.message, f)
+    }
+}
+
+impl std::ops::Deref for SidebarNotice {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.message.as_ref()
+    }
+}
+
 pub struct Shell {
     state: Entity<AppState>,
     sidebar_pane: Entity<SidebarPane>,
@@ -1914,8 +1977,8 @@ pub struct Shell {
     keep_awake: crate::power::KeepAwake<crate::power::SystemPower>,
     /// `settings.last_space_id` applied once after the first spaces frame.
     space_boot_applied: bool,
-    /// Inline sidebar error strip (mutation failures); click dismisses.
-    sidebar_notice: Option<SharedString>,
+    /// Inline sidebar status/error notice; dismissal retires its ownership.
+    sidebar_notice: Option<SidebarNotice>,
     cleanup_summary_generation: Option<u64>,
     cleanup_summary_last: Option<String>,
     /// Local lifecycle of an in-app update (macOS bundle swap) — the engine's
@@ -8162,8 +8225,11 @@ impl Shell {
             .when_some(self.render_update_strip(theme, cx), |el, strip| {
                 el.child(strip)
             })
-            // Inline mutation-failure notice.
+            // Keep error styling for existing callers; side-chat progress and
+            // confirmation use the activity notice's non-error theme tokens.
             .when_some(self.sidebar_notice.clone(), |el, notice| {
+                let notice_id = notice.id;
+                let is_status = notice.tone == SidebarNoticeTone::Status;
                 el.child(
                     div()
                         .id("sidebar-notice")
@@ -8173,18 +8239,29 @@ impl Shell {
                         .py(px(4.0))
                         .rounded(px(Theme::CONTROL_RADIUS))
                         .border_1()
-                        .border_color(theme.danger)
+                        .border_color(if is_status {
+                            theme.border
+                        } else {
+                            theme.danger
+                        })
+                        .when(is_status, |el| el.bg(theme.accent_wash))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.danger)
+                        .text_color(if is_status { theme.text } else { theme.danger })
                         .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar_notice = None;
-                            cx.notify();
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this
+                                .sidebar_notice
+                                .as_ref()
+                                .is_some_and(|current| current.id == notice_id)
+                            {
+                                this.sidebar_notice = None;
+                                cx.notify();
+                            }
                         }))
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .child(div().flex_1().min_w_0().child(notice))
+                        .child(div().flex_1().min_w_0().child(notice.message))
                         .child(
                             div()
                                 .flex_none()

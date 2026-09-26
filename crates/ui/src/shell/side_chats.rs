@@ -867,13 +867,18 @@ impl Shell {
         let request = panel.read(cx).release_request();
         drop(panel);
         if let Some((engine, id, lease)) = request {
-            self.sidebar_notice = Some("Stopping side chat and saving its transcript…".into());
+            let progress = SidebarNotice::status("Stopping side chat and saving its transcript…");
+            let notice_id = progress.id;
+            self.sidebar_notice = Some(progress);
             cx.spawn(async move |this, cx| {
                 let result = Tokio::spawn(cx, async move {
                     tokio::time::timeout(Duration::from_secs(20), engine.client().call(methods::UNLOAD_SIDE_CHAT, json!({"id":id,"lease":lease}))).await
                         .map_err(|_| luna_rpc::RpcError::Failed("Unload response timed out; the view lease remains the cancellation backstop.".into()))?
                 }).await;
                 this.update(cx, |shell, cx| {
+                    if shell.sidebar_notice.as_ref().is_none_or(|notice| notice.id != notice_id) {
+                        return;
+                    }
                     shell.sidebar_notice = match result {
                         Ok(Ok(_)) => None,
                         Ok(Err(error)) => Some(format!("Side chat unload incomplete: {error}. Inspect Previous side chats.").into()),
@@ -925,11 +930,11 @@ impl Shell {
             let inserted = shell.composer.update(cx, |composer, cx| {
                 composer.insert_side_chat_result(parent, text, *engine_generation, cx)
             });
-            shell.sidebar_notice = Some(if inserted {
-                "Added to the parent draft. Review it and press Send.".into()
+            shell.sidebar_notice = Some(SidebarNotice::status(if inserted {
+                "Added to the parent draft. Review it and press Send."
             } else {
-                "Parent draft is loading or being submitted. Try again when it is ready.".into()
-            });
+                "Parent draft is loading or being submitted. Try again when it is ready."
+            }));
             cx.notify();
         }));
         self.side_chat_panel = Some(panel);
