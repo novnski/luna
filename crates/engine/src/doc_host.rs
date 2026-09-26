@@ -1229,14 +1229,45 @@ impl DocHost {
         let mut prepared = self
             .prepare_queue_projection(&handle, command_id, doc_mutation)
             .map_err(crate::workspace_host::TaskProjectionError::Mutation)?;
-        for command_id in locally_issued_command_ids {
+        // Newly issued commands have no receipt yet. Inherit the accepted
+        // parent's W; the authority insert rechecks it in the commit transaction.
+        let admitted_w = if locally_issued_command_ids.is_empty() {
+            None
+        } else {
+            let admitted_w = self
+                .inner
+                .store
+                .command_workspace_repair_revision(command_id)
+                .map_err(|error| crate::workspace_host::TaskProjectionError::Commit(error.into()))?
+                .ok_or_else(|| {
+                    crate::workspace_host::TaskProjectionError::Commit(EngineError::Other(
+                        "accepted context command has no workspace repair stamp".into(),
+                    ))
+                })?;
+            let current_w = self
+                .inner
+                .store
+                .workspace_repair_revision(chat_id)
+                .map_err(|error| {
+                    crate::workspace_host::TaskProjectionError::Commit(error.into())
+                })?;
+            if admitted_w != current_w {
+                return Err(crate::workspace_host::TaskProjectionError::Commit(
+                    EngineError::Other(
+                        "workspace association changed since context command acceptance".into(),
+                    ),
+                ));
+            }
+            Some(admitted_w)
+        };
+        for issued_command_id in locally_issued_command_ids {
             let position = prepared
                 .unreceipted_new_commands
                 .iter()
-                .position(|(id, _)| id == command_id)
+                .position(|(id, _)| id == issued_command_id)
                 .ok_or_else(|| {
                     crate::workspace_host::TaskProjectionError::Mutation(EngineError::Other(
-                        format!("local context command {command_id} was not newly issued"),
+                        format!("local context command {issued_command_id} was not newly issued"),
                     ))
                 })?;
             let (row_id, hash) = prepared.unreceipted_new_commands.remove(position);
@@ -1247,13 +1278,7 @@ impl DocHost {
                 expected_hash: None,
                 replacement_hash: Some(hash),
                 expected_workspace_repair_revision: None,
-                replacement_workspace_repair_revision: self
-                    .inner
-                    .store
-                    .command_workspace_repair_revision(command_id)
-                    .map_err(|error| {
-                        crate::workspace_host::TaskProjectionError::Commit(error.into())
-                    })?,
+                replacement_workspace_repair_revision: admitted_w,
             });
         }
         let mut snapshots = vec![(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
