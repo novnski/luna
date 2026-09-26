@@ -228,15 +228,24 @@ pub struct ProjectCommandScope {
     engine_generation: u64,
     engine_device: Option<String>,
     chat: Option<String>,
+    project: Option<String>,
+    cwd: Option<String>,
+    checkout: Option<String>,
 }
 impl ProjectCommandScope {
     fn capture(state: &AppState) -> Self {
+        let task = state.selected_chat_row();
         Self {
             engine_generation: state.engine_generation(),
             engine_device: state
                 .engine()
                 .map(|engine| engine.engine_info().device_id.clone()),
             chat: state.selected_chat.clone(),
+            // The selected task can move project or materialize a checkout
+            // without changing its chat ID or engine. Labels are not identity.
+            project: task.and_then(|task| task.space_id.clone()),
+            cwd: task.and_then(|task| task.cwd.clone()),
+            checkout: task.and_then(|task| task.checkout_id.clone()),
         }
     }
     pub(crate) fn is_current(&self, state: &AppState) -> bool {
