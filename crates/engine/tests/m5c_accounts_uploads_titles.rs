@@ -189,7 +189,16 @@ async fn claude_provider_login_is_discovered_with_stable_native_identity() {
     assert_eq!(alice.display_name.as_deref(), Some("Test User"));
     assert_eq!(alice.organization.as_deref(), Some("Test Org"));
     assert!(!alice.switchable);
-    assert!(snapshot.warnings.is_empty());
+    // This all-provider listing may warn about the absent Codex fixture.
+    // Claude's valid native login must itself be warning-free.
+    assert!(
+        snapshot
+            .warnings
+            .iter()
+            .all(|warning| warning.harness != HarnessId::ClaudeCode),
+        "{:?}",
+        snapshot.warnings
+    );
     let alice_id = alice.id.clone();
     assert_eq!(alice_id, CLAUDE_NATIVE_ACCOUNT_ID);
     assert!(!config.data_dir.join("agent-accounts/claude-code").exists());
