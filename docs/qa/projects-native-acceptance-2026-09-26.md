@@ -10,6 +10,9 @@ paths; it does not cover the subsequently identified stale rendered
 Run/Retry/Stop admission path. Commands owns that failure-first reproduction and
 correction. Its actual rendered-action results and immutable correction must be
 accepted before native acceptance starts. Do not package known-unfenced source.
+Before packaging, the coordinator must also review/adopt the committed main
+composition and schema changes (current Sidebar runtime uses schema 14). Do
+not merge main or copy its uncommitted files as part of this preparation.
 
 ## Boundaries and ownership
 
@@ -72,8 +75,12 @@ within the native slot):
 
 The setup-failure contract is explicit: **retry setup, then retry the task**.
 Retrying setup alone must not be described as automatically replaying a failed
-provider submission. A retry retains the captured command and checkout; editing
+provider submission. Use the setup **receipt’s Retry** control, not the ordinary
+saved-action Run button. A retry retains the captured command and checkout; editing
 the saved action changes later new runs, not an existing run's snapshot.
+Before Retry, verify the native UI lets the user inspect the captured command.
+A captured name alone, or command text visible only in IPC evidence, does not
+establish that readability requirement; report any gap to the Commands owner.
 
 ## Harmless command fixtures
 
