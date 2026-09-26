@@ -384,6 +384,14 @@ pub struct TerminalPanel {
 }
 
 impl TerminalPanel {
+    /// Access the actual retained child for held-RPC GPUI integration tests.
+    #[cfg(test)]
+    pub(crate) fn command_panel_for_epoch_fixture(
+        &self,
+    ) -> Entity<crate::project_commands::ProjectCommandPanel> {
+        self.commands.clone()
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let commands =
             cx.new(|cx| crate::project_commands::ProjectCommandPanel::new(state.clone(), cx));

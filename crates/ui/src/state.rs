@@ -1909,6 +1909,17 @@ impl AppState {
         self.engine_generation
     }
 
+    /// Test-only entry to the real connection replacement path, including
+    /// generation changes, subscriptions and state notifications.
+    #[cfg(test)]
+    pub(crate) fn attach_engine_for_epoch_fixture(
+        &mut self,
+        handle: EngineHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.attach_engine(handle, cx);
+    }
+
     #[cfg(test)]
     pub(crate) fn set_test_engine(&mut self, handle: EngineHandle) {
         self.engine = Some(handle);
