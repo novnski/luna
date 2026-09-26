@@ -112,3 +112,27 @@ The six JSON traces record engine generation/device, retained entity ID, snapsho
 busy/error state, emitted Output events and request/reply/cancellation envelopes.
 The same-engine case must pass; the stale cases are expected to fail before any
 production correction. This expectation is not a runtime observation yet.
+
+## First Commands baseline and positive-control disposal correction
+
+Defaults ran the six cases at combined `97804ba0`:0/6 passed. All five stale cases
+reached their specific assertions and wrote traces. The same-engine load/execute/
+Output assertions passed; its final disposal assertion observed3 status calls
+instead of2. Original log/traces remain in the Defaults worktree at
+`target/qa/project-defaults/commands-epoch-baseline-1/`.
+
+Source review identifies a fixture ordering error at the disposal boundary:
+TestAppContext.run_until_parked only drains its dispatcher, while App's effect
+flush calls release_dropped_entities. Dropping Scene outside an App update leaves
+the queued parent entity value owning its Commands child until a subsequent
+update. Advancing the child's timer first can therefore cause one more request
+before parent disposal. Context.spawn itself holds only a weak entity, and the
+parent event subscription also uses weak handles; this evidence does not establish
+a production ownership leak.
+
+The source-only fixture correction drops Scene within cx.update, then checks
+actual parent/child weak handles are released before advancing the same2-second
+clock and retaining the original no-extra-poll assertion. A second JSON captures
+both release checks and before/after request counts. No runtime fence, helper
+change or stale-case assertion change is included. The corrected control still
+requires its own authentic rerun before declaring the baseline valid.
