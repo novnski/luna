@@ -155,6 +155,11 @@ pub mod methods {
     pub const SET_INSTRUCTION_SETTINGS: &str = "SetInstructionSettings";
     /// Read-only provider-owned skill/MCP configuration inventory.
     pub const GET_INTEGRATION_INVENTORY: &str = "GetIntegrationInventory";
+    /// Provider-owned SKILL.md library on the engine's local device.
+    pub const GET_SKILL_DOCUMENT: &str = "GetSkillDocument";
+    pub const SAVE_SKILL_DOCUMENT: &str = "SaveSkillDocument";
+    pub const INSTALL_SKILL: &str = "InstallSkill";
+    pub const REMOVE_SKILL: &str = "RemoveSkill";
     /// Bounded search over the local derived session-activity index.
     pub const SEARCH_SESSION_HISTORY: &str = "SearchSessionHistory";
     /// L16 normalized local usage. The runtime accepts only explicit synthetic homes.
@@ -359,6 +364,10 @@ pub mod methods {
         GET_INSTRUCTION_SETTINGS,
         SET_INSTRUCTION_SETTINGS,
         GET_INTEGRATION_INVENTORY,
+        GET_SKILL_DOCUMENT,
+        SAVE_SKILL_DOCUMENT,
+        INSTALL_SKILL,
+        REMOVE_SKILL,
         SEARCH_SESSION_HISTORY,
         GET_USAGE_SNAPSHOT,
         REBUILD_SESSION_HISTORY,

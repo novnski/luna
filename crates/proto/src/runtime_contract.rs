@@ -260,6 +260,24 @@ pub struct IntegrationInventoryView {
     pub help: String,
 }
 
+/// A provider-owned SKILL.md read through the managed library. The identity
+/// resolves only within the selected provider, device and project scope; the
+/// file path stays on the engine. A revision is required for every edit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDocumentView {
+    pub provider: HarnessId,
+    pub scope: IntegrationSkillScope,
+    pub identity: String,
+    pub name: String,
+    pub content: String,
+    pub revision: String,
+    /// Relative names for files alongside SKILL.md, never absolute paths.
+    pub supporting_files: Vec<String>,
+    /// Symlinks and other externally owned entries remain inspectable.
+    pub read_only_reason: Option<String>,
+}
+
 impl LunaAgentRuntimeContract {
     pub fn diagnostics(
         &self,
