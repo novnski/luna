@@ -443,7 +443,7 @@ impl Changes {
 }
 
 impl Changes {
-    fn git_button(
+    pub(super) fn git_button(
         id: impl Into<SharedString>,
         label: &'static str,
         theme: &Theme,
@@ -534,6 +534,7 @@ impl Changes {
                     ),
             );
             card = card.child(self.render_pr_status(theme));
+            card = card.child(self.render_pr_panel(theme, cx));
             card = card.child(self.render_checkpoint_section(theme, cx));
             let selected = self.git_selected.clone();
             let rows = preview.files.into_iter().map(|file| {

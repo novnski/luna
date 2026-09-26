@@ -3,6 +3,8 @@
 //! Process execution and provider calls intentionally live outside this layer so
 //! remote parsing and head selector construction remain deterministic and testable.
 
+pub mod pull_requests;
+
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};

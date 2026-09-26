@@ -1041,6 +1041,7 @@ enum MutateParams {
 }
 
 pub struct EngineRpc {
+    github_pr: Option<crate::source_control::pull_requests::GitHubPullRequests>,
     backup_control: Option<BackupControl>,
     managed_backup_root: Option<std::path::PathBuf>,
     store: std::sync::Arc<DocsStore>,
@@ -1278,6 +1279,7 @@ impl EngineRpc {
             capabilities: luna_proto::capabilities::current(),
         };
         let rpc = Self {
+            github_pr: None,
             backup_control: None,
             managed_backup_root: None,
             store,
@@ -1838,6 +1840,14 @@ impl EngineRpc {
                 }
             }
         });
+    }
+
+    pub(crate) fn with_github_pr(
+        mut self,
+        service: crate::source_control::pull_requests::GitHubPullRequests,
+    ) -> Self {
+        self.github_pr = Some(service);
+        self
     }
 
     pub fn with_previews(mut self, previews: luna_preview::PreviewService) -> Self {
@@ -6134,7 +6144,10 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         | methods::UPDATE_PROVIDER => Duration::from_secs(15 * 60),
         methods::EXECUTE_GIT_ACTION => Duration::from_secs(150),
         methods::GENERATE_GIT_COMMIT_MESSAGE => Duration::from_secs(45),
-        methods::GET_GIT_PR_STATUS => Duration::from_secs(60),
+        methods::GET_GIT_PR_STATUS
+        | methods::GET_GITHUB_PR_PREVIEW
+        | methods::GET_GITHUB_PR_DETAILS => Duration::from_secs(70),
+        methods::CREATE_GITHUB_DRAFT_PR => Duration::from_secs(110),
         methods::CREATE_WORKTREE => Duration::from_secs(120),
         _ => Duration::from_secs(30),
     }
@@ -6213,6 +6226,9 @@ fn forwardable(method: &str) -> bool {
             | methods::EXECUTE_GIT_ACTION
             | methods::GENERATE_GIT_COMMIT_MESSAGE
             | methods::GET_GIT_PR_STATUS
+            | methods::GET_GITHUB_PR_PREVIEW
+            | methods::GET_GITHUB_PR_DETAILS
+            | methods::CREATE_GITHUB_DRAFT_PR
             // Terminals live on the chat's host device.
             | methods::OPEN_TERMINAL
             | methods::SUBSCRIBE_TERMINAL
@@ -8941,6 +8957,43 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&serde_json::json!({ "message": message }))
+            }
+            methods::GET_GITHUB_PR_PREVIEW | methods::GET_GITHUB_PR_DETAILS => {
+                #[derive(Deserialize)]
+                struct P {
+                    cwd: String,
+                    number: Option<u64>,
+                }
+                let p: P = parse_params(params)?;
+                let root = self.change_request_root(&p.cwd).await?;
+                let cwd = root.to_string_lossy();
+                let service = self
+                    .github_pr
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("GitHub PR service is unavailable".into()))?;
+                if method == methods::GET_GITHUB_PR_PREVIEW {
+                    RpcReply::value(&service.preview(&cwd).await.map_err(RpcError::Failed)?)
+                } else {
+                    let number = p
+                        .number
+                        .ok_or_else(|| RpcError::Failed("PR number is required".into()))?;
+                    RpcReply::value(
+                        &service
+                            .details(&cwd, number)
+                            .await
+                            .map_err(RpcError::Failed)?,
+                    )
+                }
+            }
+            methods::CREATE_GITHUB_DRAFT_PR => {
+                let request: luna_proto::GitPrCreateRequest = parse_params(params)?;
+                self.change_request_root(&request.preview.checkout.cwd)
+                    .await?;
+                let service = self
+                    .github_pr
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("GitHub PR service is unavailable".into()))?;
+                RpcReply::value(&service.create(request).await.map_err(RpcError::Failed)?)
             }
             methods::GET_GIT_PR_STATUS => {
                 Box::pin(async move {

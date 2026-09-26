@@ -1020,3 +1020,23 @@ async fn staged_copy_engine_boot_probe_keeps_original_stage_untouched() {
     assert!(!corrupt_probe.join("credentials").exists());
     service(&root).verify_staged_for_tests(&staged).unwrap();
 }
+
+// Authored before the draft-PR backup enrollment: uncertain writes must survive
+// an archive/restore unchanged and never become permission to replay a POST.
+#[test]
+fn github_pr_attempt_journal_survives_backup_and_staging() {
+    let (_parent, root, backups) = fixture();
+    let relative = format!("profiles/local/github-pr-attempts/{}.json", "a".repeat(64));
+    let path = root.join(&relative);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let contents = br#"{"version":1,"operation_id":"38cc3a90-0eb9-454b-ab67-dd08bda1617a","target":{"repository":"github.com/acme/luna","base":"main","head":"feature/pr"},"head_sha":"1111111111111111111111111111111111111111"}"#;
+    fs::write(&path, contents).unwrap();
+    fs::write(path.with_extension("lock"), b"").unwrap();
+    let backup = BackupService::new_bb_style(IsolatedRoot::open(&root).unwrap());
+    let receipt = backup.backup_now(&backups, 1_700_000_000_000).unwrap();
+    assert!(receipt.manifest.entries.iter().any(|e| e.path == relative));
+    let staged = backup.stage_restore(&receipt.archive).unwrap();
+    backup.verify_staged_for_tests(&staged).unwrap();
+    assert_eq!(fs::read(staged.path.join(&relative)).unwrap(), contents);
+    assert!(!staged.path.join(&relative).with_extension("lock").exists());
+}

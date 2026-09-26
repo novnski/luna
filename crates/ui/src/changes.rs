@@ -60,6 +60,7 @@ use crate::theme::Theme;
 use luna_syntax::LanguageId as Lang;
 
 mod git_actions;
+mod pull_requests;
 
 // ---------------------------------------------------------------------------
 // Layout numbers (analytic — they drive the fold tween)
@@ -1695,6 +1696,7 @@ pub struct Changes {
     /// Pinned commit for a [`DiffScope::Commit`] pane (sha + subject drive
     /// the fetch and the surface-tab title).
     commit: Option<GitHistoryCommit>,
+    pr_panel: pull_requests::PullRequestPanel,
     git_open: bool,
     git_preview: Option<GitActionPreview>,
     git_target: Option<String>,
@@ -1783,6 +1785,7 @@ impl Changes {
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
+        let pr_panel = pull_requests::PullRequestPanel::new(cx);
         let git_message =
             cx.new(|cx| ComposerInput::with_context("Commit message…", "GitCommitMessage", cx));
         let git_message_events = cx.subscribe(&git_message, |_, _, _, cx| cx.notify());
@@ -1827,6 +1830,7 @@ impl Changes {
             history_view_button: None,
             history_events: None,
             commit: None,
+            pr_panel,
             git_open: false,
             git_preview: None,
             git_target: None,
@@ -4960,6 +4964,7 @@ impl Render for Changes {
         if self.git_open {
             let current = self.git_context(cx).map(|(_, _, key)| key);
             if current != self.git_target {
+                self.reset_pr_panel(cx);
                 self.git_preview = None;
                 self.git_selected.clear();
                 self.git_pr_status = None;

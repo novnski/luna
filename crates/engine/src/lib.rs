@@ -282,6 +282,7 @@ impl std::fmt::Debug for EngineConfig {
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
+    github_pr: source_control::pull_requests::GitHubPullRequests,
     backup_control: Option<backup_control::BackupControl>,
     pub store: Arc<DocsStore>,
     pub sessions: SessionsEngine,
@@ -626,7 +627,13 @@ impl EngineCore {
         titles.set_task_identity(task_identity.clone());
         sessions.set_titles(titles);
         let diff_sync = CheckoutDiffSync::start(repos.clone(), workspace.clone(), &device_id, edge);
-        sessions.set_git_checkpoints(GitCheckpoints::new(repos.clone()));
+        let checkpoints = GitCheckpoints::new(repos.clone());
+        let github_pr = source_control::pull_requests::GitHubPullRequests::new(
+            checkpoints.actions(),
+            profile.store_root().join("github-pr-attempts"),
+        )
+        .guarded(device_write.handle());
+        sessions.set_git_checkpoints(checkpoints);
         // Turn starts snapshot the checkout tree — the "Latest turn" diff base.
         let turn_diff = diff_sync.clone();
         sessions.set_turn_listener(Arc::new(move |chat_id, cwd| {
@@ -644,6 +651,7 @@ impl EngineCore {
             agent_accounts.clone(),
         ));
         Ok(Self {
+            github_pr,
             backup_control,
             store,
             sessions,
@@ -852,7 +860,8 @@ impl EngineCore {
             self.cleanup_boot_id.clone(),
         )
         .with_auth(self.auth())
-        .with_previews(self.previews.clone());
+        .with_previews(self.previews.clone())
+        .with_github_pr(self.github_pr.clone());
         if let Some(remote_auth) = &self.remote_auth {
             rpc = rpc.with_remote_auth(remote_auth.clone());
         }

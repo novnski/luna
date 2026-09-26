@@ -17,6 +17,10 @@ pr = json.loads(state.read_text()) if state.exists() else None
 if args[:2] == ['pr', 'list']:
     print(json.dumps([pr] if pr else []))
 elif args[:2] == ['pr', 'view']:
+    number = int(args[2])
+    if not pr or pr['number'] != number:
+        history = root / 'history' / f'{number}.json'
+        pr = json.loads(history.read_text()) if history.exists() else None
     if not pr: sys.exit(1)
     print(json.dumps(pr))
 elif args[:2] == ['repo', 'view']:
@@ -27,8 +31,12 @@ elif args and args[0] == 'api':
         payload = json.loads(pathlib.Path(args[args.index('--input')+1]).read_text())
         with (root / 'writes.jsonl').open('a') as f: f.write(json.dumps(payload)+'\n')
         if mode == 'reject': sys.exit(1)
-        pr = {'number': 42, 'title': payload['title'], 'body': payload['body'],
-              'url': 'https://github.com/acme/luna/pull/42', 'state': 'OPEN',
+        history = root / 'history'
+        history.mkdir(exist_ok=True)
+        if pr: (history / f"{pr['number']}.json").write_text(json.dumps(pr))
+        number = 41 + len((root / 'writes.jsonl').read_text().splitlines())
+        pr = {'number': number, 'title': payload['title'], 'body': payload['body'],
+              'url': f'https://github.com/acme/luna/pull/{number}', 'state': 'OPEN',
               'baseRefName': payload['base'], 'headRefName': payload['head'],
               'isDraft': True, 'isCrossRepository': False,
               'headRepositoryOwner': {'login': 'acme'},
@@ -40,7 +48,7 @@ elif args and args[0] == 'api':
         state.write_text(json.dumps(pr))
         if mode == 'lost': sys.exit(1)
         if mode == 'wait': time.sleep(60)
-        print(json.dumps({'number': 42}))
+        print(json.dumps({'number': number}))
     elif '/branches/' in endpoint:
         print(json.dumps({'commit': {'sha': (root / 'sha').read_text().strip() if mode != 'diverged' else '0'*40}}))
     elif endpoint.endswith('/pulls/42'):
