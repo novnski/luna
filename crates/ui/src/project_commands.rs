@@ -449,6 +449,7 @@ pub struct ProjectCommandPanel {
     scope: ProjectCommandScope,
     snapshot: Option<ProjectCommandsSnapshot>,
     expanded: bool,
+    expanded_command_run: Option<String>,
     busy: bool,
     write_pending: bool,
     error: Option<String>,
@@ -490,6 +491,7 @@ impl ProjectCommandPanel {
             scope,
             snapshot: None,
             expanded: false,
+            expanded_command_run: None,
             busy: false,
             write_pending: false,
             error: None,
@@ -508,6 +510,7 @@ impl ProjectCommandPanel {
         // remain owned by the original engine until explicitly stopped there.
         self.task = None;
         self.snapshot = None;
+        self.expanded_command_run = None;
         self.error = None;
         self.busy = false;
         self.write_pending = false;
@@ -541,6 +544,7 @@ impl ProjectCommandPanel {
                 view.busy = false;
                 match result {
                     Ok(snapshot) => {
+                        view.retain_disclosed_run(&snapshot);
                         view.snapshot = Some(snapshot);
                     }
                     Err(e) => {
@@ -550,6 +554,15 @@ impl ProjectCommandPanel {
                 cx.notify();
             });
         }));
+    }
+    fn retain_disclosed_run(&mut self, snapshot: &ProjectCommandsSnapshot) {
+        if self
+            .expanded_command_run
+            .as_ref()
+            .is_some_and(|id| !snapshot.runs.iter().any(|run| &run.id == id))
+        {
+            self.expanded_command_run = None;
+        }
     }
     fn execute(
         &mut self,
@@ -696,6 +709,10 @@ impl Render for ProjectCommandPanel {
                 let id = run.id.clone();
                 let origin = self.scope.clone();
                 let active = run.status.is_active();
+                let disclosed = self.expanded_command_run.as_deref() == Some(run.id.as_str());
+                let disclosure_id = run.id.clone();
+                let disclosure_origin = self.scope.clone();
+                let accent = theme.accent;
                 let mut row = div().flex().flex_col().gap(px(2.0)).child(
                     div()
                         .flex()
@@ -704,6 +721,8 @@ impl Render for ProjectCommandPanel {
                         .child(
                             div()
                                 .flex_1()
+                                .min_w_0()
+                                .truncate()
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.text_muted)
                                 .child(SharedString::from(format!(
@@ -713,6 +732,44 @@ impl Render for ProjectCommandPanel {
                                     run.status.label(),
                                     run.attempt
                                 ))),
+                        )
+                        .child(
+                            command_action(&theme, true)
+                                .id(SharedString::from(format!("disclose-command-{}", run.id)))
+                                .role(gpui::Role::Button)
+                                .aria_label(if disclosed {
+                                    "Hide captured command"
+                                } else {
+                                    "Show captured command"
+                                })
+                                .tab_index(0)
+                                .focus_visible(move |style| style.border_2().border_color(accent))
+                                .when(cfg!(test), |el| {
+                                    el.debug_selector(|| format!("qa-command-disclose-{}", run.id))
+                                })
+                                .child(if disclosed {
+                                    "Hide command"
+                                } else {
+                                    "Show command"
+                                })
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    if !disclosure_origin.is_current(view.state.read(cx))
+                                        || !view.snapshot.as_ref().is_some_and(|snapshot| {
+                                            snapshot.runs.iter().any(|run| run.id == disclosure_id)
+                                        })
+                                    {
+                                        return;
+                                    }
+                                    view.expanded_command_run =
+                                        if view.expanded_command_run.as_deref()
+                                            == Some(disclosure_id.as_str())
+                                        {
+                                            None
+                                        } else {
+                                            Some(disclosure_id.clone())
+                                        };
+                                    cx.notify();
+                                })),
                         )
                         .child(
                             command_action(&theme, !self.busy || (active && !self.write_pending))
@@ -740,6 +797,74 @@ impl Render for ProjectCommandPanel {
                                 }),
                         ),
                 );
+                if disclosed {
+                    let mut command_lines = div()
+                        .flex()
+                        .flex_col()
+                        .font_family(theme.font_mono.clone())
+                        .text_size(px(11.0))
+                        .text_color(theme.code_text);
+                    for line in run.action.command.split('\n') {
+                        command_lines = command_lines.child(div().whitespace_nowrap().child(
+                            SharedString::from(if line.is_empty() {
+                                " ".to_string()
+                            } else {
+                                line.to_string()
+                            }),
+                        ));
+                    }
+                    row = row.child(
+                        div()
+                            .min_w_0()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.code_wash)
+                            .p(px(8.0))
+                            .gap(px(4.0))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme.text_faint)
+                                    .child(SharedString::from(format!(
+                                        "Captured for attempt {}",
+                                        run.attempt
+                                    ))),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("checkout-command-{}", run.id)))
+                                    .when(cfg!(test), |el| {
+                                        el.debug_selector(|| {
+                                            format!("qa-command-checkout-{}-{}", run.id, run.cwd)
+                                        })
+                                    })
+                                    .min_w_0()
+                                    .whitespace_normal()
+                                    .text_size(px(11.0))
+                                    .text_color(theme.text_muted)
+                                    .child(SharedString::from(format!("Checkout: {}", run.cwd))),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("captured-command-{}", run.id)))
+                                    .when(cfg!(test), |el| {
+                                        el.debug_selector(|| {
+                                            format!(
+                                                "qa-command-captured-{}-{}",
+                                                run.id, run.action.command
+                                            )
+                                        })
+                                    })
+                                    .w_full()
+                                    .min_w_0()
+                                    .overflow_x_scroll()
+                                    .child(command_lines),
+                            ),
+                    );
+                }
                 if let Some(id) = run.terminal_id {
                     let chat = run.chat_id;
                     let scope = self.scope.clone();
