@@ -503,6 +503,10 @@ impl RuntimeConfig {
 
 struct RunHandle {
     run_id: String,
+    /// Positive evidence that a parked adapter stream reached EOF. A terminal
+    /// Done or removal after an error does not prove its child released native
+    /// writer ownership yet.
+    idle_stream_closed: Arc<AtomicBool>,
     /// In-memory provider turn evidence for a future per-request LUNA grant.
     /// Its presence also proves a turn is active, while `active_turn_id()`
     /// returns the engine run ID for command fencing.
@@ -2276,6 +2280,51 @@ impl SessionsEngine {
             .clone()
     }
 
+    /// Release only this task's idle native writer, keeping dispatch excluded
+    /// through the caller's metadata operation and durable registry commit.
+    pub(crate) async fn prepare_native_archive(
+        &self,
+        chat_id: &str,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        let transition = self.transition_gate(chat_id).lock_owned().await;
+        if self.active_turn_id(chat_id).is_some() {
+            return Err(EngineError::Other(
+                "The task has an active or pending turn; stop it before archiving.".into(),
+            ));
+        }
+        let closing = {
+            let mut runs = lock(&self.inner.runs);
+            runs.get_mut(chat_id).map(|run| {
+                // Codex's existing idle mailbox-EOF path shuts down its child
+                // before closing the event stream. Do not interrupt: its Done
+                // notification can precede child teardown.
+                let (closed_tx, closed_rx) = mpsc::channel(1);
+                drop(closed_rx);
+                let previous = std::mem::replace(&mut run.steer_tx, closed_tx);
+                let closing = (run.run_id.clone(), run.idle_stream_closed.clone());
+                drop(previous);
+                closing
+            })
+        };
+        if let Some((run_id, closed)) = closing {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while self.is_live(chat_id, &run_id) {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| EngineError::Other(
+                "The idle native writer did not close before the archive deadline; archive was not attempted.".into(),
+            ))?;
+            if !closed.load(Ordering::Acquire) {
+                return Err(EngineError::Other(
+                    "The native runtime ended without confirmed idle stream closure; archive was not attempted.".into(),
+                ));
+            }
+        }
+        Ok(transition)
+    }
+
     /// Stage a requested permission change and apply it only when the current
     /// provider runtime is no longer active. A live turn keeps its effective
     /// policy and diagnostics until a later dispatch actually starts under the
@@ -2631,6 +2680,18 @@ impl SessionsEngine {
         let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
+        // A queue drain or already accepted command may have waited behind
+        // native archive after freezing its request. Read the committed row
+        // now, before starting a provider. A deliberate new user send revives
+        // the row at command acceptance and remains allowed through this gate.
+        if let Some(workspace) = self.inner.workspace()
+            && workspace.chat(chat_id)?.is_some_and(|chat| chat.archived)
+        {
+            return Err(EngineError::Other(
+                "The task was archived before dispatch; submit a new message explicitly to resume it."
+                    .into(),
+            ));
+        }
         // Runtime contracts are host authority, never client-provided model
         // options. Strip even a syntactically valid forged contract before any
         // request snapshot, recovery record, or provider dispatch.
@@ -3097,6 +3158,7 @@ impl SessionsEngine {
         lock(&self.inner.runs).insert(
             chat_id.to_string(),
             RunHandle {
+                idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: run_id.clone(),
                 provider_turn: None,
                 run_provider_binding: None,
@@ -5950,7 +6012,15 @@ async fn drive_run(
                     // after its final Done — a clean end, not a crash (the turn
                     // was already finalized). Persistent adapters keep the
                     // stream open and never hit this.
-                    None if idle_since.is_some() => break SessionStatus::Idle,
+                    None if idle_since.is_some() => {
+                        if let Some(run) = lock(&inner.runs)
+                            .get(&chat_id)
+                            .filter(|run| run.run_id == run_id)
+                        {
+                            run.idle_stream_closed.store(true, Ordering::Release);
+                        }
+                        break SessionStatus::Idle;
+                    }
                     None => AgentEvent::Done {
                         status: DoneStatus::Errored,
                         result: None,
@@ -8323,6 +8393,7 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-a".into(),
             RunHandle {
+                idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
                 run_provider_binding: None,
@@ -8429,6 +8500,7 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-a".into(),
             RunHandle {
+                idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
                 run_provider_binding: None,
@@ -8510,6 +8582,7 @@ mod tests {
         lock(&core.sessions.inner.runs).insert(
             task_id.clone(),
             RunHandle {
+                idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
                 run_provider_binding: None,
@@ -12584,6 +12657,7 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-active".into(),
             RunHandle {
+                idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-active".into(),
                 provider_turn: None,
                 run_provider_binding: None,
