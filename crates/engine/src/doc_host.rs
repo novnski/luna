@@ -1370,7 +1370,8 @@ impl DocHost {
                         .store
                         .task_command_receipt(&command_id)?
                         .is_some_and(|receipt| {
-                            receipt.status == CommandReceiptStatus::Pending
+                            receipt.task_id == task_id
+                                && receipt.status == CommandReceiptStatus::Pending
                                 && receipt.correlation_id.as_deref() == Some(correlation_id)
                                 && matches!(
                                     receipt.intent.as_str(),
@@ -1939,15 +1940,23 @@ impl DocHost {
                 | QueueMessageStatus::DeliveryUnknown { command_id, .. } => command_id,
                 QueueMessageStatus::Held => continue,
             };
-            match self.inner.store.task_command_receipt(command_id)? {
-                Some(receipt)
-                    if receipt.status == CommandReceiptStatus::Applied
+            // Restored/synced rows do not own receipts merely by naming an
+            // existing command ID. Both acceptance and uncertainty may only
+            // affect the exact task/message delivery operation.
+            let receipt = self
+                .inner
+                .store
+                .task_command_receipt(command_id)?
+                .filter(|receipt| {
+                    receipt.task_id == chat_id
+                        && receipt.correlation_id.as_deref() == Some(item.id.as_str())
                         && matches!(
                             receipt.intent.as_str(),
                             "sendQueuedNow" | "steerQueuedNow" | "dispatchQueued"
                         )
-                        && receipt.correlation_id.as_deref() == Some(item.id.as_str()) =>
-                {
+                });
+            match receipt {
+                Some(receipt) if receipt.status == CommandReceiptStatus::Applied => {
                     reconciled_queue_claim |= doc.settle_queued_claim(&item.id, command_id)?;
                 }
                 receipt => {
@@ -4193,6 +4202,12 @@ impl DocHost {
         id: &str,
         text: &str,
     ) -> Result<bool, EngineError> {
+        if !self.is_host(chat_id) {
+            return Err(EngineError::Other(format!(
+                "device {} does not host chat {chat_id}",
+                self.inner.config.device_id
+            )));
+        }
         let handle = self.open(chat_id)?;
         self.persist_queue_projection_if(
             &handle,
@@ -4211,6 +4226,12 @@ impl DocHost {
         id: &str,
         to_index: usize,
     ) -> Result<bool, EngineError> {
+        if !self.is_host(chat_id) {
+            return Err(EngineError::Other(format!(
+                "device {} does not host chat {chat_id}",
+                self.inner.config.device_id
+            )));
+        }
         let handle = self.open(chat_id)?;
         self.persist_queue_projection_if(
             &handle,

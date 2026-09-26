@@ -489,8 +489,15 @@ impl AgentAccounts {
     /// Provider-owned transcript locations and LUNA's own cache directory.
     /// This does not open credentials or materialize a named provider home.
     pub fn usage_history_paths(&self) -> (Option<PathBuf>, PathBuf, PathBuf) {
+        let (codex, claude, data) = self.usage_history_selection();
+        (codex.map(|(home, _)| home), claude, data)
+    }
+
+    /// Capture the selected home together with its auth-store mode so history
+    /// and quota refreshes share one selection across asynchronous work.
+    pub(crate) fn usage_history_selection(&self) -> (Option<(PathBuf, bool)>, PathBuf, PathBuf) {
         (
-            self.codex_home_for_inventory().ok(),
+            self.codex_usage_target().ok(),
             self.inner.config.claude_config_dir.clone(),
             self.inner.config.data_dir.clone(),
         )

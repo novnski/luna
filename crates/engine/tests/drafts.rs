@@ -84,6 +84,80 @@ fn rich_draft(path: String, bytes: &[u8]) -> ComposerDraft {
 }
 
 #[tokio::test]
+async fn submission_retry_preserves_the_exact_destination_across_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let core = assemble(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    // Canvas content is frozen before the newly created task is published;
+    // its destination belongs to the submission envelope, not the snapshot.
+    let snapshot = ComposerDraft {
+        version: luna_proto::COMPOSER_DRAFT_VERSION,
+        draft_id: "canvas-destination-regression".into(),
+        task_id: None,
+        revision: 1,
+        text: "synthetic destination sentinel".into(),
+        attachments: vec![],
+        appshots: vec![],
+        context: Default::default(),
+        execution: Default::default(),
+        updated_at_ms: 1,
+    };
+    let begin = |target: Option<&str>| {
+        serde_json::json!({
+            "commandId": "destination-regression",
+            "taskId": target,
+            "snapshot": snapshot,
+        })
+    };
+    client
+        .call(methods::BEGIN_DRAFT_SUBMISSION, begin(Some("task-a")))
+        .await
+        .unwrap();
+    client
+        .call(methods::BEGIN_DRAFT_SUBMISSION, begin(Some("task-a")))
+        .await
+        .expect("exact retry is idempotent");
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+
+    let restarted = assemble(root.path());
+    let client = luna_rpc::memory_client(restarted.rpc_service());
+    client
+        .call(methods::BEGIN_DRAFT_SUBMISSION, begin(Some("task-a")))
+        .await
+        .expect("exact retry survives restart");
+    for target in [Some("task-b"), None] {
+        let result = client
+            .call(methods::BEGIN_DRAFT_SUBMISSION, begin(target))
+            .await;
+        assert!(
+            result.is_err(),
+            "changed destination {target:?} was acknowledged: {result:?}"
+        );
+    }
+    let original: ComposerDraftRead = client
+        .call_as(
+            methods::GET_COMPOSER_DRAFT,
+            serde_json::json!({"taskId":"task-a"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(original.submissions.len(), 1);
+    assert_eq!(original.submissions[0].task_id.as_deref(), Some("task-a"));
+    assert_eq!(original.submissions[0].snapshot, snapshot);
+    let other: ComposerDraftRead = client
+        .call_as(
+            methods::GET_COMPOSER_DRAFT,
+            serde_json::json!({"taskId":"task-b"}),
+        )
+        .await
+        .unwrap();
+    assert!(other.submissions.is_empty());
+    restarted.shutdown().await;
+}
+
+#[tokio::test]
 async fn appshot_draft_lifecycle_projects_into_owned_history_without_private_context() {
     let bytes = BASE64
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")

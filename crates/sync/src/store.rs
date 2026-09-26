@@ -1839,7 +1839,7 @@ impl DocsStore {
     }
 
     /// Freeze the exact revision before dispatch. Reusing a command id with a
-    /// different snapshot is rejected, matching L07's immutable envelope.
+    /// different snapshot or destination is rejected, matching L07's immutable envelope.
     pub fn begin_draft_submission(
         &self,
         device_id: &str,
@@ -1853,16 +1853,16 @@ impl DocsStore {
             ensure_task_not_cleaning(&tx, task_id)?;
         }
         let bytes = serde_json::to_vec(snapshot)?;
-        let existing: Option<Vec<u8>> = tx
+        let existing: Option<(Vec<u8>, Option<String>)> = tx
             .query_row(
-                "SELECT record_json FROM composer_draft_submissions
+                "SELECT record_json,task_id FROM composer_draft_submissions
                  WHERE device_id=?1 AND command_id=?2",
                 params![device_id, command_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some(existing) = existing {
-            if existing == bytes {
+        if let Some((existing, existing_task_id)) = existing {
+            if existing == bytes && existing_task_id.as_deref() == task_id {
                 return Ok(());
             }
             return Err(StoreError::DraftSubmissionConflict(command_id.into()));
