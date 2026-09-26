@@ -16,7 +16,7 @@ use std::time::Duration;
 use luna_proto::Model;
 use luna_proto::{
     AgentAccountsSnapshot, HarnessId, InstructionSettingsView, IntegrationInventoryView,
-    IntegrationKind, RuntimeContractView,
+    IntegrationKind, IntegrationSkillScope, RuntimeContractView, SkillDocumentView,
 };
 use luna_rpc::methods;
 
@@ -71,6 +71,19 @@ pub struct HarnessesPage {
     instruction_save_task: Option<Task<()>>,
     inventory_task: Option<Task<()>>,
     instruction_saving: bool,
+    skill_document: Loadable<SkillDocumentView>,
+    skill_identity: Option<String>,
+    skill_creating: bool,
+    skill_scope: IntegrationSkillScope,
+    skill_name_input: Entity<ComposerInput>,
+    skill_content_input: Entity<ComposerInput>,
+    skill_busy: bool,
+    skill_task: Option<Task<()>>,
+    skill_error: Option<String>,
+    skill_notice: Option<String>,
+    skill_remove_armed: bool,
+    skill_install_provider: HarnessId,
+    skill_install_scope: IntegrationSkillScope,
     runtime_contract: Loadable<RuntimeContractView>,
     runtime_task: Option<Task<()>>,
     runtime_task_id: Option<String>,
@@ -81,6 +94,8 @@ impl HarnessesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let global_input = cx.new(|cx| ComposerInput::new("Instructions for every LUNA task", cx));
         let project_input = cx.new(|cx| ComposerInput::new("Instructions for this project", cx));
+        let skill_name_input = cx.new(|cx| ComposerInput::new("skill-name", cx));
+        let skill_content_input = cx.new(|cx| ComposerInput::new("SKILL.md content", cx));
         let state_observer = cx.observe(&state, |page, _, cx| {
             if page.target_device.is_some() {
                 return;
@@ -98,6 +113,7 @@ impl HarnessesPage {
             if project_id != page.instruction_project_id {
                 page.load_instructions(cx);
                 page.load_inventory(false, cx);
+                page.clear_skill_editor();
                 cx.notify();
             }
         });
@@ -125,6 +141,19 @@ impl HarnessesPage {
             instruction_save_task: None,
             inventory_task: None,
             instruction_saving: false,
+            skill_document: Loadable::Idle,
+            skill_identity: None,
+            skill_creating: false,
+            skill_scope: IntegrationSkillScope::Global,
+            skill_name_input,
+            skill_content_input,
+            skill_busy: false,
+            skill_task: None,
+            skill_error: None,
+            skill_notice: None,
+            skill_remove_armed: false,
+            skill_install_provider: HarnessId::ClaudeCode,
+            skill_install_scope: IntegrationSkillScope::Global,
             runtime_contract: Loadable::Idle,
             runtime_task: None,
             runtime_task_id: None,
@@ -162,6 +191,7 @@ impl HarnessesPage {
         self.harnesses = Loadable::Idle;
         self.instructions = Loadable::Idle;
         self.inventory = Loadable::Idle;
+        self.clear_skill_editor();
         self.runtime_contract = Loadable::Idle;
         self.runtime_task_id = None;
         self.load(cx);
@@ -454,6 +484,296 @@ impl HarnessesPage {
         }));
     }
 
+    fn clear_skill_editor(&mut self) {
+        self.skill_document = Loadable::Idle;
+        self.skill_identity = None;
+        self.skill_creating = false;
+        self.skill_remove_armed = false;
+        self.skill_error = None;
+        self.skill_notice = None;
+    }
+
+    fn selected_skill_project_id(&self, cx: &Context<Self>) -> Option<String> {
+        self.state
+            .read(cx)
+            .selected_space_row()
+            .map(|space| space.id.clone())
+    }
+
+    fn create_skill(&mut self, scope: IntegrationSkillScope, cx: &mut Context<Self>) {
+        if self.skill_busy
+            || (scope == IntegrationSkillScope::Project
+                && self.selected_skill_project_id(cx).is_none())
+        {
+            return;
+        }
+        self.clear_skill_editor();
+        self.skill_creating = true;
+        self.skill_scope = scope;
+        self.skill_name_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.skill_content_input.update(cx, |input, cx| {
+            input.set_text(
+                "---\nname: new-skill\ndescription: Describe when this skill should be used.\n---\n\n# Instructions\n\n",
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    fn open_skill(&mut self, identity: String, cx: &mut Context<Self>) {
+        if self.skill_busy {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let provider = self.integration_provider;
+        let project_id = self.selected_skill_project_id(cx);
+        self.clear_skill_editor();
+        self.skill_identity = Some(identity.clone());
+        self.skill_document = Loadable::Loading;
+        self.skill_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::GET_SKILL_DOCUMENT,
+                    serde_json::json!({"provider": provider, "projectId": project_id, "identity": identity}),
+                )
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<SkillDocumentView>(value)
+                        .map_err(|error| error.to_string())
+                });
+            this.update(cx, |page, cx| {
+                if page.target_device.is_some()
+                    || page.integration_provider != provider
+                    || page.selected_skill_project_id(cx) != project_id
+                    || page.skill_identity.as_deref() != Some(identity.as_str())
+                {
+                    return;
+                }
+                page.skill_document = match result {
+                    Ok(document) => {
+                        page.skill_scope = document.scope;
+                        page.skill_install_provider = if provider == HarnessId::Codex {
+                            HarnessId::ClaudeCode
+                        } else {
+                            HarnessId::Codex
+                        };
+                        page.skill_install_scope = document.scope;
+                        page.skill_content_input.update(cx, |input, cx| {
+                            input.set_text(document.content.clone(), cx)
+                        });
+                        Loadable::Ready(document)
+                    }
+                    Err(error) => Loadable::Error(error),
+                };
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn save_skill(&mut self, cx: &mut Context<Self>) {
+        if self.skill_busy || self.target_device.is_some() {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let provider = self.integration_provider;
+        let project_id = self.selected_skill_project_id(cx);
+        let (scope, name, expected_revision) = if self.skill_creating {
+            (
+                self.skill_scope,
+                self.skill_name_input.read(cx).text().trim().to_owned(),
+                None,
+            )
+        } else if let Loadable::Ready(document) = &self.skill_document {
+            if document.read_only_reason.is_some() {
+                return;
+            }
+            (
+                document.scope,
+                document.name.clone(),
+                Some(document.revision.clone()),
+            )
+        } else {
+            return;
+        };
+        let mut content = self.skill_content_input.read(cx).text().to_string();
+        if self.skill_creating {
+            content = content.replacen("name: new-skill\n", &format!("name: {name}\n"), 1);
+        }
+        self.skill_busy = true;
+        self.skill_error = None;
+        self.skill_notice = None;
+        self.skill_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::SAVE_SKILL_DOCUMENT,
+                    serde_json::json!({"provider": provider, "projectId": project_id, "scope": scope, "name": name, "content": content, "expectedRevision": expected_revision}),
+                )
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<SkillDocumentView>(value)
+                        .map_err(|error| error.to_string())
+                });
+            this.update(cx, |page, cx| {
+                page.skill_busy = false;
+                if page.target_device.is_some()
+                    || page.integration_provider != provider
+                    || page.selected_skill_project_id(cx) != project_id
+                {
+                    return;
+                }
+                match result {
+                    Ok(document) => {
+                        page.skill_creating = false;
+                        page.skill_identity = Some(document.identity.clone());
+                        page.skill_content_input.update(cx, |input, cx| {
+                            input.set_text(document.content.clone(), cx)
+                        });
+                        page.skill_document = Loadable::Ready(document);
+                        page.skill_remove_armed = false;
+                        page.skill_notice = Some("Skill saved. Existing provider sessions may need a fresh turn to discover it.".into());
+                        page.load_inventory(false, cx);
+                    }
+                    Err(error) => page.skill_error = Some(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn install_skill(&mut self, cx: &mut Context<Self>) {
+        let Loadable::Ready(document) = &self.skill_document else {
+            return;
+        };
+        if self.skill_busy || document.read_only_reason.is_some() {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let source_provider = document.provider;
+        let source_identity = document.identity.clone();
+        let expected_source_revision = document.revision.clone();
+        let destination_provider = self.skill_install_provider;
+        let destination_scope = self.skill_install_scope;
+        let project_id = self.selected_skill_project_id(cx);
+        if destination_scope == IntegrationSkillScope::Project && project_id.is_none() {
+            return;
+        }
+        self.skill_busy = true;
+        self.skill_error = None;
+        self.skill_notice = None;
+        self.skill_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::INSTALL_SKILL,
+                    serde_json::json!({"sourceProvider": source_provider, "projectId": project_id, "sourceIdentity": source_identity, "expectedSourceRevision": expected_source_revision, "destinationProvider": destination_provider, "destinationScope": destination_scope}),
+                )
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<SkillDocumentView>(value)
+                        .map_err(|error| error.to_string())
+                });
+            this.update(cx, |page, cx| {
+                page.skill_busy = false;
+                if page.target_device.is_some()
+                    || page.integration_provider != source_provider
+                    || page.selected_skill_project_id(cx) != project_id
+                    || page.skill_identity.as_deref() != Some(source_identity.as_str())
+                {
+                    return;
+                }
+                match result {
+                    Ok(document) => {
+                        page.integration_provider = destination_provider;
+                        page.skill_identity = Some(document.identity.clone());
+                        page.skill_content_input.update(cx, |input, cx| {
+                            input.set_text(document.content.clone(), cx)
+                        });
+                        page.skill_document = Loadable::Ready(document);
+                        page.skill_remove_armed = false;
+                        page.skill_notice = Some("Skill installed with its supporting files.".into());
+                        page.load_inventory(false, cx);
+                    }
+                    Err(error) => page.skill_error = Some(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn remove_skill(&mut self, cx: &mut Context<Self>) {
+        let Loadable::Ready(document) = &self.skill_document else {
+            return;
+        };
+        if self.skill_busy || document.read_only_reason.is_some() {
+            return;
+        }
+        if !self.skill_remove_armed {
+            self.skill_remove_armed = true;
+            cx.notify();
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let provider = document.provider;
+        let identity = document.identity.clone();
+        let expected_revision = document.revision.clone();
+        let project_id = self.selected_skill_project_id(cx);
+        self.skill_busy = true;
+        self.skill_error = None;
+        self.skill_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    methods::REMOVE_SKILL,
+                    serde_json::json!({"provider": provider, "projectId": project_id, "identity": identity, "expectedRevision": expected_revision}),
+                )
+                .await;
+            this.update(cx, |page, cx| {
+                page.skill_busy = false;
+                if page.target_device.is_some()
+                    || page.integration_provider != provider
+                    || page.selected_skill_project_id(cx) != project_id
+                    || page.skill_identity.as_deref() != Some(identity.as_str())
+                {
+                    return;
+                }
+                match result {
+                    Ok(_) => {
+                        page.clear_skill_editor();
+                        page.skill_notice = Some("Skill and its supporting files removed.".into());
+                        page.load_inventory(false, cx);
+                    }
+                    Err(error) => {
+                        page.skill_error = Some(error.to_string());
+                        page.skill_remove_armed = false;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
     fn load_runtime_contract(&mut self, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
@@ -580,9 +900,9 @@ impl HarnessesPage {
 
     fn render_integrations(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
-            .child(widgets::row_title(theme, "Skills and MCP"))
+            .child(widgets::row_title(theme, "Skill library and MCP"))
             .child(widgets::page_subtitle(theme,
-                "Provider-owned configuration on this device. Check provider reads Codex's native catalog; availability and selected-session attachment remain separate checks."))
+                "Browse provider-owned skills by global or project scope. Check provider reads Codex's native catalog; file presence and selected-session attachment are separate checks."))
             .child(widgets::ghost_action(theme).id("refresh-integrations")
                 .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
                 .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(true, cx); cx.notify(); }))
@@ -596,6 +916,12 @@ impl HarnessesPage {
                 .gap(px(6.0));
             for harness in harnesses {
                 let id = harness.id;
+                if !matches!(
+                    id,
+                    HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::Opencode
+                ) {
+                    continue;
+                }
                 let selected = id == self.integration_provider;
                 picker = picker.child(
                     widgets::ghost_action(theme)
@@ -604,6 +930,7 @@ impl HarnessesPage {
                         .hover(|s| widgets::ghost_hover(theme, s))
                         .on_click(cx.listener(move |page, _, _, cx| {
                             page.integration_provider = id;
+                            page.clear_skill_editor();
                             page.load_inventory(false, cx);
                             cx.notify();
                         }))
@@ -612,9 +939,41 @@ impl HarnessesPage {
             }
             card = card.child(picker);
         }
+        let has_project = self.selected_skill_project_id(cx).is_some();
+        card = card.child(
+            div()
+                .mt(px(10.0))
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(6.0))
+                .child(
+                    widgets::ghost_action(theme)
+                        .id("create-global-skill")
+                        .hover(|style| widgets::ghost_hover(theme, style))
+                        .on_click(cx.listener(|page, _, _, cx| {
+                            page.create_skill(IntegrationSkillScope::Global, cx)
+                        }))
+                        .child("New global skill"),
+                )
+                .when(has_project, |row| {
+                    row.child(
+                        widgets::ghost_action(theme)
+                            .id("create-project-skill")
+                            .hover(|style| widgets::ghost_hover(theme, style))
+                            .on_click(cx.listener(|page, _, _, cx| {
+                                page.create_skill(IntegrationSkillScope::Project, cx)
+                            }))
+                            .child("New project skill"),
+                    )
+                }),
+        );
         match &self.inventory {
             Loadable::Ready(view) => {
                 card = card.child(meta_text(theme, format!("Device: {}", view.machine_id)));
+                if let Some(task_id) = self.state.read(cx).selected_chat.as_deref() {
+                    card = card.child(meta_text(theme, format!("Selected task: {task_id}. Skill attachment reflects only exact provider session evidence; unknown means no verified readback.")));
+                }
                 if let Some(reason) = &view.unavailable_reason {
                     card = card.child(meta_text(theme, reason.clone()));
                 }
@@ -650,13 +1009,257 @@ impl HarnessesPage {
                             })
                             .when_some(item.actions.reason.clone(), |el, reason| {
                                 el.child(meta_text(theme, reason))
-                            }),
+                            })
+                            .when(
+                                item.kind == IntegrationKind::Skill && item.identity.is_some(),
+                                |el| {
+                                    let identity = item.identity.clone().unwrap_or_default();
+                                    el.child(
+                                        widgets::ghost_action(theme)
+                                            .id(SharedString::from(format!(
+                                                "inspect-skill-{identity}"
+                                            )))
+                                            .mt(px(6.0))
+                                            .hover(|style| widgets::ghost_hover(theme, style))
+                                            .on_click(cx.listener(move |page, _, _, cx| {
+                                                page.open_skill(identity.clone(), cx)
+                                            }))
+                                            .child("Inspect / edit"),
+                                    )
+                                },
+                            ),
                     );
                 }
                 card = card.child(div().mt(px(8.0)).child(meta_text(theme, view.help.clone())));
             }
             Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
             _ => card = card.child(meta_text(theme, "Loading provider inventory…")),
+        }
+        card.into_any_element()
+    }
+
+    fn render_skill_editor(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
+            .child(widgets::row_title(theme, "Skill details"))
+            .child(widgets::page_subtitle(theme,
+                "LUNA edits the provider's SKILL.md in its selected global or project folder. Existing sessions may need a fresh turn to discover a change."))
+            .child(widgets::ghost_action(theme).id("close-skill-editor")
+                .mt(px(8.0)).hover(|style| widgets::ghost_hover(theme, style))
+                .on_click(cx.listener(|page, _, _, cx| { page.clear_skill_editor(); cx.notify(); }))
+                .child("Close"));
+        if let Some(error) = &self.skill_error {
+            card = card.child(widgets::error_strip(theme, error.clone()));
+        }
+        if let Some(notice) = &self.skill_notice {
+            card = card.child(div().mt(px(8.0)).child(meta_text(theme, notice.clone())));
+        }
+        if self.skill_creating {
+            let scope = if self.skill_scope == IntegrationSkillScope::Global {
+                "Global"
+            } else {
+                "Project"
+            };
+            card = card
+                .child(div().mt(px(12.0)).child(widgets::row_title(theme, format!("New {scope} skill"))))
+                .child(meta_text(theme, "Use a lowercase name with digits or single hyphens. Edit the description and instructions before saving."))
+                .child(div().mt(px(8.0)).child(popover::dialog_field(self.skill_name_input.clone().into_any_element())));
+        }
+        match &self.skill_document {
+            Loadable::Loading => {
+                return card
+                    .child(meta_text(theme, "Loading skill…"))
+                    .into_any_element();
+            }
+            Loadable::Error(error) => {
+                return card
+                    .child(widgets::error_strip(theme, error.clone()))
+                    .into_any_element();
+            }
+            Loadable::Ready(document) => {
+                let scope = if document.scope == IntegrationSkillScope::Global {
+                    "global"
+                } else {
+                    "project"
+                };
+                card = card
+                    .child(
+                        div()
+                            .mt(px(12.0))
+                            .child(widgets::row_title(theme, document.name.clone())),
+                    )
+                    .child(meta_text(
+                        theme,
+                        format!(
+                            "{scope} · {:?} · revision {}",
+                            document.provider,
+                            &document.revision[..12]
+                        ),
+                    ))
+                    .when_some(document.read_only_reason.clone(), |el, reason| {
+                        el.child(meta_text(theme, reason))
+                    });
+                if !document.supporting_files.is_empty() {
+                    let names = document
+                        .supporting_files
+                        .iter()
+                        .take(12)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let more = document.supporting_files.len().saturating_sub(12);
+                    card = card.child(meta_text(
+                        theme,
+                        format!(
+                            "Supporting files: {names}{}",
+                            if more > 0 {
+                                format!(" +{more} more")
+                            } else {
+                                String::new()
+                            }
+                        ),
+                    ));
+                }
+            }
+            Loadable::Idle if !self.skill_creating => return card.into_any_element(),
+            Loadable::Idle => {}
+        }
+        card = card
+            .child(
+                div()
+                    .mt(px(12.0))
+                    .child(widgets::row_title(theme, "SKILL.md")),
+            )
+            .child(div().mt(px(6.0)).child(popover::dialog_field(
+                self.skill_content_input.clone().into_any_element(),
+            )))
+            .child(
+                widgets::ghost_action(theme)
+                    .id("save-skill-document")
+                    .mt(px(8.0))
+                    .when(!self.skill_busy, |el| {
+                        el.hover(|style| widgets::ghost_hover(theme, style))
+                            .on_click(cx.listener(|page, _, _, cx| page.save_skill(cx)))
+                    })
+                    .when(self.skill_busy, |el| el.opacity(0.5))
+                    .child(if self.skill_busy {
+                        "Saving or installing…"
+                    } else if self.skill_creating {
+                        "Create skill"
+                    } else {
+                        "Save skill"
+                    }),
+            );
+
+        if let Loadable::Ready(document) = &self.skill_document {
+            card = card
+                .child(div().mt(px(18.0)).child(widgets::row_title(theme, "Install a copy")))
+                .child(meta_text(theme, "Copy this skill and its supporting files to another provider or scope. An existing skill with the same name is never replaced."));
+            let mut providers = div().mt(px(8.0)).flex().flex_row().flex_wrap().gap(px(6.0));
+            for (provider, label) in [
+                (HarnessId::Codex, "Codex"),
+                (HarnessId::ClaudeCode, "Claude Code"),
+                (HarnessId::Opencode, "OpenCode"),
+            ] {
+                providers = providers.child(
+                    widgets::ghost_action(theme)
+                        .id(SharedString::from(format!(
+                            "skill-install-provider-{provider:?}"
+                        )))
+                        .when(self.skill_install_provider == provider, |el| {
+                            el.bg(theme.accent_wash)
+                        })
+                        .hover(|style| widgets::ghost_hover(theme, style))
+                        .on_click(cx.listener(move |page, _, _, cx| {
+                            page.skill_install_provider = provider;
+                            cx.notify();
+                        }))
+                        .child(label),
+                );
+            }
+            card = card.child(providers);
+            let mut scopes = div().mt(px(8.0)).flex().flex_row().flex_wrap().gap(px(6.0));
+            for (scope, label) in [
+                (IntegrationSkillScope::Global, "Global"),
+                (IntegrationSkillScope::Project, "Current project"),
+            ] {
+                if scope == IntegrationSkillScope::Project
+                    && self.selected_skill_project_id(cx).is_none()
+                {
+                    continue;
+                }
+                scopes = scopes.child(
+                    widgets::ghost_action(theme)
+                        .id(SharedString::from(format!("skill-install-scope-{scope:?}")))
+                        .when(self.skill_install_scope == scope, |el| {
+                            el.bg(theme.accent_wash)
+                        })
+                        .hover(|style| widgets::ghost_hover(theme, style))
+                        .on_click(cx.listener(move |page, _, _, cx| {
+                            page.skill_install_scope = scope;
+                            cx.notify();
+                        }))
+                        .child(label),
+                );
+            }
+            card = card.child(scopes);
+            let install_valid = self.skill_install_provider != document.provider
+                || self.skill_install_scope != document.scope;
+            card = card.child(
+                widgets::ghost_action(theme)
+                    .id("install-skill-copy")
+                    .mt(px(8.0))
+                    .when(
+                        install_valid && !self.skill_busy && document.read_only_reason.is_none(),
+                        |el| {
+                            el.hover(|style| widgets::ghost_hover(theme, style))
+                                .on_click(cx.listener(|page, _, _, cx| page.install_skill(cx)))
+                        },
+                    )
+                    .when(
+                        !install_valid || self.skill_busy || document.read_only_reason.is_some(),
+                        |el| el.opacity(0.5),
+                    )
+                    .child("Install copy"),
+            );
+            card = card
+                .child(
+                    div()
+                        .mt(px(18.0))
+                        .child(widgets::row_title(theme, "Remove skill")),
+                )
+                .child(meta_text(
+                    theme,
+                    format!(
+                        "Removing deletes SKILL.md and {} supporting entries from this {} folder.",
+                        document.supporting_files.len(),
+                        if document.scope == IntegrationSkillScope::Global {
+                            "global"
+                        } else {
+                            "project"
+                        }
+                    ),
+                ))
+                .child(
+                    widgets::ghost_action(theme)
+                        .id("remove-skill")
+                        .mt(px(8.0))
+                        .when(
+                            !self.skill_busy && document.read_only_reason.is_none(),
+                            |el| {
+                                el.hover(|style| widgets::ghost_hover(theme, style))
+                                    .on_click(cx.listener(|page, _, _, cx| page.remove_skill(cx)))
+                            },
+                        )
+                        .when(
+                            self.skill_busy || document.read_only_reason.is_some(),
+                            |el| el.opacity(0.5),
+                        )
+                        .child(if self.skill_remove_armed {
+                            "Confirm remove skill and files"
+                        } else {
+                            "Remove…"
+                        }),
+                );
         }
         card.into_any_element()
     }
@@ -1061,6 +1664,12 @@ impl HarnessesPage {
             .child(self.render_model_cache(&theme, cx))
             .when(local, |el| {
                 el.child(self.render_integrations(&theme, cx))
+                    .when(
+                        self.skill_creating
+                            || !matches!(&self.skill_document, Loadable::Idle)
+                            || self.skill_notice.is_some(),
+                        |el| el.child(self.render_skill_editor(&theme, cx)),
+                    )
                     .child(self.render_instructions(&theme, cx))
                     .child(self.render_runtime_contract(&theme, cx))
             })
