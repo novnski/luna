@@ -160,3 +160,20 @@ these limitations and the observed AX excerpts.
 QA app/data, build cache, earlier evidence and the original draft are retained.
 No task-created disposable target directory requires removal. Final disk/source
 receipts and the report-only commit identity are saved in the native packet.
+
+## Coordinator integration and primary app handoff
+
+The coordinator verified all 59 native and 66 preserved artifact hashes, all
+eight state snapshots, the four notice screenshots and final restored view.
+Handoff `6df0087a` merged without conflicts as local `8399ca21`; the integration
+tree exactly matched the reviewed handoff. Main's four pre-existing local files
+remained byte-identical and were not included in the merge.
+
+Primary `LUNA Dev` refreshed from `8399ca21` in 54s build time, 57.19s total.
+Exact bundle PID 36151 owns IPC 59777; strict deep codesign passed. Live engine
+device and owner-root claim match the preserved primary data directory. Binary
+SHA-256: `fd0488aa75c3771a69fcc6827ada3c3899ddb74a54b3068b411923a77b062206`.
+Evidence is in main's
+`target/qa/parallel-audit-2026-09-26/sidebar-notice-primary-handoff/`.
+Aggregate target/cache accounting was 142.476 GiB afterward, below 170 GiB;
+main `target/debug` was 28 GiB. No push, deployment or cache deletion occurred.
