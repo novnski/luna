@@ -75,6 +75,8 @@ pub struct ProjectsPage {
     saved: bool,
     task: Option<Task<()>>,
     catalog_task: Option<Task<()>>,
+    catalog_generation: u64,
+    catalog_harness: Option<HarnessId>,
     _observe: Subscription,
     _search: Subscription,
 }
@@ -86,7 +88,22 @@ impl ProjectsPage {
             .selected_space
             .clone()
             .or_else(|| state.read(cx).spaces_sorted().first().map(|s| s.id.clone()));
-        let observe = cx.observe(&state, |_, _, cx| cx.notify());
+        let observe = cx.observe(&state, |page: &mut Self, _, cx| {
+            let harness = page.selected(cx).and_then(|space| {
+                space
+                    .execution_defaults
+                    .provider
+                    .map(|provider| provider.harness)
+            });
+            if harness != page.catalog_harness {
+                page.catalog_generation = page.catalog_generation.wrapping_add(1);
+                page.catalog_task = None;
+                page.catalog_harness = harness;
+                page.models = popover::Loadable::Idle;
+                page.models_open = false;
+            }
+            cx.notify();
+        });
         let model_search =
             cx.new(|cx| ComposerInput::with_context("Search models…", "PaletteSearch", cx));
         let search = cx.subscribe(&model_search, |_, _, event, cx| {
@@ -106,6 +123,8 @@ impl ProjectsPage {
             saved: false,
             task: None,
             catalog_task: None,
+            catalog_generation: 0,
+            catalog_harness: None,
             _observe: observe,
             _search: search,
         }
@@ -133,13 +152,18 @@ impl ProjectsPage {
                 popover::Loadable::Error("Connect to the project's device to load models.".into());
             return;
         };
+        self.catalog_generation = self.catalog_generation.wrapping_add(1);
+        let generation = self.catalog_generation;
+        self.catalog_harness = Some(harness);
         self.models = popover::Loadable::Loading;
         let project_id = space.id;
         let params = serde_json::json!({"harness":harness,"targetDeviceId":space.device_id});
         self.catalog_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::LIST_MODELS, params).await;
             this.update(cx, |page, cx| {
-                if page.selected_project_id.as_deref() != Some(project_id.as_str()) {
+                if page.catalog_generation != generation
+                    || page.selected_project_id.as_deref() != Some(project_id.as_str())
+                {
                     return;
                 }
                 page.models = match result {
@@ -160,7 +184,9 @@ impl ProjectsPage {
         }
         if let Action::Project(id) = action {
             self.selected_project_id = Some(id);
+            self.catalog_generation = self.catalog_generation.wrapping_add(1);
             self.catalog_task = None;
+            self.catalog_harness = None;
             self.models = popover::Loadable::Idle;
             self.models_open = false;
             self.error = None;
@@ -186,6 +212,9 @@ impl ProjectsPage {
         let mut defaults = space.execution_defaults.clone();
         match action {
             Action::Provider(harness) => {
+                self.catalog_generation = self.catalog_generation.wrapping_add(1);
+                self.catalog_task = None;
+                self.catalog_harness = harness;
                 defaults.provider = harness.map(|harness| ProjectProviderDefault {
                     harness,
                     model: None,
