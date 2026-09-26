@@ -44,7 +44,9 @@ wrapping as a prerequisite for this project.
   incremental compilation. It keeps the native linker. LUNA's `target/`,
   packaged apps and dev data stay under LUNA's existing lifecycle rules.
 - The shared action store defaults to a **20 GiB collection budget** via
-  `MBX_GC_MAX_SIZE`. It is separate from the 50 GiB `target/debug` threshold.
+  `MBX_GC_MAX_SIZE`. The wrapper keeps it fixed at `20GiB` during the shared
+  audit; changing it requires a coordinated policy change. It is separate
+  from the 70 GiB per-checkout cleanup review threshold.
   Automatic collection normally runs after builds at most once per hour;
   the store can temporarily exceed the budget. APFS cloning can reduce
   physical duplication. Hard-link restoration is disabled so plain Cargo
@@ -63,6 +65,64 @@ with `mbx explain --last`. Preview collection using
 action store, including entries from other projects; coordinate cleanup
 with active tasks. Never use `mbx adopt`, `mbx clean` or `mbx cache remove`
 on this checkout, because `target/` also contains persistent app data.
+
+## Shared build admission
+
+`scripts/cargo.sh` runs compilation commands through `scripts/build-budget.py`
+(Python 3 standard library, macOS/Linux). It holds an advisory lock in the
+repository's common Git directory for the entire subprocess lifetime. All
+linked worktrees share that lock, including worktrees added later. A competing
+build exits **75** with its owner's PID and checkout; it does not queue or
+start another compiler. Ordinary Cargo exit codes and interrupt signals are
+preserved. Non-compilation commands still go directly to Cargo.
+
+```bash
+python3 scripts/build-budget.py --status
+scripts/cargo.sh check --locked -p luna-proto
+```
+
+Admission requires current usage plus a **25 GiB growth reservation** to fit
+under the **170 GiB operating ceiling**, and that much free disk plus 10 GiB.
+The guard measures all linked checkout `target/` directories (including apps,
+QA artifacts and data) and the entire mbx cache root. This intentionally
+includes more than the action store. It samples after each two-second wait
+and after child exit, stopping only its own build process group if usage
+reaches the ceiling, growth reaches the reservation, or free disk falls below
+10 GiB. It sends TERM, waits up to ten seconds, then kills remaining build
+processes if necessary. It never cleans files. A budget failure exits 75.
+
+`LUNA_BUILD_BUDGET_GIB` can **lower** 170 and `LUNA_BUILD_RESERVE_GIB` can lower
+25 for a bounded check; neither can raise the default. Reservation is also
+the build's growth limit, so do not lower it below the expected build size.
+Explicit target overrides must resolve inside the current checkout's target;
+target symlinks and Cargo config/path overrides are refused. Do not configure
+an external intermediate build directory in machine/repository Cargo config.
+All peers and main must use the updated wrapper before builds are released.
+
+The absolute policy maximum remains **200 GiB**. The unused 30 GiB provides
+headroom for packaging, sampling delay and unrelated activity. This is a
+cooperative guard, **not a hard filesystem quota**: a fast writer can grow
+between samples, main using an old wrapper or direct Cargo bypasses the lock,
+and other projects can write the shared cache. Stop and coordinate if any
+uncoordinated writer threatens that headroom. A strict kernel-enforced cap
+would require a separately provisioned quota, outside this change.
+
+Accounting charges the larger of logical and allocated bytes per file,
+canonicalizes roots but does not follow descendant symlinks, avoids duplicate
+canonical roots and same-root hard links,
+and charges APFS clones separately. It is deliberately conservative and is
+not APFS physical-exclusive usage. The sample is not atomic; files may change
+during traversal. Only linked worktree targets and the discovered mbx root
+are included, not unrelated clones or Cargo registry/download caches.
+The permanent lock file must **never be deleted** to clear a busy build;
+the OS releases its advisory lock when the guard exits. Inspect the reported
+PID instead. A killed supervisor cannot supervise surviving children, so
+inspect processes before retrying after abnormal termination.
+
+One checkout's 70 GiB threshold requests a cleanup review; it does not grant
+70 GiB to each peer. Follow `AGENTS.md` for coordinated dry-run/scoped cleanup.
+Keep persistent QA data, apps and active artifacts. The shared action store
+remains at its original 20 GiB collection setting.
 
 ## Repeatable verification
 

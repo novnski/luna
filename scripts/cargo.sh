@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Project-scoped Cargo entrypoint; no global Cargo shim or Rust toolchain changes.
 set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cache_mode="${LUNA_BUILD_CACHE:-auto}"
 case "$cache_mode" in
@@ -21,8 +22,42 @@ case "$cargo_command" in
   *) exec cargo "$@" ;;
 esac
 
+# Keep targets discoverable by the repository-wide guard. Cargo's explicit
+# target-dir also overrides machine-local Cargo configuration.
+target_dir="${CARGO_TARGET_DIR:-$ROOT/target}"
+previous=""
+for argument in "$@"; do
+  [[ "$argument" != -- ]] || break
+  if [[ "$previous" == --target-dir ]]; then target_dir="$argument"; fi
+  case "$argument" in
+    --target-dir=*) target_dir="${argument#--target-dir=}" ;;
+    --config|--config=*|--build-dir|--build-dir=*)
+      echo "Build budget cannot account for Cargo path overrides; use the checkout target" >&2; exit 2 ;;
+  esac
+  previous="$argument"
+done
+target_dir="$(python3 - "$ROOT" "$target_dir" <<'PY'
+from pathlib import Path
+import sys
+root, target = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
+base = root / 'target'
+if base.is_symlink() or (target != base and base not in target.parents):
+    sys.exit('Build target must be inside this checkout target/ (no target symlink)')
+print(target)
+PY
+)" || exit 2
+if [[ -n "${CARGO_BUILD_BUILD_DIR:-}" || -n "${CARGO_BUILD_TARGET_DIR:-}" ]]; then
+  echo "Unset CARGO_BUILD_BUILD_DIR/CARGO_BUILD_TARGET_DIR; use the checkout target" >&2
+  exit 2
+fi
+export CARGO_TARGET_DIR="$target_dir"
+
+guarded_exec() {
+  exec python3 "$ROOT/scripts/build-budget.py" -- "$@"
+}
+
 if [[ "$cache_mode" == 0 ]]; then
-  exec cargo "$@"
+  guarded_exec cargo "$@"
 fi
 
 mbx_bin="${LUNA_MBX_BIN:-}"
@@ -38,7 +73,7 @@ if [[ -z "$mbx_bin" || ! -x "$mbx_bin" ]]; then
     exit 127
   fi
   echo "Mr Boxington unavailable; using Cargo (see docs/reference/build-cache.md)" >&2
-  exec cargo "$@"
+  guarded_exec cargo "$@"
 fi
 
 # target/ also holds the dev bundle and persistent app data, so mbx must never
@@ -47,9 +82,13 @@ fi
 export MBX_TARGET_VIEWS=0
 export MBX_LEARNED_INCREMENTAL=0
 export MBX_RESTORE_HARDLINK=0
-export MBX_GC_MAX_SIZE="${MBX_GC_MAX_SIZE:-20GiB}"
+if [[ "${MBX_GC_MAX_SIZE:-20GiB}" != 20GiB ]]; then
+  echo "Keep MBX_GC_MAX_SIZE=20GiB during the shared audit; coordinate policy changes" >&2
+  exit 2
+fi
+export MBX_GC_MAX_SIZE=20GiB
 export MBX_SAVINGS="${MBX_SAVINGS:-plain}"
 
 # exec preserves Cargo's status/signals. A cache failure is never retried as a
 # second build; use LUNA_BUILD_CACHE=0 explicitly when diagnosing one.
-exec "$mbx_bin" "$@"
+guarded_exec "$mbx_bin" "$@"
