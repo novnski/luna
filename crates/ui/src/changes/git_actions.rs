@@ -860,3 +860,6 @@ impl Changes {
 
 #[cfg(test)]
 mod lifetime_tests;
+
+#[cfg(test)]
+mod ownership_tests;

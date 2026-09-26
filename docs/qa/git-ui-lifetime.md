@@ -96,3 +96,35 @@ backend journal are unchanged. Runtime remains the81105db5 implementation.
 Rustfmt/diff checks pass; no Cargo/native execution or further runtime fix has
 occurred. The earlier unapplied preparation artifacts and exact9089 logs/traces
 remain retained for chronology and review.
+
+## Additional ownership cases recorded before coherent runtime repair
+
+The13-case baseline at6c486a8f reproduced nine stale completions; all eight
+accepted write cases still completed once. The cold baseline independently
+reproduced two retired reads keeping the loading flag. Before changing mixed
+read/write task ownership, add five separate held-RPC controls without editing
+any of the frozen22+3+13 cases or helper:
+
+1. Accepted Commit + same-context Refresh: no new Git preview read and busy
+   remains true until the original write completes; its result applies once.
+2. Accepted Commit + Git section close/reopen: same ownership invariant.
+3. Accepted Restore + same-context Refresh: same ownership invariant.
+4. Accepted Restore + Git section close/reopen: same ownership invariant.
+5. Accepted Commit + a newer authored commit-message draft: completion must not
+   erase the newer draft. The original unchanged draft still clears normally.
+
+Capture settlement before admission; record the while-held state before releasing
+A and final state afterward. Do not assert early and abandon an accepted write.
+All write requests must reply once, never cancel/replay, and no real Git/restore
+or hosted operation runs. Same-context refresh may wait for the write's normal
+receipt/readback; it must not cancel the write or falsely declare idle. These
+new cases are source-prepared before their runtime behavior changes; no baseline
+run is claimed for them during source-only work.
+
+Planned ownership split: keep task slots cancelable/read-only, make accepted
+writes retain their original engine independently, and track which current-view
+operation owns busy. Context retirement clears only current-view authority;
+new context reads can recover without canceling old writes. Reads/results fence
+engine+selected-checkout scope and request identity. Missing-preview/error cards
+must expose a usable Refresh control; a newly shown valid context can request
+its current snapshot without an automatic error-retry loop.
