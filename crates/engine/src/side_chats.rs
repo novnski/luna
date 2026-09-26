@@ -925,6 +925,16 @@ impl SideChats {
                     "This side chat is still open in a writable view. Unload it before reading history."
                 );
             }
+        } else if matches!(meta.state.as_str(), "closing" | "closeFailed") {
+            self.seal(
+                id,
+                if self.expired(&meta) {
+                    "expired"
+                } else {
+                    "unloaded"
+                },
+            )
+            .await?;
         }
         let recovery: bool = lock(&self.0.db).query_row(
             "SELECT needs_recovery FROM side_chats WHERE id=?1",

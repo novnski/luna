@@ -865,11 +865,17 @@ async fn failed_unload_storage_still_stops_generation_and_can_be_repaired() {
     );
     assert!(client.call("SendSideChat", json!({"id":id,"lease":created["lease"],"messageId":"after-failed-unload","text":"must not run"})).await.is_err());
     db.execute_batch("DROP TRIGGER reject_side_close").unwrap();
-    client
-        .call("UnloadSideChat", json!({"id":id,"lease":created["lease"]}))
-        .await
-        .unwrap();
+    // Reopening saved history after a failed close must finish the stopped
+    // transcript projection, without requiring a lost view's lease token.
     let history = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+    assert_eq!(history["meta"]["state"], "unloaded");
+    assert!(
+        !core
+            .doc_host
+            .sync_statuses()
+            .iter()
+            .any(|(chat, _)| chat == id)
+    );
     assert!(history.to_string().contains("SIDE_PARTIAL_BEFORE_STOP"));
     assert_eq!(recorder.0.lock().unwrap().len(), 1);
     core.shutdown().await;
