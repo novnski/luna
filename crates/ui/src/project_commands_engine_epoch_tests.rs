@@ -419,10 +419,11 @@ fn button_window(
             renders: view_renders,
         }
     });
-    window
-        .update(cx, |_, window, cx| window.draw(cx).clear())
-        .unwrap();
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    // A typed WindowHandle update leases ButtonSurface. Drawing while that
+    // lease is held would recursively update the same root. Use the raw
+    // Window/App boundary, just like real window rendering and event dispatch.
+    visual.update(|window, cx| window.draw(cx).clear());
     let bounds = visual
         .debug_bounds(selector)
         .expect("the actual enabled command button was painted");
@@ -435,29 +436,28 @@ fn mouse_click_old_frame(
 ) {
     // Deliberately no scheduler/frame drain between replacement and input: this
     // is the real mouse path's last-rendered-frame admission boundary.
-    window
-        .update(cx, |_, window, cx| {
-            window.dispatch_event(
-                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-                    position: point,
-                    button: gpui::MouseButton::Left,
-                    modifiers: Default::default(),
-                    click_count: 1,
-                    first_mouse: false,
-                }),
-                cx,
-            );
-            window.dispatch_event(
-                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                    position: point,
-                    button: gpui::MouseButton::Left,
-                    modifiers: Default::default(),
-                    click_count: 1,
-                }),
-                cx,
-            );
-        })
-        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        window.dispatch_event(
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                position: point,
+                button: gpui::MouseButton::Left,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                position: point,
+                button: gpui::MouseButton::Left,
+                modifiers: Default::default(),
+                click_count: 1,
+            }),
+            cx,
+        );
+    });
 }
 fn stale_button_admission(cx: &mut TestAppContext, method: &'static str) {
     let runtime = runtime(cx);

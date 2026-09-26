@@ -37,3 +37,18 @@ responses are synthetic/held; no shell or provider runs. JSON records painted
 bounds, old/current scope, busy state, mouse dispatch and A/B request envelopes.
 The existing epoch/assertion suites are unchanged. Baseline execution is pending
 an explicit serialized build slot; expected failures are not observed facts yet.
+
+## First compile/run: fixture borrowing error
+
+Combined `896106a1` compiled but all five cases panicked before producing traces
+at GPUI entity_map.rs142: ButtonSurface was already being updated. This is zero
+authenticated admission failures. Original source `2b9c4f2c` and Defaults artifact
+`target/qa/project-defaults/button-admission-baseline-1/tests.log` are preserved.
+
+Cause: the fixture called window.draw inside typed
+WindowHandle<ButtonSurface>::update, which already held a mutable root-view lease;
+draw then tried to update the same root for rendering. The test-only correction
+uses VisualTestContext::update (Window/App only) for explicit draw and mouse
+dispatch. Real rendered buttons, old-frame input timing, render/bounds provenance
+and every behavior assertion remain unchanged. No admission fix is included;
+the corrected fixture still requires an authorized baseline run.
