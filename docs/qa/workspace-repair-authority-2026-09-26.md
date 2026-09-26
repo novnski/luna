@@ -28,6 +28,7 @@ agreed before runtime implementation; the old audit ref and artifacts are retain
 | Fresh post-repair work | New explicit admission captures current W and executes exactly once. Unrelated rename/queue edits advancing R do not invalidate otherwise current grants because W changes only on repair. |
 | Legacy compatibility before first repair | Existing unstamped grants/recovery have W=0 and remain usable while task W=0, subject to all existing owner/hash/binding/replay fences. |
 | Full-profile restore/rollback | No claim of anti-replay when the high-water state and authority are rolled back together. Restore/rebuild must retain v2/W or fence unresolved legacy task state; existing restore behavior/tests must remain intact. |
+| Authorized new-v2/unbound WorktreeSpec initialization | A separate pending-Run transaction verifies task, original command row hash/W, current W and pending Run intent. It atomically publishes registry/identity metadata without marking Run Applied or advancing R/W. Bad hash/W/task or terminal receipt refuses; legacy/bound/history reassociation is excluded. |
 
 ## Agreed narrow contract
 

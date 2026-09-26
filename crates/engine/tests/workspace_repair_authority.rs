@@ -12,7 +12,7 @@ use luna_harness::{Harness, HarnessError, RunControls};
 use luna_proto::{AgentEvent, ChatConfig, CommandReceipt, CommandReceiptStatus, DoneStatus,
     FollowUpBehavior, HarnessId, Model, PermissionMode, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode};
 use luna_rpc::methods;
-use luna_sync::{LocalExecutableKind, StoredTaskRecovery, TaskCommandBeginKind, WorkspaceRepairFence};
+use luna_sync::{LocalExecutableKind, StoredTaskRecovery, TaskCommandBeginKind, WorkspaceRepairFence, WorkspaceMaterializationFence};
 
 #[derive(Default)]
 struct SyntheticHarness {
@@ -360,4 +360,39 @@ async fn old_recovery_retry_after_repair_cannot_reseal_the_frozen_request() {
     assert_eq!(record["workspaceRepairRevision"], 0);
     assert_eq!(after.attempt_count, 0, "blocked lineage is not another provider attempt");
     reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn initial_materialization_is_bound_to_original_pending_run_without_repair_or_receipt_renewal() {
+    let (_root, core, harness, task) = fixture().await;
+    let original = pending(&core, &task, "materializing-run", "run");
+    let before_r = original.snapshot.task_revision;
+    core.doc_host.begin_task_command(original, None, None, None).unwrap();
+    let before = core.store.task_command_receipt("materializing-run").unwrap();
+    core.store.record_local_executable(&task, LocalExecutableKind::Command,
+        "materializing-run", "exact-original-command-row", None).unwrap();
+    let fence = WorkspaceMaterializationFence {expected_workspace_repair_revision:0,
+        original_command_hash:"exact-original-command-row".into()};
+    let bad_hash = WorkspaceMaterializationFence {expected_workspace_repair_revision:0,
+        original_command_hash:"substituted-command".into()};
+    let bad_w = WorkspaceMaterializationFence {expected_workspace_repair_revision:1,
+        original_command_hash:fence.original_command_hash.clone()};
+    for invalid in [&bad_hash, &bad_w] {
+        assert!(core.store.persist_workspace_materialization("materializing-run", &task, invalid,
+            &[("materialization-fixture", b"must-not-publish")]).is_err());
+    }
+    core.store.persist_workspace_materialization("materializing-run", &task, &fence,
+        &[("materialization-fixture", b"verified-initial-association")]).unwrap();
+    assert_eq!(core.store.task_command_receipt("materializing-run").unwrap(), before);
+    assert_eq!(core.store.task_command_snapshot(&task).unwrap().snapshot.task_revision, before_r);
+    assert_eq!(core.store.workspace_repair_revision(&task).unwrap(), 0);
+    core.doc_host.complete_task_command("materializing-run", CommandReceiptStatus::Applied,
+        true, None, None, None, None, None).unwrap();
+    assert!(core.store.persist_workspace_materialization("materializing-run", &task, &fence,
+        &[("materialization-fixture", b"must-not-replay")]).is_err());
+    evidence("pending-run-materialization", serde_json::json!({"beforeR":before_r,
+        "afterR":core.store.task_command_snapshot(&task).unwrap().snapshot.task_revision,
+        "w":core.store.workspace_repair_revision(&task).unwrap(), "calls":harness.calls.load(Ordering::SeqCst)}));
+    assert_eq!(harness.calls.load(Ordering::SeqCst), 0);
+    core.shutdown().await;
 }
