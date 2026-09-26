@@ -367,6 +367,7 @@ mod tests {
 
     fn space(device: &str) -> Space {
         Space {
+            execution_defaults: Default::default(),
             id: "space".into(),
             device_id: device.into(),
             path: "/project".into(),

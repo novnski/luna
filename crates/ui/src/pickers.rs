@@ -683,6 +683,8 @@ pub struct Pickers {
     /// Sticky last-used picks (luna `luna.composer.defaults:v1`): seeds the
     /// new-chat chips and is rewritten on every new-chat pick.
     defaults: ComposerDefaults,
+    project_defaults: luna_proto::ProjectExecutionDefaults,
+    checkout_choice_explicit: bool,
     /// Where [`Self::defaults`] persists (`{data_dir}/composer-defaults.json`);
     /// `None` before bootstrap stamps the state (writes are skipped).
     data_dir: Option<PathBuf>,
@@ -790,6 +792,7 @@ impl Pickers {
             return;
         };
         self.config = saved.draft;
+        self.checkout_choice_explicit = true;
         self.full_confirmation = None;
         self.account_error = None;
         self.switch_error = None;
@@ -843,6 +846,7 @@ impl Pickers {
         // the draft picks — they belonged to the previous chat/new-chat canvas.
         let state_observe = cx.observe(&state, |this: &mut Self, state, cx| {
             let selected = state.read(cx).selected_chat.clone();
+            let selection_changed = selected != this.draft_owner;
             if selected != this.draft_owner {
                 this.draft_owner = selected;
                 this.config.harness = None;
@@ -861,7 +865,8 @@ impl Pickers {
             // (and possibly the device) changed under them.
             let space = state.read(cx).selected_space.clone();
             let device = state.read(cx).effective_device_id();
-            if space != this.space_owner || device != this.device_owner {
+            let target_changed = space != this.space_owner || device != this.device_owner;
+            if target_changed {
                 this.space_owner = space;
                 this.device_owner = device;
                 this.target_generation = this.target_generation.wrapping_add(1);
@@ -872,6 +877,10 @@ impl Pickers {
                 this.accounts_task = None;
                 this.config.branch = None;
                 this.config.checkout = CheckoutKind::default();
+                // New-task choices belong to one project and device.
+                if this.draft_owner.is_none() {
+                    this.config = DraftConfig::default();
+                }
                 this.refs = Loadable::Idle;
                 this.refs_space = None;
                 // Catalogs are per-DEVICE (fetched from the space's host):
@@ -880,6 +889,20 @@ impl Pickers {
                 this.accounts = Loadable::Idle;
                 this.models.clear();
                 this.catalog_rev += 1;
+            }
+            if selection_changed || target_changed {
+                this.checkout_choice_explicit = false;
+            }
+            this.project_defaults = state
+                .read(cx)
+                .selected_space_row()
+                .map(|space| space.execution_defaults.clone())
+                .unwrap_or_default();
+            if this.draft_owner.is_none() && !this.checkout_choice_explicit {
+                this.config.checkout = match this.new_task_defaults().checkout {
+                    luna_proto::ProjectCheckout::Local => CheckoutKind::Local,
+                    luna_proto::ProjectCheckout::NewWorktree => CheckoutKind::NewWorktree,
+                };
             }
             cx.notify();
         });
@@ -920,13 +943,26 @@ impl Pickers {
         let draft_owner = state.read(cx).selected_chat.clone();
         let space_owner = state.read(cx).selected_space.clone();
         let device_owner = state.read(cx).effective_device_id();
+        let project_defaults = state
+            .read(cx)
+            .selected_space_row()
+            .map(|space| space.execution_defaults.clone())
+            .unwrap_or_default();
+        let mut config = DraftConfig::default();
+        if draft_owner.is_none()
+            && project_defaults.checkout == Some(luna_proto::ProjectCheckout::NewWorktree)
+        {
+            config.checkout = CheckoutKind::NewWorktree;
+        }
         Self {
             state,
             space_owner,
             device_owner,
             target_generation: 0,
-            config: DraftConfig::default(),
+            config,
             defaults,
+            project_defaults,
+            checkout_choice_explicit: false,
             data_dir,
             draft_owner,
             open,
@@ -975,6 +1011,13 @@ impl Pickers {
         }
     }
 
+    fn new_task_defaults(&self) -> crate::settings::project_defaults::ResolvedNewTaskDefaults<'_> {
+        crate::settings::project_defaults::resolve_new_task_defaults(
+            &self.project_defaults,
+            &self.defaults,
+        )
+    }
+
     /// Persist the sticky defaults (best-effort; picks are rare and tiny).
     fn save_defaults(&self) {
         if let Some(dir) = self.data_dir.as_deref()
@@ -1021,10 +1064,20 @@ impl Pickers {
         {
             return Some(config.harness);
         }
+        if self.state.read(cx).selected_chat.is_none()
+            && let Some(provider) = &self.project_defaults.provider
+        {
+            return Some(provider.harness);
+        }
         // New-chat canvas: the remembered last-used harness (sticky defaults),
         // when the loaded catalog still offers it (the device may have
         // disabled it in Settings → Agents since).
-        if let Some(harness) = self.defaults.harness {
+        let remembered = if self.state.read(cx).selected_chat.is_some() {
+            self.defaults.harness
+        } else {
+            self.new_task_defaults().harness
+        };
+        if let Some(harness) = remembered {
             let offered = match self.harnesses.ready() {
                 Some(list) => offered_harnesses(list).iter().any(|d| d.id == harness),
                 None => true, // catalog not loaded yet — trust the memory
@@ -1089,6 +1142,15 @@ impl Pickers {
                 PermissionChoiceState::Selected(mode)
             };
         }
+        if self.state.read(cx).selected_chat.is_none()
+            && let Some(mode) = self.project_defaults.permission_mode
+        {
+            return if mode == PermissionMode::Ask {
+                PermissionChoiceState::Unselected
+            } else {
+                PermissionChoiceState::Selected(mode)
+            };
+        }
         let Some(harness) = self.effective_harness(cx) else {
             return PermissionChoiceState::Unselected;
         };
@@ -1149,6 +1211,45 @@ impl Pickers {
     }
 
     pub fn permission_run_block_reason(&self, cx: &App) -> Option<String> {
+        if self.state.read(cx).selected_chat.is_none() {
+            if let Err(reason) = self.project_defaults.validate() {
+                return Some(reason.into());
+            }
+            if let Some(provider) = &self.project_defaults.provider {
+                if self.config.harness.is_none() {
+                    match self.harnesses.ready() {
+                        None => return Some("Loading the project provider. Open the model picker to refresh or choose another provider.".into()),
+                        Some(list) if !offered_harnesses(list).iter().any(|item| item.id == provider.harness) =>
+                            return Some("The project provider is unavailable on this device. Enable it in Providers or choose another provider for this task.".into()),
+                        _ => {}
+                    }
+                }
+                if self.config.model.is_none()
+                    && self.effective_harness(cx) == Some(provider.harness)
+                {
+                    match self.models.get(&provider.harness).and_then(Loadable::ready) {
+                        None => return Some("Loading the project model. Open the model picker to refresh or choose another model.".into()),
+                        Some(models) if provider.model.as_ref().is_some_and(|id| !models.iter().any(|model| &model.id == id)) || models.is_empty() =>
+                            return Some("The project model is unavailable for this provider/account. Choose an available model or update Projects settings.".into()),
+                        _ => {}
+                    }
+                }
+            }
+            if self.project_defaults.permission_mode == Some(PermissionMode::Full)
+                && self.requested_permission_mode(cx) == PermissionMode::Full
+                && !self
+                    .defaults
+                    .confirmed_full_machines
+                    .contains(&self.permission_machine(cx).0)
+            {
+                return Some("Confirm Full access for this machine in the permissions picker before starting this task.".into());
+            }
+            if self.config.checkout == CheckoutKind::NewWorktree
+                && !self.state.read(cx).selected_space_git()
+            {
+                return Some("This project has no Git checkout. Choose Current checkout before starting this task.".into());
+            }
+        }
         match self.permission_choice_state(cx) {
             // Existing Ask remains a conservative, runnable compatibility
             // state. The menu offers no way to newly select it.
@@ -1196,6 +1297,11 @@ impl Pickers {
             return chat.config.as_ref().and_then(|c| c.model.as_deref());
         }
         let harness = self.effective_harness(cx)?;
+        if let Some(provider) = &self.project_defaults.provider
+            && provider.harness == harness
+        {
+            return self.new_task_defaults().model;
+        }
         self.defaults.model_for(harness).map(|m| m.id.as_str())
     }
 
@@ -1232,6 +1338,14 @@ impl Pickers {
     fn selected_model<'a>(&'a self, cx: &'a App) -> Option<&'a Model> {
         let harness = self.effective_harness(cx)?;
         let models = self.models.get(&harness)?.ready()?;
+        if self.state.read(cx).selected_chat.is_none()
+            && self.config.model.is_none()
+            && let Some(provider) = &self.project_defaults.provider
+            && provider.harness == harness
+            && let Some(id) = provider.model.as_deref()
+        {
+            return models.iter().find(|model| model.id == id);
+        }
         match self.effective_model_id(cx) {
             Some(id) => models
                 .iter()
@@ -1863,6 +1977,7 @@ impl Pickers {
             // t3code `reuseExistingWorktree` path.
             self.config.branch = Some(row.name.clone());
             self.config.checkout = CheckoutKind::Local;
+            self.checkout_choice_explicit = true;
         } else if self.config.checkout == CheckoutKind::NewWorktree || row.current {
             // Base pick for a new worktree, or the already-current ref.
             self.config.branch = Some(row.name.clone());
@@ -1943,6 +2058,7 @@ impl Pickers {
             self.config.branch = None;
         }
         self.config.checkout = kind;
+        self.checkout_choice_explicit = true;
         self.animate_close(cx);
         cx.notify();
     }
@@ -1968,8 +2084,10 @@ impl Pickers {
             self.full_confirmation = None;
         }
         self.config.harness = Some(harness);
-        self.defaults.harness = Some(harness);
-        self.save_defaults();
+        if self.project_defaults.provider.is_none() {
+            self.defaults.harness = Some(harness);
+            self.save_defaults();
+        }
         self.model_scroll_base().set_offset(gpui::Point::default());
         self.ensure_models(harness, false, cx);
         // Re-anchor the keyboard highlight onto the new harness's selected row.
@@ -2058,7 +2176,9 @@ impl Pickers {
             // New chat: draft pick + sticky last-used memory for this harness.
             self.config.model = Some(model_id.clone());
             self.config.model_options.clear();
-            if let Some(harness) = self.effective_harness(cx) {
+            if self.project_defaults.provider.is_none()
+                && let Some(harness) = self.effective_harness(cx)
+            {
                 let label = self
                     .models
                     .get(&harness)
@@ -2243,7 +2363,9 @@ impl Pickers {
             self.defaults.confirmed_full_machines.push(machine_id);
         }
         self.full_confirmation = None;
-        self.defaults.permission_by_harness.insert(harness, mode);
+        if self.project_defaults.permission_mode.is_none() {
+            self.defaults.permission_by_harness.insert(harness, mode);
+        }
         self.save_defaults();
         if self.state.read(cx).selected_chat.is_some() {
             self.update_chat_permission(mode, cx);
@@ -6474,6 +6596,7 @@ mod tests {
             let mut state = AppState::new();
             state.local_device_id = Some("local".into());
             state.apply_spaces(vec![Space {
+                execution_defaults: Default::default(),
                 id: "repo".into(),
                 device_id: "local".into(),
                 path: "/repo".into(),

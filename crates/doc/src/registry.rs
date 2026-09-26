@@ -773,6 +773,10 @@ impl RegistryDoc {
             ("gitDetected", json!(space.git_detected)),
             ("gitCheckedAt", opt_ms(space.git_checked_at)),
             ("checkoutId", opt_str(space.checkout_id.as_deref())),
+            (
+                "executionDefaults",
+                serde_json::to_value(&space.execution_defaults)?,
+            ),
             ("createdAt", json!(space.created_at.timestamp_millis())),
         ]);
         self.write(KIND_SPACES, &space.id.clone(), OpKind::Upsert, set);
@@ -807,6 +811,24 @@ impl RegistryDoc {
             space_id,
             OpKind::Update,
             fields([("name", opt_str(name))]),
+        );
+        Ok(true)
+    }
+
+    /// Targeted update leaves sibling project settings and task rows untouched.
+    pub fn set_project_execution_defaults(
+        &mut self,
+        space_id: &str,
+        defaults: &luna_proto::ProjectExecutionDefaults,
+    ) -> Result<bool, DocError> {
+        if !self.row_exists(KIND_SPACES, space_id) {
+            return Ok(false);
+        }
+        self.write(
+            KIND_SPACES,
+            space_id,
+            OpKind::Update,
+            fields([("executionDefaults", serde_json::to_value(defaults)?)]),
         );
         Ok(true)
     }

@@ -50,6 +50,7 @@ use crate::settings::general::{GeneralEvent, GeneralPage};
 use crate::settings::notifications::{
     NotificationPreferences, NotificationTask, NotificationsEvent, NotificationsPage,
 };
+use crate::settings::project_defaults::ProjectsPage;
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, JUMP_SLOTS, KeymapConfig, RIGHT_PANE_DEFAULT,
@@ -426,6 +427,7 @@ pub fn apply_keymap(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     General,
+    Projects,
     Devices,
     /// Per-device providers, CLI enablement, accounts, and usage.
     Providers,
@@ -440,8 +442,9 @@ pub enum SettingsSection {
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 11] = [
+    pub const ALL: [SettingsSection; 12] = [
         SettingsSection::General,
+        SettingsSection::Projects,
         SettingsSection::Providers,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
@@ -460,6 +463,7 @@ impl SettingsSection {
     fn from_fixture_route(route: &str) -> Option<Self> {
         Some(match route {
             "settings" | "settings/general" => Self::General,
+            "settings/projects" => Self::Projects,
             "settings/devices" => Self::Devices,
             "settings/harnesses" | "settings/agents" | "settings/providers" => Self::Providers,
             "settings/appearance" => Self::Appearance,
@@ -477,6 +481,7 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::General => "General",
+            SettingsSection::Projects => "Projects",
             SettingsSection::Devices => "Devices",
             SettingsSection::Providers => "Providers",
             SettingsSection::Appearance => "Appearance",
@@ -1836,6 +1841,7 @@ pub struct Shell {
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
     general_page: Option<Entity<GeneralPage>>,
+    projects_page: Option<Entity<ProjectsPage>>,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
@@ -2293,6 +2299,7 @@ impl Shell {
             usage_price_error: None,
             nav,
             general_page: None,
+            projects_page: None,
             devices_page: None,
             archived_page: None,
             appearance_page: None,
@@ -4391,6 +4398,16 @@ impl Shell {
                     self.devices_page = Some(cx.new(|cx| DevicesPage::new(state, cx)));
                 }
                 match &self.devices_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
+            SettingsSection::Projects => {
+                if self.projects_page.is_none() {
+                    let state = self.state.clone();
+                    self.projects_page = Some(cx.new(|cx| ProjectsPage::new(state, cx)));
+                }
+                match &self.projects_page {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
@@ -12832,6 +12849,7 @@ mod tests {
     #[test]
     fn history_search_parses_all_supported_filters_and_requires_current_profile() {
         let spaces = vec![luna_proto::Space {
+            execution_defaults: Default::default(),
             id: "project-id".into(),
             device_id: "device-id".into(),
             path: "/synthetic/project".into(),
@@ -14544,6 +14562,7 @@ mod exit_regressions {
                     ));
                 }
                 state.spaces = vec![luna_proto::Space {
+                    execution_defaults: Default::default(),
                     id: "project-a".into(),
                     device_id: "local".into(),
                     path: "/synthetic/project-a".into(),
@@ -14787,6 +14806,7 @@ mod exit_regressions {
                 state.spaces = ["project-a", "project-b"]
                     .into_iter()
                     .map(|id| luna_proto::Space {
+                        execution_defaults: Default::default(),
                         id: id.into(),
                         device_id: "local".into(),
                         path: format!("/synthetic/{id}"),
@@ -15215,6 +15235,7 @@ mod exit_regressions {
                     luna_rpc::memory_client(service.clone()),
                 ));
                 state.spaces = vec![luna_proto::Space {
+                    execution_defaults: Default::default(),
                     id: "project-a".into(),
                     device_id: "local".into(),
                     path: "/synthetic/project-a".into(),
@@ -15444,6 +15465,7 @@ mod exit_regressions {
                     luna_rpc::memory_client(service.clone()),
                 ));
                 state.spaces = vec![luna_proto::Space {
+                    execution_defaults: Default::default(),
                     id: "project-a".into(),
                     device_id: "local".into(),
                     path: "/synthetic/project-a".into(),
@@ -15616,6 +15638,7 @@ mod exit_regressions {
                 state.spaces = ["project-a", "project-b"]
                     .into_iter()
                     .map(|id| luna_proto::Space {
+                        execution_defaults: Default::default(),
                         id: id.into(),
                         device_id: "local".into(),
                         path: format!("/synthetic/{id}"),
@@ -15814,6 +15837,7 @@ mod exit_regressions {
                 state.spaces = ["project-a", "project-b"]
                     .into_iter()
                     .map(|id| luna_proto::Space {
+                        execution_defaults: Default::default(),
                         id: id.into(),
                         device_id: "local".into(),
                         path: format!("/synthetic/{id}"),
@@ -16991,6 +17015,7 @@ mod exit_regressions {
             .update(cx, |shell, _, cx| {
                 shell.state.update(cx, |state, _| {
                     state.apply_spaces(vec![luna_proto::Space {
+                        execution_defaults: Default::default(),
                         id: "repo".into(),
                         device_id: "local".into(),
                         path: "/repo".into(),

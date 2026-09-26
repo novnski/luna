@@ -2924,6 +2924,7 @@ impl Shell {
         // Optimistic echo: the watch frame carrying the real row replaces it
         // by id (apply_spaces re-sorts; same-id upsert is idempotent).
         let space = Space {
+            execution_defaults: Default::default(),
             id: space_id.clone(),
             device_id: device.id.clone(),
             path: path.clone(),
@@ -4488,6 +4489,7 @@ mod project_flow_tests {
     #[test]
     fn existing_project_match_requires_exact_device_and_path() {
         let project = Space {
+            execution_defaults: Default::default(),
             id: "existing".into(),
             device_id: "local".into(),
             path: "/Users/éva/work space".into(),

@@ -65,6 +65,9 @@ pub struct Space {
     /// (sha256(deviceId ‖ NUL ‖ git_dir)) — diff grouping key for root sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout_id: Option<String>,
+    /// Overrides used only when composing a new task. Old rows inherit.
+    #[serde(default)]
+    pub execution_defaults: crate::ProjectExecutionDefaults,
     pub created_at: DateTime<Utc>,
 }
 

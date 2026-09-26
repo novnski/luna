@@ -1383,6 +1383,7 @@ impl WorkspaceHost {
             git_detected: false,
             git_checked_at: None,
             checkout_id: None,
+            execution_defaults: Default::default(),
             created_at: Utc::now(),
         };
         self.mutate(|doc| doc.upsert_space(&space))?;
@@ -1551,6 +1552,7 @@ impl WorkspaceHost {
                 git_detected,
                 git_checked_at: None,
                 checkout_id: None,
+                execution_defaults: Default::default(),
                 created_at: Utc::now(),
             })
         })?;
@@ -1559,6 +1561,37 @@ impl WorkspaceHost {
 
     pub fn rename_space(&self, space_id: &str, name: Option<&str>) -> Result<bool, EngineError> {
         Ok(self.mutate(|doc| doc.rename_space(space_id, name))?)
+    }
+
+    /// Validate and update under the registry mutation lock so deleted or
+    /// re-owned projects cannot accept a stale settings write.
+    pub fn set_project_execution_defaults(
+        &self,
+        space_id: &str,
+        owner: &str,
+        defaults: &luna_proto::ProjectExecutionDefaults,
+        expected: &luna_proto::ProjectExecutionDefaults,
+    ) -> Result<(), EngineError> {
+        defaults
+            .validate()
+            .map_err(|message| EngineError::Other(message.into()))?;
+        self.mutate(|doc| {
+            let space = doc
+                .space(space_id)?
+                .ok_or_else(|| DocError::Schema("Project no longer exists.".into()))?;
+            if space.device_id != owner {
+                return Err(DocError::Schema(
+                    "Project defaults must be saved on the owning device.".into(),
+                ));
+            }
+            if &space.execution_defaults != expected {
+                return Err(DocError::Schema(
+                    "Project defaults changed. Reload Projects settings before saving.".into(),
+                ));
+            }
+            doc.set_project_execution_defaults(space_id, defaults)?;
+            Ok(())
+        })
     }
 
     /// Hard-delete a space and its chats (registry cascade — one atomic batch).
@@ -2554,6 +2587,7 @@ mod tests {
             git_detected: false,
             git_checked_at: None,
             checkout_id: None,
+            execution_defaults: Default::default(),
             created_at: Utc::now(),
         };
         let error = host
