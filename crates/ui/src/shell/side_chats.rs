@@ -190,18 +190,17 @@ impl SideChatPanel {
 
     fn action(&mut self, action: PanelAction, cx: &mut Context<Self>) {
         if matches!(action, PanelAction::RevealOrigin) {
-            if self.is_current(cx) {
-                if let Some(message_id) = self
+            if self.is_current(cx)
+                && let Some(message_id) = self
                     .page
                     .as_ref()
                     .and_then(|page| page.meta.origin_message_id.clone())
-                {
-                    cx.emit(SideChatEvent::RevealOrigin {
-                        parent: self.parent.clone(),
-                        message_id,
-                        engine_generation: self.engine_generation,
-                    });
-                }
+            {
+                cx.emit(SideChatEvent::RevealOrigin {
+                    parent: self.parent.clone(),
+                    message_id,
+                    engine_generation: self.engine_generation,
+                });
             }
             return;
         }
@@ -496,31 +495,29 @@ impl SideChatPanel {
                 Transcript::for_doc(self.state.clone(), page.meta.id.clone(), false, cx)
             }));
         }
-        if self.transcript_events.is_none() {
-            if let Some(transcript) = &self.transcript {
-                transcript.update(cx, |view, _| view.allow_side_chat_handoff());
-                self.transcript_events = Some(cx.subscribe(transcript, |panel, _, event, cx| {
-                    if let TranscriptEvent::SideChatResult {
-                        side_chat_id,
-                        message_id,
-                        text,
-                    } = event
-                    {
-                        if panel.is_current(cx)
-                            && panel.page.as_ref().is_some_and(|page| {
-                                page.meta.id == *side_chat_id
-                                    && page.entries.iter().any(|entry| entry.id == *message_id)
-                            })
-                        {
-                            cx.emit(SideChatEvent::ResultToParent {
-                                parent: panel.parent.clone(),
-                                engine_generation: panel.engine_generation,
-                                text: text.clone(),
-                            });
-                        }
-                    }
-                }));
-            }
+        if self.transcript_events.is_none()
+            && let Some(transcript) = &self.transcript
+        {
+            transcript.update(cx, |view, _| view.allow_side_chat_handoff());
+            self.transcript_events = Some(cx.subscribe(transcript, |panel, _, event, cx| {
+                if let TranscriptEvent::SideChatResult {
+                    side_chat_id,
+                    message_id,
+                    text,
+                } = event
+                    && panel.is_current(cx)
+                    && panel.page.as_ref().is_some_and(|page| {
+                        page.meta.id == *side_chat_id
+                            && page.entries.iter().any(|entry| entry.id == *message_id)
+                    })
+                {
+                    cx.emit(SideChatEvent::ResultToParent {
+                        parent: panel.parent.clone(),
+                        engine_generation: panel.engine_generation,
+                        text: text.clone(),
+                    });
+                }
+            }));
         }
         if changed {
             self.state.update(cx, |state, cx| {
@@ -720,45 +717,44 @@ impl Render for SideChatPanel {
                 ));
             }
             if writable {
-                if let Some((_, questions)) = self.pending_question() {
-                    if let Some(question) = questions
+                if let Some((_, questions)) = self.pending_question()
+                    && let Some(question) = questions
                         .iter()
                         .find(|question| !self.answers.contains_key(&question.id))
-                    {
-                        let mut card = div()
-                            .px(px(16.0))
-                            .py(px(10.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.0))
-                            .child(question.header.clone())
-                            .child(question.question.clone());
-                        if question.approval.is_some() {
-                            card = card
-                                .child(self.button(
-                                    "side-allow",
-                                    "Allow once",
-                                    PanelAction::Approve(luna_proto::ApprovalDecision::AllowOnce),
-                                    cx,
-                                ))
-                                .child(self.button(
-                                    "side-deny",
-                                    "Deny",
-                                    PanelAction::Approve(luna_proto::ApprovalDecision::Deny),
-                                    cx,
-                                ));
-                        } else {
-                            for (index, option) in question.options.iter().enumerate() {
-                                card = card.child(self.button(
-                                    format!("side-answer-{index}"),
-                                    option.clone(),
-                                    PanelAction::Answer(option.clone()),
-                                    cx,
-                                ));
-                            }
+                {
+                    let mut card = div()
+                        .px(px(16.0))
+                        .py(px(10.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(question.header.clone())
+                        .child(question.question.clone());
+                    if question.approval.is_some() {
+                        card = card
+                            .child(self.button(
+                                "side-allow",
+                                "Allow once",
+                                PanelAction::Approve(luna_proto::ApprovalDecision::AllowOnce),
+                                cx,
+                            ))
+                            .child(self.button(
+                                "side-deny",
+                                "Deny",
+                                PanelAction::Approve(luna_proto::ApprovalDecision::Deny),
+                                cx,
+                            ));
+                    } else {
+                        for (index, option) in question.options.iter().enumerate() {
+                            card = card.child(self.button(
+                                format!("side-answer-{index}"),
+                                option.clone(),
+                                PanelAction::Answer(option.clone()),
+                                cx,
+                            ));
                         }
-                        root = root.child(card);
                     }
+                    root = root.child(card);
                 }
                 root = root.child(
                     div()

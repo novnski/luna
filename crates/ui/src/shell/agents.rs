@@ -108,7 +108,25 @@ impl Shell {
         }
         for (id, title, label, activity, metrics, doc_id, frozen) in rows {
             let parent = parent.clone();
-            let accessible = format!("{title}, {label}. Open agent transcript");
+            let available = doc_id.is_some();
+            let accessible = if available {
+                format!("{title}, {label}. Open agent transcript")
+            } else {
+                format!(
+                    "{title}, {label}. Transcript unavailable: the provider has not reported a transcript reference."
+                )
+            };
+            let metrics = if !available {
+                if metrics.is_empty() {
+                    "Transcript unavailable".into()
+                } else {
+                    format!("Transcript unavailable · {metrics}")
+                }
+            } else if metrics.is_empty() {
+                "Usage not reported".into()
+            } else {
+                metrics
+            };
             let key_title = title.clone();
             let key_doc = doc_id.clone();
             let key_parent = parent.clone();
@@ -125,12 +143,8 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
-                    .role(gpui::Role::Button)
+                    .role(gpui::Role::Group)
                     .aria_label(accessible)
-                    .tab_index(0)
-                    .focus_visible(move |style| style.border_color(theme.border_strong))
-                    .hover(move |style| style.bg(theme.surface_raised))
-                    .cursor_pointer()
                     .child(
                         div()
                             .flex()
@@ -150,39 +164,45 @@ impl Shell {
                             .truncate()
                             .text_color(theme.text_muted)
                             .text_size(crate::typography::ui_rems(11.0))
-                            .child(if metrics.is_empty() {
-                                "Usage not reported".into()
-                            } else {
-                                metrics
-                            }),
+                            .child(metrics),
                     )
-                    .on_click(cx.listener(move |shell, _, _, cx| {
-                        if let Some(doc) = doc_id.clone() {
-                            shell.add_subagent_surface(
-                                parent.clone(),
-                                doc,
-                                title.clone(),
-                                frozen,
-                                cx,
-                            );
-                        }
-                    }))
-                    .on_key_down(
-                        cx.listener(move |shell, event: &gpui::KeyDownEvent, _, cx| {
-                            if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                                if let Some(doc) = key_doc.clone() {
+                    .when(available, |row| {
+                        row.role(gpui::Role::Button)
+                            .tab_index(0)
+                            .focus_visible(move |style| style.border_color(theme.border_strong))
+                            .hover(move |style| style.bg(theme.surface_raised))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                if let Some(doc) = doc_id.clone() {
                                     shell.add_subagent_surface(
-                                        key_parent.clone(),
+                                        parent.clone(),
                                         doc,
-                                        key_title.clone(),
+                                        title.clone(),
                                         frozen,
                                         cx,
                                     );
                                 }
-                                cx.stop_propagation();
-                            }
-                        }),
-                    ),
+                            }))
+                            .on_key_down(cx.listener(
+                                move |shell, event: &gpui::KeyDownEvent, _, cx| {
+                                    if is_settings_nav_activation(
+                                        &event.keystroke.key,
+                                        event.is_held,
+                                    ) {
+                                        if let Some(doc) = key_doc.clone() {
+                                            shell.add_subagent_surface(
+                                                key_parent.clone(),
+                                                doc,
+                                                key_title.clone(),
+                                                frozen,
+                                                cx,
+                                            );
+                                        }
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                    }),
             );
         }
         div()

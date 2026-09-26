@@ -251,3 +251,43 @@ Coordinator review additionally identified agent cards with no native transcript
 reference being presented as clickable buttons. Preserve this verification
 checkpoint before correcting those cards, then rerun affected UI compile/lint
 and include available and missing-reference cards in native screenshot/AX QA.
+
+## Native acceptance preparation after that checkpoint
+
+Missing-reference cards now use a non-interactive Group role and display
+"Transcript unavailable" with a matching accessible explanation. Only cards
+with an actual reference receive button role, tabindex, focus/hover/pointer
+styling and activation handlers. Geometry, activity/status and LUNA tokens stay
+the same. Four new side-panel collapsible-if warnings were also addressed.
+The affected `luna-ui` check passed in 10.98s (`agent-card-ui-check.log`);
+post-correction Clippy and native render/AX checks remain pending.
+
+The earlier immediate-cancellation regression proves releasing a server stream,
+not that repeated subscribe/cancel is harmless for provider reconciliation.
+`scripts/qa-sidebar.py` therefore now uses one multiplexed reader and one
+persistent WatchDocMessages subscription per active task. It folds the actual
+reset/upsert/remove/UTF-8 byte-count append protocol, aborts visibly on desync,
+preserves immutable prior snapshots, and cancels the exact watch on exit.
+Creation/send IDs are saved before admission; partial attempts are never replayed.
+
+The failure-first loopback acceptance in `scripts/qa-sidebar-protocol.py` passed
+with `SIDEBAR_PERSISTENT_PROTOCOL_PASS` and zero provider calls. Its result is
+`target/qa/sidebar/persistent-driver-protocol.json`: interleaved RPC/stream
+frames, 20 reads through one subscription, UTF-8 folding, prior-snapshot
+immutability, explicit desync, cancellation and prompt disconnect failure.
+
+`crates/engine/examples/seed_sidebar_qa.rs` reuses the existing synthetic engine
+fixture pattern to seed available/missing-reference cards into only the reserved
+Sidebar QA root before its first app launch. It refuses an existing profile or
+occupied 59787 port, uses fake provider homes with native metadata disabled, and
+labels the task/cards as synthetic. It is source-only and not yet compiled/run.
+The actual signed QA app will render these cards for screenshot/AX checks.
+
+Separately, `scripts/qa-sidebar-agents.py prepare` creates a disposable real QA
+parent without starting provider work. After selecting it in the Agents UI,
+`run` requests exactly one native gpt-6-luna child, with only a bounded
+`/bin/sleep 20` and exact result marker. It requires actual native spawn metadata,
+observed running status, a real child transcript reference and the child result;
+unsupported capability is a failure to report, never a simulated agent. The
+driver retains observations and never retries an attempted run. Both real-agent
+and native-fork drivers remain unexecuted pending the separate native grant.
