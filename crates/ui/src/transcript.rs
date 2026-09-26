@@ -2715,6 +2715,7 @@ pub struct Transcript {
     /// attachment protection (that set is shared with the primary transcript
     /// and overwritten wholesale).
     doc_override: Option<String>,
+    side_chat_handoff: bool,
     /// Whether an override instance watches a LIVE doc (`for_doc(follow)`):
     /// only then may the working trailer render — a frozen snapshot must
     /// never spin, whatever its entries claim.
@@ -2910,6 +2911,16 @@ enum BlobFetch {
 /// Shell-facing events (the transcript itself hosts no surfaces).
 #[derive(Debug, Clone)]
 pub enum TranscriptEvent {
+    StartSideChat {
+        task_id: String,
+        message_id: String,
+        text: String,
+    },
+    SideChatResult {
+        side_chat_id: String,
+        message_id: String,
+        text: String,
+    },
     /// A spawn chip's "Open subagent" affordance: open the subagent's
     /// transcript as a right-pane tab. `chat_id` is the doc the chip lives
     /// in (the frozen blob is keyed `{chat_id}/{doc_id}`); `frozen` means
@@ -2936,6 +2947,10 @@ pub enum TranscriptEvent {
 impl gpui::EventEmitter<TranscriptEvent> for Transcript {}
 
 impl Transcript {
+    pub(crate) fn allow_side_chat_handoff(&mut self) {
+        self.side_chat_handoff = true;
+    }
+
     pub(crate) fn set_workspace_link_handler(&mut self, handler: render::LinkUi) {
         self.workspace_link = Some(handler);
     }
@@ -3035,6 +3050,7 @@ impl Transcript {
             land_end_pending: doc_override.is_some() && !follow,
             doc_live: doc_override.is_some() && follow,
             doc_override,
+            side_chat_handoff: false,
             saved_viewports: SavedViewportCache::default(),
             pending_viewport: None,
             viewport_generation: 0,
@@ -6292,6 +6308,76 @@ impl Transcript {
                         .text_color(theme.text_muted),
                     )
             });
+            let side_action = copy_text.clone().and_then(|text| {
+                if !matches!(history_role, MessageRole::User | MessageRole::Assistant) {
+                    return None;
+                }
+                let parent = history_task_id.clone();
+                let side = self
+                    .doc_override
+                    .clone()
+                    .filter(|_| self.side_chat_handoff && history_role == MessageRole::Assistant);
+                if parent.is_none() && side.is_none() {
+                    return None;
+                }
+                let message = copy_entry_id.to_string();
+                let selection = crate::markdown::selection::anchor_key()
+                    .filter(|key| key.starts_with(&format!("{message}#")))
+                    .and_then(|_| crate::markdown::selection::selected_text());
+                let text = selection.unwrap_or_else(|| text.to_string());
+                let label = if side.is_some() {
+                    "Send to main"
+                } else {
+                    "Side chat"
+                };
+                let emit = move |cx: &mut Context<Self>| {
+                    if let Some(task_id) = &parent {
+                        cx.emit(TranscriptEvent::StartSideChat {
+                            task_id: task_id.clone(),
+                            message_id: message.clone(),
+                            text: text.clone(),
+                        });
+                    } else if let Some(side_chat_id) = &side {
+                        cx.emit(TranscriptEvent::SideChatResult {
+                            side_chat_id: side_chat_id.clone(),
+                            message_id: message.clone(),
+                            text: text.clone(),
+                        });
+                    }
+                };
+                let keyboard_emit = emit.clone();
+                Some(
+                    div()
+                        .id(SharedString::from(format!("side-action-{copy_entry_id}")))
+                        .role(gpui::Role::Button)
+                        .aria_label(if self.side_chat_handoff {
+                            "Insert this result into the parent draft"
+                        } else {
+                            "Reply to this message or selection in a side chat"
+                        })
+                        .tab_index(0)
+                        .px(px(6.0))
+                        .h(px(Theme::SPACE_MD * 2.0))
+                        .rounded(px(Theme::CONTROL_RADIUS))
+                        .flex()
+                        .items_center()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_muted)
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(crate::theme::ink(0.08)))
+                        .focus_visible(move |style| style.bg(theme.surface_raised))
+                        .child(label)
+                        .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
+                        .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
+                            if !event.is_held
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                keyboard_emit(cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                )
+            });
             let fork = history_task_id.clone().and_then(|task_id| {
                 let eligible = matches!(
                     (history_provider, history_role),
@@ -6367,6 +6453,7 @@ impl Transcript {
                 .gap(px(Theme::SPACE_SM));
             let metadata = metadata
                 .child(timestamp)
+                .children(side_action)
                 .children(fork)
                 .children(edit)
                 .children(copy);

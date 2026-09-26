@@ -861,11 +861,37 @@ impl RegistryDoc {
     // ── chats ───────────────────────────────────────────────────────────────
 
     pub fn upsert_chat(&mut self, chat: &Chat) -> Result<(), DocError> {
+        self.upsert_chat_with_side_parent(chat, None)
+    }
+
+    /// One row operation carries ownership and hidden visibility together,
+    /// so peers never observe a side child as a main-sidebar task.
+    pub fn upsert_side_chat(&mut self, chat: &Chat, parent_id: &str) -> Result<(), DocError> {
+        self.upsert_chat_with_side_parent(chat, Some(parent_id))
+    }
+
+    pub fn side_chat_parent(&self, chat_id: &str) -> Option<String> {
+        let row = self.overlay_row(KIND_CHATS, chat_id)?;
+        if row.deleted {
+            return None;
+        }
+        row.fields
+            .get("sideChatParentId")?
+            .as_str()
+            .filter(|parent| !parent.is_empty())
+            .map(str::to_owned)
+    }
+
+    fn upsert_chat_with_side_parent(
+        &mut self,
+        chat: &Chat,
+        side_parent: Option<&str>,
+    ) -> Result<(), DocError> {
         let config = match &chat.config {
             Some(config) => serde_json::to_value(config)?,
             None => Value::Null,
         };
-        let set = fields([
+        let mut set = fields([
             ("id", json!(chat.id)),
             ("deviceId", json!(chat.device_id)),
             ("title", opt_str(chat.title.as_deref())),
@@ -919,6 +945,9 @@ impl RegistryDoc {
                 chat.room_gen.map(|g| json!(g)).unwrap_or(Value::Null),
             ),
         ]);
+        if let Some(parent) = side_parent {
+            set.insert("sideChatParentId".into(), json!(parent));
+        }
         self.write(KIND_CHATS, &chat.id.clone(), OpKind::Upsert, set);
         Ok(())
     }

@@ -5535,3 +5535,129 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     drop(calls);
     core.shutdown().await;
 }
+
+/// Side chats use the same native-fork acknowledgement/receipt boundary while
+/// retaining only their new exchanges in the side transcript.
+#[tokio::test(flavor = "multi_thread")]
+async fn side_chat_native_fork_preserves_binding_and_never_replays_unknown_creation() {
+    for behavior in [
+        HistoryForkBehavior::Success,
+        HistoryForkBehavior::FailAfterAcknowledgement,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let forks = Arc::new(Mutex::new(Vec::new()));
+        let core = assemble_history_with_behavior(
+            dir.path(),
+            forks.clone(),
+            HarnessId::Opencode,
+            behavior,
+        );
+        let client = luna_rpc::memory_client(core.rpc_service());
+        let parent = uuid::Uuid::new_v4().to_string();
+        create_materialized_history_task(&core, &client, &parent, HarnessId::Opencode).await;
+        let before = core
+            .doc_host
+            .open(&parent)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap();
+        let request =
+            serde_json::json!({"parentId":parent,"requestId":uuid::Uuid::new_v4().to_string()});
+        let first = client.call("CreateSideChat", request.clone()).await;
+        let second = client.call("CreateSideChat", request).await;
+        assert_eq!(
+            forks.lock().unwrap().len(),
+            1,
+            "creation cannot replay a native fork"
+        );
+        if matches!(behavior, HistoryForkBehavior::Success) {
+            let created = first.unwrap();
+            assert_eq!(created["meta"]["contextMode"], "nativeFork");
+            assert_eq!(created["meta"]["id"], second.unwrap()["meta"]["id"]);
+            let child = created["meta"]["id"].as_str().unwrap();
+            assert!(
+                core.doc_host
+                    .open(child)
+                    .unwrap()
+                    .doc()
+                    .read_entries()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_ne!(
+                core.task_identity
+                    .view(child)
+                    .unwrap()
+                    .current_binding
+                    .unwrap()
+                    .provider_task_id,
+                core.task_identity
+                    .view(&parent)
+                    .unwrap()
+                    .current_binding
+                    .unwrap()
+                    .provider_task_id
+            );
+            client
+                .call(
+                    "UnloadSideChat",
+                    serde_json::json!({"id":child,"lease":created["lease"]}),
+                )
+                .await
+                .unwrap();
+            assert!(
+                client
+                    .call(
+                        "QueueMessage",
+                        serde_json::json!({"chatId":child,"text":"must not resume"})
+                    )
+                    .await
+                    .is_err()
+            );
+        } else {
+            assert!(first.is_err());
+            assert!(second.is_err());
+        }
+        assert_eq!(
+            before,
+            core.doc_host
+                .open(&parent)
+                .unwrap()
+                .doc()
+                .read_entries()
+                .unwrap()
+        );
+        core.shutdown().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn side_chat_context_snapshot_is_an_explicit_native_fork_alternative() {
+    let dir = tempfile::tempdir().unwrap();
+    let forks = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble_history(dir.path(), forks.clone(), HarnessId::Opencode);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let parent = uuid::Uuid::new_v4().to_string();
+    create_materialized_history_task(&core, &client, &parent, HarnessId::Opencode).await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request =
+        serde_json::json!({"parentId":parent,"requestId":request_id,"forceSnapshot":true});
+    let created = client.call("CreateSideChat", request).await.unwrap();
+    assert_eq!(created["meta"]["contextMode"], "contextSnapshot");
+    assert!(
+        forks.lock().unwrap().is_empty(),
+        "explicit snapshot must not attempt native fork"
+    );
+    assert!(
+        client
+            .call(
+                "CreateSideChat",
+                serde_json::json!({"parentId":parent,"requestId":request_id,"forceSnapshot":false})
+            )
+            .await
+            .is_err(),
+        "request dedupe includes the explicit context choice"
+    );
+    core.shutdown().await;
+}

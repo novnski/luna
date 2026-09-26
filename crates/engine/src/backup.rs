@@ -39,7 +39,9 @@ const CHUNK: usize = 64 * 1024;
 // Review new DocsStore migrations before raising this ceiling. v10/v11 keep
 // owned cleanup checkpoints; v12 keeps exact local executable authority in
 // the copied SQLite snapshot. v9 Appshot sources still rebuild the activity index.
-const CURRENT_SCHEMA: i64 = 12;
+// v13 adds device-owned project commands and their execution receipts.
+// v14 adds local side-chat metadata, transcript pages and send admission records.
+const CURRENT_SCHEMA: i64 = 14;
 
 const EXCLUDED: &[&str] = &[
     "OS Keychain and LUNA credential vault",
@@ -1150,6 +1152,22 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         return Err(BackupError::Unsupported(format!(
             "database schema {schema_version} is newer than supported {CURRENT_SCHEMA}"
         )));
+    }
+    // A version marker cannot make an incomplete feature schema restorable.
+    // File hashes preserve its contents; validate table presence before export
+    // and again when inspecting the staged database.
+    for (introduced, table) in [
+        (13, "project_command_configs"),
+        (13, "project_command_runs"),
+        (14, "side_chats"),
+        (14, "side_chat_entries"),
+        (14, "side_chat_sends"),
+    ] {
+        if schema_version >= introduced && !has_table(conn, table)? {
+            return Err(BackupError::Invalid(format!(
+                "database schema requires missing table {table}"
+            )));
+        }
     }
     Ok(DatabaseCounts {
         path,
