@@ -1,7 +1,7 @@
 //! Rendered, held-RPC Commands card acceptance. No shell or provider runs.
 use super::*;
 use crate::engine_epoch_fixture::{self as fixture, HeldRpc};
-use gpui::{AppContext, TestAppContext};
+use gpui::{AppContext, Focusable, TestAppContext};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -128,6 +128,37 @@ fn trace_rendered_controls(
     );
 }
 
+fn focus_from_preview(
+    visual: &mut gpui::VisualTestContext,
+    preview: &gpui::FocusHandle,
+    steps: usize,
+    selector: &'static str,
+    rpc: &HeldRpc,
+    trace_name: &str,
+) -> gpui::FocusHandle {
+    let bounds = visual.debug_bounds(selector);
+    let focused = visual.update(|window, app| {
+        window.focus(preview, app);
+        for _ in 0..steps {
+            window.focus_next(app);
+        }
+        window.focused(app)
+    });
+    fixture::write_trace(
+        trace_name,
+        &json!({
+            "source":file!(),
+            "targetSelector":selector,
+            "targetBounds":bounds.map(|bounds| format!("{bounds:?}")),
+            "startingHandle":format!("{preview:?}"),
+            "tabSteps":steps,
+            "focusedHandle":focused.as_ref().map(|handle| format!("{handle:?}")),
+            "rpcCount":{"get":rpc.calls(methods::GET_PROJECT_COMMANDS),"save":rpc.calls(methods::SAVE_PROJECT_COMMANDS)},
+        }),
+    );
+    focused.expect("target control must receive keyboard focus after tab navigation")
+}
+
 #[gpui::test]
 fn command_card_rendered_edit_toggles_and_cancel(cx: &mut TestAppContext) {
     let runtime = runtime(cx);
@@ -175,20 +206,44 @@ fn command_card_rendered_edit_toggles_and_cancel(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("qa-command-cancel").is_some());
     visual.update(|window, app| click(window, app, setup.center()));
     assert!(card.read_with(cx, |card, _| card.setup));
+    visual.update(|window, app| window.draw(app).clear());
+    let preview_focus = card.read_with(cx, |card, cx| card.preview.read(cx).focus_handle(cx));
+    let _setup_focus = focus_from_preview(
+        &mut visual,
+        &preview_focus,
+        1,
+        "qa-command-setup",
+        &rpc,
+        "project-command-ax-rendered-setup-focused",
+    );
     visual.update(|window, app| key(window, app, "space"));
     assert!(!card.read_with(cx, |card, _| card.setup));
     visual.update(|window, app| click(window, app, wait.center()));
     assert!(!card.read_with(cx, |card, _| card.wait));
+    visual.update(|window, app| window.draw(app).clear());
+    let _wait_focus = focus_from_preview(
+        &mut visual,
+        &preview_focus,
+        2,
+        "qa-command-wait",
+        &rpc,
+        "project-command-ax-rendered-wait-focused",
+    );
     visual.update(|window, app| key(window, app, "enter"));
     assert!(card.read_with(cx, |card, _| card.wait));
 
-    // The two next tab stops after Wait are Save and Cancel. Space on Cancel
-    // must leave the persisted action list intact and issue no save request.
-    visual.update(|window, app| {
-        window.focus_next(app);
-        window.focus_next(app);
-        key(window, app, "space");
-    });
+    // From Preview URL, the editor's tab stops are Setup, Wait, Save, Cancel.
+    // Space on Cancel must leave persisted actions intact and issue no save.
+    visual.update(|window, app| window.draw(app).clear());
+    let _cancel_focus = focus_from_preview(
+        &mut visual,
+        &preview_focus,
+        4,
+        "qa-command-cancel",
+        &rpc,
+        "project-command-ax-rendered-cancel-focused",
+    );
+    visual.update(|window, app| key(window, app, "space"));
     let after = card.read_with(cx, |card, _| {
         json!({"editing":card.editing,"actions":card.actions,"setup":card.setup,"wait":card.wait})
     });
@@ -215,13 +270,27 @@ fn command_card_keyboard_remove_sends_one_synthetic_save(cx: &mut TestAppContext
         &["qa-command-edit-build", "qa-command-remove-build"],
     );
     assert!(visual.debug_bounds("qa-command-remove-build").is_some());
-    // The closed card's tab order is Add, Edit, Remove.
-    visual.update(|window, app| {
+    // The closed card's tab order is Add, Edit, Remove. Record the focused
+    // handle and rendered target before invoking the destructive fixture RPC.
+    let focused = visual.update(|window, app| {
         window.focus_next(app);
         window.focus_next(app);
         window.focus_next(app);
-        key(window, app, "enter");
+        window.focused(app)
     });
+    fixture::write_trace(
+        "project-command-ax-rendered-remove-focused",
+        &json!({
+            "source":file!(),
+            "targetSelector":"qa-command-remove-build",
+            "targetBounds":visual.debug_bounds("qa-command-remove-build").map(|bounds| format!("{bounds:?}")),
+            "focusedHandle":focused.as_ref().map(|handle| format!("{handle:?}")),
+            "tabSteps":3,
+            "rpcCount":{"get":rpc.calls(methods::GET_PROJECT_COMMANDS),"save":rpc.calls(methods::SAVE_PROJECT_COMMANDS)},
+        }),
+    );
+    assert!(focused.is_some());
+    visual.update(|window, app| key(window, app, "enter"));
     fixture::pump_until(cx, &runtime, |_| {
         rpc.calls(methods::SAVE_PROJECT_COMMANDS) == 1
     });
@@ -277,11 +346,19 @@ fn command_card_keyboard_save_is_single_flight(cx: &mut TestAppContext) {
         .expect("setup choice must be painted");
     assert!(visual.debug_bounds("qa-command-save").is_some());
     visual.update(|window, app| click(window, app, setup.center()));
-    // From Setup, Tab passes Wait and lands on Save. A second Enter before
-    // the held save reply must not issue a second request from the old frame.
+    visual.update(|window, app| window.draw(app).clear());
+    let preview_focus = card.read_with(cx, |card, cx| card.preview.read(cx).focus_handle(cx));
+    let _save_focus = focus_from_preview(
+        &mut visual,
+        &preview_focus,
+        3,
+        "qa-command-save",
+        &rpc,
+        "project-command-ax-rendered-save-focused",
+    );
+    // From Preview URL, Tab passes Setup and Wait before Save. A second Enter
+    // before the held save reply must not issue another old-frame request.
     visual.update(|window, app| {
-        window.focus_next(app);
-        window.focus_next(app);
         key(window, app, "enter");
         key(window, app, "enter");
     });

@@ -41,6 +41,9 @@ dispatches keyboard and mouse events through the window, and inspects the
 resulting draft state and held RPC trace. It writes selector presence/bounds,
 focus, RPC counts, and source to a bounded JSON trace before the first
 missing-control assertion, so the failing baseline retains its evidence.
+Keyboard cases explicitly focus the Preview URL input and advance through
+the rendered tab order to Setup, Wait, Save or Cancel, recording the focused
+handle and intended selector before dispatching Enter/Space.
 The GPUI headless `TestWindow`
 does not initialize an accessibility adapter, so it cannot produce a genuine
 AccessKit tree. After the source patch is composed into a signed QA app, open
