@@ -455,3 +455,29 @@ exactly the verified sidebar product source. No source conflict was resolved
 and no unchecked runtime edit was introduced. Primary app refresh is a separate
 handoff milestone; the native limits above and the separately owned workspace
 identity collision remain explicit.
+
+
+## Primary app handoff
+
+Local main integrated the reviewed feature as `570d951b72c950eceb9493e4a07fe7908039edbc`. The primary
+`scripts/run-macos-dev.sh --refresh` completed successfully: **91 seconds build,
+92 seconds total**. Post-refresh verification confirmed exact bundle PID
+**47463**, loopback IPC **59777** on the same process, the primary data-root
+claim and device, and strict code-sign verification. Binary SHA-256:
+`9c01637e8e10c3708734881a5ffde4800d46e982dcff8c555127aaaef0cf416b`. Main formatting also passed. The four pre-existing user
+files remained byte-identical before and after integration, cleanup and refresh.
+
+To restore the standard 25 GiB build reservation, the coordinator previewed and
+cleaned only the unused main `luna-ui` dev artifacts through Cargo. The target
+had Cargo's valid ownership tag and no open compiler artifacts. The aggregate
+accounted reduction was **19.30 GiB**; Cargo's file-removal summary reports a
+different 31.1 GiB total. Apps, profiles, QA evidence and other worktree targets
+were preserved. Aggregate accounted storage after refresh was
+**141.60 GiB**, below the 170 GiB operating ceiling.
+
+Evidence: primary checkout
+`target/qa/parallel-audit-2026-09-26/sidebar-primary-handoff/`, including
+`identity.json`, `refresh-result.txt`, `refresh.log`, `format.log`,
+`cleanup-accounting.json`, and before/after budget snapshots. These checks
+establish the primary handoff; detailed native feature acceptance used the
+isolated Sidebar QA profile above. No push or deployment occurred.
