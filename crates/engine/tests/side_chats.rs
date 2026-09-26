@@ -709,13 +709,29 @@ async fn side_documents_and_tool_blobs_do_not_export_to_configured_edge() {
     );
     // A restored pre-suppression outbox must remain local too. Keep it intact
     // for inspection instead of silently acknowledging or deleting its bytes.
+    let side_update = core
+        .doc_host
+        .open(child)
+        .unwrap()
+        .doc()
+        .doc()
+        .export(loro::ExportMode::updates(&loro::VersionVector::default()))
+        .unwrap();
+    let sub_update = core
+        .doc_host
+        .open(&subdoc)
+        .unwrap()
+        .doc()
+        .doc()
+        .export(loro::ExportMode::updates(&loro::VersionVector::default()))
+        .unwrap();
     core.store.initialize_chat_outbox(child, &[]).unwrap();
     core.store
-        .enqueue_chat_update(child, "restored-side-batch", b"PRIVATE_QUEUED_SIDE")
+        .enqueue_chat_update(child, "restored-side-batch", &side_update)
         .unwrap();
     core.store.initialize_chat_outbox(&subdoc, &[]).unwrap();
     core.store
-        .enqueue_chat_update(&subdoc, "restored-sub-batch", b"PRIVATE_QUEUED_SUBDOC")
+        .enqueue_chat_update(&subdoc, "restored-sub-batch", &sub_update)
         .unwrap();
     core.shutdown().await;
     drop(client);
@@ -750,7 +766,7 @@ async fn side_documents_and_tool_blobs_do_not_export_to_configured_edge() {
             .pending_chat_updates(child)
             .unwrap()
             .iter()
-            .any(|(id, bytes)| id == "restored-side-batch" && bytes == b"PRIVATE_QUEUED_SIDE")
+            .any(|(id, bytes)| id == "restored-side-batch" && bytes == &side_update)
     );
     assert!(
         reopened
@@ -758,7 +774,7 @@ async fn side_documents_and_tool_blobs_do_not_export_to_configured_edge() {
             .pending_chat_updates(&subdoc)
             .unwrap()
             .iter()
-            .any(|(id, bytes)| id == "restored-sub-batch" && bytes == b"PRIVATE_QUEUED_SUBDOC")
+            .any(|(id, bytes)| id == "restored-sub-batch" && bytes == &sub_update)
     );
     reopened.shutdown().await;
     server.abort();

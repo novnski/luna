@@ -194,4 +194,32 @@ checks metadata, origin quote and transcript bytes through the real service.
 No Cargo or native app command ran for this schema checkpoint. Required queued
 checks include the `project_command_store` and `side_chat_store` integration
 targets, the complete `backup_restore` target, and the sidebar lifecycle suites.
-The fake-Edge failing-before test still precedes export suppression.
+The fake-Edge failing-before evidence and correction are recorded below.
+
+## Export and lifecycle verification before audited-runtime merge
+
+All runs below use base `68dbc36e`, before adopting the reviewed runtime
+`9bb805ac`. The Cargo slot was released after this bounded batch.
+
+- `target/qa/sidebar/export-before-68dbc36e.log`: compilation passed in 38.66s;
+  the exact fake-Edge case failed in 0.76s with "side document or blob escaped to
+  Edge". The immediately preceding ordinary-parent control assertion passed.
+- `target/qa/sidebar/export-after-1.log`: the narrow guard compiled in 35.24s;
+  the initial outbound assertions passed, but the restart fixture failed in
+  0.78s because its fabricated upload bytes were not valid Loro updates.
+- `target/qa/sidebar/side-chats-e2e-3.log`: after replacing only that invalid
+  setup with actual encoded document updates, all 12 cases passed (1.68s compile,
+  13.41s tests, exit 0). This includes the permission ceiling matrix, expiry and
+  restart, paged cold history and doc release, anchor dedupe, deletion cascade,
+  failed-close history retry, and the full export/restarted-outbox boundary.
+
+The guard prevents side and native-subagent docs from joining, seeding,
+checkpointing or publishing tails to Edge, suppresses tool-blob upload/fetch and
+registry previews, and preserves locally readable snapshots and saved outbox
+bytes. Ordinary parent syncing remains exercised by the HTTP control. Side docs
+also do not count as disconnected remote rooms in connectivity status.
+
+`target/qa/sidebar/export-guard-tested.patch` preserves the exact tested changes
+from `68dbc36e`; `export-lifecycle-verification.json` records commands, outcomes
+and SHA-256 hashes. This batch does not establish native app/UI behavior or
+post-merge migration/backup/native-fork/peer behavior; those remain queued.

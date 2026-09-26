@@ -1734,7 +1734,20 @@ impl DocHost {
 
     /// Open (or return) the chat's doc handle: load the local snapshot (or init fresh),
     /// start the change-driven task, and join the edge room when configured.
+    /// Side transcripts and their native subagent docs belong to one profile.
+    /// The replicated marker also fails closed when local history is absent.
+    pub(crate) fn is_side_document(&self, chat_id: &str) -> bool {
+        let owner = chat_id
+            .split_once("--sub--")
+            .map_or(chat_id, |(owner, _)| owner);
+        self.inner.store.is_side_chat(owner).unwrap_or(true)
+            || self
+                .workspace()
+                .is_some_and(|workspace| workspace.is_side_chat(owner))
+    }
+
     pub fn open(&self, chat_id: &str) -> Result<Arc<ChatDocHandle>, EngineError> {
+        let local_only = self.is_side_document(chat_id);
         let side_owner = chat_id
             .split_once("--sub--")
             .map_or(chat_id, |(owner, _)| owner);
@@ -1845,7 +1858,7 @@ impl DocHost {
                         .map_err(|e| EngineError::Other(format!("snapshot import failed: {e}")))?;
                     SessionDoc::from_doc(raw)
                 }
-                Some((bytes, _cursor, epoch)) if self.inner.config.edge.is_none() => {
+                Some((bytes, _cursor, epoch)) if local_only || self.inner.config.edge.is_none() => {
                     // Offline/edge-less: adopting would blank a readable
                     // transcript with no way to catch up (review B4). Keep
                     // the old doc read-only-ish; the adopt runs on the next
@@ -2062,7 +2075,7 @@ impl DocHost {
         // retried: the exact "transcript frozen until restart" report.
         // Retry on the workspace host's capped, jittered backoff; a system
         // wake redials immediately; eviction/purge ends the loop via `weak`.
-        if let Some(edge) = &self.inner.config.edge {
+        if !local_only && let Some(edge) = &self.inner.config.edge {
             if room_gen >= 2 {
                 // Subscription BEFORE the dial (review B3): every local
                 // commit lands in the client when connected, else in the
@@ -2157,6 +2170,9 @@ impl DocHost {
     /// after full catch-up (checkpoint + rows), so "joined" here means
     /// "transcript converged".
     fn spawn_chat2_join(&self, edge: EdgeConfig, handle: &Arc<ChatDocHandle>, cursor: u64) {
+        if self.is_side_document(&handle.chat_id) {
+            return;
+        }
         let chat = handle.chat_id.clone();
         let doc = handle.doc.clone();
         let store = self.inner.store.clone();
@@ -2406,6 +2422,9 @@ impl DocHost {
         chat_id: &str,
         handle: &Arc<ChatDocHandle>,
     ) {
+        if self.is_side_document(chat_id) {
+            return;
+        }
         const TICK: std::time::Duration = std::time::Duration::from_millis(500);
         const QUIET_TICKS: u32 = 4; // 2s of frontier silence
         if !lock(&self.inner.seed_waiting).insert(chat_id.to_string()) {
@@ -2481,6 +2500,9 @@ impl DocHost {
         chat_id: &str,
         doc: Arc<SessionDoc>,
     ) -> Result<(), String> {
+        if self.is_side_document(chat_id) {
+            return Err("Side chat documents remain in their owning profile".into());
+        }
         use base64::Engine as _;
         let vv_at_rebuild = doc.doc().oplog_vv().encode();
         let rebuilt = luna_doc::rebuild::rebuild_thin_doc(&doc).map_err(|e| e.to_string())?;
@@ -2693,7 +2715,7 @@ impl DocHost {
     /// - tail sidecar: publish the last-64 transcript JSON for thin/instant
     ///   readers (the iOS fallback path).
     async fn chat2_maintenance(&self, handle: &Arc<ChatDocHandle>) {
-        if handle.retired.load(Ordering::Relaxed) {
+        if self.is_side_document(&handle.chat_id) || handle.retired.load(Ordering::Relaxed) {
             return;
         }
         let stats = match &*lock(&handle.chat2) {
@@ -2744,7 +2766,9 @@ impl DocHost {
     /// fresh reader sees only post-reset rows; `PushRejected` — the rejected
     /// ops reach peers only through a checkpoint).
     fn spawn_chat2_checkpoint(&self, handle: &Arc<ChatDocHandle>, reason: &'static str) {
-        if self.inner.edge_disconnected.load(Ordering::Acquire) {
+        if self.is_side_document(&handle.chat_id)
+            || self.inner.edge_disconnected.load(Ordering::Acquire)
+        {
             return;
         }
         use base64::Engine as _;
@@ -3086,6 +3110,7 @@ impl DocHost {
         grace.retain_chats(|id| statuses.iter().any(|(chat_id, _)| chat_id == id));
         let chats = statuses
             .into_iter()
+            .filter(|(chat_id, _)| !self.is_side_document(chat_id))
             .map(|(chat_id, stats)| {
                 let stats = stats.unwrap_or_default();
                 let connected = !grace.degraded(GraceKey::Chat(&chat_id), !stats.connected, now);
@@ -5550,6 +5575,9 @@ impl DocHost {
     /// POST `{edge}/device/{host}/nudge {chatId}` when the chat's workspace row names
     /// another device as host. Best-effort: offline/edge-less engines skip silently.
     fn nudge_remote_host(&self, chat_id: &str) {
+        if self.is_side_document(chat_id) {
+            return;
+        }
         let Some(edge) = self.inner.config.edge.clone() else {
             return;
         };
@@ -6125,6 +6153,9 @@ impl DocHost {
     /// degrades to "full output unavailable" — it must never block or fail
     /// the run. Offline/edge-less engines skip silently.
     pub fn upload_tool_sidecar(&self, chat_id: &str, payload: luna_doc::SidecarPayload) {
+        if self.is_side_document(chat_id) {
+            return;
+        }
         let Some(edge) = self.inner.config.edge.clone() else {
             return;
         };
@@ -6195,6 +6226,11 @@ impl DocHost {
         });
         if !valid {
             return Err(EngineError::Other(format!("bad blob ref: {blob_ref}")));
+        }
+        if self.is_side_document(blob_ref.split_once('/').expect("validated above").0) {
+            return Err(EngineError::Other(
+                "This side-chat output is not available remotely".into(),
+            ));
         }
         let Some(edge) = self.inner.config.edge.clone() else {
             return Err(EngineError::Other("offline: no edge configured".into()));
