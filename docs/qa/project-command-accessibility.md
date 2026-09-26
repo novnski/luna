@@ -38,7 +38,10 @@ The focused rendered GPUI/RPC case in
 `crates/ui/src/project_commands_accessibility_tests.rs` paints the real
 `ProjectCommandSettings` child, locates the actual controls by QA selectors,
 dispatches keyboard and mouse events through the window, and inspects the
-resulting draft state and held RPC trace. The GPUI headless `TestWindow`
+resulting draft state and held RPC trace. It writes selector presence/bounds,
+focus, RPC counts, and source to a bounded JSON trace before the first
+missing-control assertion, so the failing baseline retains its evidence.
+The GPUI headless `TestWindow`
 does not initialize an accessibility adapter, so it cannot produce a genuine
 AccessKit tree. After the source patch is composed into a signed QA app, open
 Settings → Projects with a synthetic saved command and repeat native AX

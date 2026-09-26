@@ -99,12 +99,48 @@ fn key(window: &mut Window, app: &mut gpui::App, name: &str) {
     );
 }
 
+fn trace_rendered_controls(
+    visual: &mut gpui::VisualTestContext,
+    rpc: &HeldRpc,
+    name: &str,
+    case: &str,
+    selectors: &[&'static str],
+) {
+    let focused =
+        visual.update(|window, app| window.focused(app).map(|handle| format!("{handle:?}")));
+    let mut rendered = serde_json::Map::new();
+    for selector in selectors {
+        let bounds = visual.debug_bounds(*selector);
+        rendered.insert(
+            (*selector).into(),
+            json!({"present":bounds.is_some(),"bounds":bounds.map(|bounds| format!("{bounds:?}"))}),
+        );
+    }
+    fixture::write_trace(
+        name,
+        &json!({
+            "source":{"file":file!(),"case":case},
+            "renderedSelectors":rendered,
+            "focusedControl":focused,
+            "rpcCount":{"get":rpc.calls(methods::GET_PROJECT_COMMANDS),"save":rpc.calls(methods::SAVE_PROJECT_COMMANDS)},
+            "rpc":rpc.trace().into_iter().take(12).collect::<Vec<_>>(),
+        }),
+    );
+}
+
 #[gpui::test]
 fn command_card_rendered_edit_toggles_and_cancel(cx: &mut TestAppContext) {
     let runtime = runtime(cx);
     let _entered = runtime.enter();
     let (card, rpc, window) = scene(cx, &runtime);
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    trace_rendered_controls(
+        &mut visual,
+        &rpc,
+        "project-command-ax-rendered-cancel-closed",
+        "command_card_rendered_edit_toggles_and_cancel",
+        &["qa-command-edit-build", "qa-command-remove-build"],
+    );
     let edit = visual
         .debug_bounds("qa-command-edit-build")
         .expect("visible Edit must have a rendered button target");
@@ -115,6 +151,19 @@ fn command_card_rendered_edit_toggles_and_cancel(cx: &mut TestAppContext) {
         Some("build".into())
     );
     visual.update(|window, app| window.draw(app).clear());
+
+    trace_rendered_controls(
+        &mut visual,
+        &rpc,
+        "project-command-ax-rendered-cancel-editor",
+        "command_card_rendered_edit_toggles_and_cancel",
+        &[
+            "qa-command-setup",
+            "qa-command-wait",
+            "qa-command-save",
+            "qa-command-cancel",
+        ],
+    );
 
     let setup = visual
         .debug_bounds("qa-command-setup")
@@ -158,6 +207,13 @@ fn command_card_keyboard_remove_sends_one_synthetic_save(cx: &mut TestAppContext
     let _entered = runtime.enter();
     let (_card, rpc, window) = scene(cx, &runtime);
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    trace_rendered_controls(
+        &mut visual,
+        &rpc,
+        "project-command-ax-rendered-remove-closed",
+        "command_card_keyboard_remove_sends_one_synthetic_save",
+        &["qa-command-edit-build", "qa-command-remove-build"],
+    );
     assert!(visual.debug_bounds("qa-command-remove-build").is_some());
     // The closed card's tab order is Add, Edit, Remove.
     visual.update(|window, app| {
@@ -192,11 +248,30 @@ fn command_card_keyboard_save_is_single_flight(cx: &mut TestAppContext) {
     let _entered = runtime.enter();
     let (card, rpc, window) = scene(cx, &runtime);
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    trace_rendered_controls(
+        &mut visual,
+        &rpc,
+        "project-command-ax-rendered-save-closed",
+        "command_card_keyboard_save_is_single_flight",
+        &["qa-command-edit-build", "qa-command-remove-build"],
+    );
     let edit = visual
         .debug_bounds("qa-command-edit-build")
         .expect("Edit must be painted before opening the editor");
     visual.update(|window, app| click(window, app, edit.center()));
     visual.update(|window, app| window.draw(app).clear());
+    trace_rendered_controls(
+        &mut visual,
+        &rpc,
+        "project-command-ax-rendered-save-editor",
+        "command_card_keyboard_save_is_single_flight",
+        &[
+            "qa-command-setup",
+            "qa-command-wait",
+            "qa-command-save",
+            "qa-command-cancel",
+        ],
+    );
     let setup = visual
         .debug_bounds("qa-command-setup")
         .expect("setup choice must be painted");
