@@ -29,6 +29,25 @@ and returned the prompt to the canvas. The signed app and complete read-only
 receipt packet are preserved under
 `target/qa/projects-native/6fce1828-retest/` in the integration checkout.
 
+The GPUI composer/draft-load fixture has a second failure-first check for the
+notice shown after a task is correctly retained. Run the focused names with
+the repository's guarded Cargo wrapper after the coordinator grants a build
+slot:
+
+```sh
+scripts/cargo.sh test --locked -p luna-ui --lib first_submit_canvas_rekey_shows_setup_recovery_action -- --test-threads=1
+scripts/cargo.sh test --locked -p luna-ui --lib recoverable_setup_preserves_genuinely_newer_task_drafts -- --test-threads=1
+```
+
+The first case models the native evidence: a recoverable submission with a
+canvas draft ID/revision 86 is tied to the new task, whose own blank draft has
+revision 1. It must display the receipt's exact setup `recoveryAction`, keep
+the task selected and the prompt recoverable, and issue no provider command.
+The second case protects real newer task text, attachment, context, and a
+newer revision of the same draft: their content remains separate and the
+existing separate-draft warning remains appropriate. The source of a draft
+ID change alone is insufficient evidence of newer user edits.
+
 ## Reproduce A and verify the fix
 
 1. In a new, isolated QA data directory, run the existing

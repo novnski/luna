@@ -11046,6 +11046,7 @@ mod tests {
         settlements: Mutex<Vec<(String, String)>>,
         fail_saves: AtomicBool,
         command_status: Mutex<Option<CommandReceiptStatus>>,
+        command_recovery_action: Mutex<Option<String>>,
         command_tasks: Mutex<HashMap<String, String>>,
         command_calls: AtomicUsize,
         read_started: Mutex<Option<oneshot::Sender<()>>>,
@@ -11066,6 +11067,7 @@ mod tests {
                 settlements: Mutex::new(Vec::new()),
                 fail_saves: AtomicBool::new(false),
                 command_status: Mutex::new(Some(CommandReceiptStatus::Applied)),
+                command_recovery_action: Mutex::new(None),
                 command_tasks: Mutex::new(HashMap::new()),
                 command_calls: AtomicUsize::new(0),
                 read_started: Mutex::new(None),
@@ -11262,11 +11264,12 @@ mod tests {
                     let command_id = params["commandId"].as_str().unwrap();
                     let task_id = self.command_tasks.lock().unwrap().get(command_id).cloned();
                     let status = *self.command_status.lock().unwrap();
-                    RpcReply::value(
-                        &task_id.zip(status).map(|(task_id, status)| {
-                            synthetic_receipt(&task_id, command_id, status)
-                        }),
-                    )
+                    RpcReply::value(&task_id.zip(status).map(|(task_id, status)| {
+                        let mut receipt = synthetic_receipt(&task_id, command_id, status);
+                        receipt.recovery_action =
+                            self.command_recovery_action.lock().unwrap().clone();
+                        receipt
+                    }))
                 }
                 other => Err(RpcError::UnknownMethod(other.into())),
             }
@@ -11320,6 +11323,32 @@ mod tests {
             committed_at_ms: (status == CommandReceiptStatus::Applied).then_some(1),
             observed_at_ms: 1,
         }
+    }
+
+    fn recoverable_setup_service(
+        task: &str,
+        task_draft: ComposerDraft,
+        snapshot: ComposerDraft,
+    ) -> Arc<DraftTestRpc> {
+        const COMMAND: &str = "setup-rejected-run";
+        const ACTION: &str = "Worktree setup failed. Open Terminal → Commands to inspect output and retry setup, then retry the task.";
+        let service = Arc::new(DraftTestRpc::new(vec![task_draft]));
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Rejected);
+        *service.command_recovery_action.lock().unwrap() = Some(ACTION.into());
+        service
+            .command_tasks
+            .lock()
+            .unwrap()
+            .insert(COMMAND.into(), task.into());
+        service.submissions.lock().unwrap().push(DraftSubmission {
+            command_id: COMMAND.into(),
+            state: DraftSubmissionState::Recoverable,
+            snapshot,
+            task_id: Some(task.into()),
+            queue_id: None,
+            updated_at_ms: 100,
+        });
+        service
     }
 
     fn mock_task_chat(task: &str) -> luna_proto::Chat {
@@ -12059,6 +12088,108 @@ mod tests {
         let saved = saved.last().unwrap();
         assert_eq!(saved.text, "newer draft\n\nolder unsent");
         assert_eq!(saved.attachments.len(), 1);
+    }
+
+    #[gpui::test]
+    fn first_submit_canvas_rekey_shows_setup_recovery_action(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let task = "new-task-after-failed-setup";
+        let prompt =
+            "Reply with exactly PROJECT_DEFAULTS_NATIVE_OK. Do not use tools or change files.";
+        let mut snapshot = test_draft("canvas-draft", 86, prompt);
+        snapshot.task_id = None;
+        let service = recoverable_setup_service(task, test_draft(task, 1, ""), snapshot);
+        let (state, composer) = composer_with_draft_rpc(cx, task, service.clone());
+        state.update(cx, |state, _| state.chats.push(mock_task_chat(task)));
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+        });
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(state.read(cx).selected_chat.as_deref(), Some(task));
+            assert_eq!(composer.current_key, task);
+            assert_eq!(composer.input.read(cx).text(), "");
+            assert_eq!(composer.failure_key.as_deref(), Some(task));
+            assert_eq!(
+                composer.failure.as_deref(),
+                Some("Worktree setup failed. Open Terminal → Commands to inspect output and retry setup, then retry the task.")
+            );
+            assert_eq!(composer.recoverable_submissions[task][0].snapshot.text, prompt);
+        });
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(service.submissions.lock().unwrap().len(), 1);
+    }
+
+    #[gpui::test]
+    fn recoverable_setup_preserves_genuinely_newer_task_drafts(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let prompt = "synthetic original setup prompt";
+        for case in ["text", "attachment", "context", "same-draft-revision"] {
+            let task = format!("setup-newer-{case}");
+            let mut draft = test_draft(&task, 1, "");
+            let mut snapshot = test_draft("canvas-draft", 86, prompt);
+            snapshot.task_id = None;
+            match case {
+                "text" => draft.text = "newer task text".into(),
+                "attachment" => draft.attachments.push(DraftBlob {
+                    attachment_id: "recovered-image".into(),
+                    name: "recovered.png".into(),
+                    path: Some("/synthetic/recovered.png".into()),
+                    sha256: None,
+                    size: Some(68),
+                    state: DraftBlobState::Saved,
+                    error: None,
+                }),
+                "context" => draft.context.quoted = Some(serde_json::json!("newer task quote")),
+                "same-draft-revision" => {
+                    draft.revision = 3;
+                    snapshot = test_draft(&task, 2, prompt);
+                }
+                _ => unreachable!(),
+            }
+            let service = recoverable_setup_service(&task, draft, snapshot);
+            let (state, composer) = composer_with_draft_rpc(cx, &task, service.clone());
+            state.update(cx, |state, _| state.chats.push(mock_task_chat(&task)));
+            pump_until(cx, &runtime, |cx| {
+                composer.read_with(cx, |composer, _| composer.draft_loaded.contains(&task))
+            });
+            composer.read_with(cx, |composer, cx| {
+                assert_eq!(state.read(cx).selected_chat.as_deref(), Some(task.as_str()));
+                assert_eq!(composer.failure_key.as_deref(), Some(task.as_str()));
+                assert_eq!(
+                    composer.failure.as_deref(),
+                    Some(
+                        "A previous unsent message was preserved separately from this newer draft."
+                    ),
+                    "case {case}"
+                );
+                assert_eq!(
+                    composer.input.read(cx).text(),
+                    if case == "text" {
+                        "newer task text"
+                    } else {
+                        ""
+                    }
+                );
+                assert_eq!(
+                    composer.recoverable_submissions[task.as_str()][0]
+                        .snapshot
+                        .text,
+                    prompt
+                );
+                if case == "attachment" {
+                    assert_eq!(composer.attachments[task.as_str()].len(), 1);
+                }
+            });
+            assert_eq!(service.command_calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[gpui::test]
