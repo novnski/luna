@@ -41,7 +41,8 @@ const CHUNK: usize = 64 * 1024;
 // the copied SQLite snapshot. v9 Appshot sources still rebuild the activity index.
 // v13 adds device-owned project commands and their execution receipts.
 // v14 adds local side-chat metadata, transcript pages and send admission records.
-const CURRENT_SCHEMA: i64 = 15;
+// v15 keeps workspace repair authority; v16 adds local prompt stash records.
+const CURRENT_SCHEMA: i64 = 16;
 
 const EXCLUDED: &[&str] = &[
     "OS Keychain and LUNA credential vault",
@@ -1178,6 +1179,7 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
         (14, "side_chat_entries"),
         (14, "side_chat_sends"),
         (15, "task_execution_lineage"),
+        (16, "prompt_stash"),
     ] {
         if schema_version >= introduced && !has_table(conn, table)? {
             return Err(BackupError::Invalid(format!(

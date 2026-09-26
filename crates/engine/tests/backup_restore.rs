@@ -350,14 +350,14 @@ fn managed_offline_backup_refuses_unreviewed_future_schema() {
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
     conn.execute(
-        "INSERT INTO schema_migrations(version,applied_at) VALUES (16,1)",
+        "INSERT INTO schema_migrations(version,applied_at) VALUES (17,1)",
         [],
     )
     .unwrap();
     drop(conn);
     let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
     assert!(
-        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 15"))
+        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 16"))
     );
 }
 
