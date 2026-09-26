@@ -110,7 +110,27 @@ impl ContextData {
         });
     }
     fn live<C: gpui::AppContext>(&self, scene: &Scene, cx: &C) -> Value {
-        scene.state.read_with(cx,|state,_|json!({"projectId":state.chats[0].space_id,"cwd":state.chats[0].cwd,"checkoutId":state.chats[0].checkout_id,"taskId":state.chats[0].id,"deviceId":state.chats[0].device_id,"engineGeneration":state.engine_generation()}))
+        scene.state.read_with(cx,|state,_|json!({"projectId":state.chats[0].space_id,"cwd":state.chats[0].cwd,"checkoutId":state.chats[0].checkout_id,"taskId":state.chats[0].id,"deviceId":state.chats[0].device_id,"engineGeneration":state.engine_generation(),"engineDeviceId":state.engine().map(|engine|engine.engine_info().device_id.clone())}))
+    }
+}
+fn assert_context_transition(before: &Value, after: &Value, transition: Transition) {
+    for field in ["engineGeneration", "engineDeviceId", "taskId", "deviceId"] {
+        assert_eq!(
+            before[field], after[field],
+            "live {field} must stay stable in this same-chat case"
+        );
+    }
+    match transition {
+        Transition::ProjectMove => {
+            assert_ne!(before["projectId"], after["projectId"]);
+            assert_eq!(before["cwd"], after["cwd"]);
+            assert_eq!(before["checkoutId"], after["checkoutId"]);
+        }
+        Transition::Materialization => {
+            assert_eq!(before["projectId"], after["projectId"]);
+            assert_ne!(before["cwd"], after["cwd"]);
+            assert_ne!(before["checkoutId"], after["checkoutId"]);
+        }
     }
 }
 fn stale_context_run(cx: &mut TestAppContext, transition: Transition) {
@@ -136,6 +156,7 @@ fn stale_context_run(cx: &mut TestAppContext, transition: Transition) {
     });
     let (window, point, renders, bounds) = button_window(cx, &scene, "qa-command-run-build");
     let painted = scene.view(cx);
+    let before_task = data.live(&scene, cx);
     let painted_render = renders.load(Ordering::SeqCst);
     rpc.reply(
         methods::PROJECT_COMMAND_STATUS,
@@ -154,17 +175,14 @@ fn stale_context_run(cx: &mut TestAppContext, transition: Transition) {
     let dispatched = rpc.calls(methods::RUN_PROJECT_COMMAND);
     fixture::write_trace(
         &format!("commands-same-chat-stale-run-{transition:?}"),
-        &json!({"painted":painted,"delivery":delivery,"currentBackendSnapshot":data.snapshot(true),"runRequests":dispatched,"rpc":rpc.trace()}),
+        &json!({"painted":painted,"beforeTask":before_task,"delivery":delivery,"currentBackendSnapshot":data.snapshot(true),"runRequests":dispatched,"rpc":rpc.trace()}),
     );
     rpc.release(methods::RUN_PROJECT_COMMAND);
     rpc.release(methods::PROJECT_COMMAND_STATUS);
     assert!(bounds_present);
     assert_eq!(delivery["beforeRender"], painted_render);
     assert_eq!(delivery["afterRender"], painted_render);
-    assert_eq!(
-        delivery["before"]["scope"], painted["scope"],
-        "this separate case keeps engine/device/chat identity fixed"
-    );
+    assert_context_transition(&before_task, &delivery["liveTask"], transition);
     assert_eq!(
         dispatched, 0,
         "old project/checkout action was carried into the task's new authoritative context"
@@ -187,6 +205,7 @@ fn stale_context_status(cx: &mut TestAppContext, transition: Transition) {
         rpc.calls(methods::PROJECT_COMMAND_STATUS) == 1
     });
     let before = scene.view(cx);
+    let before_task = data.live(&scene, cx);
     data.apply(&scene, cx);
     // Release the captured old reply before replacing the route, without
     // pumping either executor; fresh requests then see only the current data.
@@ -200,11 +219,12 @@ fn stale_context_status(cx: &mut TestAppContext, transition: Transition) {
         rpc.settled(methods::PROJECT_COMMAND_STATUS) > 0 && scene.view(cx)["busy"] == false
     });
     let after = scene.view(cx);
+    let after_task = data.live(&scene, cx);
     fixture::write_trace(
         &format!("commands-same-chat-stale-status-{transition:?}"),
-        &json!({"before":before,"after":after,"liveTask":data.live(&scene,cx),"currentBackendSnapshot":data.snapshot(true),"rpc":rpc.trace()}),
+        &json!({"before":before,"after":after,"beforeTask":before_task,"afterTask":after_task,"currentBackendSnapshot":data.snapshot(true),"rpc":rpc.trace()}),
     );
-    assert_eq!(before["scope"], after["scope"]);
+    assert_context_transition(&before_task, &after_task, transition);
     assert_eq!(
         after["snapshot"],
         data.snapshot(true),
