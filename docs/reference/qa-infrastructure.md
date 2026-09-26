@@ -62,6 +62,17 @@ lsof -nP -iTCP:"$LUNA_DEV_IPC_PORT" -sTCP:LISTEN
 ps -p <listener-pid> -o pid=,command=
 ```
 
+The four QA identity overrides above remain required. A QA bundle also sets
+the runtime `LUNA_WORKTREES_DIR` to `$LUNA_DEV_DATA_DIR/worktrees` in its signed
+plist and LaunchServices invocation, so a synthetic New worktree does not land
+under the user's `~/.luna/worktrees`. An optional `LUNA_DEV_WORKTREES_DIR` can
+choose another non-symlink directory **inside that same QA data directory**;
+the wrapper rejects an empty, external, shared, or non-owned path before build.
+The primary LUNA Dev bundle does not set this QA-only worktree override, and
+production Repos keeps its user-facing default. A QA setup failure can retain
+its Git checkout for inspection; use the recorded checkout path and Git
+registration for recovery, never a broad filesystem cleanup.
+
 Confirm the listener PID's executable is the exact chosen worktree bundle.
 Record the refresh duration from its output and retain `last-build.log`.
 The primary app retains `LUNA Dev`, `com.novnski.luna.dev`, port 59777 and

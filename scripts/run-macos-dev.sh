@@ -79,6 +79,40 @@ print(data)
 PY
 )" || exit 2
 
+# QA data isolation also needs a worktree root. Production keeps Repos' normal
+# user-facing ~/.luna/worktrees default; a QA bundle uses its own data subtree.
+if [[ "$APP_NAME" == 'LUNA Dev' && "$BUNDLE_ID" == 'com.novnski.luna.dev' ]]; then
+  if [[ -n "${LUNA_DEV_WORKTREES_DIR+x}" ]]; then
+    echo 'Invalid dev app configuration: LUNA_DEV_WORKTREES_DIR is QA-only' >&2
+    exit 2
+  fi
+  WORKTREES_DIR=''
+else
+  WORKTREES_DIR="$(python3 - "$DATA_DIR" "${LUNA_DEV_WORKTREES_DIR-$DATA_DIR/worktrees}" <<'PY'
+import os, pathlib, sys
+data = pathlib.Path(sys.argv[1])
+raw = sys.argv[2]
+def reject(message):
+    sys.exit('Invalid dev app configuration: ' + message)
+if not raw or any(char in raw for char in '\n\r'):
+    reject('QA worktree directory must be a nonempty single-line path')
+worktrees = pathlib.Path(raw)
+if not worktrees.is_absolute() or worktrees == data or data not in worktrees.parents:
+    reject('QA worktree directory must be inside its own data directory')
+if worktrees != worktrees.resolve():
+    reject('QA worktree directory must not contain symlinks or path aliases')
+if worktrees.exists() and not worktrees.is_dir():
+    reject('QA worktree directory must be a directory')
+existing = worktrees
+while not existing.exists():
+    existing = existing.parent
+if existing.stat().st_uid != os.getuid():
+    reject('QA worktree directory must be under a directory owned by this user')
+print(worktrees)
+PY
+)" || exit 2
+fi
+
 # Two refreshes must never swap the same bundle concurrently. A stale directory
 # is deliberately not auto-removed; inspect its owner before manual recovery.
 mkdir -p "$DEV_ROOT"
@@ -137,6 +171,9 @@ sed -e "s/__UPSTREAM_VERSION__/$UPSTREAM_VERSION/g" \
   "$ROOT/dist/macos/Info-dev.plist" >"$staged_contents/Info.plist"
 plutil -replace LSEnvironment.LUNA_DATA_DIR -string "$DATA_DIR" "$staged_contents/Info.plist"
 plutil -replace LSEnvironment.LUNA_IPC_PORT -string "$IPC_PORT" "$staged_contents/Info.plist"
+if [[ -n "$WORKTREES_DIR" ]]; then
+  plutil -replace LSEnvironment.LUNA_WORKTREES_DIR -string "$WORKTREES_DIR" "$staged_contents/Info.plist"
+fi
 plutil -replace CFBundleDisplayName -string "$APP_NAME" "$staged_contents/Info.plist"
 plutil -replace CFBundleName -string "$APP_NAME" "$staged_contents/Info.plist"
 plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$staged_contents/Info.plist"
@@ -211,6 +248,9 @@ OPEN_ENV=(
   --env "LUNA_DATA_DIR=$DATA_DIR"
   --env "LUNA_IPC_PORT=$IPC_PORT"
 )
+if [[ -n "$WORKTREES_DIR" ]]; then
+  OPEN_ENV+=(--env "LUNA_WORKTREES_DIR=$WORKTREES_DIR")
+fi
 if [[ -n "${LUNA_OPEN_ROUTE:-}" ]]; then
   OPEN_ENV+=(--env "LUNA_OPEN_ROUTE=$LUNA_OPEN_ROUTE")
 fi

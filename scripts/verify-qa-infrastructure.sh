@@ -44,7 +44,7 @@ script(root / 'scripts' / 'cargo.sh', 'echo build >> "$QA_E2E_SCRATCH/actions"; 
 script(binpath / 'codesign', 'exit "${QA_SIGN_EXIT:-0}"')
 script(binpath / 'security', 'exit 0')
 script(binpath / 'iconutil', 'exit 0')
-script(binpath / 'open', 'exit 1')
+script(binpath / 'open', 'printf "%s\\n" "$@" > "$QA_E2E_SCRATCH/open-args"; exit 1')
 script(binpath / 'pgrep', 'if [[ "${QA_RUNNING:-0}" == 1 ]]; then echo 98765; fi')
 script(binpath / 'ps', 'if [[ "${QA_RUNNING:-0}" == 1 && "$*" == "-p 98765 -o command=" ]]; then printf \'%s\\n\' "$QA_E2E_SCRATCH/repo/target/luna-macos-dev/LUNA QA Fixture.app/Contents/MacOS/luna"; else /bin/ps "$@"; fi')
 script(binpath / 'osascript', 'echo "$*" >> "$QA_E2E_SCRATCH/quit-request"; exit 1')
@@ -55,6 +55,8 @@ env = {**os.environ, 'QA_E2E_SCRATCH': str(scratch), 'PATH': str(binpath) + ':' 
        'LUNA_MBX_BIN': str(binpath / 'mbx'), 'LUNA_DEV_APP_NAME': 'LUNA QA Fixture',
        'LUNA_DEV_BUNDLE_ID': 'com.novnski.luna.qa.fixture', 'LUNA_DEV_IPC_PORT': '59885',
        'LUNA_DEV_DATA_DIR': str(root / 'target' / 'qa-data')}
+env.pop('LUNA_DEV_WORKTREES_DIR', None)
+env.pop('LUNA_WORKTREES_DIR', None)
 checks = []
 def expect(name, args, code, cwd=root, overrides=None):
     r = call(args, cwd=cwd, env={**env, **(overrides or {})})
@@ -63,6 +65,9 @@ def expect(name, args, code, cwd=root, overrides=None):
     checks.append(name); print('PASS', name, flush=True)
     return r
 appcmd = ['bash', 'scripts/run-macos-dev.sh', '--refresh']
+outside_worktrees = scratch / 'outside-worktrees'; outside_worktrees.mkdir()
+worktrees_link = root / 'target' / 'qa-worktrees-link'
+worktrees_link.symlink_to(outside_worktrees, target_is_directory=True)
 for name, overrides in {
     'partial-name': {'LUNA_DEV_BUNDLE_ID': ''},
     'unsafe-name': {'LUNA_DEV_APP_NAME': '../LUNA Dev'},
@@ -72,6 +77,16 @@ for name, overrides in {
     'leading-zero-port': {'LUNA_DEV_IPC_PORT': '059785'},
     'invalid-revision': {'LUNA_DEV_REVISION': '1/2'},
     'outside-data': {'LUNA_DEV_DATA_DIR': str(scratch / 'data')},
+    'outside-worktrees': {'LUNA_DEV_WORKTREES_DIR': str(outside_worktrees)},
+    'symlink-worktrees': {'LUNA_DEV_WORKTREES_DIR': str(worktrees_link / 'checkouts')},
+    'empty-worktrees': {'LUNA_DEV_WORKTREES_DIR': ''},
+    'data-root-as-worktrees': {'LUNA_DEV_WORKTREES_DIR': str(root / 'target' / 'qa-data')},
+    'worktrees-cannot-replace-data': {'LUNA_DEV_DATA_DIR': '', 'LUNA_DEV_WORKTREES_DIR': str(root / 'target' / 'qa-data' / 'worktrees')},
+    'main-rejects-qa-worktrees': {
+        'LUNA_DEV_APP_NAME': 'LUNA Dev', 'LUNA_DEV_BUNDLE_ID': 'com.novnski.luna.dev',
+        'LUNA_DEV_IPC_PORT': '59777', 'LUNA_DEV_DATA_DIR': str(root / 'target/luna-macos-dev/data'),
+        'LUNA_DEV_WORKTREES_DIR': str(root / 'target/qa-data/worktrees'),
+    },
 }.items(): expect(name, appcmd, 2, overrides=overrides)
 assert not (scratch / 'actions').exists(), 'invalid configuration reached build'
 # A separately packaged peer must reserve its identity even while stopped.
@@ -82,12 +97,24 @@ peer_info.write_bytes(plistlib.dumps({'CFBundleIdentifier': env['LUNA_DEV_BUNDLE
 expect('peer-collision', appcmd, 2)
 peer_info.unlink()
 app = root / 'target/luna-macos-dev/LUNA QA Fixture.app'
-(app / 'Contents').mkdir(parents=True)
+(root / 'target/debug').mkdir()
+(root / 'target/debug/luna').write_text('fixture binary')
+expect('qa-worktrees-default', ['bash', 'scripts/run-macos-dev.sh', '--build-only'], 0)
+info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+assert info['LSEnvironment']['LUNA_WORKTREES_DIR'] == str(root / 'target/qa-data/worktrees')
+explicit_worktrees = root / 'target/qa-data/alternate-worktrees'
+expect('qa-worktrees-explicit', ['bash', 'scripts/run-macos-dev.sh', '--build-only'], 0,
+       overrides={'LUNA_DEV_WORKTREES_DIR': str(explicit_worktrees)})
+info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+assert info['LSEnvironment']['LUNA_WORKTREES_DIR'] == str(explicit_worktrees)
+expect('main-worktrees-default-unchanged', ['bash', 'scripts/run-macos-dev.sh', '--build-only'], 0,
+       overrides={'LUNA_DEV_APP_NAME': 'LUNA Dev', 'LUNA_DEV_BUNDLE_ID': 'com.novnski.luna.dev',
+                  'LUNA_DEV_IPC_PORT': '59777', 'LUNA_DEV_DATA_DIR': str(root / 'target/luna-macos-dev/data')})
+main_info = plistlib.loads((root / 'target/luna-macos-dev/LUNA Dev.app/Contents/Info.plist').read_bytes())
+assert 'LUNA_WORKTREES_DIR' not in main_info.get('LSEnvironment', {})
 sentinel = app / 'Contents/sentinel'; sentinel.write_text('preserve')
 expect('failed-build', appcmd, 37, overrides={'QA_BUILD_EXIT': '37'})
 assert sentinel.read_text() == 'preserve'
-(root / 'target/debug').mkdir()
-(root / 'target/debug/luna').write_text('fixture binary')
 expect('failed-signing', appcmd, 38, overrides={'QA_SIGN_EXIT': '38'})
 assert sentinel.read_text() == 'preserve'
 # An occupied real TCP socket must leave the existing bundle in place.
@@ -103,6 +130,8 @@ assert '98765' in quit_request and 'runningApplicationWithProcessIdentifier' in 
 assert 'tell application id' not in quit_request
 expect('failed-launch', appcmd, 1)
 assert sentinel.read_text() == 'preserve'
+open_args = (scratch / 'open-args').read_text().splitlines()
+assert ('--env', 'LUNA_WORKTREES_DIR=' + str(root / 'target/qa-data/worktrees')) in zip(open_args, open_args[1:])
 guard = ['python3', 'scripts/build-budget.py']
 small = {'LUNA_BUILD_BUDGET_GIB': '0.05', 'LUNA_BUILD_RESERVE_GIB': '0.01'}
 expect('invalid-ceiling', guard + ['--status'], 2, overrides={'LUNA_BUILD_BUDGET_GIB': '200'})
