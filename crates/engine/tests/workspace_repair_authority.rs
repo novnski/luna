@@ -853,3 +853,175 @@ async fn initial_materialization_is_bound_to_original_pending_run_without_repair
     assert_eq!(harness.calls.load(Ordering::SeqCst), 0);
     core.shutdown().await;
 }
+
+// FAILURE MATRIX RECORDED BEFORE THE WORKSPACE HOST VALIDATOR:
+// 1. A legacy v1 unbound task previews root A under task revision R/W.
+// 2. An out-of-lane registry cwd change to B fires after final identity proof
+//    but before the registry lock. The repair must terminally refuse, keep
+//    original identity log, R/W and provider-run count, even though chat B stays.
+// 3. A separate unchanged-root control must commit exactly R+1/W=R+1.
+// The synthetic hook fires after identity proof is checked and immediately
+// before WorkspaceHost takes the registry lock. An out-of-lane row update can
+// enter this same interval without changing optimistic task revision.
+async fn legacy_unbound_for_repair()
+-> (tempfile::TempDir, EngineCore, Arc<SyntheticHarness>, String) {
+    const LOG: &str = "luna-task-identity-events-v1";
+    let (root, core, harness, task) = fixture().await;
+    let store = core.store.clone();
+    let owner = core.device_id.clone();
+    core.shutdown().await;
+    drop(core);
+    let mut log: serde_json::Value =
+        serde_json::from_slice(&store.load_snapshot(LOG).unwrap().unwrap()).unwrap();
+    let legacy = format!("projectless:{owner}");
+    log["schemaVersion"] = serde_json::json!(1);
+    for event in log["events"].as_array_mut().unwrap() {
+        match event["type"].as_str() {
+            Some("workspaceObserved") => {
+                event["workspace"]["schemaVersion"] = serde_json::json!(1);
+                event["workspace"]["workspaceId"] = serde_json::json!(legacy);
+            }
+            Some("taskRegistered") => {
+                event["task"]["schemaVersion"] = serde_json::json!(1);
+                event["task"]["workspaceId"] = serde_json::json!(legacy);
+            }
+            _ => {}
+        }
+    }
+    store
+        .save_snapshot(LOG, &serde_json::to_vec(&log).unwrap())
+        .unwrap();
+    drop(store);
+    let reopened = assemble(root.path(), harness.clone());
+    assert!(
+        !reopened
+            .task_identity
+            .view(&task)
+            .unwrap()
+            .workspace
+            .workspace_id
+            .starts_with("workspace:v2:")
+    );
+    (root, reopened, harness, task)
+}
+
+async fn repair_preview(client: &luna_rpc::RpcClient, task: &str) -> serde_json::Value {
+    let preview = client
+        .call(
+            "PreviewWorkspaceIdentityRepair",
+            serde_json::json!({"taskId":task,"providerProof":"localOnly"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview["status"], "ready", "{preview:?}");
+    preview
+}
+
+async fn apply_repair(
+    client: &luna_rpc::RpcClient,
+    task: &str,
+    preview: &serde_json::Value,
+) -> CommandReceipt {
+    client.call_as(methods::EXECUTE_TASK_COMMAND, serde_json::json!({
+        "commandId":uuid::Uuid::new_v4().to_string(), "taskId":task,
+        "actorId":"local-user", "clientId":"workspace-witness-e2e", "clientSessionId":"fixture",
+        "expectedTaskRevision":preview["expectedTaskRevision"],
+        "intent":{"kind":"repairWorkspaceIdentity","previewId":preview["previewId"],
+            "evidenceDigest":preview["evidenceDigest"]}
+    })).await.unwrap()
+}
+
+#[tokio::test]
+async fn repair_refuses_a_chat_changed_after_proof_before_registry_commit() {
+    const LOG: &str = "luna-task-identity-events-v1";
+    let (root, core, harness, task) = legacy_unbound_for_repair().await;
+    let other = root.path().join("other-workspace");
+    std::fs::create_dir(&other).unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let preview = repair_preview(&client, &task).await;
+    let before_r = core
+        .store
+        .task_command_snapshot(&task)
+        .unwrap()
+        .snapshot
+        .task_revision;
+    let before_w = core.store.workspace_repair_revision(&task).unwrap();
+    let before_log = core.store.load_snapshot(LOG).unwrap().unwrap();
+    let hook_calls = Arc::new(AtomicUsize::new(0));
+    let witness = core.workspace.clone();
+    let owned_task = task.clone();
+    let calls = hook_calls.clone();
+    core.workspace
+        .set_workspace_repair_precommit_hook_for_tests(move || {
+            witness
+                .set_chat_cwd(&owned_task, other.to_str().unwrap())
+                .unwrap();
+            calls.fetch_add(1, Ordering::SeqCst);
+        });
+    let receipt = apply_repair(&client, &task, &preview).await;
+    evidence(
+        "repair-final-chat-witness-refusal",
+        serde_json::json!({"receipt":receipt,
+        "hookCalls":hook_calls.load(Ordering::SeqCst),"task":task}),
+    );
+    assert_eq!(hook_calls.load(Ordering::SeqCst), 1);
+    assert!(receipt.status.is_terminal() && receipt.status != CommandReceiptStatus::Applied);
+    assert_eq!(
+        core.store
+            .task_command_snapshot(&task)
+            .unwrap()
+            .snapshot
+            .task_revision,
+        before_r
+    );
+    assert_eq!(
+        core.store.workspace_repair_revision(&task).unwrap(),
+        before_w
+    );
+    assert_eq!(core.store.load_snapshot(LOG).unwrap().unwrap(), before_log);
+    assert!(
+        !core
+            .task_identity
+            .view(&task)
+            .unwrap()
+            .workspace
+            .workspace_id
+            .starts_with("workspace:v2:")
+    );
+    assert_eq!(harness.calls.load(Ordering::SeqCst), 0);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn repair_with_unchanged_final_chat_witness_still_applies_once() {
+    let (_root, core, harness, task) = legacy_unbound_for_repair().await;
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let preview = repair_preview(&client, &task).await;
+    let old_r = core
+        .store
+        .task_command_snapshot(&task)
+        .unwrap()
+        .snapshot
+        .task_revision;
+    let receipt = apply_repair(&client, &task, &preview).await;
+    evidence(
+        "repair-final-chat-witness-control",
+        serde_json::json!({"receipt":receipt,"task":task}),
+    );
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+    assert_eq!(receipt.snapshot.task_revision, old_r + 1);
+    assert_eq!(
+        core.store.workspace_repair_revision(&task).unwrap(),
+        old_r + 1
+    );
+    assert!(
+        core.task_identity
+            .view(&task)
+            .unwrap()
+            .workspace
+            .workspace_id
+            .starts_with("workspace:v2:")
+    );
+    assert_eq!(harness.calls.load(Ordering::SeqCst), 0);
+    core.shutdown().await;
+}

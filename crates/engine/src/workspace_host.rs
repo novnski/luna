@@ -174,6 +174,10 @@ struct WorkspaceHostInner {
     /// commit, including task projections and the delayed worker. Otherwise
     /// an older capture can commit after an explicit flush.
     snapshot_persist: Mutex<()>,
+    /// Deterministic synthetic race seam. Only debug Rust callers can place
+    /// an out-of-lane registry change between proof read and commit lock.
+    #[cfg(debug_assertions)]
+    workspace_repair_before_registry_lock: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     snapshot_after_capture: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     chats_tx: watch::Sender<Vec<Chat>>,
@@ -409,6 +413,8 @@ impl WorkspaceHost {
                 snapshot_write_handle,
                 reg: Arc::new(Mutex::new(doc)),
                 snapshot_persist: Mutex::new(()),
+                #[cfg(debug_assertions)]
+                workspace_repair_before_registry_lock: Mutex::new(None),
                 #[cfg(test)]
                 snapshot_after_capture: Mutex::new(None),
                 chats_tx,
@@ -1134,9 +1140,18 @@ impl WorkspaceHost {
         binding_id: Option<&str>,
         binding_generation: Option<u32>,
         identity_snapshot: (&str, &[u8]),
+        validate: impl FnOnce(&RegistryDoc) -> Result<(), EngineError>,
     ) -> Result<CommandReceipt, TaskProjectionError> {
+        #[cfg(debug_assertions)]
+        {
+            let hook = lock(&self.inner.workspace_repair_before_registry_lock).take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         let _persist = lock(&self.inner.snapshot_persist);
         let reg = lock(&self.inner.reg);
+        validate(&reg).map_err(TaskProjectionError::Mutation)?;
         let bytes = reg.to_bytes().map_err(|error| {
             TaskProjectionError::Commit(EngineError::Other(format!(
                 "registry snapshot export failed: {error}"
@@ -1158,6 +1173,17 @@ impl WorkspaceHost {
                 }
                 _ => TaskProjectionError::Commit(error.into()),
             })
+    }
+
+    /// Synthetic integration seam; it is absent from release builds and is
+    /// never exposed through ControlRpc or provider tools.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn set_workspace_repair_precommit_hook_for_tests(
+        &self,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        *lock(&self.inner.workspace_repair_before_registry_lock) = Some(Box::new(hook));
     }
 
     pub(crate) fn commit_workspace_materialization<R>(
