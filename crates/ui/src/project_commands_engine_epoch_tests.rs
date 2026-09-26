@@ -344,11 +344,37 @@ fn commands_engine_epoch_same_engine_control_remains_usable(cx: &mut TestAppCont
     assert_eq!(before["scope"], after["scope"]);
     assert_eq!(after["snapshot"]["cwd"], "/A/checkout");
     let calls = a.calls(methods::PROJECT_COMMAND_STATUS);
-    drop(scene);
+    let parent_weak = scene.parent.downgrade();
+    let commands_weak = scene.commands(cx).downgrade();
+    // GPUI releases dropped entity values during an App update. Dropping the
+    // outer Scene outside that boundary leaves its queued parent value still
+    // owning the child until the next update, so advancing time first would
+    // test an entity which had not actually been disposed yet.
+    cx.update(|_| drop(scene));
     cx.run_until_parked();
+    let parent_released = parent_weak.upgrade().is_none();
+    let commands_released = commands_weak.upgrade().is_none();
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
     fixture::drain(cx, &runtime);
+    fixture::write_trace(
+        "commands-same-engine-control-drop",
+        &json!({
+            "parentReleased": parent_released,
+            "commandsReleased": commands_released,
+            "statusCallsBeforeDrop": calls,
+            "statusCallsAfterDrop": a.calls(methods::PROJECT_COMMAND_STATUS),
+            "rpc": a.trace(),
+        }),
+    );
+    assert!(
+        parent_released,
+        "parent must be disposed before checking the child poller"
+    );
+    assert!(
+        commands_released,
+        "Commands child must be disposed before advancing its timer"
+    );
     assert_eq!(
         a.calls(methods::PROJECT_COMMAND_STATUS),
         calls,
