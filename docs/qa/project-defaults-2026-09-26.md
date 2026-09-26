@@ -169,3 +169,34 @@ new backend with the same project identity. These are source-derived findings,
 not runtime reproductions. The coordinator and Commands owner were notified;
 production source remains `3e62cf03` while scoped failure-first correction is
 coordinated. The ten focused passing cases do not establish this lifecycle path.
+
+### Genuine Defaults engine-replacement baseline
+
+The coordinator granted the Defaults-only baseline on exact test source
+`37afc8c813521f93f184d070f326a1821833ed6c`, whose production runtime remains
+`3e62cf03`. The only dirty file was the three-line clarification of stale
+busy/loading retirement in `project-defaults-cases.md`; its exact patch was
+recorded without reverting or stashing it.
+
+The command compiled successfully and ran eight integration cases: **0 passed,
+8 failed**, exit 101, 54s wall. Every failure reached the strict before/after
+state assertion after the actual retained ProjectsPage callback completed;
+there were no compiler errors, fixture timeouts or setup panics. The traces
+confirm real engine-A replies after actual engine-B attachment, with generation
+advancing from 1 to 2 in both same-device and different-device variants:
+
+- Save success replaced B's project model with `late-engine-A-save`.
+- Save failure displayed A's error in B's retained settings page.
+- Model success replaced B's catalog with `late-engine-A-model`.
+- Model failure displayed A's catalog error in B's page.
+
+The explicitly selected B draft remained unchanged in all eight cases. This
+narrows the confirmed defect to retained page/callback state and project-row
+projection. Tests use the shared Commands-owned held-RPC fixture, the real
+in-memory RPC transport and the actual AppState attachment path; they do not
+invoke synthetic completion callbacks.
+
+All eight before/after/transport traces, a compact `summary.json`, exact source,
+command, dirty-doc patch, exit and pre/post budget are preserved under
+`target/qa/project-defaults/epoch-baseline-1`. The sole Cargo slot was released
+at completion. No production identity fence has been applied at this baseline.

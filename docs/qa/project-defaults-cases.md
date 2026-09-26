@@ -60,6 +60,9 @@ For each identity variant, verify four delayed completions independently:
 4. Engine A fails model discovery after B is attached. Its error must not
    replace B's current catalog state or alter the selected draft.
 
+Retiring A must also release its stale busy/loading indicators so B remains
+usable; cancellation is an acceptable settled outcome for the old request.
+
 Hold only the intended request; the fixture must prove it reached engine A
 before replacement. Observe B's state before releasing A's reply, then observe
 completion through the actual RPC transport. Do not directly invoke a fabricated
