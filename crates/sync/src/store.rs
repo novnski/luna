@@ -13,7 +13,7 @@ use luna_proto::{
     CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, ComposerDraft,
     ComposerDraftRead, ComposerDraftSaveOutcome, DraftSubmission, DraftSubmissionState,
     HistoryCursor, HistoryProjectPolicy, HistorySearchPage, HistorySearchRequest,
-    HistorySearchScope, TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
+    HistorySearchScope, PromptStashEntry, TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -42,6 +42,8 @@ pub enum StoreError {
     DraftSubmissionConflict(String),
     #[error("composer draft {0} reused a revision with different content")]
     DraftRevisionConflict(String),
+    #[error("prompt stash id {0} already has different content")]
+    PromptStashConflict(String),
     #[error("task {0} is being permanently deleted")]
     TaskCleanupPending(String),
     #[error("task recovery state changed before the requested transition")]
@@ -307,6 +309,18 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/side_chats.sql"),
     // v15 — original local execution authority survives association repair.
     include_str!("migrations/workspace_repair.sql"),
+    // v16 — user-managed prompts survive independently of active drafts and
+    // keep their uploaded bytes owned after the source draft is cleared.
+    "CREATE TABLE prompt_stash (
+        device_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        record_json BLOB NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(device_id,id)
+     ) STRICT;
+     CREATE INDEX prompt_stash_recent
+       ON prompt_stash(device_id,created_at DESC,id DESC);",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1883,6 +1897,72 @@ impl DocsStore {
             )
             .collect::<Result<Vec<_>, StoreError>>()?;
         Ok(ComposerDraftRead { draft, submissions })
+    }
+
+    /// Save one immutable stash entry and give every saved blob an independent
+    /// owner in the same transaction. Retrying the same entry is safe.
+    pub fn save_prompt_stash(
+        &self,
+        device_id: &str,
+        entry: &PromptStashEntry,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let bytes = serde_json::to_vec(entry)?;
+        let existing: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT record_json FROM prompt_stash WHERE device_id=?1 AND id=?2",
+                params![device_id, entry.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            if existing == bytes {
+                return Ok(());
+            }
+            return Err(StoreError::PromptStashConflict(entry.id.clone()));
+        }
+        tx.execute(
+            "INSERT INTO prompt_stash(device_id,id,label,record_json,created_at)
+             VALUES(?1,?2,?3,?4,?5)",
+            params![device_id, entry.id, entry.label, bytes, entry.created_at_ms],
+        )?;
+        replace_attachment_owners_tx(&tx, device_id, "stash", &entry.id, entry.saved_blob_paths())?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_prompt_stash(&self, device_id: &str) -> Result<Vec<PromptStashEntry>, StoreError> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT record_json FROM prompt_stash WHERE device_id=?1
+             ORDER BY created_at DESC,id DESC",
+        )?;
+        let entries = statement
+            .query_map(params![device_id], |row| row.get::<_, Vec<u8>>(0))?
+            .map(|row| Ok(serde_json::from_slice(&row?)?))
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        Ok(entries)
+    }
+
+    /// Deleting a stash removes only its ownership rows. Shared blobs remain
+    /// protected by any active draft, submission, queue, or other stash owner.
+    pub fn delete_prompt_stash(&self, device_id: &str, id: &str) -> Result<bool, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let deleted = tx.execute(
+            "DELETE FROM prompt_stash WHERE device_id=?1 AND id=?2",
+            params![device_id, id],
+        )? > 0;
+        if deleted {
+            tx.execute(
+                "DELETE FROM attachment_owners
+                 WHERE device_id=?1 AND owner_kind='stash' AND owner_id=?2",
+                params![device_id, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(deleted)
     }
 
     /// Freeze the exact revision before dispatch. Reusing a command id with a
