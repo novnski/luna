@@ -1,5 +1,11 @@
 # Project execution defaults — 26 September 2026
 
+Latest targeted verification: the Defaults engine-identity correction passes
+eight held-RPC cases on `86111689`, and the corrected Commands same-engine
+control passes 1/1. Combined verification after the Commands runtime correction
+and native app acceptance remain pending. Earlier failures and exact-source
+proofs are preserved below.
+
 Branch: `codex/project-execution-defaults`.
 Worktree: `/Users/iulian/.codex/worktrees/9f21/luna`.
 Base: `d1c71c3a31d6ef7c895adc9084c27293940fce39`.
@@ -249,3 +255,28 @@ This is a source diagnosis, not a passing run. Prior baseline traces still show
 actual late A mutations; their early assertion panics did not reach the final
 scheduler check. The runtime topology difference is retained explicitly in the
 baseline/fixed evidence rather than treating the failed fixed run as a pass.
+
+
+### Corrected fixed run passes
+
+On exact clean `8611168911eae2ccf3aab71bccaf57542b409962`, the coordinator's
+bounded rerun passed the Defaults held-RPC cases **8/8** (43.74s compile, 0.03s
+tests, 52s wall) and the exact corrected Commands same-engine control **1/1**
+(1.39s warm compile, 0.01s test, 9s wall). Both commands exited 0; no scheduler
+failure was suppressed and no assertion was changed.
+
+Every Defaults trace shows B's project/page/catalog/draft state unchanged after
+A's request is canceled. The Commands control retains normal load/execute/Output
+behavior and proves `parentReleased=true`, `commandsReleased=true`, with status
+calls unchanged at 2 before and after actual disposal. This confirms the prior
+control issue was its disposal boundary; the five Commands stale-runtime cases
+still await their owner's production fence and subsequent verification.
+
+Evidence: `target/qa/project-defaults/epoch-fixed-2` contains logs, eight Defaults
+traces, Commands normal/drop traces, `summary.json`, exact source/commands/exits
+and budget snapshots. Aggregate usage was 149.189 → 149.423 GiB with the
+coordinator-approved temporary 10 GiB reservation and unchanged 170 GiB ceiling.
+Cargo was released at completion; the passing control evidence was sent directly
+to the Commands owner under the coordinator's conditional source-only approval.
+No native app or extra test targets ran. The repeatable Defaults runner now
+includes its eight held-RPC cases and retains their JSON in `engine-epoch`.
