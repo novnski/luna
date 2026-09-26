@@ -222,7 +222,18 @@ impl GitHubPullRequests {
         if !valid_branch(&request.base) || request.base == request.head {
             return Err("Choose a valid base branch different from head".into());
         }
-        let current = self.preview(&request.preview.checkout.cwd).await?;
+        let prior_target = Target {
+            repository: request.preview.repository.clone(),
+            base: request.base.clone(),
+            head: request.head.clone(),
+        };
+        let current = match self.preview(&request.preview.checkout.cwd).await {
+            Ok(current) => current,
+            Err(error) if self.attempt_path(&prior_target).exists() => {
+                return Ok(reconciliation_error(error));
+            }
+            Err(error) => return Err(error),
+        };
         same_checkout(&request.preview.checkout, &current.checkout)?;
         if current.repository != request.preview.repository
             || current.upstream != request.preview.upstream
@@ -271,11 +282,16 @@ impl GitHubPullRequests {
             }
             let details = if let Some(confirmed) = &journal.attempts[index].confirmed {
                 Some(
-                    self.exact_details(&source, &target, confirmed.number)
-                        .await?,
+                    match self.exact_details(&source, &target, confirmed.number).await {
+                        Ok(details) => details,
+                        Err(error) => return Ok(reconciliation_error(error)),
+                    },
                 )
             } else {
-                self.matching(&source, &target).await?
+                match self.matching(&source, &target).await {
+                    Ok(details) => details,
+                    Err(error) => return Ok(reconciliation_error(error)),
+                }
             };
             if let Some(details) = details {
                 self.confirm(&path, &mut journal, index, &details)?;
@@ -291,9 +307,10 @@ impl GitHubPullRequests {
         // predecessor must be authoritatively terminal before a new POST.
         if let Some(index) = journal.attempts.len().checked_sub(1) {
             if let Some(confirmed) = &journal.attempts[index].confirmed {
-                let details = self
-                    .exact_details(&source, &target, confirmed.number)
-                    .await?;
+                let details = match self.exact_details(&source, &target, confirmed.number).await {
+                    Ok(details) => details,
+                    Err(error) => return Ok(reconciliation_error(error)),
+                };
                 self.confirm(&path, &mut journal, index, &details)?;
                 if details.summary.state == ChangeRequestState::Open || request.reconcile_only {
                     return Ok(receipt(
@@ -303,7 +320,11 @@ impl GitHubPullRequests {
                     ));
                 }
             } else {
-                if let Some(details) = self.matching(&source, &target).await? {
+                let matching = match self.matching(&source, &target).await {
+                    Ok(details) => details,
+                    Err(error) => return Ok(reconciliation_error(error)),
+                };
+                if let Some(details) = matching {
                     self.confirm(&path, &mut journal, index, &details)?;
                     return Ok(receipt(
                         GitPrCreateOutcome::Existing,
@@ -769,6 +790,16 @@ impl GitHubPullRequests {
             .map_err(|_| "Could not sync PR history directory")?;
         Ok(())
     }
+}
+
+fn reconciliation_error(error: String) -> GitPrCreateReceipt {
+    receipt(
+        GitPrCreateOutcome::Uncertain,
+        None,
+        &format!(
+            "Previous PR outcome could not be reconciled: {error}. Check GitHub again after resolving access or identity; no create request was sent"
+        ),
+    )
 }
 
 fn unresolved() -> GitPrCreateReceipt {

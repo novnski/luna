@@ -147,7 +147,7 @@ async fn draft_pr_subprocess_acceptance() {
     );
     mode(root, "success");
     let preview = service.preview(cwd).await.unwrap();
-    let request = GitPrCreateRequest {
+    let mut request = GitPrCreateRequest {
         preview,
         reconcile_only: false,
         title: "Fixture draft".into(),
@@ -288,6 +288,39 @@ async fn draft_pr_subprocess_acceptance() {
     assert_eq!(history["attempts"].as_array().unwrap().len(), 3);
     assert_eq!(history["attempts"][0]["confirmed"]["state"], "closed");
     assert_eq!(history["attempts"][1]["confirmed"]["state"], "merged");
+    // Failure-first review regression: known operations are read-only even when
+    // local/published SHA advances after their PR has closed.
+    git(
+        &checkout,
+        &[
+            "-c",
+            "user.name=QA",
+            "-c",
+            "user.email=qa@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "Advance reused branch",
+        ],
+    );
+    let advanced = git(&checkout, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("sha"), &advanced).unwrap();
+    git(
+        &checkout,
+        &["update-ref", "refs/remotes/origin/feature/pr", &advanced],
+    );
+    let replay = service.create(request.clone()).await.unwrap();
+    assert_eq!(replay.outcome, GitPrCreateOutcome::Existing);
+    assert_eq!(replay.details.unwrap().summary.number, 42);
+    assert_eq!(writes(root), 3);
+    let mut stale_new = request.clone();
+    stale_new.preview.operation_id = uuid::Uuid::new_v4().to_string();
+    assert_eq!(
+        service.create(stale_new).await.unwrap().outcome,
+        GitPrCreateOutcome::Rejected
+    );
+    assert_eq!(writes(root), 3);
+    request.preview = service.preview(cwd).await.unwrap();
     reset(root, &journal);
     mode(root, "lost");
     assert_eq!(
@@ -297,6 +330,11 @@ async fn draft_pr_subprocess_acceptance() {
     assert_eq!(writes(root), 1);
     reset(root, &journal);
     mode(root, "reject");
+    assert_eq!(
+        service.create(request.clone()).await.unwrap().outcome,
+        GitPrCreateOutcome::Uncertain
+    );
+    mode(root, "auth");
     assert_eq!(
         service.create(request.clone()).await.unwrap().outcome,
         GitPrCreateOutcome::Uncertain
@@ -350,7 +388,7 @@ async fn draft_pr_subprocess_acceptance() {
     std::fs::write(root.join("pr.json"), serde_json::to_vec(&pr).unwrap()).unwrap();
     assert_eq!(
         restarted.create(request.clone()).await.unwrap().outcome,
-        GitPrCreateOutcome::Rejected
+        GitPrCreateOutcome::Uncertain
     );
     assert_eq!(writes(root), 1);
     // Malformed persisted state must fail closed.
