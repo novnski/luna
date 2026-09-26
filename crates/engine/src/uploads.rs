@@ -262,7 +262,7 @@ impl Uploads {
         let name = sanitize(file_name);
         let id8: String = upload_id.chars().take(8).collect();
         let path = self.inner.dir.join(format!("{id8}-{name}"));
-        std::fs::rename(temporary.path(), &path)?;
+        publish_immutable_upload(temporary, &path)?;
         #[cfg(unix)]
         std::fs::File::open(&self.inner.dir)?.sync_all()?;
         let _ = std::fs::remove_dir_all(&dir);
@@ -464,6 +464,56 @@ struct InspectedFile {
     name: String,
     mime_type: String,
     size: u64,
+}
+
+/// Attachment paths may already be referenced by drafts or history. Publish
+/// without replacement; a retry is successful only if those bytes are identical.
+fn publish_immutable_upload(
+    temporary: tempfile::NamedTempFile,
+    destination: &Path,
+) -> Result<(), EngineError> {
+    use std::io::{Read, Seek};
+
+    match temporary.persist_noclobber(destination) {
+        Ok(_) => Ok(()),
+        Err(mut error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let collision = || {
+                EngineError::Other(
+                    "Upload destination already contains different or unsafe bytes".into(),
+                )
+            };
+            let parent = destination.parent().ok_or_else(collision)?;
+            let name = destination.file_name().ok_or_else(collision)?;
+            // Use the same no-symlink open as generated-image intake. Never
+            // accept a link as proof of a previously published attachment.
+            let (mut existing, _pins) = open_generated_file(parent, Path::new(name))?;
+            let before = existing.metadata()?;
+            let size = error.file.as_file().metadata()?.len();
+            if !before.is_file() || before.len() != size || size > MAX_BYTES {
+                return Err(collision());
+            }
+            error.file.as_file_mut().rewind()?;
+            let mut old = [0; 64 * 1024];
+            let mut new = [0; 64 * 1024];
+            let mut remaining = size;
+            while remaining > 0 {
+                let count = remaining.min(old.len() as u64) as usize;
+                existing.read_exact(&mut old[..count])?;
+                error.file.as_file_mut().read_exact(&mut new[..count])?;
+                if old[..count] != new[..count] {
+                    return Err(collision());
+                }
+                remaining -= count as u64;
+            }
+            if !same_generated_file(&before, &existing.metadata()?)
+                || !same_generated_file(&before, &std::fs::symlink_metadata(destination)?)
+            {
+                return Err(collision());
+            }
+            Ok(())
+        }
+        Err(error) => Err(error.error.into()),
+    }
 }
 
 fn chunk_files(dir: &Path) -> Result<Vec<(u64, PathBuf)>, EngineError> {
@@ -966,9 +1016,7 @@ impl Uploads {
         }
         temporary.flush()?;
         temporary.as_file().sync_all()?;
-        temporary
-            .persist(&destination)
-            .map_err(|e| EngineError::Io(e.error))?;
+        publish_immutable_upload(temporary, &destination)?;
         Ok(ImportedImage {
             path: destination.to_string_lossy().into_owned(),
             name,

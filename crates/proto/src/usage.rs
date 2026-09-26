@@ -292,6 +292,12 @@ pub fn merge_usage_snapshots(mut snapshots: Vec<UsageSnapshot>) -> Option<UsageS
                 .push("Incompatible environment usage summary excluded".into());
             continue;
         }
+        merged.summary.partial |= snapshot.summary.partial;
+        for warning in snapshot.summary.warnings {
+            if !merged.summary.warnings.contains(&warning) {
+                merged.summary.warnings.push(warning);
+            }
+        }
         let mut accepted = HashSet::new();
         for mut source in snapshot.summary.sources {
             if matches!(
