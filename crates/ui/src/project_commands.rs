@@ -15,6 +15,27 @@ fn command_action(theme: &Theme, enabled: bool) -> gpui::Div {
         .when(!enabled, |el| el.opacity(0.5).cursor_default())
 }
 
+fn command_settings_button(
+    theme: &Theme,
+    enabled: bool,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let accent = theme.accent;
+    command_action(theme, enabled)
+        .id(id.into())
+        .role(gpui::Role::Button)
+        .aria_label(label.into())
+        .when(enabled, |el| {
+            el.tab_index(0)
+                .focus_visible(move |style| style.border_2().border_color(accent))
+        })
+}
+
+fn command_key_activated(event: &gpui::KeyDownEvent) -> bool {
+    !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space")
+}
+
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json)]
 pub struct OpenCommandPreview(pub String);
@@ -91,6 +112,9 @@ impl ProjectCommandSettings {
         cx.notify();
     }
     fn edit(&mut self, action: Option<ProjectAction>, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
         let action = action.unwrap_or_else(|| ProjectAction {
             id: uuid::Uuid::new_v4().to_string(),
             name: String::new(),
@@ -112,6 +136,9 @@ impl ProjectCommandSettings {
         cx.notify();
     }
     fn save(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
         let Some(id) = self.editing.clone() else {
             return;
         };
@@ -132,6 +159,40 @@ impl ProjectCommandSettings {
         }
         self.request(Some(actions), cx);
     }
+
+    fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let actions = self
+            .actions
+            .iter()
+            .filter(|action| action.id != id)
+            .cloned()
+            .collect();
+        self.request(Some(actions), cx);
+    }
+
+    fn toggle_setup(&mut self, cx: &mut Context<Self>) {
+        self.setup = !self.setup;
+        cx.notify();
+    }
+
+    fn toggle_wait(&mut self, cx: &mut Context<Self>) {
+        self.wait = !self.wait;
+        cx.notify();
+    }
+
+    fn cancel_edit(&mut self, cx: &mut Context<Self>) {
+        self.editing = None;
+        cx.notify();
+    }
+
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        if !self.busy {
+            self.request(None, cx);
+        }
+    }
 }
 impl Render for ProjectCommandSettings {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -149,11 +210,7 @@ impl Render for ProjectCommandSettings {
                     .child(widgets::row_title(&theme, "Project commands"))
                     .when(self.editing.is_none(), |row| {
                         row.child(
-                            command_action(&theme, !self.busy)
-                                .id("add-project-command")
-                                .role(gpui::Role::Button)
-                                .aria_label("Add project command")
-                                .when(!self.busy, |el| el.tab_index(0))
+                            command_settings_button(&theme, !self.busy, "add-project-command", "Add project command")
                                 .border_1()
                                 .border_color(theme.border)
                                 .bg(theme.surface_raised)
@@ -163,12 +220,7 @@ impl Render for ProjectCommandSettings {
                                     el.on_click(cx.listener(|view, _, _, cx| view.edit(None, cx)))
                                         .on_key_down(cx.listener(
                                             |view, event: &gpui::KeyDownEvent, _, cx| {
-                                                if !event.is_held
-                                                    && matches!(
-                                                        event.keystroke.key.as_str(),
-                                                        "enter" | "space"
-                                                    )
-                                                {
+                                                if command_key_activated(event) {
                                                     view.edit(None, cx);
                                                     cx.stop_propagation();
                                                 }
@@ -180,8 +232,12 @@ impl Render for ProjectCommandSettings {
             )
             .child(widgets::page_subtitle(&theme, "Saved on this device. Run commands from Terminal → Commands in the selected task’s checkout. Foreground commands use /bin/sh; shell operators and environment variables are supported."));
         for action in self.actions.clone() {
-            let edit = action.clone();
-            let id = action.id.clone();
+            let edit_click = action.clone();
+            let edit_key = action.clone();
+            let edit_selector_id = action.id.clone();
+            let remove_selector_id = action.id.clone();
+            let remove_click_id = action.id.clone();
+            let remove_key_id = action.id.clone();
             card = card.child(
                 div()
                     .flex()
@@ -203,54 +259,146 @@ impl Render for ProjectCommandSettings {
                             ))),
                     )
                     .child(
-                        command_action(&theme, !self.busy)
-                            .id(SharedString::from(format!("edit-command-{}", action.id)))
-                            .child("Edit")
-                            .when(!self.busy, |el| {
-                                el.on_click(cx.listener(move |view, _, _, cx| {
-                                    view.edit(Some(edit.clone()), cx)
-                                }))
-                            }),
+                        command_settings_button(
+                            &theme,
+                            !self.busy,
+                            SharedString::from(format!("edit-command-{}", action.id)),
+                            format!("Edit project command: {}", action.name),
+                        )
+                        .when(cfg!(test), |el| {
+                            el.debug_selector(move || format!("qa-command-edit-{edit_selector_id}"))
+                        })
+                        .child("Edit")
+                        .when(!self.busy, |el| {
+                            el.on_click(cx.listener(move |view, _, _, cx| {
+                                view.edit(Some(edit_click.clone()), cx)
+                            }))
+                            .on_key_down(cx.listener(
+                                move |view, event: &gpui::KeyDownEvent, _, cx| {
+                                    if command_key_activated(event) {
+                                        view.edit(Some(edit_key.clone()), cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                        }),
                     )
                     .child(
-                        command_action(&theme, !self.busy)
-                            .id(SharedString::from(format!("remove-command-{}", action.id)))
-                            .child("Remove")
-                            .when(!self.busy, |el| {
-                                el.on_click(cx.listener(move |view, _, _, cx| {
-                                    let actions = view
-                                        .actions
-                                        .iter()
-                                        .filter(|a| a.id != id)
-                                        .cloned()
-                                        .collect();
-                                    view.request(Some(actions), cx);
-                                }))
-                            }),
+                        command_settings_button(
+                            &theme,
+                            !self.busy,
+                            SharedString::from(format!("remove-command-{}", action.id)),
+                            format!("Remove project command: {}", action.name),
+                        )
+                        .when(cfg!(test), |el| {
+                            el.debug_selector(move || {
+                                format!("qa-command-remove-{remove_selector_id}")
+                            })
+                        })
+                        .child("Remove")
+                        .when(!self.busy, |el| {
+                            el.on_click(cx.listener(move |view, _, _, cx| {
+                                view.remove(&remove_click_id, cx);
+                            }))
+                            .on_key_down(cx.listener(
+                                move |view, event: &gpui::KeyDownEvent, _, cx| {
+                                    if command_key_activated(event) {
+                                        view.remove(&remove_key_id, cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                        }),
                     ),
             );
         }
         if self.editing.is_some() {
-            card = card.child(widgets::field_label(&theme,"Name")).child(popover::dialog_field(self.name.clone().into_any_element()))
-                .child(widgets::field_label(&theme,"Command")).child(div().min_h(px(56.0)).child(popover::dialog_field(self.command.clone().into_any_element())))
-                .child(widgets::field_label(&theme,"Preview URL")).child(popover::dialog_field(self.preview.clone().into_any_element()))
-                .child(command_action(&theme, true).id("command-setup").child(if self.setup { "✓ Run on new worktree creation" } else { "Run on new worktree creation" }).on_click(cx.listener(|view,_,_,cx| { view.setup = !view.setup; cx.notify(); })))
-                .child(command_action(&theme, true).id("command-wait").child(if self.wait { "✓ Wait for setup before dependent work" } else { "Allow work while setup runs" }).on_click(cx.listener(|view,_,_,cx| { view.wait = !view.wait; cx.notify(); })))
+            card = card
+                .child(widgets::field_label(&theme, "Name"))
+                .child(popover::dialog_field(self.name.clone().into_any_element()))
+                .child(widgets::field_label(&theme, "Command"))
+                .child(div().min_h(px(56.0)).child(popover::dialog_field(self.command.clone().into_any_element())))
+                .child(widgets::field_label(&theme, "Preview URL"))
+                .child(popover::dialog_field(self.preview.clone().into_any_element()))
+                .child(
+                    command_settings_button(&theme, true, "command-setup", "Run on new worktree creation")
+                        .aria_toggled(if self.setup { gpui::Toggled::True } else { gpui::Toggled::False })
+                        .when(cfg!(test), |el| el.debug_selector(|| "qa-command-setup".into()))
+                        .child(if self.setup { "✓ Run on new worktree creation" } else { "Run on new worktree creation" })
+                        .on_click(cx.listener(|view, _, _, cx| view.toggle_setup(cx)))
+                        .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
+                            if command_key_activated(event) {
+                                view.toggle_setup(cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                )
+                .child(
+                    command_settings_button(&theme, true, "command-wait", "Wait for setup before dependent work")
+                        .aria_toggled(if self.wait { gpui::Toggled::True } else { gpui::Toggled::False })
+                        .when(cfg!(test), |el| el.debug_selector(|| "qa-command-wait".into()))
+                        .child(if self.wait { "✓ Wait for setup before dependent work" } else { "Allow work while setup runs" })
+                        .on_click(cx.listener(|view, _, _, cx| view.toggle_wait(cx)))
+                        .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
+                            if command_key_activated(event) {
+                                view.toggle_wait(cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                )
                 .child(widgets::page_subtitle(&theme,"Setup runs only for newly created worktrees. Interrupted or failed setup stays visible and requires an explicit retry. Editing this command does not rerun existing setup."))
-                .child(div().flex().gap(px(8.0))
-                    .child(command_action(&theme, !self.busy).id("save-command").child(if self.busy { "Saving…" } else { "Save command" }).when(!self.busy, |el| el.on_click(cx.listener(|view,_,_,cx| view.save(cx)))))
-                    .child(command_action(&theme, true).id("cancel-command-edit").child("Cancel").on_click(cx.listener(|view,_,_,cx| { view.editing = None; cx.notify(); }))));
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.0))
+                        .child(
+                            command_settings_button(&theme, !self.busy, "save-command", "Save project command")
+                                .when(cfg!(test), |el| el.debug_selector(|| "qa-command-save".into()))
+                                .child(if self.busy { "Saving…" } else { "Save command" })
+                                .when(!self.busy, |el| {
+                                    el.on_click(cx.listener(|view, _, _, cx| view.save(cx)))
+                                        .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
+                                            if command_key_activated(event) {
+                                                view.save(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        }))
+                                }),
+                        )
+                        .child(
+                            command_settings_button(&theme, true, "cancel-command-edit", "Cancel command edit")
+                                .when(cfg!(test), |el| el.debug_selector(|| "qa-command-cancel".into()))
+                                .child("Cancel")
+                                .on_click(cx.listener(|view, _, _, cx| view.cancel_edit(cx)))
+                                .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
+                                    if command_key_activated(event) {
+                                        view.cancel_edit(cx);
+                                        cx.stop_propagation();
+                                    }
+                                })),
+                        ),
+                );
         }
         if let Some(error) = &self.error {
             card = card
                 .child(widgets::error_strip(&theme, error.clone()))
                 .child(
-                    command_action(&theme, !self.busy)
-                        .id("reload-project-commands")
-                        .child("Reload saved commands (keep draft)")
-                        .when(!self.busy, |el| {
-                            el.on_click(cx.listener(|view, _, _, cx| view.request(None, cx)))
-                        }),
+                    command_settings_button(
+                        &theme,
+                        !self.busy,
+                        "reload-project-commands",
+                        "Reload saved project commands and keep draft",
+                    )
+                    .child("Reload saved commands (keep draft)")
+                    .when(!self.busy, |el| {
+                        el.on_click(cx.listener(|view, _, _, cx| view.reload(cx)))
+                            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
+                                if command_key_activated(event) {
+                                    view.reload(cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                    }),
                 );
         }
         card.child(widgets::page_subtitle(&theme,"Configuration and receipts are included in backups. Terminal output follows local terminal retention and is excluded from backups. Stop controls foreground processes; commands that detach themselves must manage their own lifecycle."))
