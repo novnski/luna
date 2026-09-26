@@ -857,3 +857,6 @@ impl Changes {
         section.into_any_element()
     }
 }
+
+#[cfg(test)]
+mod lifetime_tests;
