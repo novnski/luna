@@ -3,6 +3,7 @@
 
 use luna_proto::{
     ComposerDraft, ComposerDraftRead, ComposerDraftSaveOutcome, DraftBlob, DraftBlobState,
+    PromptStashEntry,
 };
 use luna_rpc::{RpcError, methods};
 use sha2::{Digest, Sha256};
@@ -72,6 +73,38 @@ pub async fn save(
             serde_json::json!({ "draft": draft }),
         )
         .await
+}
+
+pub async fn list_stash(engine: &EngineHandle) -> Result<Vec<PromptStashEntry>, RpcError> {
+    engine
+        .client()
+        .call_as(methods::LIST_PROMPT_STASH, serde_json::json!({}))
+        .await
+}
+
+pub async fn save_stash(engine: &EngineHandle, entry: &PromptStashEntry) -> Result<(), RpcError> {
+    engine
+        .client()
+        .call(
+            methods::SAVE_PROMPT_STASH,
+            serde_json::json!({ "entry": entry }),
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_stash(engine: &EngineHandle, id: &str) -> Result<bool, RpcError> {
+    let reply = engine
+        .client()
+        .call(
+            methods::DELETE_PROMPT_STASH,
+            serde_json::json!({ "id": id }),
+        )
+        .await?;
+    reply
+        .get("deleted")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| RpcError::Failed("prompt stash delete receipt is missing".into()))
 }
 
 pub async fn begin_submission(

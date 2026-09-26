@@ -13,7 +13,8 @@ use luna_proto::{
     CommandReasonCode, CommandReceipt, CommandReceiptReason, CommandReceiptStatus, ComposerDraft,
     ComposerDraftRead, ComposerDraftSaveOutcome, DraftSubmission, DraftSubmissionState,
     HistoryCursor, HistoryProjectPolicy, HistorySearchPage, HistorySearchRequest,
-    HistorySearchScope, PromptStashEntry, TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
+    HistorySearchScope, MAX_PROMPT_STASH_ENTRIES, MAX_PROMPT_STASH_ENTRY_BYTES, PromptStashEntry,
+    TaskCommandEvent, TaskCommandRead, TaskCommandSnapshot,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -44,6 +45,10 @@ pub enum StoreError {
     DraftRevisionConflict(String),
     #[error("prompt stash id {0} already has different content")]
     PromptStashConflict(String),
+    #[error("prompt stash is full (maximum 50 entries)")]
+    PromptStashFull,
+    #[error("prompt stash entry exceeds 1 MiB of metadata")]
+    PromptStashEntryTooLarge,
     #[error("task {0} is being permanently deleted")]
     TaskCleanupPending(String),
     #[error("task recovery state changed before the requested transition")]
@@ -1909,6 +1914,9 @@ impl DocsStore {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let bytes = serde_json::to_vec(entry)?;
+        if bytes.len() > MAX_PROMPT_STASH_ENTRY_BYTES {
+            return Err(StoreError::PromptStashEntryTooLarge);
+        }
         let existing: Option<Vec<u8>> = tx
             .query_row(
                 "SELECT record_json FROM prompt_stash WHERE device_id=?1 AND id=?2",
@@ -1921,6 +1929,14 @@ impl DocsStore {
                 return Ok(());
             }
             return Err(StoreError::PromptStashConflict(entry.id.clone()));
+        }
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM prompt_stash WHERE device_id=?1",
+            params![device_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_PROMPT_STASH_ENTRIES as i64 {
+            return Err(StoreError::PromptStashFull);
         }
         tx.execute(
             "INSERT INTO prompt_stash(device_id,id,label,record_json,created_at)
@@ -1936,10 +1952,12 @@ impl DocsStore {
         let conn = self.conn();
         let mut statement = conn.prepare(
             "SELECT record_json FROM prompt_stash WHERE device_id=?1
-             ORDER BY created_at DESC,id DESC",
+             ORDER BY created_at DESC,id DESC LIMIT ?2",
         )?;
         let entries = statement
-            .query_map(params![device_id], |row| row.get::<_, Vec<u8>>(0))?
+            .query_map(params![device_id, MAX_PROMPT_STASH_ENTRIES as i64], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?
             .map(|row| Ok(serde_json::from_slice(&row?)?))
             .collect::<Result<Vec<_>, StoreError>>()?;
         Ok(entries)

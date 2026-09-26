@@ -196,6 +196,9 @@ pub mod methods {
     /// intentionally not relay-forwardable or synced across devices.
     pub const GET_COMPOSER_DRAFT: &str = "GetComposerDraft";
     pub const SAVE_COMPOSER_DRAFT: &str = "SaveComposerDraft";
+    pub const LIST_PROMPT_STASH: &str = "ListPromptStash";
+    pub const SAVE_PROMPT_STASH: &str = "SavePromptStash";
+    pub const DELETE_PROMPT_STASH: &str = "DeletePromptStash";
     pub const BEGIN_DRAFT_SUBMISSION: &str = "BeginDraftSubmission";
     pub const SETTLE_DRAFT_SUBMISSION: &str = "SettleDraftSubmission";
     /// Ask a headless IPC owner to drain its runtime and exit successfully.
@@ -390,6 +393,9 @@ pub mod methods {
         WATCH_TASK_COMMANDS,
         GET_COMPOSER_DRAFT,
         SAVE_COMPOSER_DRAFT,
+        LIST_PROMPT_STASH,
+        SAVE_PROMPT_STASH,
+        DELETE_PROMPT_STASH,
         BEGIN_DRAFT_SUBMISSION,
         SETTLE_DRAFT_SUBMISSION,
         STOP_ENGINE,

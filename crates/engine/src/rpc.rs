@@ -623,6 +623,18 @@ struct ComposerDraftSaveParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SavePromptStashParams {
+    entry: luna_proto::PromptStashEntry,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletePromptStashParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BeginDraftSubmissionParams {
     command_id: String,
     #[serde(default)]
@@ -1075,6 +1087,7 @@ enum MutateParams {
     },
 }
 
+mod prompt_stash;
 mod side_chats;
 
 pub struct EngineRpc {
@@ -8568,6 +8581,17 @@ impl RpcService for EngineRpc {
                     }
                 }
                 RpcReply::value(&outcome)
+            }
+            methods::LIST_PROMPT_STASH => RpcReply::value(&prompt_stash::list(self)?),
+            methods::SAVE_PROMPT_STASH => {
+                let p: SavePromptStashParams = parse_params(params)?;
+                prompt_stash::save(self, &p.entry)?;
+                RpcReply::value(&serde_json::json!({ "saved": true }))
+            }
+            methods::DELETE_PROMPT_STASH => {
+                let p: DeletePromptStashParams = parse_params(params)?;
+                let deleted = prompt_stash::delete(self, &p.id)?;
+                RpcReply::value(&serde_json::json!({ "deleted": deleted }))
             }
             methods::BEGIN_DRAFT_SUBMISSION => {
                 let p: BeginDraftSubmissionParams = parse_params(params)?;

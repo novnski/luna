@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DraftAppshot, DraftBlob, DraftBlobState, DraftContext};
 
+pub const MAX_PROMPT_STASH_ENTRIES: usize = 50;
+pub const MAX_PROMPT_STASH_ENTRY_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptStashEntry {
