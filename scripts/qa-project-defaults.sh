@@ -20,8 +20,9 @@ run() {
   return "$status"
 }
 run engine scripts/cargo.sh test --locked -p luna-engine --test project_defaults
-run picker scripts/cargo.sh test --locked -p luna-ui --lib project_defaults_tests
+run picker scripts/cargo.sh test --locked -p luna-ui --lib project_defaults_tests -- --test-threads=1
 run format scripts/cargo.sh fmt --all -- --check
+run compile scripts/cargo.sh check --locked -p luna-ui -p luna-engine
 run lint scripts/cargo.sh clippy --locked -p luna-ui -p luna-engine --no-deps
 python3 scripts/build-budget.py --status > "$out/budget-after.json"
 printf 'passed\n' > "$out/result.txt"

@@ -96,15 +96,30 @@ on `aabb52a1` (only the logging script differed). Initial failures are retained.
 | Picker GPUI integration compilation | Exit 101: new Projects category missing from existing sidebar icon match | `target/qa/project-defaults/batch-1/picker.log` |
 | Picker retry after one-line existing-icon fix | Exit 75 before compilation: aggregate reservation blocked | `target/qa/project-defaults/batch-2/picker.log` |
 | Source formatting, shell/Node syntax, diff whitespace | Passed static checks | Source checkpoint / git diff checks |
-| Full format, focused Clippy, picker runtime and native app | Pending build-slot regrant | No pass claimed |
+| Corrected picker GPUI integration | 3 passed, 0 failed; compile 29.91s, tests 0.03s (34s wall) | `target/qa/project-defaults/batch-3/picker.log` |
+| Full workspace format check | Exit 0, 5s wall | `target/qa/project-defaults/batch-3/format.log` |
+| Focused engine/UI compile | Exit 0, 48s wall | `target/qa/project-defaults/batch-3/compile.log` |
+| Focused engine/UI Clippy | Exit 0, 35s wall; existing warnings, none in the new defaults modules | `target/qa/project-defaults/batch-3/lint.log` |
+| Native app/UI/IPC/signature | Pending separately granted slot | No native pass claimed |
 
 Engine coverage confirms missing-field migration through serialized registry
 state, owner/missing-project/malformed-value rejection, stale expected-value
 rejection, restart persistence, explicit inherit clearing and unchanged existing
-task rows. UI runtime behavior remains unverified until its GPUI cases run.
+task rows. The corrected GPUI cases verify A → B → A transitions, reconstructed
+picker state, inherit clearing, retained explicit draft choices across watch
+updates, global fallback preservation, existing task config authority,
+provider-default model semantics, unavailable model retention/blocking and
+first-Full-access confirmation/recovery. Native visual behavior remains pending.
 
 The second admission observed 156,642,626,920 bytes (145.89 GiB) in aggregate;
 adding the default 25 GiB reservation would exceed the 170 GiB operating limit.
 No reservation override, retry loop, cache cleanup or native launch followed.
 The build slot was released and the coordinator notified. This checkout's
 `target/debug` measured 7.1 GiB; it is preserved for the pending verification.
+
+After coordinator-managed normal 20 GiB cache collection, batch 3 was explicitly
+regranted and passed on `6d637af9` without lowering the 25 GiB reservation or
+changing cache policy. `commands.txt`, `source.txt`, `exits.tsv`, `result.txt`
+and before/after accounting are retained with that batch. Final aggregate was
+154,439,057,096 bytes (143.83 GiB); this target/debug was 9.0 GiB and available
+disk space 393 GiB. The compiler slot was released after the checks.
