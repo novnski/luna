@@ -237,8 +237,18 @@ impl SessionDoc {
 
     /// Retype one row. Empty text means "I don't want to send this after all",
     /// so the row goes — that is the delete gesture, not an error.
-    /// `false` when there is no such row, or the text is unchanged.
+    /// `false` when the row is missing, already claimed, or unchanged.
     pub fn set_queued_text(&self, id: &str, text: &str, now_ms: i64) -> Result<bool, DocError> {
+        // A claimed prompt is immutable delivery evidence, including when
+        // acceptance is unknown. Legacy edits must obey the same fence as
+        // revisioned edit/remove commands.
+        if !self
+            .read_queue()?
+            .iter()
+            .any(|item| item.id == id && matches!(item.status, QueueMessageStatus::Held))
+        {
+            return Ok(false);
+        }
         if text.trim().is_empty() {
             return self.remove_queued(id);
         }
@@ -422,8 +432,15 @@ impl SessionDoc {
     }
 
     /// Move a row to `to` (clamped to the queue's bounds). `false` when the row
-    /// is missing or already sits there.
+    /// is missing, already claimed, or already sits there.
     pub fn move_queued(&self, id: &str, to: usize) -> Result<bool, DocError> {
+        if !self
+            .read_queue()?
+            .iter()
+            .any(|item| item.id == id && matches!(item.status, QueueMessageStatus::Held))
+        {
+            return Ok(false);
+        }
         let queue = self.doc().get_movable_list("queue");
         let Some(from) = index_of(&queue, id) else {
             return Ok(false);
