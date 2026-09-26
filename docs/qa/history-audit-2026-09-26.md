@@ -133,6 +133,6 @@ Artifacts under `target/qa/history-audit-2026-09-26/`:
   worktree's debug target is approximately 3.1 GiB; no release target or
   additional build directory was created. Disposable fixtures cleaned up.
 
-The focused build slot has been released. Native QA app and read-only live
-endpoint verification remain queued separately; no app readiness is claimed
-by these focused results.
+The focused build slot was released before the separately scheduled native
+batch. The completed combined-engine and native follow-up is recorded in
+[the native verification report](history-native-2026-09-26.md).
