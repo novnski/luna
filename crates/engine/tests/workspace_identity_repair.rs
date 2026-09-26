@@ -455,6 +455,22 @@ async fn nested_project_move(
     client: &RpcClient,
     bound: bool,
 ) -> (String, String, String, TaskIdentityView, TaskIdentityView) {
+    // MoveProject permits distinct project folders within one Git checkout;
+    // non-Git projects must use the exact same canonical root.
+    git(&fixture.root_a, &["init", "-q", "-b", "main"]);
+    std::fs::write(fixture.root_a.join("fixture.txt"), "fixture\n").unwrap();
+    git(&fixture.root_a, &["add", "fixture.txt"]);
+    git(
+        &fixture.root_a,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "fixture",
+        ],
+    );
     let nested = fixture.root_a.join("sub");
     std::fs::create_dir(&nested).unwrap();
     let origin = uuid::Uuid::new_v4().to_string();
