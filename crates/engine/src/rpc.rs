@@ -2259,6 +2259,57 @@ impl EngineRpc {
         ))
     }
 
+    /// Git card requests must retain the checkout owned by the selected task.
+    /// A fresh `git rev-parse` alone is not provenance: when a nested
+    /// worktree's .git disappears, Git resolves its ancestor repository.
+    async fn trusted_git_checkout(
+        &self,
+        chat_id: &str,
+        cwd: &str,
+        expected_checkout_id: Option<&str>,
+    ) -> Result<String, RpcError> {
+        let chat = self
+            .workspace
+            .chat(chat_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .ok_or_else(|| RpcError::Failed("Git task is unavailable".into()))?;
+        if chat.device_id != self.doc_host.device_id() || chat.cwd.as_deref() != Some(cwd) {
+            return Err(RpcError::Failed(
+                "Task working directory changed; refresh Git".into(),
+            ));
+        }
+        let recorded = chat.checkout_id.ok_or_else(|| {
+            RpcError::Failed(
+                "Task checkout identity is unavailable; select its working directory again".into(),
+            )
+        })?;
+        if expected_checkout_id.is_some_and(|expected| expected != recorded.as_str()) {
+            return Err(RpcError::Failed(
+                "Task checkout changed; refresh Git".into(),
+            ));
+        }
+        let current = self
+            .repos
+            .checkout_identity(std::path::Path::new(cwd))
+            .await
+            .map_err(|_| RpcError::Failed("Git checkout is unavailable".into()))?;
+        if current.id != recorded {
+            return Err(RpcError::Failed(
+                "Task checkout changed; restore the worktree or select its working directory again"
+                    .into(),
+            ));
+        }
+        Ok(recorded)
+    }
+
+    fn git_request_chat_id(params: &serde_json::Value) -> Result<&str, RpcError> {
+        params
+            .get("chatId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| RpcError::BadParams("chatId is required for Git actions".into()))
+    }
+
     fn checkpoint_service(&self) -> Result<&crate::git_checkpoints::GitCheckpoints, RpcError> {
         self.git_checkpoints.as_ref().ok_or_else(|| {
             RpcError::Failed("Git checkpoints are unavailable in this engine".into())
@@ -5485,6 +5536,15 @@ impl EngineRpc {
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetCwd { cwd } => {
+                // An explicit retarget is the only time a task may adopt a
+                // different checkout. Resolve on the owner before publishing
+                // the cwd and its binding in one projection.
+                let checkout_id = self
+                    .repos
+                    .checkout_identity(std::path::Path::new(&cwd))
+                    .await
+                    .ok()
+                    .map(|identity| identity.id);
                 let owned_task_id = task_id.to_string();
                 let (_, receipt) = self.commit_task_projection_superseding_recovery(
                     command_id,
@@ -5492,6 +5552,9 @@ impl EngineRpc {
                     "Recovery cancelled because the working directory changed.",
                     move |doc| {
                         doc.set_chat_cwd(&owned_task_id, &cwd)?;
+                        if let Some(checkout_id) = checkout_id.as_deref() {
+                            doc.set_chat_checkout(&owned_task_id, checkout_id)?;
+                        }
                         Ok(())
                     },
                 )?;
@@ -9102,19 +9165,35 @@ impl RpcService for EngineRpc {
             }
             methods::GET_GIT_ACTION_PREVIEW => {
                 #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
                 struct P {
                     cwd: String,
+                    chat_id: String,
+                    expected_checkout_id: Option<String>,
                 }
                 let p: P = parse_params(params)?;
+                let recorded = self
+                    .trusted_git_checkout(&p.chat_id, &p.cwd, p.expected_checkout_id.as_deref())
+                    .await?;
                 let preview = self
                     .git_actions
                     .preview(&p.cwd)
                     .await
                     .map_err(RpcError::Failed)?;
+                self.trusted_git_checkout(&p.chat_id, &p.cwd, Some(&recorded))
+                    .await?;
+                if preview.checkout_id != recorded {
+                    return Err(RpcError::Failed(
+                        "Task checkout changed; refresh Git".into(),
+                    ));
+                }
                 RpcReply::value(&preview)
             }
             methods::EXECUTE_GIT_ACTION => {
+                let chat_id = Self::git_request_chat_id(&params)?.to_owned();
                 let request: luna_proto::GitActionRequest = parse_params(params)?;
+                self.trusted_git_checkout(&chat_id, &request.cwd, Some(&request.checkout_id))
+                    .await?;
                 let receipt = self
                     .git_actions
                     .execute(request)
@@ -9123,7 +9202,10 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&receipt)
             }
             methods::GENERATE_GIT_COMMIT_MESSAGE => {
+                let chat_id = Self::git_request_chat_id(&params)?.to_owned();
                 let request: luna_proto::GitMessageRequest = parse_params(params)?;
+                self.trusted_git_checkout(&chat_id, &request.cwd, Some(&request.checkout_id))
+                    .await?;
                 let preferred_harness = request.harness;
                 let diff = self
                     .git_actions
@@ -9143,11 +9225,17 @@ impl RpcService for EngineRpc {
             }
             methods::GET_GITHUB_PR_PREVIEW | methods::GET_GITHUB_PR_DETAILS => {
                 #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
                 struct P {
                     cwd: String,
+                    chat_id: String,
+                    expected_checkout_id: Option<String>,
                     number: Option<u64>,
                 }
                 let p: P = parse_params(params)?;
+                let recorded = self
+                    .trusted_git_checkout(&p.chat_id, &p.cwd, p.expected_checkout_id.as_deref())
+                    .await?;
                 let root = self.change_request_root(&p.cwd).await?;
                 let cwd = root.to_string_lossy();
                 let service = self
@@ -9155,21 +9243,37 @@ impl RpcService for EngineRpc {
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("GitHub PR service is unavailable".into()))?;
                 if method == methods::GET_GITHUB_PR_PREVIEW {
-                    RpcReply::value(&service.preview(&cwd).await.map_err(RpcError::Failed)?)
+                    let preview = service.preview(&cwd).await.map_err(RpcError::Failed)?;
+                    self.trusted_git_checkout(&p.chat_id, &p.cwd, Some(&recorded))
+                        .await?;
+                    if preview.checkout.checkout_id != recorded {
+                        return Err(RpcError::Failed(
+                            "Task checkout changed; refresh Git".into(),
+                        ));
+                    }
+                    RpcReply::value(&preview)
                 } else {
                     let number = p
                         .number
                         .ok_or_else(|| RpcError::Failed("PR number is required".into()))?;
-                    RpcReply::value(
-                        &service
-                            .details(&cwd, number)
-                            .await
-                            .map_err(RpcError::Failed)?,
-                    )
+                    let details = service
+                        .details(&cwd, number)
+                        .await
+                        .map_err(RpcError::Failed)?;
+                    self.trusted_git_checkout(&p.chat_id, &p.cwd, Some(&recorded))
+                        .await?;
+                    RpcReply::value(&details)
                 }
             }
             methods::CREATE_GITHUB_DRAFT_PR => {
+                let chat_id = Self::git_request_chat_id(&params)?.to_owned();
                 let request: luna_proto::GitPrCreateRequest = parse_params(params)?;
+                self.trusted_git_checkout(
+                    &chat_id,
+                    &request.preview.checkout.cwd,
+                    Some(&request.preview.checkout.checkout_id),
+                )
+                .await?;
                 self.change_request_root(&request.preview.checkout.cwd)
                     .await?;
                 let service = self
@@ -9180,7 +9284,12 @@ impl RpcService for EngineRpc {
             }
             methods::GET_GIT_PR_STATUS => {
                 Box::pin(async move {
+                    let chat_id = Self::git_request_chat_id(&params)?.to_owned();
                     let mut request: luna_proto::GitPrStatusRequest = parse_params(params)?;
+                    let original_cwd = request.cwd.clone();
+                    let recorded = self
+                        .trusted_git_checkout(&chat_id, &original_cwd, Some(&request.checkout_id))
+                        .await?;
                     let root = self.change_request_root(&request.cwd).await?;
                     request.cwd = root.to_string_lossy().into_owned();
                     let status = self
@@ -9188,6 +9297,8 @@ impl RpcService for EngineRpc {
                         .pr_status(request)
                         .await
                         .map_err(RpcError::Failed)?;
+                    self.trusted_git_checkout(&chat_id, &original_cwd, Some(&recorded))
+                        .await?;
                     RpcReply::value(&status)
                 })
                 .await

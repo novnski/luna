@@ -33,6 +33,13 @@ impl Changes {
         Some((cwd, target, key))
     }
 
+    pub(super) fn git_chat_id(&self, cx: &App) -> Option<String> {
+        self.state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.id.clone())
+    }
+
     fn live_git_scope(&self, cx: &App) -> Option<GitUiScope> {
         let (_, _, selection) = self.git_context(cx)?;
         let state = self.state.read(cx);
@@ -136,6 +143,9 @@ impl Changes {
         let Some((cwd, target, key)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -147,7 +157,10 @@ impl Changes {
         self.git_pr_status = None;
         self.git_pr_task = None;
         self.git_task = Some(cx.spawn(async move |this, cx| {
-            let mut params = serde_json::json!({ "cwd": cwd });
+            let mut params = serde_json::json!({ "cwd": cwd, "chatId": chat_id });
+            if let Some(checkout_id) = scope.checkout_id.as_deref() {
+                params["expectedCheckoutId"] = checkout_id.into();
+            }
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -408,6 +421,9 @@ impl Changes {
         let Some((cwd, target, key)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -423,6 +439,7 @@ impl Changes {
         self.git_pr_status = None;
         self.git_pr_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).unwrap_or_default();
+            params["chatId"] = chat_id.into();
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -472,6 +489,9 @@ impl Changes {
         let Some((cwd, target, key)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -494,6 +514,7 @@ impl Changes {
         self.git_notice = None;
         cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).unwrap_or_default();
+            params["chatId"] = chat_id.into();
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -567,6 +588,9 @@ impl Changes {
         let Some((cwd, target, _)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -587,6 +611,7 @@ impl Changes {
         self.git_busy = true;
         self.git_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).unwrap_or_default();
+            params["chatId"] = chat_id.into();
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }

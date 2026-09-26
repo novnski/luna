@@ -1153,7 +1153,7 @@ impl RegistryDoc {
             KIND_CHATS,
             chat_id,
             OpKind::Update,
-            fields([("cwd", json!(cwd))]),
+            fields([("cwd", json!(cwd)), ("checkoutId", serde_json::Value::Null)]),
         );
         Ok(true)
     }

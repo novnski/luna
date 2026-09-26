@@ -441,6 +441,9 @@ impl WorkspaceDoc {
             return Ok(false);
         };
         row.insert("cwd", cwd)?;
+        // A checkout binding belongs to the previous cwd. The owner must
+        // resolve the destination before Git actions become available again.
+        row.insert("checkoutId", LoroValue::Null)?;
         self.doc.commit();
         Ok(true)
     }

@@ -144,16 +144,23 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     }
 
     // Control A: an intact nested linked worktree remains usable.
-    let inner_preview = client
-        .call(methods::GET_GIT_ACTION_PREVIEW, json!({ "cwd": inner }))
-        .await
-        .expect("intact linked worktree preview");
-    let inner_id = inner_preview["checkoutId"].as_str().unwrap().to_owned();
-    assert_eq!(inner_preview["cwd"], inner.to_str().unwrap());
-    assert!(has_file(&inner_preview, "inner-only.txt"));
+    let inner_id = core.repos.checkout_identity(&inner).await.unwrap().id;
     core.workspace
         .set_chat_checkout("inner-task", &inner_id)
         .expect("record actual linked checkout identity");
+    let inner_preview = client
+        .call(
+            methods::GET_GIT_ACTION_PREVIEW,
+            json!({
+                "cwd": inner, "chatId": "inner-task",
+                "expectedCheckoutId": inner_id,
+            }),
+        )
+        .await
+        .expect("intact linked worktree preview");
+    assert_eq!(inner_preview["checkoutId"], inner_id);
+    assert_eq!(inner_preview["cwd"], inner.to_str().unwrap());
+    assert!(has_file(&inner_preview, "inner-only.txt"));
     let inner_task = core.workspace.chat("inner-task").unwrap().unwrap();
     assert_eq!(inner_task.cwd.as_deref(), inner.to_str());
     assert_eq!(inner_task.checkout_id.as_deref(), Some(inner_id.as_str()));
@@ -178,20 +185,29 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     assert!(!git(&outer, &["diff", "--cached", "--name-only"]).contains("outside.txt"));
 
     // Control B: a legitimate subdirectory of one checkout remains usable.
-    let outer_preview = client
-        .call(
-            methods::GET_GIT_ACTION_PREVIEW,
-            json!({ "cwd": outer_subdir, "chatId": "outer-task" }),
-        )
+    let outer_id = core
+        .repos
+        .checkout_identity(&outer_subdir)
         .await
-        .expect("ordinary subdirectory preview");
-    let outer_id = outer_preview["checkoutId"].as_str().unwrap().to_owned();
-    assert_ne!(inner_id, outer_id);
-    assert_eq!(outer_preview["cwd"], outer.to_str().unwrap());
-    assert!(has_file(&outer_preview, "subdir/legitimate.txt"));
+        .unwrap()
+        .id;
     core.workspace
         .set_chat_checkout("outer-task", &outer_id)
         .expect("record actual outer checkout identity");
+    let outer_preview = client
+        .call(
+            methods::GET_GIT_ACTION_PREVIEW,
+            json!({
+                "cwd": outer_subdir, "chatId": "outer-task",
+                "expectedCheckoutId": outer_id,
+            }),
+        )
+        .await
+        .expect("ordinary subdirectory preview");
+    assert_eq!(outer_preview["checkoutId"], outer_id);
+    assert_ne!(inner_id, outer_id);
+    assert_eq!(outer_preview["cwd"], outer.to_str().unwrap());
+    assert!(has_file(&outer_preview, "subdir/legitimate.txt"));
     client
         .call(
             methods::EXECUTE_GIT_ACTION,
@@ -210,6 +226,58 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
         "subdir/legitimate.txt"
     );
 
+    // A projectless legacy task in a subdirectory cannot infer provenance
+    // from ancestry alone, but an explicit cwd selection binds it safely.
+    client
+        .call(
+            methods::MUTATE,
+            json!({
+                "op": "createChat", "chatId": "projectless-subdir",
+                "deviceId": core.device_id, "cwd": outer_subdir,
+            }),
+        )
+        .await
+        .expect("create projectless subdirectory task");
+    assert!(
+        client
+            .call(
+                methods::GET_GIT_ACTION_PREVIEW,
+                json!({ "cwd": outer_subdir, "chatId": "projectless-subdir" }),
+            )
+            .await
+            .is_err(),
+        "unbound subdirectory must wait for explicit selection"
+    );
+    client
+        .call(
+            methods::MUTATE,
+            json!({
+                "op": "setChatCwd", "chatId": "projectless-subdir",
+                "cwd": outer_subdir,
+            }),
+        )
+        .await
+        .expect("explicitly rebind projectless subdirectory task");
+    assert_eq!(
+        core.workspace
+            .chat("projectless-subdir")
+            .unwrap()
+            .unwrap()
+            .checkout_id
+            .as_deref(),
+        Some(outer_id.as_str())
+    );
+    assert_eq!(
+        client
+            .call(
+                methods::GET_GIT_ACTION_PREVIEW,
+                json!({ "cwd": outer_subdir, "chatId": "projectless-subdir" }),
+            )
+            .await
+            .expect("bound projectless subdirectory preview")["checkoutId"],
+        outer_id
+    );
+
     // The inner task still points to its original checkout. Moving only its
     // synthetic .git file makes Git itself walk up to the outer repository.
     let held = HeldGitMetadata::move_to(inner.join(".git"), root.join("held-inner-git"));
@@ -217,6 +285,28 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
         git(&inner, &["rev-parse", "--show-toplevel"]),
         outer.to_str().unwrap()
     );
+    client
+        .call(
+            methods::MUTATE,
+            json!({
+                "op": "createChat", "chatId": "unbound-inner-task",
+                "deviceId": core.device_id, "cwd": inner,
+            }),
+        )
+        .await
+        .expect("create unbound projectless task after metadata loss");
+    let unbound_preview = client
+        .call(
+            methods::GET_GIT_ACTION_PREVIEW,
+            json!({ "cwd": inner, "chatId": "unbound-inner-task" }),
+        )
+        .await;
+    let unbound_checkout = core
+        .workspace
+        .chat("unbound-inner-task")
+        .unwrap()
+        .unwrap()
+        .checkout_id;
     let stale_inner_action = client
         .call(
             methods::EXECUTE_GIT_ACTION,
@@ -264,6 +354,7 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     let outer_staged_before_restore = git(&outer, &["diff", "--cached", "--name-only"]);
     eprintln!(
         "ancestry pre-fix observation: unsafe_preview={unsafe_preview:?}, \
+         unbound_preview={unbound_preview:?}, unbound_checkout={unbound_checkout:?}, \
          stale_inner_action={stale_inner_action:?}, \
          newly_selected_action={newly_selected_action:?}, \
          outer_staged={outer_staged_before_restore:?}"
@@ -277,6 +368,14 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     assert!(
         stale_inner_action.is_err(),
         "stale inner token must fail closed"
+    );
+    assert!(
+        unbound_preview.is_err(),
+        "unbound task must not adopt an ancestor"
+    );
+    assert!(
+        unbound_checkout.is_none(),
+        "diff-sync must not stamp the ancestor"
     );
     assert!(
         unsafe_preview.is_err(),

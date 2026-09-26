@@ -183,6 +183,9 @@ impl Changes {
         let Some((cwd, target, _)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -196,7 +199,10 @@ impl Changes {
         self.pr_panel.generation += 1;
         let generation = self.pr_panel.generation;
         self.pr_panel.task = Some(cx.spawn(async move |this, cx| {
-            let mut params = serde_json::json!({"cwd":cwd, "number":number});
+            let mut params = serde_json::json!({"cwd":cwd, "chatId":chat_id, "number":number});
+            if let Some(checkout_id) = context.selected_checkout.as_deref() {
+                params["expectedCheckoutId"] = checkout_id.into();
+            }
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -285,6 +291,9 @@ impl Changes {
         let Some((_, target, _)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -314,6 +323,7 @@ impl Changes {
         // Retiring or closing the UI must neither kill gh nor replay through B.
         cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).expect("PR request serializes");
+            params["chatId"] = chat_id.into();
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
