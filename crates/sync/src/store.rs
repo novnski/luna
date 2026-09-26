@@ -19,9 +19,15 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::write_epoch::{FlushPermit, WriteEpoch, WritePermit};
 
+mod project_commands;
+
 /// Errors surfaced by [`DocsStore`].
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error(
+        "database schema {found} is newer than supported {supported}; open it with a newer Luna version"
+    )]
+    NewerSchema { found: i64, supported: i64 },
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("io: {0}")]
@@ -281,6 +287,18 @@ const MIGRATIONS: &[&str] = &[
         payload_hash TEXT NOT NULL,
         PRIMARY KEY(doc_id,kind,row_id)
      ) STRICT;",
+    // v13 — device-owned saved actions and attempt-fenced terminal receipts.
+    "CREATE TABLE project_command_configs (
+        project_id TEXT NOT NULL, device_id TEXT NOT NULL, config BLOB NOT NULL,
+        PRIMARY KEY(project_id,device_id)
+     ) STRICT;
+     CREATE TABLE project_command_runs (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, device_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL, updated_at INTEGER NOT NULL, receipt BLOB NOT NULL
+     ) STRICT;
+     CREATE INDEX project_command_runs_project ON project_command_runs(project_id,device_id);",
+    // v14 — profile-local side-chat leases, saved history and no-replay sends.
+    include_str!("migrations/side_chats.sql"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -526,6 +544,7 @@ impl DocsStore {
     ) -> Result<Self, StoreError> {
         let database = data_dir.join("docs.sqlite3");
         let mut writer = Connection::open(&database)?;
+        ensure_known_schema(&writer)?;
         writer.pragma_update(None, "journal_mode", "WAL")?;
         writer.pragma_update(None, "synchronous", "NORMAL")?;
         writer.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -2259,6 +2278,25 @@ impl DocsStore {
 
     /// Retire only records keyed to this LUNA task. The command receipt and
     /// identity tombstone remain as durable replay guards.
+    /// Side chat ownership is metadata only. Startup consumers use this
+    /// before opening transcript documents or probing native sessions.
+    pub fn is_side_chat(&self, task_id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='side_chats')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM side_chats WHERE id=?1)",
+            [task_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn retire_task_local_records(
         &self,
         device_id: &str,
@@ -2300,6 +2338,9 @@ impl DocsStore {
             "DELETE FROM chat_outbox_initialized WHERE doc_id=?1",
             params![task_id],
         )?;
+        // Setup state belongs to the checkout generation and remains as a
+        // replay guard until project deletion; ordinary action runs are task-owned.
+        tx.execute("DELETE FROM project_command_runs WHERE device_id=?1 AND json_extract(receipt,'$.chatId')=?2 AND json_extract(receipt,'$.setup')=0", params![device_id, task_id])?;
         tx.commit()?;
         Ok(())
     }
@@ -2568,6 +2609,14 @@ impl DocsStore {
         tx.execute(
             "DELETE FROM activity_events WHERE project_id=?1",
             params![project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM project_command_configs WHERE project_id=?1",
+            [project_id],
+        )?;
+        tx.execute(
+            "DELETE FROM project_command_runs WHERE project_id=?1",
+            [project_id],
         )?;
         tx.commit()?;
         Ok(())
@@ -4236,7 +4285,24 @@ fn activity_matches(
     .any(|value| value.to_lowercase().contains(needle))
 }
 
+fn ensure_known_schema(conn: &Connection) -> Result<(), StoreError> {
+    let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')", [], |row| row.get(0))?;
+    if exists {
+        let found: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(version),0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        let supported = MIGRATIONS.len() as i64;
+        if found > supported {
+            return Err(StoreError::NewerSchema { found, supported });
+        }
+    }
+    Ok(())
+}
+
 fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
+    ensure_known_schema(conn)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
             version    INTEGER PRIMARY KEY,

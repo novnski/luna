@@ -543,6 +543,11 @@ impl TaskIdentityService {
                 tracing::warn!(%error, "startup task materialization recovery remains pending");
             }
             for task_id in this.managed_task_ids() {
+                if this.inner.store.is_side_chat(&task_id).unwrap_or(true)
+                    || this.inner.workspace.is_side_chat(&task_id)
+                {
+                    continue;
+                }
                 if this.has_pending_materialization(&task_id) {
                     continue;
                 }
@@ -1684,6 +1689,10 @@ impl TaskIdentityService {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
+        task_ids.retain(|id| {
+            !self.inner.store.is_side_chat(id).unwrap_or(true)
+                && !self.inner.workspace.is_side_chat(id)
+        });
         task_ids.sort();
         if !self.inner.native_codex_metadata && !task_ids.is_empty() {
             return Err(EngineError::Other(

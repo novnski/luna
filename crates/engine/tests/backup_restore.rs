@@ -247,14 +247,14 @@ fn managed_offline_backup_refuses_unreviewed_future_schema() {
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
     conn.execute(
-        "INSERT INTO schema_migrations(version,applied_at) VALUES (13,1)",
+        "INSERT INTO schema_migrations(version,applied_at) VALUES (15,1)",
         [],
     )
     .unwrap();
     drop(conn);
     let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
     assert!(
-        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 12"))
+        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 14"))
     );
 }
 
@@ -273,7 +273,29 @@ fn managed_offline_backup_refuses_missing_v12_authority_table() {
 }
 
 #[test]
-fn managed_offline_v9_archive_remains_restorable_after_v12_migrations() {
+fn managed_offline_backup_refuses_missing_v13_v14_feature_tables() {
+    for table in [
+        "project_command_configs",
+        "project_command_runs",
+        "side_chats",
+        "side_chat_entries",
+        "side_chat_sends",
+    ] {
+        let (_parent, root, _backups) = fixture();
+        fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
+        let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
+        conn.execute(&format!("DROP TABLE {table}"), []).unwrap();
+        drop(conn);
+        let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
+        assert!(
+            matches!(result, Err(BackupError::Invalid(message)) if message.contains(&format!("missing table {table}"))),
+            "missing {table} was not refused"
+        );
+    }
+}
+
+#[test]
+fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
     let (_parent, root, _backups) = fixture();
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     let db = root.join("profiles/local/docs.sqlite3");
@@ -283,6 +305,11 @@ fn managed_offline_v9_archive_remains_restorable_after_v12_migrations() {
          DROP TABLE task_cleanup_paths;
          DROP TABLE task_cleanup;
          DROP TABLE project_cleanup;
+         DROP TABLE project_command_configs;
+         DROP TABLE project_command_runs;
+         DROP TABLE side_chat_entries;
+         DROP TABLE side_chat_sends;
+         DROP TABLE side_chats;
          DELETE FROM schema_migrations WHERE version > 9;",
     )
     .unwrap();
@@ -306,7 +333,7 @@ fn managed_offline_v9_archive_remains_restorable_after_v12_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 12);
+    assert_eq!(schema, 14);
 }
 
 #[test]
@@ -557,7 +584,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 12);
+    assert_eq!(backup.manifest.databases[0].schema_version, 14);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)
@@ -1019,4 +1046,38 @@ async fn staged_copy_engine_boot_probe_keeps_original_stage_untouched() {
     assert!(boot.is_err());
     assert!(!corrupt_probe.join("credentials").exists());
     service(&root).verify_staged_for_tests(&staged).unwrap();
+}
+
+#[test]
+fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
+    let (_parent, root, backups) = fixture();
+    let profile = root.join("profiles/local/docs.sqlite3");
+    let conn = Connection::open(&profile).unwrap();
+    conn.execute("INSERT INTO side_chats (id,parent_id,title,created_at_ms,expires_at_ms,state,config,cwd,context,context_mode,origin_message_id,anchor_text,creation_hash) VALUES ('synthetic-side','synthetic-parent','Saved side chat',1,7200001,'unloaded','{}','/tmp','','nativeFork','origin-message','selected quote','fixture-hash')", []).unwrap();
+    conn.execute("INSERT INTO side_chat_entries VALUES ('synthetic-side',0,?1)", [r#"{"id":"saved-message","role":"assistant","parts":[{"kind":"text","id":"text","text":"SIDE_BACKUP_SENTINEL"}],"createdAt":2,"deviceId":"synthetic-device","status":"complete"}"#]).unwrap();
+    drop(conn);
+    let backup = service(&root)
+        .export(&backups.join("side-chat.lunabk"))
+        .unwrap();
+    assert_eq!(backup.manifest.databases[0].schema_version, 14);
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    service(&root).verify_staged_for_tests(&staged).unwrap();
+    let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();
+    let row: (String,String,String) = restored.query_row("SELECT parent_id,origin_message_id,anchor_text FROM side_chats WHERE id='synthetic-side'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(
+        row,
+        (
+            "synthetic-parent".into(),
+            "origin-message".into(),
+            "selected quote".into()
+        )
+    );
+    let transcript: String = restored
+        .query_row(
+            "SELECT entry FROM side_chat_entries WHERE chat_id='synthetic-side'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(transcript.contains("SIDE_BACKUP_SENTINEL"));
 }

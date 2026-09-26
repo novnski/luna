@@ -37,7 +37,8 @@ use luna_proto::{
     AgentEvent, ChatConfig, CommandReceiptStatus, CompactMechanism, CompactOperation,
     ContextControlState, ContextOperationStatus, DoneStatus, HarnessId, PermissionAuditEntry,
     PermissionMode, PermissionPolicy, RecoveryAcceptance, RecoveryFailure, RecoveryStatus,
-    RunRequest, Session, SessionStatus, TaskRecovery, UserInputAnswer, UserInputQuestion,
+    RunRequest, SandboxLevel, Session, SessionStatus, TaskRecovery, UserInputAnswer,
+    UserInputQuestion,
 };
 
 use crate::device_write::DeviceWritePermit;
@@ -918,10 +919,12 @@ struct Inner {
     /// for the Changes pane's "Latest turn" scope. Absent in bare tests.
     turn_listener: OnceLock<TurnListener>,
     git_checkpoints: OnceLock<crate::git_checkpoints::GitCheckpoints>,
+    side_chat_lookup: OnceLock<SideChatLookup>,
 }
 
 /// Turn-start hook: called with `(chat_id, cwd)`.
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
+type SideChatLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -965,6 +968,7 @@ impl SessionsEngine {
                 generated_images: OnceLock::new(),
                 turn_listener: OnceLock::new(),
                 git_checkpoints: OnceLock::new(),
+                side_chat_lookup: OnceLock::new(),
             }),
         }
     }
@@ -2637,6 +2641,63 @@ impl SessionsEngine {
     /// - A live steerable run receives the prompt as its next turn via the mailbox
     ///   (luna's persistent-session routing); otherwise any live run is interrupted
     ///   first — never two runtimes driving one chat.
+    pub(crate) fn release_side_chat_runtime(&self, chat_id: &str) -> Result<(), EngineError> {
+        if self.has_live_run(chat_id) {
+            return Err(EngineError::Other(
+                "Side chat runtime has not stopped".into(),
+            ));
+        }
+        lock(&self.inner.last_requests).remove(chat_id);
+        lock(&self.inner.harness_sessions).remove(chat_id);
+        lock(&self.inner.hubs).remove(chat_id);
+        lock(&self.inner.transition_gates).remove(chat_id);
+        if let Some(task) = lock(&self.inner.recovery_tasks).remove(chat_id) {
+            task.abort();
+        }
+        let mut statuses = lock(&self.inner.statuses);
+        statuses.remove(chat_id);
+        let mut rows: Vec<_> = statuses.values().cloned().collect();
+        rows.sort_by(|left, right| left.chat_id.cmp(&right.chat_id));
+        self.inner.sessions_tx.send_replace(rows);
+        Ok(())
+    }
+
+    pub(crate) fn freeze_side_chat_account(
+        &self,
+        config: &mut ChatConfig,
+    ) -> Result<(), EngineError> {
+        if matches!(config.harness, HarnessId::Codex | HarnessId::ClaudeCode) {
+            let accounts = self
+                .inner
+                .agent_accounts
+                .get()
+                .ok_or_else(|| EngineError::Other("Provider accounts unavailable".into()))?;
+            config.provider_account_id = Some(
+                accounts
+                    .resolve_execution(config.harness, config.provider_account_id.as_deref())?
+                    .account_id,
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_side_chat_lookup(&self, lookup: SideChatLookup) {
+        let _ = self.inner.side_chat_lookup.set(lookup);
+    }
+
+    pub(crate) async fn dispatch_side_chat(
+        &self,
+        chat_id: &str,
+        request: RunRequest,
+        message_id: Option<String>,
+    ) -> Result<String, EngineError> {
+        let harness = request
+            .harness
+            .ok_or_else(|| EngineError::Other("Side chat provider missing".into()))?;
+        self.dispatch_with_context(chat_id, harness, request, message_id, None)
+            .await
+    }
+
     pub async fn dispatch(
         &self,
         chat_id: &str,
@@ -2644,6 +2705,16 @@ impl SessionsEngine {
         request: RunRequest,
         message_id: Option<String>,
     ) -> Result<String, EngineError> {
+        if self
+            .inner
+            .side_chat_lookup
+            .get()
+            .is_some_and(|lookup| lookup(chat_id))
+        {
+            return Err(EngineError::Other(
+                "Side chats require an active side-panel lease".into(),
+            ));
+        }
         self.dispatch_with_context(chat_id, harness_id, request, message_id, None)
             .await
     }
@@ -2667,6 +2738,17 @@ impl SessionsEngine {
         mut message_id: Option<String>,
         recovery: Option<RecoveryAttemptContext>,
     ) -> Result<String, EngineError> {
+        if recovery.is_some()
+            && self
+                .inner
+                .side_chat_lookup
+                .get()
+                .is_some_and(|lookup| lookup(chat_id))
+        {
+            return Err(EngineError::Other(
+                "Side chat recovery never replays a send".into(),
+            ));
+        }
         // A run owns one ticket for its entire lifetime, including parked
         // persistent sessions. Acquire before account/chat gates and before
         // accepting a user message or starting a provider.
@@ -2806,7 +2888,35 @@ impl SessionsEngine {
                 format!("{harness_id:?}").to_lowercase()
             )));
         }
+        // Side conversations preserve even a legacy stricter sandbox. The
+        // ordinary resolver intentionally derives sandbox from product mode;
+        // carrying a parent's ReadOnly value through that resolver would
+        // otherwise widen it to WorkspaceWrite. Only adapters with an actual
+        // read-only wire contract can retain that ceiling.
+        let side_sandbox = self
+            .inner
+            .side_chat_lookup
+            .get()
+            .filter(|lookup| lookup(chat_id))
+            .map(|_| request.sandbox);
+        if side_sandbox == Some(SandboxLevel::ReadOnly) {
+            if !matches!(harness_id, HarnessId::Codex | HarnessId::Mock) {
+                return Err(EngineError::Other(
+                    "This provider cannot preserve the parent's read-only sandbox in a side chat"
+                        .into(),
+                ));
+            }
+            request.permission_mode = PermissionMode::Ask;
+        }
         let permission_policy = crate::permissions::resolve_run_policy(harness_id, &mut request);
+        if let Some(sandbox) = side_sandbox {
+            if sandbox == SandboxLevel::ReadOnly
+                || (sandbox == SandboxLevel::WorkspaceWrite
+                    && request.sandbox == SandboxLevel::DangerFullAccess)
+            {
+                request.sandbox = sandbox;
+            }
+        }
         if crate::permissions::hidden_ask_fallback(&permission_policy) {
             return Err(EngineError::Other(
                 "requested permission mode would fall back to hidden Ask; choose an available Approve for me or Full access mode"
@@ -3712,6 +3822,16 @@ impl SessionsEngine {
         provider_session_id: Option<String>,
         attempt: Option<&RecoveryAttemptContext>,
     ) -> Result<Option<TaskRecovery>, EngineError> {
+        // The side-chat admission ledger deliberately has no automatic replay
+        // or recovery continuation. Its transcript retains the actual failure.
+        if self
+            .inner
+            .side_chat_lookup
+            .get()
+            .is_some_and(|lookup| lookup(chat_id))
+        {
+            return Ok(None);
+        }
         let now = now_ms();
         let existing = if let Some(attempt) = attempt {
             let Some(record) = self.inner.recovery.latest(chat_id)? else {
@@ -4313,13 +4433,27 @@ impl SessionsEngine {
     /// and L07 receipt. It never replays the last transcript text blindly.
     pub fn recover_stale(&self) -> Result<usize, EngineError> {
         let permit = self.inner.journal.try_admit()?;
-        let stale = self.inner.journal.stale_sessions()?;
+        let stale = self.inner.journal.stale_sessions_filtered(|id| {
+            !self
+                .inner
+                .side_chat_lookup
+                .get()
+                .is_some_and(|lookup| lookup(id))
+        })?;
         let mut recovered = 0usize;
         let mut reconciled_running = std::collections::HashSet::new();
         // Stop is authoritative even when the process died after the doc
         // command landed but before receipt/recovery finalization. Restore the
         // hold before any stale/terminal sweep can make the chain runnable.
         for record in self.inner.recovery.latest_records()? {
+            if self
+                .inner
+                .side_chat_lookup
+                .get()
+                .is_some_and(|lookup| lookup(&record.view.task_id))
+            {
+                continue;
+            }
             if !record.view.status.active() {
                 continue;
             }
@@ -4334,6 +4468,14 @@ impl SessionsEngine {
             }
         }
         for chat_id in stale {
+            if self
+                .inner
+                .side_chat_lookup
+                .get()
+                .is_some_and(|lookup| lookup(&chat_id))
+            {
+                continue;
+            }
             if lock(&self.inner.runs).contains_key(&chat_id) {
                 continue; // a live run owns this journal
             }
@@ -4469,6 +4611,14 @@ impl SessionsEngine {
         // for the same task must never mask a newer failed Run command.
         if let Some(workspace) = self.inner.workspace() {
             for chat in workspace.read_chats()? {
+                if self
+                    .inner
+                    .side_chat_lookup
+                    .get()
+                    .is_some_and(|lookup| lookup(&chat.id))
+                {
+                    continue;
+                }
                 if chat.device_id != self.inner.device_id
                     || lock(&self.inner.runs).contains_key(&chat.id)
                 {
@@ -4584,6 +4734,14 @@ impl SessionsEngine {
         // Reconcile every remaining Running row as delivery-unknown instead of
         // replaying it or minting a replacement chain/deadline.
         for record in self.inner.recovery.latest_records()? {
+            if self
+                .inner
+                .side_chat_lookup
+                .get()
+                .is_some_and(|lookup| lookup(&record.view.task_id))
+            {
+                continue;
+            }
             if record.view.status != RecoveryStatus::Running
                 || reconciled_running.contains(&record.view.task_id)
             {
@@ -4623,6 +4781,14 @@ impl SessionsEngine {
             )?;
         }
         for record in self.inner.recovery.latest_records()? {
+            if self
+                .inner
+                .side_chat_lookup
+                .get()
+                .is_some_and(|lookup| lookup(&record.view.task_id))
+            {
+                continue;
+            }
             self.inner
                 .publish_recovery(&record.view.task_id, Some(record.view.clone()));
             if record.view.status == RecoveryStatus::Scheduled {

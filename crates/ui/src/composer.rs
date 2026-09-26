@@ -4954,6 +4954,36 @@ impl Composer {
         }
     }
 
+    /// Explicit result handoff only stages the current parent's durable draft.
+    /// It never queues a command, changes attachments, or submits a provider turn.
+    pub(crate) fn insert_side_chat_result(
+        &mut self,
+        parent: &str,
+        result: &str,
+        engine_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.current_key != parent
+            || self.state.read(cx).selected_chat.as_deref() != Some(parent)
+            || self.state.read(cx).engine_generation() != engine_generation
+            || !self.draft_loaded.contains(parent)
+            || self.editing_queued.is_some()
+            || self.pending_draft_owner_stage.is_some()
+            || self.is_sending()
+        {
+            return false;
+        }
+        let existing = self.input.read(cx).text();
+        let text = if existing.trim().is_empty() {
+            result.to_string()
+        } else {
+            format!("{existing}\n\n{result}")
+        };
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        self.focus_pending = true;
+        true
+    }
+
     pub(crate) fn set_input_text_without_draft_edit(
         &mut self,
         text: String,
