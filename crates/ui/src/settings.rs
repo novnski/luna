@@ -2122,6 +2122,7 @@ mod tests {
                 light: "catppuccin-latte".into(),
                 dark: "catppuccin-mocha".into(),
             },
+            diff_color_scheme: DiffColorScheme::default(),
             diff_split: true,
             diff_wrap: true,
             code_fences_fit_content: true,
