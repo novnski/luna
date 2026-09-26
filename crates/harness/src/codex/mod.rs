@@ -318,6 +318,15 @@ impl CodexHarness {
                     params["cursor"] = Value::String(cursor.to_owned());
                 }
                 let page = client.request("model/list", params).await?;
+                if !page.get("data").is_some_and(Value::is_array)
+                    || page
+                        .get("nextCursor")
+                        .is_some_and(|cursor| !cursor.is_null() && !cursor.is_string())
+                {
+                    return Err(HarnessError::Protocol(
+                        "model/list returned an invalid catalog page".into(),
+                    ));
+                }
                 let (page_models, next_cursor) = parse_model_list_page(&page);
                 for (model, is_default) in page_models {
                     if model_ids.insert(model.id.clone()) {
@@ -331,7 +340,9 @@ impl CodexHarness {
                     break;
                 };
                 if !seen_cursors.insert(next.clone()) {
-                    break;
+                    return Err(HarnessError::Protocol(
+                        "model/list returned a repeated pagination cursor".into(),
+                    ));
                 }
                 cursor = Some(next);
             }
@@ -1030,6 +1041,24 @@ async fn start_turn(client: &RpcClient, params: Value) -> Result<String, Harness
     Ok(started["turn"]["id"].as_str().unwrap_or("").to_owned())
 }
 
+/// Awaiting a provider reply must not suspend Stop or consumer teardown.
+/// None is an uncertain outcome: dispatch may already have reached Codex.
+struct SessionLiveness<'a> {
+    interrupt: &'a CancellationToken,
+    events: &'a mpsc::Sender<Result<AgentEvent, HarnessError>>,
+}
+
+impl SessionLiveness<'_> {
+    async fn wait<T>(&self, operation: impl std::future::Future<Output = T>) -> Option<T> {
+        tokio::select! {
+            biased;
+            _ = self.interrupt.cancelled() => None,
+            _ = self.events.closed() => None,
+            result = operation => Some(result),
+        }
+    }
+}
+
 /// The per-run event loop: one task multiplexing app-server messages, the
 /// steering mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
@@ -1051,6 +1080,10 @@ async fn run_session(session: Session) {
         interrupt,
         invoke_luna_tool,
     } = controls;
+    let liveness = SessionLiveness {
+        interrupt: &interrupt,
+        events: &event_tx,
+    };
     let request_input = Arc::new(request_input);
     let runtime_contract = request
         .model_options
@@ -1265,6 +1298,10 @@ async fn run_session(session: Session) {
             shutdown_child(&mut child, kill_grace).await;
             return;
         }
+        _ = event_tx.closed() => {
+            shutdown_child(&mut child, kill_grace).await;
+            return;
+        }
     };
 
     let turn_params = |text: &str| -> Value {
@@ -1314,7 +1351,26 @@ async fn run_session(session: Session) {
 
     let mut router = TurnRouter::default();
     let mut luna_call_ids = LunaCallIds::default();
-    match start_turn(&client, turn_params(&request.prompt)).await {
+    let Some(started) = liveness
+        .wait(start_turn(&client, turn_params(&request.prompt)))
+        .await
+    else {
+        if !event_tx.is_closed() {
+            let _ = send(
+                &event_tx,
+                AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    result: None,
+                    error: None,
+                    session_id: Some(thread_id.clone()),
+                },
+            )
+            .await;
+        }
+        shutdown_child(&mut child, kill_grace).await;
+        return;
+    };
+    match started {
         Ok(id) => {
             router.adopt_started(id.clone());
             if !send(
@@ -1370,6 +1426,7 @@ async fn run_session(session: Session) {
     // A Done has been emitted for the turn currently/last in flight.
     let mut done_current = false;
     let mut done_after_interrupt = false;
+    let mut terminal_error = None;
     let mut escalation: Option<tokio::task::JoinHandle<()>> = None;
 
     'main: loop {
@@ -1644,7 +1701,7 @@ async fn run_session(session: Session) {
                                 &client,
                                 turn_params(&text),
                                 &mut router,
-                                &event_tx,
+                                &liveness,
                                 &mut assistant_message_id,
                                 &mut done_current,
                                 &mut computer_use_turn_cancel,
@@ -1804,7 +1861,18 @@ async fn run_session(session: Session) {
                             "expectedTurnId": expected,
                             "input": [{ "type": "text", "text": text }],
                         });
-                        match client.request_classified("turn/steer", steer_params).await {
+                        let Some(reply) = liveness
+                            .wait(client.request_classified("turn/steer", steer_params))
+                            .await
+                        else {
+                            if let Some(tx) = acceptance.take() {
+                                let _ = tx.send(SteerAcceptance::Unknown(
+                                    "Codex session stopped before the steer reply arrived".into(),
+                                ));
+                            }
+                            break 'main;
+                        };
+                        match reply {
                             Ok(reply) => {
                                 // The response's turn id is the provider's
                                 // acknowledgement that this input joined the
@@ -1844,12 +1912,9 @@ async fn run_session(session: Session) {
                                     }
                                 }
                             }
-                            // A failed `turn/steer` does NOT mean the text is
-                            // bad: most commonly the active turn finished
-                            // between the UI send and this request. Queue it
-                            // for redelivery as the next `turn/start` when the
-                            // expected turn's end arrives (also the safe
-                            // fallback for older Codex without steering).
+                            // Only a correlated rejection authorizes ordinary
+                            // warm input to fall back to the next turn. A lost
+                            // reply may already have delivered the input.
                             Err(failure) => {
                                 if require_active {
                                     if let Some(tx) = acceptance.take() {
@@ -1865,6 +1930,15 @@ async fn run_session(session: Session) {
                                     }
                                     continue 'main;
                                 }
+                                if let RpcRequestFailure::Unknown(message) = failure {
+                                    if let Some(tx) = acceptance.take() {
+                                        let _ = tx.send(SteerAcceptance::Unknown(message.clone()));
+                                    }
+                                    terminal_error = Some(format!(
+                                        "Codex steering delivery is unknown; input was not replayed: {message}"
+                                    ));
+                                    break 'main;
+                                }
                                 tracing::debug!(
                                     target: "luna_harness::codex",
                                     "turn/steer did not settle (queued as next turn): {}",
@@ -1878,7 +1952,7 @@ async fn run_session(session: Session) {
                                     &client,
                                     turn_params(&text),
                                     &mut router,
-                                    &event_tx,
+                                    &liveness,
                                     &mut assistant_message_id,
                                     &mut done_current,
                                     &mut computer_use_turn_cancel,
@@ -1899,7 +1973,7 @@ async fn run_session(session: Session) {
                         &client,
                         turn_params(&text),
                         &mut router,
-                        &event_tx,
+                        &liveness,
                         &mut assistant_message_id,
                         &mut done_current,
                         &mut computer_use_turn_cancel,
@@ -1964,6 +2038,7 @@ async fn run_session(session: Session) {
 
     // Terminal bookkeeping: never end the stream without a Done unless the
     // consumer already hung up.
+    interrupted |= interrupt.is_cancelled();
     computer_use_turn_cancel.cancel();
     if !event_tx.is_closed() {
         for event in computer_use.take_unknown() {
@@ -1990,11 +2065,9 @@ async fn run_session(session: Session) {
                 .send(Ok(AgentEvent::Done {
                     status: DoneStatus::Errored,
                     result: None,
-                    error: Some(crate::crash_message(
-                        "codex app-server",
-                        status,
-                        &stderr_tail,
-                    )),
+                    error: Some(terminal_error.unwrap_or_else(|| {
+                        crate::crash_message("codex app-server", status, &stderr_tail)
+                    })),
                     session_id: Some(thread_id.clone()),
                 }))
                 .await;
@@ -2050,12 +2123,16 @@ async fn steer_as_new_turn(
     client: &RpcClient,
     params: Value,
     router: &mut TurnRouter,
-    event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    liveness: &SessionLiveness<'_>,
     assistant_message_id: &mut String,
     done_current: &mut bool,
     computer_use_turn_cancel: &mut CancellationToken,
 ) -> bool {
-    match start_turn(client, params).await {
+    let Some(started) = liveness.wait(start_turn(client, params)).await else {
+        return false;
+    };
+    let event_tx = liveness.events;
+    match started {
         Ok(id) => {
             router.adopt_started(id.clone());
             if router.active_id() == Some(id.as_str()) {

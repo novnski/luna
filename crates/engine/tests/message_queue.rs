@@ -635,6 +635,226 @@ async fn restart_marks_an_unresolved_claim_unknown_without_replaying_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_queue_edits_preserve_claimed_delivery_evidence_across_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (harness, prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let core = assemble_at(tmp.path(), harness);
+    create_chat(&core).await;
+    let handle = core.doc_host.open(CHAT).unwrap();
+    core.doc_host.pause_all_queues();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let mut protected = Vec::new();
+    for state in ["claimed", "accepted", "unknown"] {
+        let id = core
+            .doc_host
+            .queue_message(CHAT, state, Vec::new())
+            .unwrap();
+        let command = format!("delivery-{state}");
+        assert!(matches!(
+            handle
+                .doc()
+                .claim_queued(&id, 1, &command, QueueClaimMode::SteerNow, 1)
+                .unwrap(),
+            luna_doc::QueueClaimOutcome::Claimed(_)
+        ));
+        if state == "accepted" {
+            handle
+                .doc()
+                .mark_queued_steer_accepted(&id, &command, 2)
+                .unwrap();
+        } else if state == "unknown" {
+            handle
+                .doc()
+                .mark_queued_claim_unknown(&id, &command, 2)
+                .unwrap();
+        }
+        protected.push(core.doc_host.queued_message(CHAT, &id).unwrap().unwrap());
+    }
+    let held = core
+        .doc_host
+        .queue_message(CHAT, "editable", Vec::new())
+        .unwrap();
+    let mut outcomes = Vec::new();
+    for row in &protected {
+        for (method, params) in [
+            (
+                luna_rpc::methods::UPDATE_QUEUED_MESSAGE,
+                serde_json::json!({
+                    "chatId": CHAT, "id": row.id, "text": "late replacement",
+                }),
+            ),
+            (
+                luna_rpc::methods::MOVE_QUEUED_MESSAGE,
+                serde_json::json!({
+                    "chatId": CHAT, "id": row.id, "toIndex": 3,
+                }),
+            ),
+        ] {
+            let response = client.call(method, params).await.unwrap();
+            outcomes.push((row.text.clone(), method, response["changed"].clone()));
+        }
+    }
+    assert!(
+        outcomes.iter().all(|(_, _, changed)| changed == false),
+        "claimed rows accepted late mutations: {outcomes:?}"
+    );
+    assert_eq!(
+        &handle.doc().read_queue().unwrap()[..3],
+        protected.as_slice()
+    );
+    let edited = client
+        .call(
+            luna_rpc::methods::UPDATE_QUEUED_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT, "id": held, "text": "still editable",
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edited["changed"], true);
+    let moved = client
+        .call(
+            luna_rpc::methods::MOVE_QUEUED_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT, "id": held, "toIndex": 0,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved["changed"], true);
+    core.doc_host.flush_all();
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+
+    let (harness, restarted_prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let restarted = assemble_at(tmp.path(), harness);
+    for original in protected {
+        let row = restarted
+            .doc_host
+            .queued_message(CHAT, &original.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.text, original.text);
+        assert_eq!(row.revision, original.revision);
+        assert!(matches!(
+            row.status,
+            QueueMessageStatus::DeliveryUnknown { .. }
+        ));
+    }
+    restarted
+        .doc_host
+        .drain_queue(&restarted.doc_host.open(CHAT).unwrap())
+        .await;
+    assert!(prompts.lock().unwrap().is_empty());
+    assert!(restarted_prompts.lock().unwrap().is_empty());
+    restarted.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restored_queue_claim_cannot_change_an_unrelated_command_receipt() {
+    use luna_proto::{CommandReceipt, CommandReceiptStatus};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (harness, prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let core = assemble_at(tmp.path(), harness);
+    create_chat(&core).await;
+    let handle = core.doc_host.open(CHAT).unwrap();
+    core.doc_host.pause_all_queues();
+    let mut receipts = Vec::new();
+    for (kind, task_id, correlation, intent) in [
+        (
+            "other-task",
+            "unrelated-task",
+            "other-task",
+            "dispatchQueued",
+        ),
+        ("other-message", CHAT, "unrelated-message", "dispatchQueued"),
+        ("other-intent", CHAT, "other-intent", "rename"),
+    ] {
+        core.doc_host
+            .queue_message_with_id_and_execution(
+                CHAT,
+                kind,
+                "uncertain original",
+                vec![],
+                false,
+                luna_proto::FollowUpBehavior::Queue,
+                None,
+            )
+            .unwrap();
+        let command_id = format!("unrelated-{kind}");
+        let receipt = CommandReceipt {
+            command_id: command_id.clone(),
+            task_id: task_id.into(),
+            intent: intent.into(),
+            payload_hash: format!("synthetic-{kind}"),
+            status: CommandReceiptStatus::Pending,
+            snapshot: core
+                .doc_host
+                .task_command_snapshot(task_id)
+                .unwrap()
+                .snapshot,
+            event_sequence: None,
+            actor_id: core.device_id.clone(),
+            client_id: "task-durability-regression".into(),
+            client_session_id: "synthetic".into(),
+            execution_environment: Some(core.device_id.clone()),
+            correlation_id: Some(correlation.into()),
+            reason: None,
+            recovery_action: None,
+            accepted_at_ms: 1,
+            committed_at_ms: None,
+            observed_at_ms: 1,
+        };
+        let begun = core
+            .doc_host
+            .begin_task_command(receipt, None, None, None)
+            .unwrap();
+        receipts.push(begun.receipt);
+        assert!(matches!(
+            handle
+                .doc()
+                .claim_queued(kind, 1, &command_id, QueueClaimMode::NextTurn, 1,)
+                .unwrap(),
+            luna_doc::QueueClaimOutcome::Claimed(_)
+        ));
+    }
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(core);
+    let (harness, restarted_prompts) = HeldHarness::new(SteeringMode::TurnBoundary);
+    let restarted = assemble_at(tmp.path(), harness);
+    let recovered = restarted.doc_host.open(CHAT).unwrap();
+    assert!(
+        recovered
+            .doc()
+            .read_queue()
+            .unwrap()
+            .iter()
+            .all(|row| matches!(row.status, QueueMessageStatus::DeliveryUnknown { .. }))
+    );
+    let readback = receipts
+        .iter()
+        .map(|receipt| {
+            restarted
+                .doc_host
+                .task_command_receipt(&receipt.command_id)
+                .unwrap()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        readback, receipts,
+        "unrelated receipts changed while opening a recovered queue"
+    );
+    restarted.doc_host.drain_queue(&recovered).await;
+    assert!(prompts.lock().unwrap().is_empty());
+    assert!(restarted_prompts.lock().unwrap().is_empty());
+    restarted.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
     let tmp = tempfile::tempdir().unwrap();
     let (harness, prompts) = HeldHarness::new(SteeringMode::TurnBoundary);

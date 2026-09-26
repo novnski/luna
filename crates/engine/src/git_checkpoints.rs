@@ -183,15 +183,12 @@ impl GitCheckpoints {
         let private_index = tempfile::NamedTempFile::new_in(&identity.git_dir)
             .map_err(|_| "Could not create private checkpoint index".to_string())?;
         let private_path = private_index.path().to_path_buf();
-        let head = git_optional(root, &["rev-parse", "--verify", "HEAD"], None).await?;
-        if head.is_some() {
-            git(root, &["read-tree", "HEAD"], Some(&private_path), None).await?;
-        } else {
-            git(root, &["read-tree", "--empty"], Some(&private_path), None).await?;
-        }
+        // Preserve actual tracked membership, including force-added ignored
+        // files absent from HEAD. Only the private index receives worktree bytes.
+        let index_tree = git_text(root, &["write-tree"], None).await?;
+        git(root, &["read-tree", &index_tree], Some(&private_path), None).await?;
         git(root, &["add", "-A", "--", "."], Some(&private_path), None).await?;
         let work_tree = git_text(root, &["write-tree"], Some(&private_path)).await?;
-        let index_tree = git_text(root, &["write-tree"], None).await?;
         let at_ms = crate::now_ms();
         let message =
             format!("LUNA file checkpoint\nindex={index_tree}\nat={at_ms}\noutcome={outcome}");
@@ -756,14 +753,14 @@ impl GitCheckpoints {
         let private_index = tempfile::NamedTempFile::new_in(&identity.git_dir)
             .map_err(|_| "Could not create private checkpoint index".to_string())?;
         let path = private_index.path();
-        if git_optional(&identity.root, &["rev-parse", "--verify", "HEAD"], None)
-            .await?
-            .is_some()
-        {
-            git(&identity.root, &["read-tree", "HEAD"], Some(path), None).await?;
-        } else {
-            git(&identity.root, &["read-tree", "--empty"], Some(path), None).await?;
-        }
+        let index_tree = git_text(&identity.root, &["write-tree"], None).await?;
+        git(
+            &identity.root,
+            &["read-tree", &index_tree],
+            Some(path),
+            None,
+        )
+        .await?;
         git(&identity.root, &["add", "-A", "--", "."], Some(path), None).await?;
         git_text(&identity.root, &["write-tree"], Some(path)).await
     }
