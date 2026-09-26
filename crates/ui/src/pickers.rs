@@ -7687,3 +7687,7 @@ impl Pickers {
         cx.notify();
     }
 }
+
+#[cfg(test)]
+#[path = "pickers_project_defaults_tests.rs"]
+mod project_defaults_tests;
