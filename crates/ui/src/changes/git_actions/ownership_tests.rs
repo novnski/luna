@@ -38,7 +38,11 @@ fn preview(after: bool) -> GitActionPreview {
             "a".repeat(40)
         },
         remote: Some("origin".into()),
-        files: vec![],
+        files: vec![luna_proto::GitFileState {
+            path: "note.rs".into(),
+            staged: true,
+            unstaged: false,
+        }],
         token: if after { "after" } else { "before" }.into(),
     }
 }
@@ -112,7 +116,7 @@ fn run(cx: &mut TestAppContext, name: &str, write: Write, during: During) {
     service.reply(method, Ok(result), true);
     let settled_before = service.settled(method);
     pane.update(cx, |pane, cx| match write {
-        Write::Commit => pane.git_action(GitActionKind::Commit, vec![], cx),
+        Write::Commit => pane.git_action(GitActionKind::Commit, vec!["note.rs".into()], cx),
         Write::Restore => pane.restore_checkpoint(cx),
     });
     rpc::pump_until(cx, &runtime, |_| service.calls(method) == 1);
