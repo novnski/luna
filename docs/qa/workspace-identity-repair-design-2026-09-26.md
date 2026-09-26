@@ -18,6 +18,7 @@ included. The earlier audit branch `codex/audit-workspace-data` stays at
 | First managed Run materializes a new worktree | The UUID task must acquire that root-instance before/with first binding, preserving a sibling task at the project root. This is authorized first-run initialization, not permission to auto-repair legacy/bound mismatches. |
 | Same root, aliases and home shorthand | Canonical aliases and owner-local `~` resolve consistently; identity never depends on the RPC client's working directory. |
 | MoveProject changes UI grouping but not cwd | Preserve origin source-space, root instance, binding ID/generation and W. A supported move to a containing local project is not a relocation; legacy proof must preserve the current grouping. |
+| Historical import preview has a missing cwd | Return readable EnvironmentMissing/non-adoptable metadata with a display-only unresolved reference, never a canonical v2 claim or persisted identity. A valid-root control and existing stored history remain unchanged; permission, file and dangling-alias failures stay distinct. |
 | Genuine root/provider-store/native-ID change | Existing resume/fork fences reject mismatches before provider execution. |
 | Polluted v1 workspace row | Repair must use task-specific historical evidence, never the last shared row as proof for every task. |
 | Missing/conflicting evidence, missing root, foreign active provider | Keep an explicit unresolved/fenced state; do not relabel it `current` or start a provider. |

@@ -167,6 +167,138 @@ fn evidence(case: &str, value: Value) -> PathBuf {
 #[path = "support/workspace_identity_repair_contract.rs"]
 mod repair_contract;
 
+fn synthetic_observation(cwd: &Path) -> luna_proto::ProviderTaskObservation {
+    luna_proto::ProviderTaskObservation {
+        provider_task_id: "synthetic-historical-thread".into(),
+        name: Some("Historical fixture".into()),
+        cwd: cwd.to_string_lossy().into_owned(),
+        status: "notLoaded".into(),
+        archived: Some(true),
+        updated_at: Some(1),
+        cli_version: Some("synthetic".into()),
+        project_id: None,
+        ephemeral: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_import_preview_is_display_only_and_preserves_stored_history() {
+    let fixture = Fixture::new();
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let task = uuid::Uuid::new_v4().to_string();
+    create(&client, &task, &core.device_id, None, &fixture.root_a).await;
+    let doc = luna_doc::SessionDoc::init(&task).unwrap();
+    doc.push_message(&luna_doc::SessionMessageEntry {
+        id: "stored-user-message".into(),
+        role: luna_doc::MessageRole::User,
+        parts: vec![luna_proto::MessagePart::Text {
+            id: "stored-part".into(),
+            text: "Preserved synthetic history".into(),
+        }],
+        created_at: 1,
+        device_id: core.device_id.clone(),
+        status: Some(luna_doc::MessageStatus::Complete),
+        continuation_of: None,
+    })
+    .unwrap();
+    let history = doc.export_snapshot().unwrap();
+    core.store.save_snapshot(&task, &history).unwrap();
+    let before_identity = identity(&client, &task).await;
+    let before_log = core
+        .store
+        .load_snapshot("luna-task-identity-events-v1")
+        .unwrap();
+    let missing = fixture.root_b.join("deleted-history-root");
+    let preview = core
+        .task_identity
+        .preview_import_observation_for_tests(
+            synthetic_observation(&missing),
+            luna_proto::ImportOwnership::ProviderOwned,
+            None,
+            None,
+        )
+        .unwrap();
+    let refused = core
+        .task_identity
+        .adopt_preview(&preview.preview_id, None)
+        .await;
+    assert!(refused.is_err(), "missing-root preview must not be adopted");
+    let valid = core
+        .task_identity
+        .preview_import_observation_for_tests(
+            synthetic_observation(&fixture.root_b),
+            luna_proto::ImportOwnership::ProviderOwned,
+            None,
+            None,
+        )
+        .unwrap();
+    let after_identity = identity(&client, &task).await;
+    let after_log = core
+        .store
+        .load_snapshot("luna-task-identity-events-v1")
+        .unwrap();
+    let after_history = core.store.load_snapshot(&task).unwrap();
+    evidence(
+        "historical-import-preview",
+        json!({"missing":preview,"valid":valid,
+        "adoptionError":refused.err().map(|error|error.to_string()),
+        "beforeIdentity":before_identity,"afterIdentity":after_identity,
+        "identityLogUnchanged":before_log==after_log,"historyUnchanged":after_history.as_ref()==Some(&history)}),
+    );
+    close(core, client).await;
+    assert_eq!(
+        preview.reconciliation_state,
+        luna_proto::ReconciliationState::EnvironmentMissing
+    );
+    assert!(!preview.adoptable);
+    assert!(
+        preview
+            .workspace
+            .workspace_id
+            .starts_with("unresolved:missing:")
+    );
+    assert_eq!(preview.workspace.current_path, missing.to_string_lossy());
+    assert_eq!(
+        preview.provider_task.name.as_deref(),
+        Some("Historical fixture")
+    );
+    assert!(valid.adoptable);
+    assert!(valid.workspace.workspace_id.starts_with("workspace:v2:"));
+    assert_eq!(after_identity, before_identity);
+    assert_eq!(after_log, before_log);
+    assert_eq!(after_history, Some(history));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn import_preview_does_not_mislabel_file_or_dangling_alias_as_missing_root() {
+    let fixture = Fixture::new();
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let file = fixture.root_a.join("ordinary-file");
+    std::fs::write(&file, b"fixture").unwrap();
+    let alias = fixture.root_a.join("dangling-alias");
+    std::os::unix::fs::symlink(fixture.root_b.join("absent"), &alias).unwrap();
+    for path in [&file, &alias] {
+        let result = core.task_identity.preview_import_observation_for_tests(
+            synthetic_observation(path),
+            luna_proto::ImportOwnership::ProviderOwned,
+            None,
+            None,
+        );
+        evidence(
+            "historical-import-root-refusal",
+            json!({"path":path,"error":result.as_ref().err().map(ToString::to_string)}),
+        );
+        assert!(
+            result.is_err(),
+            "non-directory or ambiguous alias must not be called EnvironmentMissing"
+        );
+    }
+    close(core, client).await;
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn canonical_aliases_share_only_the_same_environment_and_source_scope() {
