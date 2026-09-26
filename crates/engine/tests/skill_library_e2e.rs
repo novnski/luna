@@ -223,7 +223,8 @@ fn competing_installs_never_replace_a_winner() {
     assert_eq!(
         attempts
             .into_iter()
-            .filter(|attempt| attempt.join().unwrap())
+            .map(|attempt| attempt.join().unwrap())
+            .filter(|succeeded| *succeeded)
             .count(),
         1
     );
