@@ -8,7 +8,10 @@ use crate::{
 use gpui::{AppContext, TestAppContext};
 use luna_proto::{Chat, ProjectCommandStatus};
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use tokio::runtime::Runtime;
 
 const CHAT: &str = "epoch-shared-chat";
@@ -379,5 +382,245 @@ fn commands_engine_epoch_same_engine_control_remains_usable(cx: &mut TestAppCont
         a.calls(methods::PROJECT_COMMAND_STATUS),
         calls,
         "dropped entity kept polling"
+    );
+}
+
+// Outbound-admission reproduction: actual painted callbacks and mouse dispatch,
+// not a direct invocation of execute() with a synthetic origin predicate.
+struct ButtonSurface {
+    commands: Entity<ProjectCommandPanel>,
+    renders: Arc<AtomicUsize>,
+}
+impl Render for ButtonSurface {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.renders.fetch_add(1, Ordering::SeqCst);
+        div().size_full().child(self.commands.clone())
+    }
+}
+fn button_window(
+    cx: &mut TestAppContext,
+    scene: &Scene,
+    selector: &'static str,
+) -> (
+    gpui::WindowHandle<ButtonSurface>,
+    gpui::Point<gpui::Pixels>,
+    Arc<AtomicUsize>,
+) {
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+    });
+    let commands = scene.commands(cx);
+    let renders = Arc::new(AtomicUsize::new(0));
+    let view_renders = renders.clone();
+    let window = cx.open_window(gpui::size(px(680.0), px(420.0)), move |_, _| {
+        ButtonSurface {
+            commands,
+            renders: view_renders,
+        }
+    });
+    window
+        .update(cx, |_, window, cx| window.draw(cx).clear())
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let bounds = visual
+        .debug_bounds(selector)
+        .expect("the actual enabled command button was painted");
+    (window, bounds.center(), renders)
+}
+fn mouse_click_old_frame(
+    cx: &mut TestAppContext,
+    window: gpui::WindowHandle<ButtonSurface>,
+    point: gpui::Point<gpui::Pixels>,
+) {
+    // Deliberately no scheduler/frame drain between replacement and input: this
+    // is the real mouse path's last-rendered-frame admission boundary.
+    window
+        .update(cx, |_, window, cx| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    position: point,
+                    button: gpui::MouseButton::Left,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                    position: point,
+                    button: gpui::MouseButton::Left,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+}
+fn stale_button_admission(cx: &mut TestAppContext, method: &'static str) {
+    let runtime = runtime(cx);
+    let _entered = runtime.enter();
+    let a = HeldRpc::new("A", "same-device");
+    let b = HeldRpc::new("B", "same-device");
+    let mut snapshot = status("A");
+    let selector = if method == methods::RUN_PROJECT_COMMAND {
+        "qa-command-run-build"
+    } else {
+        let mut receipt = run("A", "same-device");
+        if method == methods::RETRY_PROJECT_COMMAND {
+            receipt["status"] = json!("failed");
+        }
+        snapshot["runs"] = json!([receipt]);
+        "qa-command-control-A-run"
+    };
+    a.reply(methods::PROJECT_COMMAND_STATUS, Ok(snapshot), false);
+    b.reply(methods::PROJECT_COMMAND_STATUS, Ok(status("B")), true);
+    b.reply(method, Ok(run("B", "same-device")), true);
+    let scene = Scene::new(cx, &runtime, a.clone(), "same-device");
+    scene.open(cx);
+    fixture::pump_until(cx, &runtime, |cx| {
+        scene.view(cx)["snapshot"]["cwd"] == "/A/checkout"
+    });
+    let (window, point, renders) = button_window(cx, &scene, selector);
+    let painted_render = renders.load(Ordering::SeqCst);
+    let painted = scene.view(cx);
+    scene.replace(cx, &runtime, b.clone(), "same-device");
+    let before_click = scene.view(cx);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let old_bounds_retained = visual.debug_bounds(selector).is_some();
+    let before_input_render = renders.load(Ordering::SeqCst);
+    mouse_click_old_frame(cx, window, point);
+    let after_input_render = renders.load(Ordering::SeqCst);
+    fixture::drain(cx, &runtime);
+    let dispatched = b.calls(method);
+    fixture::write_trace(
+        &format!("commands-button-stale-{method}"),
+        &json!({
+            "painted":painted,"beforeClick":before_click,"afterClick":scene.view(cx),
+            "oldBoundsRetained":old_bounds_retained,"dispatchedToB":dispatched,"oldRpc":a.trace(),"newRpc":b.trace(),
+            "paintedRender":painted_render,"beforeInputRender":before_input_render,"afterInputRender":after_input_render,
+            "mousePath":"Window::dispatch_event(MouseDown/MouseUp)","buttonCenter":format!("{point:?}"),
+        }),
+    );
+    b.release(method);
+    b.release(methods::PROJECT_COMMAND_STATUS);
+    assert!(
+        old_bounds_retained,
+        "fixture must deliver input to the retained painted frame"
+    );
+    assert_eq!(
+        painted_render, before_input_render,
+        "fixture unexpectedly redrew before stale input"
+    );
+    assert_eq!(
+        painted_render, after_input_render,
+        "mouse dispatch unexpectedly repainted the callback frame"
+    );
+    assert_ne!(
+        painted["scope"]["generation"],
+        before_click["scope"]["generation"]
+    );
+    assert_eq!(
+        dispatched, 0,
+        "an old rendered {method} callback was rebound to engine B"
+    );
+}
+#[gpui::test]
+fn commands_button_admission_stale_run(cx: &mut TestAppContext) {
+    stale_button_admission(cx, methods::RUN_PROJECT_COMMAND);
+}
+#[gpui::test]
+fn commands_button_admission_stale_retry(cx: &mut TestAppContext) {
+    stale_button_admission(cx, methods::RETRY_PROJECT_COMMAND);
+}
+#[gpui::test]
+fn commands_button_admission_stale_stop(cx: &mut TestAppContext) {
+    stale_button_admission(cx, methods::STOP_PROJECT_COMMAND);
+}
+
+#[gpui::test]
+fn commands_button_admission_live_busy_rejects_old_enabled_callback(cx: &mut TestAppContext) {
+    let runtime = runtime(cx);
+    let _entered = runtime.enter();
+    let a = HeldRpc::new("A", "device-a");
+    a.reply(methods::PROJECT_COMMAND_STATUS, Ok(status("A")), false);
+    a.reply(methods::RUN_PROJECT_COMMAND, Ok(run("A", "device-a")), true);
+    let scene = Scene::new(cx, &runtime, a.clone(), "device-a");
+    scene.open(cx);
+    fixture::pump_until(cx, &runtime, |cx| {
+        scene.view(cx)["snapshot"]["cwd"] == "/A/checkout"
+    });
+    let (window, point, renders) = button_window(cx, &scene, "qa-command-run-build");
+    let painted_render = renders.load(Ordering::SeqCst);
+    scene.commands(cx).update(cx, |view, cx| {
+        view.execute(
+            methods::RUN_PROJECT_COMMAND,
+            "already-starting".into(),
+            String::new(),
+            cx,
+        )
+    });
+    let before_click = scene.view(cx);
+    mouse_click_old_frame(cx, window, point);
+    let input_render = renders.load(Ordering::SeqCst);
+    fixture::drain(cx, &runtime);
+    let trace = a.trace();
+    let build_requests = trace
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "request"
+                && entry["method"] == methods::RUN_PROJECT_COMMAND
+                && entry["params"]["actionId"] == "build"
+        })
+        .count();
+    fixture::write_trace(
+        "commands-button-live-busy",
+        &json!({"beforeClick":before_click,"afterClick":scene.view(cx),"buildRequests":build_requests,"rpc":trace,"paintedRender":painted_render,"inputRender":input_render,"mousePath":"Window::dispatch_event(MouseDown/MouseUp)"}),
+    );
+    a.release(methods::RUN_PROJECT_COMMAND);
+    assert_eq!(
+        painted_render, input_render,
+        "busy input must use the enabled painted frame"
+    );
+    assert_eq!(
+        before_click["busy"], true,
+        "busy must come from the actual first execution path"
+    );
+    assert_eq!(
+        build_requests, 0,
+        "old enabled button dispatched a second action while live busy"
+    );
+}
+
+#[gpui::test]
+fn commands_button_admission_fresh_same_engine_control(cx: &mut TestAppContext) {
+    let runtime = runtime(cx);
+    let _entered = runtime.enter();
+    let a = HeldRpc::new("A", "device-a");
+    a.reply(methods::PROJECT_COMMAND_STATUS, Ok(status("A")), false);
+    a.reply(methods::RUN_PROJECT_COMMAND, Ok(run("A", "device-a")), true);
+    let scene = Scene::new(cx, &runtime, a.clone(), "device-a");
+    scene.open(cx);
+    fixture::pump_until(cx, &runtime, |cx| {
+        scene.view(cx)["snapshot"]["cwd"] == "/A/checkout"
+    });
+    let (window, point, renders) = button_window(cx, &scene, "qa-command-run-build");
+    let painted_render = renders.load(Ordering::SeqCst);
+    let before_click = scene.view(cx);
+    mouse_click_old_frame(cx, window, point);
+    let input_render = renders.load(Ordering::SeqCst);
+    fixture::pump_until(cx, &runtime, |_| a.calls(methods::RUN_PROJECT_COMMAND) == 1);
+    fixture::write_trace(
+        "commands-button-fresh-control",
+        &json!({"beforeClick":before_click,"afterClick":scene.view(cx),"rpc":a.trace(),"paintedRender":painted_render,"inputRender":input_render,"mousePath":"Window::dispatch_event(MouseDown/MouseUp)"}),
+    );
+    a.release(methods::RUN_PROJECT_COMMAND);
+    assert_eq!(before_click["busy"], false);
+    assert_eq!(
+        a.calls(methods::RUN_PROJECT_COMMAND),
+        1,
+        "fresh eligible rendered button must dispatch exactly once"
     );
 }
