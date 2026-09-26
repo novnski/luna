@@ -1250,7 +1250,10 @@ impl DocHost {
                 replacement_workspace_repair_revision: self
                     .inner
                     .store
-                    .command_workspace_repair_revision(command_id)?,
+                    .command_workspace_repair_revision(command_id)
+                    .map_err(|error| {
+                        crate::workspace_host::TaskProjectionError::Commit(error.into())
+                    })?,
             });
         }
         let mut snapshots = vec![(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
@@ -7006,7 +7009,7 @@ impl DocHost {
                                     fresh.as_ref().map(|worktree| worktree.branch.as_str()),
                                 )
                                 .await
-                                .map_err(|error| EngineError::Other(error.message()))?;
+                                .map_err(|error| EngineError::Other(error.message().to_string()))?;
                             managed_materialization = true;
                         }
                         request.cwd = cwd;
