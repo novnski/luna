@@ -651,3 +651,6 @@ fn commands_button_admission_fresh_same_engine_control(cx: &mut TestAppContext) 
         "fresh eligible rendered button must dispatch exactly once"
     );
 }
+
+#[path = "project_commands_same_chat_tests.rs"]
+mod same_chat_context_tests;
