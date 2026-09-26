@@ -96,3 +96,33 @@ check, explicit draft choices, and backend CAS behavior. Capture immutable
 baseline/fixed source, exact commands, exits, case counts and JSON separately.
 No new Cargo, native interaction, main/schema integration or broadened test
 scope is authorized by this plan.
+
+
+## Source-only reproduction checkpoint
+
+The six Defaults cases are authored in
+`crates/ui/src/settings/project_defaults_button_admission_tests.rs`, with a
+cfg(test) module inclusion and one test-gated New worktree debug selector.
+No Defaults runtime admission guard has been added. Commands owner agreed that
+a tiny page-specific root/paint wrapper and the two raw mouse dispatch calls
+are preferable to changing its validated fixture. Existing HeldRpc, attachment,
+pump and trace helpers are reused unchanged.
+
+The mouse cases measure actual page scope and render counts around input inside
+one raw Window/App update. Engine changes use the real attach path; project
+selection uses the production page selector path. A legitimate device change
+may reset the prior draft, so the deliberate current draft is hydrated after
+transition effects settle but before any held save acknowledges. Wrong-target
+dispatch is asserted independently; the current draft must remain unchanged
+across the held completion.
+
+The keyboard control uses a real mouse activation to focus New worktree,
+settles that setup save, applies a same-project metadata projection via
+`apply_spaces`, then uses actual previous-tab-stop focus navigation and Enter
+KeyDown/KeyUp to select Current checkout. Its measured keyboard activation must
+add exactly one request with the latest expected-default snapshot. Keyboard
+redraw behavior is recorded rather than requiring a stale-mouse premise.
+Fresh and busy controls also inspect request targets/CAS fields and the draft.
+
+Direct rustfmt and diff checks passed. No Cargo, fixture execution, test pass or
+behavioral Defaults admission failure is claimed at this source checkpoint.

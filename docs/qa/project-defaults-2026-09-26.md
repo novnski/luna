@@ -345,3 +345,26 @@ The default 25 GiB reservation was used; aggregate was 140.623 → 140.857 GiB.
 Cargo was explicitly released. Commands owns the admission fix; Defaults may now
 write its separately specified six-case suite using this validated boundary,
 before any Defaults admission guard. No native interaction occurred.
+
+
+### Commands admission fix and retained regressions pass
+
+The Commands-owned 13-line runtime admission correction `a679a411` was reviewed
+and adopted in exact clean `59fbe099569b3e5d3ed371cbe8b072bac2e62228`. Rendered
+Run/Retry/Stop callbacks capture origin scope; execution also rejects live busy
+re-entry without replacing its existing waiter. Output/result fences, PTYs,
+poll cadence, layout and theme are unchanged.
+
+The granted affected batch passed **19/19** engine-epoch/admission cases (prior
+14 plus five rendered-button cases), **3/3** original picker cases, full format,
+focused `luna-ui --lib` check and Clippy. Wall times were 49s, 7s, 6s, 21s and 26s;
+all exits were 0. Fixed traces show zero B dispatches for stale Run/Retry/Stop
+and zero target build requests while busy, with unchanged delivery frame counts
+and a passing fresh control.
+
+Evidence: `target/qa/project-defaults/commands-admission-fixed-1`, including
+source/commands/exits/logs, frame/RPC JSON, `admission-summary.json` and actual
+budget. Default reservation was 25 GiB. Cargo was explicitly released; no new
+Defaults admission cases, backend repeats, native package or source edits ran
+during this batch. Defaults' separate six-case admission reproduction is now
+source-only and awaits its own grant; these 22 passes do not claim that coverage.

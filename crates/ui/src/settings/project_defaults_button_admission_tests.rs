@@ -393,12 +393,10 @@ fn defaults_button_admission_same_project_watch_keyboard(cx: &mut TestAppContext
     fixture::pump_until(cx, &runtime, |_| scene.a.calls(methods::MUTATE) == 1);
     settle(cx, &runtime, &scene, None);
     scene.state.update(cx, |state, cx| {
-        state
-            .spaces
-            .iter_mut()
-            .find(|space| space.id == A)
-            .unwrap()
-            .name = Some("Renamed in the same scope".into());
+        let mut spaces = state.spaces.clone();
+        spaces.iter_mut().find(|space| space.id == A).unwrap().name =
+            Some("Renamed in the same scope".into());
+        state.apply_spaces(spaces);
         cx.notify();
     });
     fixture::drain(cx, &runtime);
