@@ -82,6 +82,20 @@ struct SkillLocation {
 }
 
 impl SkillRoots {
+    fn selected_project_root(&self) -> Result<&PathBuf, EngineError> {
+        let root = self.project_root.as_ref().ok_or_else(no_project_root)?;
+        if !root.is_absolute()
+            || !root.is_dir()
+            || std::fs::symlink_metadata(root)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(EngineError::Other(
+                "Selected project folder is unavailable or symlinked".into(),
+            ));
+        }
+        Ok(root)
+    }
+
     fn location(
         &self,
         provider: HarnessId,
@@ -97,7 +111,7 @@ impl SkillRoots {
                 "codex-home-skill",
             ),
             (HarnessId::Codex, IntegrationSkillScope::Project) => (
-                self.project_root.as_ref().ok_or_else(no_project_root)?,
+                self.selected_project_root()?,
                 ".agents/skills",
                 "project / .agents/skills",
                 "project-agents-skill",
@@ -109,7 +123,7 @@ impl SkillRoots {
                 "claude-home-skill",
             ),
             (HarnessId::ClaudeCode, IntegrationSkillScope::Project) => (
-                self.project_root.as_ref().ok_or_else(no_project_root)?,
+                self.selected_project_root()?,
                 ".claude/skills",
                 "project / .claude/skills",
                 "project-claude-skill",
@@ -121,13 +135,18 @@ impl SkillRoots {
                 "opencode-home-skill",
             ),
             (HarnessId::Opencode, IntegrationSkillScope::Project) => (
-                self.project_root.as_ref().ok_or_else(no_project_root)?,
+                self.selected_project_root()?,
                 ".opencode/skills",
                 "project / .opencode/skills",
                 "project-opencode-skill",
             ),
             _ => return Err(EngineError::Other("Unsupported skill provider".into())),
         };
+        if !base.is_absolute() {
+            return Err(EngineError::Other(
+                "Provider skill home is not an absolute path".into(),
+            ));
+        }
         let identity_root = base.join(suffix);
         // A global provider config may deliberately link its skills folder to
         // a shared user-owned library. Resolve that selected root once, then

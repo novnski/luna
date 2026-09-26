@@ -10,6 +10,7 @@ use luna_engine::integration_settings::{
 use luna_proto::{HarnessId, IntegrationKind, IntegrationSkillScope};
 
 fn roots(base: &Path) -> SkillRoots {
+    std::fs::create_dir_all(base.join("project")).unwrap();
     SkillRoots {
         codex_home: Some(base.join("codex")),
         claude_home: base.join("claude"),
@@ -153,6 +154,22 @@ fn file_backed_provider_skill_lifecycle() {
         )
         .is_err()
     );
+    let missing_project = SkillRoots {
+        project_root: Some(temp.path().join("missing-project")),
+        ..roots(temp.path())
+    };
+    assert!(
+        save_skill_document(
+            HarnessId::ClaudeCode,
+            &missing_project,
+            IntegrationSkillScope::Project,
+            "must-not-create-project",
+            &content("must-not-create-project"),
+            None,
+        )
+        .is_err()
+    );
+    assert!(!temp.path().join("missing-project").exists());
 }
 
 #[cfg(unix)]
