@@ -18,6 +18,8 @@ included. The earlier audit branch `codex/audit-workspace-data` stays at
 | Polluted v1 workspace row | Repair must use task-specific historical evidence, never the last shared row as proof for every task. |
 | Missing/conflicting evidence, missing root, foreign active provider | Keep an explicit unresolved/fenced state; do not relabel it `current` or start a provider. |
 | Migration interrupted or replayed | Publish the repair atomically and once; no partial task/binding remap, duplicated receipt, lost event or invisible generation change. |
+| Optimistic authorization survives a mapping correction | Repair must advance taskRevision exactly once and invalidate pre-repair execution authority, even with unchanged provider binding ID/generation. |
+| Unresolved sibling blocks independent work | A blocked bound task must not prevent an independently verified unbound task from being repaired. |
 | Tombstones, imports, forks and binding history | Preserve IDs, origin/provenance, lineage, ownership, receipts and retired generations. Imports stay read-only unless explicitly adopted. |
 | Old reader / rollback / restored backup | Older code must refuse an upgraded identity log instead of silently reopening v1 as writable state. Restore/rebuild must preserve v2 repairs. |
 
@@ -104,20 +106,21 @@ provenance, lineage, origin and receipts. No provider state changed, so this is 
 an invisible new execution generation. Historical bindings are assessed separately;
 never point every retired generation at the current task root.
 
-Apply the approved plan under the device write lease and identity lock; recheck
-the expected source log/evidence before one durable snapshot transaction, then
-publish the projection. Idempotent replay recognizes the migration ID. Old receipt
+Apply the approved plan through the existing task-command transaction under the
+task lane, device write lease and identity lock. Recheck task-specific history and
+evidence, atomically advance taskRevision, persist the execution-authorization
+boundary and corrected identity snapshot, then publish the projection. Do not
+invalidate an independent task's plan merely because the global log gained an
+unrelated event. Idempotent replay recognizes the migration ID. Old receipt
 payloads/snapshots are historical facts and are not rewritten. The failed sidebar
 request remains failed; a later user action uses a new request ID after resolution.
 
-**Review decision before runtime code:** approve an explicit v2 association
-correction under the same binding ID/generation, visible in the audit event and
-identity view. If binding immutability instead forbids that projection correction,
-the alternative is a separately reviewed explicit rebind with a visible generation
-advance; it must not happen silently during startup. Also confirm the proposed
-refusal of ambiguous relative cwd for new managed registrations, rather than
-resolving it against the engine process directory. These choices affect existing
-API compatibility; this source-only commit implements neither.
+The coordinator accepted explicit, proof-based association-only correction with
+unchanged provider binding ID/generation, provided taskRevision and execution
+authorization advance. The concrete API, queued-work invariant, caller audit and
+additional failure-first contracts are in
+[the migration contract](workspace-identity-repair-contract-2026-09-26.md).
+Relative-path refusal remains a proposed compatibility change, not a runtime patch.
 
 ## Failure-first regression source and focused command
 
@@ -128,10 +131,11 @@ with Claude keychain fallback disabled. It queues no run and reads no credential
 The reused-worktree case prepares actual local Git worktrees when execution is
 later authorized. No fixture or subprocess has run in this phase.
 
-Three independent tests record RPC identities, expected paths, chat rows and
+Three allocation tests record RPC identities, expected paths, chat rows and
 creation receipts to JSON before their expected failing assertions. The restart
 case shuts down/reopens the same profile and verifies saved receipts as well.
-They intentionally cover allocation/replay, not a not-yet-designed migration API.
+Additional migration contract tests are source-only and use proposed RPC strings;
+they are distinguished from the allocation repros in the migration contract.
 
 After a separate build grant, run from this checkout with a unique report directory:
 
