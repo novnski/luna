@@ -97,7 +97,36 @@ pub(super) fn delete(rpc: &EngineRpc, id: &str) -> Result<bool, RpcError> {
     if uuid::Uuid::parse_str(id).is_err() {
         return Err(RpcError::BadParams("invalid saved prompt id".into()));
     }
-    rpc.store
+    let paths = rpc
+        .store
+        .list_prompt_stash(&rpc.engine_info.device_id)
+        .map_err(|error| RpcError::Failed(error.to_string()))?
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| {
+            entry
+                .saved_blob_paths()
+                .map(str::to_string)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let deleted = rpc
+        .store
         .delete_prompt_stash(&rpc.engine_info.device_id, id)
-        .map_err(|error| RpcError::Failed(error.to_string()))
+        .map_err(|error| RpcError::Failed(error.to_string()))?;
+    if deleted {
+        for path in paths {
+            let regular = std::fs::symlink_metadata(&path)
+                .is_ok_and(|metadata| metadata.file_type().is_file());
+            if regular && rpc.uploads.owned_blob_path(&path).is_some() {
+                // The store takes an immediate writer reservation from owner
+                // check through unlink. Another draft/stash can still adopt
+                // this path before the check and keep it protected.
+                if let Err(error) = rpc.store.remove_unowned_attachment(&path) {
+                    tracing::warn!(%path, %error, "prompt stash blob cleanup deferred");
+                }
+            }
+        }
+    }
+    Ok(deleted)
 }

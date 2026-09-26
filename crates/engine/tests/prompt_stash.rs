@@ -125,6 +125,14 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
             .await
             .is_err()
     );
+    let source: ComposerDraftRead = client
+        .call_as(
+            methods::GET_COMPOSER_DRAFT,
+            serde_json::json!({"taskId":"source-task"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(source.draft.unwrap().text, "keep this image");
     client
         .call(
             methods::SAVE_COMPOSER_DRAFT,
@@ -249,6 +257,41 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
         )
         .await
         .unwrap();
+
+    client
+        .call(
+            methods::UPLOAD_CHUNK,
+            serde_json::json!({"uploadId":"last-owner-fixture", "data":BASE64.encode(&bytes), "seq":0}),
+        )
+        .await
+        .unwrap();
+    let lone_upload = client
+        .call(
+            methods::UPLOAD_COMMIT,
+            serde_json::json!({"uploadId":"last-owner-fixture", "fileName":"lone.png"}),
+        )
+        .await
+        .unwrap();
+    let lone_path = lone_upload["path"].as_str().unwrap().to_string();
+    let mut lone = entry.clone();
+    lone.id = uuid::Uuid::new_v4().to_string();
+    lone.attachments[0].path = Some(lone_path.clone());
+    client
+        .call(
+            methods::SAVE_PROMPT_STASH,
+            serde_json::json!({"entry":lone}),
+        )
+        .await
+        .unwrap();
+    assert!(std::path::Path::new(&lone_path).is_file());
+    client
+        .call(
+            methods::DELETE_PROMPT_STASH,
+            serde_json::json!({"id":lone.id}),
+        )
+        .await
+        .unwrap();
+    assert!(!std::path::Path::new(&lone_path).exists());
 
     for index in 0..50 {
         let slot = PromptStashEntry {
