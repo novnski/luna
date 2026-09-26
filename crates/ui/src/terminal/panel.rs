@@ -397,9 +397,13 @@ impl TerminalPanel {
             cx.new(|cx| crate::project_commands::ProjectCommandPanel::new(state.clone(), cx));
         let command_events = cx.subscribe(&commands, |panel: &mut Self, _, event, cx| {
             let crate::project_commands::ProjectCommandEvent::Output {
+                scope,
                 chat_id,
                 terminal_id,
             } = event;
+            if !scope.is_current(panel.state.read(cx)) {
+                return;
+            }
             if panel
                 .state
                 .read(cx)

@@ -1,8 +1,8 @@
 //! Native project command settings card and checkout-scoped terminal controls.
 use crate::{composer::ComposerInput, popover, settings::widgets, state::AppState, theme::Theme};
 use gpui::{
-    Action, AnyElement, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
-    Subscription, Task, Window, div, prelude::*, px,
+    Action, Context, Entity, EventEmitter, IntoElement, Render, SharedString, Subscription, Task,
+    Window, div, prelude::*, px,
 };
 use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandsSnapshot};
 use luna_rpc::methods;
@@ -221,15 +221,39 @@ impl Render for ProjectCommandSettings {
     }
 }
 
+/// Origin of a Commands view/request. The consumer checks current AppState as
+/// well as the producer so queued Output events cannot cross a replacement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectCommandScope {
+    engine_generation: u64,
+    engine_device: Option<String>,
+    chat: Option<String>,
+}
+impl ProjectCommandScope {
+    fn capture(state: &AppState) -> Self {
+        Self {
+            engine_generation: state.engine_generation(),
+            engine_device: state
+                .engine()
+                .map(|engine| engine.engine_info().device_id.clone()),
+            chat: state.selected_chat.clone(),
+        }
+    }
+    pub(crate) fn is_current(&self, state: &AppState) -> bool {
+        *self == Self::capture(state)
+    }
+}
+
 pub enum ProjectCommandEvent {
     Output {
+        scope: ProjectCommandScope,
         chat_id: String,
         terminal_id: String,
     },
 }
 pub struct ProjectCommandPanel {
     state: Entity<AppState>,
-    chat: Option<String>,
+    scope: ProjectCommandScope,
     snapshot: Option<ProjectCommandsSnapshot>,
     expanded: bool,
     busy: bool,
@@ -242,13 +266,7 @@ impl EventEmitter<ProjectCommandEvent> for ProjectCommandPanel {}
 impl ProjectCommandPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |view: &mut Self, _, cx| {
-            let selected = view.state.read(cx).selected_chat.clone();
-            if view.chat != selected {
-                view.chat = selected;
-                view.snapshot = None;
-                view.error = None;
-                view.busy = false;
-                view.task = None;
+            if view.sync_scope(cx) {
                 if view.expanded {
                     view.load(cx);
                 }
@@ -272,10 +290,10 @@ impl ProjectCommandPanel {
                 }
             }
         });
-        let chat = state.read(cx).selected_chat.clone();
+        let scope = ProjectCommandScope::capture(state.read(cx));
         Self {
             state,
-            chat,
+            scope,
             snapshot: None,
             expanded: false,
             busy: false,
@@ -285,8 +303,24 @@ impl ProjectCommandPanel {
             _poll: poll,
         }
     }
+    fn sync_scope(&mut self, cx: &mut Context<Self>) -> bool {
+        let scope = ProjectCommandScope::capture(self.state.read(cx));
+        if self.scope == scope {
+            return false;
+        }
+        self.scope = scope;
+        // Cancel only this view's waiter. Accepted commands and their PTYs
+        // remain owned by the original engine until explicitly stopped there.
+        self.task = None;
+        self.snapshot = None;
+        self.error = None;
+        self.busy = false;
+        true
+    }
     fn load(&mut self, cx: &mut Context<Self>) {
-        let Some(chat) = self.chat.clone() else {
+        self.sync_scope(cx);
+        let scope = self.scope.clone();
+        let Some(chat) = scope.chat.clone() else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -302,7 +336,7 @@ impl ProjectCommandPanel {
                 )
                 .await;
             let _ = this.update(cx, |view, cx| {
-                if view.chat.as_deref() != Some(&chat) {
+                if view.scope != scope || !scope.is_current(view.state.read(cx)) {
                     return;
                 }
                 view.busy = false;
@@ -325,7 +359,9 @@ impl ProjectCommandPanel {
         run_id: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(chat) = self.chat.clone() else {
+        self.sync_scope(cx);
+        let scope = self.scope.clone();
+        let Some(chat) = scope.chat.clone() else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -333,12 +369,23 @@ impl ProjectCommandPanel {
         };
         self.busy = true;
         self.error = None;
-        self.task = Some(cx.spawn(async move |this,cx| {
-            let result = engine.client().call_as::<ProjectCommandRun>(method,serde_json::json!({"chatId":chat,"actionId":action_id,"runId":run_id,"requestId":uuid::Uuid::new_v4().to_string()})).await;
-            let _ = this.update(cx,|view,cx| { if view.chat.as_deref() != Some(&chat) { return; } view.busy = false; match result {
-                Ok(run) => { if let Some(id) = run.terminal_id { cx.emit(ProjectCommandEvent::Output { chat_id: run.chat_id, terminal_id:id }); } view.load(cx); },
-                Err(e) => { view.error = Some(e.to_string()); }
-            } cx.notify(); });
+        self.task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call_as::<ProjectCommandRun>(method,
+                serde_json::json!({"chatId":chat,"actionId":action_id,"runId":run_id,"requestId":uuid::Uuid::new_v4().to_string()})).await;
+            let _ = this.update(cx, |view, cx| {
+                if view.scope != scope || !scope.is_current(view.state.read(cx)) { return; }
+                view.busy = false;
+                match result {
+                    Ok(run) => {
+                        if let Some(id) = run.terminal_id {
+                            cx.emit(ProjectCommandEvent::Output { scope: scope.clone(), chat_id: run.chat_id, terminal_id: id });
+                        }
+                        view.load(cx);
+                    }
+                    Err(error) => view.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
         }));
         cx.notify();
     }
@@ -467,19 +514,23 @@ impl Render for ProjectCommandPanel {
                 );
                 if let Some(id) = run.terminal_id {
                     let chat = run.chat_id;
+                    let scope = self.scope.clone();
                     row = row.child(
                         widgets::ghost_action(&theme)
                             .id(SharedString::from(format!("output-command-{}", run.id)))
-                            .child(if self.chat.as_deref() == Some(chat.as_str()) {
+                            .child(if self.scope.chat.as_deref() == Some(chat.as_str()) {
                                 "Output"
                             } else {
                                 "Output in original task"
                             })
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(ProjectCommandEvent::Output {
-                                    chat_id: chat.clone(),
-                                    terminal_id: id.clone(),
-                                })
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if scope.is_current(view.state.read(cx)) {
+                                    cx.emit(ProjectCommandEvent::Output {
+                                        scope: scope.clone(),
+                                        chat_id: chat.clone(),
+                                        terminal_id: id.clone(),
+                                    });
+                                }
                             })),
                     );
                 }
