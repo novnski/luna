@@ -227,7 +227,7 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     );
 
     // A projectless legacy task in a subdirectory cannot infer provenance
-    // from ancestry alone, but an explicit cwd selection binds it safely.
+    // from ancestry alone. Select the repo root first, then its subdirectory.
     client
         .call(
             methods::MUTATE,
@@ -248,7 +248,7 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
             .is_err(),
         "unbound subdirectory must wait for explicit selection"
     );
-    client
+    let denied_subdir = client
         .call(
             methods::MUTATE,
             json!({
@@ -257,7 +257,33 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
             }),
         )
         .await
-        .expect("explicitly rebind projectless subdirectory task");
+        .expect("rejected mutation has a durable receipt");
+    assert_eq!(
+        denied_subdir["receipt"]["status"], "failed",
+        "same unbound subdirectory cannot bootstrap from ancestry"
+    );
+    let bound_root = client
+        .call(
+            methods::MUTATE,
+            json!({
+                "op": "setChatCwd", "chatId": "projectless-subdir",
+                "cwd": outer,
+            }),
+        )
+        .await
+        .expect("explicitly bind projectless task at checkout root");
+    assert_eq!(bound_root["receipt"]["status"], "applied");
+    let bound_subdir = client
+        .call(
+            methods::MUTATE,
+            json!({
+                "op": "setChatCwd", "chatId": "projectless-subdir",
+                "cwd": outer_subdir,
+            }),
+        )
+        .await
+        .expect("move bound task into a subdirectory of the same checkout");
+    assert_eq!(bound_subdir["receipt"]["status"], "applied");
     assert_eq!(
         core.workspace
             .chat("projectless-subdir")
@@ -307,6 +333,24 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
         .unwrap()
         .unwrap()
         .checkout_id;
+    let denied_same_cwd = client
+        .call(
+            methods::MUTATE,
+            json!({
+                "op": "setChatCwd", "chatId": "inner-task", "cwd": inner,
+            }),
+        )
+        .await
+        .expect("same-cwd refusal has a durable receipt");
+    let denied_unbound_cwd = client
+        .call(
+            methods::MUTATE,
+            json!({
+                "op": "setChatCwd", "chatId": "unbound-inner-task", "cwd": inner,
+            }),
+        )
+        .await
+        .expect("unbound refusal has a durable receipt");
     let stale_inner_action = client
         .call(
             methods::EXECUTE_GIT_ACTION,
@@ -351,10 +395,23 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     } else {
         None
     };
+    let inner_checkout_after_denied = core
+        .workspace
+        .chat("inner-task")
+        .unwrap()
+        .unwrap()
+        .checkout_id;
+    let unbound_checkout_after_denied = core
+        .workspace
+        .chat("unbound-inner-task")
+        .unwrap()
+        .unwrap()
+        .checkout_id;
     let outer_staged_before_restore = git(&outer, &["diff", "--cached", "--name-only"]);
     eprintln!(
         "ancestry pre-fix observation: unsafe_preview={unsafe_preview:?}, \
          unbound_preview={unbound_preview:?}, unbound_checkout={unbound_checkout:?}, \
+         denied_same_cwd={denied_same_cwd:?}, denied_unbound_cwd={denied_unbound_cwd:?}, \
          stale_inner_action={stale_inner_action:?}, \
          newly_selected_action={newly_selected_action:?}, \
          outer_staged={outer_staged_before_restore:?}"
@@ -376,6 +433,17 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     assert!(
         unbound_checkout.is_none(),
         "diff-sync must not stamp the ancestor"
+    );
+    assert_eq!(denied_same_cwd["receipt"]["status"], "failed");
+    assert_eq!(denied_unbound_cwd["receipt"]["status"], "failed");
+    assert_eq!(
+        inner_checkout_after_denied.as_deref(),
+        Some(inner_id.as_str()),
+        "same-cwd refusal must retain the original linked checkout"
+    );
+    assert!(
+        unbound_checkout_after_denied.is_none(),
+        "unbound refusal must not adopt the ancestor"
     );
     assert!(
         unsafe_preview.is_err(),

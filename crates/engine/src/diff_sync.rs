@@ -359,7 +359,7 @@ async fn resolve_identity(
     }
 }
 
-fn has_checkout_marker(root: &Path) -> bool {
+pub(crate) fn has_checkout_marker(root: &Path) -> bool {
     std::fs::symlink_metadata(root.join(".git")).is_ok_and(|metadata| {
         !metadata.file_type().is_symlink() && (metadata.is_file() || metadata.is_dir())
     })

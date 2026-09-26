@@ -5536,15 +5536,47 @@ impl EngineRpc {
                 Ok(Some(receipt))
             }
             TaskCommandIntent::SetCwd { cwd } => {
-                // An explicit retarget is the only time a task may adopt a
-                // different checkout. Resolve on the owner before publishing
-                // the cwd and its binding in one projection.
-                let checkout_id = self
+                let previous = self
+                    .workspace
+                    .chat(task_id)
+                    .map_err(TaskProjectionError::Mutation)?
+                    .ok_or_else(|| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "Task is unavailable".into(),
+                        ))
+                    })?;
+                let identity = self
                     .repos
                     .checkout_identity(std::path::Path::new(&cwd))
                     .await
-                    .ok()
-                    .map(|identity| identity.id);
+                    .ok();
+                let same_identity = identity.as_ref().is_some_and(|identity| {
+                    previous.checkout_id.as_deref() == Some(identity.id.as_str())
+                });
+                if previous.cwd.as_deref() == Some(cwd.as_str())
+                    && previous.checkout_id.is_some()
+                    && !same_identity
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Task checkout changed; restore the worktree before selecting this directory"
+                            .into(),
+                    )));
+                }
+                if let Some(identity) = identity.as_ref()
+                    && !same_identity
+                {
+                    // A new binding must name a checkout root with its own
+                    // .git marker. An unbound nested path may otherwise
+                    // resolve a parent whose worktree metadata just vanished.
+                    let selected_root =
+                        std::fs::canonicalize(&cwd).is_ok_and(|selected| selected == identity.root);
+                    if !selected_root || !crate::diff_sync::has_checkout_marker(&identity.root) {
+                        return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "Select the checkout root before using a Git subdirectory".into(),
+                        )));
+                    }
+                }
+                let checkout_id = identity.map(|identity| identity.id);
                 let owned_task_id = task_id.to_string();
                 let (_, receipt) = self.commit_task_projection_superseding_recovery(
                     command_id,
