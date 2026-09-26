@@ -1249,6 +1249,10 @@ impl WorkspaceHost {
         Ok(self.read(|doc| doc.space(space_id))?)
     }
 
+    pub fn is_side_chat(&self, chat_id: &str) -> bool {
+        self.read(|doc| doc.side_chat_parent(chat_id).is_some())
+    }
+
     pub fn read_chats(&self) -> Result<Vec<Chat>, EngineError> {
         Ok(self.read(|doc| doc.read_chats())?)
     }
@@ -1671,6 +1675,15 @@ impl WorkspaceHost {
     /// and pushes like any other; the caller fixes `room_gen` beforehand.
     pub fn import_chat_row(&self, chat: &Chat) -> Result<(), EngineError> {
         self.mutate(|doc| doc.upsert_chat(chat))
+    }
+
+    pub(crate) fn import_side_chat_row(
+        &self,
+        chat: &Chat,
+        parent: &str,
+        permit: Option<&DeviceWritePermit>,
+    ) -> Result<(), EngineError> {
+        self.mutate_with_permit(permit, |doc| doc.upsert_side_chat(chat, parent))
     }
 
     pub(crate) fn import_chat_row_admitted(

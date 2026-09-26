@@ -1020,3 +1020,37 @@ async fn staged_copy_engine_boot_probe_keeps_original_stage_untouched() {
     assert!(!corrupt_probe.join("credentials").exists());
     service(&root).verify_staged_for_tests(&staged).unwrap();
 }
+
+#[test]
+fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
+    let (_parent, root, backups) = fixture();
+    let profile = root.join("profiles/local/docs.sqlite3");
+    let conn = Connection::open(&profile).unwrap();
+    conn.execute("INSERT INTO side_chats (id,parent_id,title,created_at_ms,expires_at_ms,state,config,cwd,context,context_mode,origin_message_id,anchor_text,creation_hash) VALUES ('synthetic-side','synthetic-parent','Saved side chat',1,7200001,'unloaded','{}','/tmp','','nativeFork','origin-message','selected quote','fixture-hash')", []).unwrap();
+    conn.execute("INSERT INTO side_chat_entries VALUES ('synthetic-side',0,?1)", [r#"{"id":"saved-message","role":"assistant","parts":[{"kind":"text","id":"text","text":"SIDE_BACKUP_SENTINEL"}],"createdAt":2,"deviceId":"synthetic-device","status":"complete"}"#]).unwrap();
+    drop(conn);
+    let backup = service(&root)
+        .export(&backups.join("side-chat.lunabk"))
+        .unwrap();
+    assert_eq!(backup.manifest.databases[0].schema_version, 14);
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    service(&root).verify_staged_for_tests(&staged).unwrap();
+    let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();
+    let row: (String,String,String) = restored.query_row("SELECT parent_id,origin_message_id,anchor_text FROM side_chats WHERE id='synthetic-side'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(
+        row,
+        (
+            "synthetic-parent".into(),
+            "origin-message".into(),
+            "selected quote".into()
+        )
+    );
+    let transcript: String = restored
+        .query_row(
+            "SELECT entry FROM side_chat_entries WHERE chat_id='synthetic-side'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(transcript.contains("SIDE_BACKUP_SENTINEL"));
+}

@@ -1602,7 +1602,8 @@ impl DocHost {
                 let device = host.inner.config.device_id.clone();
                 let now = now_ms();
                 let candidate = chats.into_iter().find(|c| {
-                    c.device_id == device
+                    !host.inner.store.is_side_chat(&c.id).unwrap_or(true)
+                        && c.device_id == device
                         && c.room_gen.unwrap_or(1) < 2
                         && !attempted
                             .get(&c.id)
@@ -1734,6 +1735,18 @@ impl DocHost {
     /// Open (or return) the chat's doc handle: load the local snapshot (or init fresh),
     /// start the change-driven task, and join the edge room when configured.
     pub fn open(&self, chat_id: &str) -> Result<Arc<ChatDocHandle>, EngineError> {
+        let side_owner = chat_id
+            .split_once("--sub--")
+            .map_or(chat_id, |(owner, _)| owner);
+        if self
+            .workspace()
+            .is_some_and(|workspace| workspace.is_side_chat(side_owner))
+            && !self.inner.store.is_side_chat(side_owner)?
+        {
+            return Err(EngineError::Other(
+                "Side chat history is available only in its owning profile".into(),
+            ));
+        }
         // The registry names the sync room generation (docs/chat2-sync.md
         // M2): absent row / absent field = legacy s2. Read it BEFORE the
         // cached-handle check — a cached s2-mode handle for a chat another
@@ -2596,6 +2609,9 @@ impl DocHost {
             let Some(ws) = host.workspace() else { return };
             let chats: Vec<luna_proto::Chat> = ws.watch_chats().borrow().clone();
             for chat in chats {
+                if host.inner.store.is_side_chat(&chat.id).unwrap_or(true) {
+                    continue;
+                }
                 if chat.device_id != host.inner.config.device_id {
                     continue; // only the host owns its chats' history
                 }
@@ -3142,6 +3158,11 @@ impl DocHost {
 
     /// Finish an atomic task-command delete after its local snapshot/outbox
     /// rows were removed in the receipt transaction.
+    pub(crate) fn flush_chat_checked(&self, chat_id: &str) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        self.save_snapshot_checked(&handle)
+    }
+
     pub(crate) fn evict_chat(&self, chat_id: &str) {
         let removed = lock(&self.inner.handles).remove(chat_id);
         drop(removed);

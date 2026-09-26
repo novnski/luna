@@ -2259,6 +2259,25 @@ impl DocsStore {
 
     /// Retire only records keyed to this LUNA task. The command receipt and
     /// identity tombstone remain as durable replay guards.
+    /// Side chat ownership is metadata only. Startup consumers use this
+    /// before opening transcript documents or probing native sessions.
+    pub fn is_side_chat(&self, task_id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='side_chats')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM side_chats WHERE id=?1)",
+            [task_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn retire_task_local_records(
         &self,
         device_id: &str,
