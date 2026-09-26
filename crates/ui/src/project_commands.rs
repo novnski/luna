@@ -257,7 +257,9 @@ impl ProjectCommandPanel {
         });
         let poll = cx.spawn(async move |this, cx| {
             loop {
-                gpui::Timer::after(std::time::Duration::from_secs(1)).await;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
                 if this
                     .update(cx, |view, cx| {
                         if view.expanded && !view.busy {
