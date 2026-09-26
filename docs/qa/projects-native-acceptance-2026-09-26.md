@@ -1,25 +1,31 @@
-# Combined Projects native acceptance — prepared, not run
+# Combined Projects native acceptance — integration source prepared, not run
 
 This is a source-only acceptance plan. It grants no build, app launch, desktop
 input or provider invocation. The coordinator must first approve the final
-combined source and transfer both the packaging and desktop QA slots.
+combined source and transfer both the packaging and desktop QA slots. Run from
+the isolated `audit-integration` checkout, never the primary LUNA checkout.
+
+The first clean Projects + Workspace/Lifecycle integration commit is
+`64aa32b244aad951d5d72a0bf57f8e78a6f4ca47`. A prewritten Commands UUID
+WorktreeSpec E2E passed 1/1 on that exact source. The coordinator is validating
+the combined UI separately; pin the **final approved clean integration HEAD**
+and its test packet before packaging. A later source commit supersedes `64aa32b2`
+for native acceptance and requires an explicit new source readback.
 
 The initial 17-case/check/format/Clippy proof remains tied to runtime source
 `04da0cf3` and report `27bec30c`. After separate failure-first reproductions,
-combined source `79deab99` passed 34 affected UI cases, the real UUID
-MoveProject control, format, focused UI check and Clippy. This includes stale
-rendered Run/Retry/Stop and Defaults choice admission in their tested scopes.
-The materialization engine companion is still excluded. Do not package until
-the coordinator reviews the current main/schema-14 composition and grants
-native packaging and desktop QA.
-Before packaging, the coordinator must also review/adopt the committed main
-composition and schema changes (current Sidebar runtime uses schema 14). Do
-not merge main or copy its uncommitted files as part of this preparation.
+Projects source `da0f14f4` (including main/sidebar schema 14) passed the
+remaining 37 focused cases, format and affected-crate Clippy; its prior merged
+compile, engine 76, sync 5 and Defaults UI 8 cases also passed. These are
+component prerequisites, not proof of combined native behavior. The
+Workspace/Lifecycle materialization bridge is present only in the integration
+source; its combined UI checks and native behavior require their own readback.
 
 ## Boundaries and ownership
 
-- Use one combined **LUNA QA Defaults** app from this worktree. The Defaults
-  worker owns the shared page, defaults and this acceptance record. Commands
+- Use one combined **LUNA QA Projects Integration** app from the clean
+  `audit-integration` worktree. The Defaults worker owns the shared page,
+  defaults and this acceptance record. Commands
   owns command controls, setup and any failure diagnosis in those paths; relay
   exact evidence instead of independently patching its code.
 - Limit fixtures to two Git projects A/B, two linked worktrees A1/A2 from A,
@@ -27,7 +33,7 @@ not merge main or copy its uncommitted files as part of this preparation.
   before provider QA. A separately granted desktop new-task run may add A3,
   and an optional B task after inherit clearing makes four QA chats maximum.
   Use at most three ordinary named commands plus one setup action and one
-  transient configuration-only row. Keep all files under this worktree's
+  transient configuration-only row. Keep all files under the integration checkout's
   `target/qa/` and isolated dev data directory.
 - Use at most two short Codex `gpt-6-luna` completions if current catalog/account
   availability supports them. No other provider needs to run. A different
@@ -43,11 +49,34 @@ Assigned identity (all four values travel together):
 
 | Field | Value |
 | --- | --- |
-| App | `LUNA QA Defaults` |
-| Bundle ID | `com.novnski.luna.qa.defaults` |
-| IPC | `59788` |
-| Data | `$PWD/target/luna-qa-data/defaults` |
-| Bundle path | `$PWD/target/luna-macos-dev/LUNA QA Defaults.app` |
+| App | `LUNA QA Projects Integration` |
+| Bundle ID | `com.novnski.luna.qa.projects-integration` |
+| IPC | `59791` |
+| Data | `$PWD/target/luna-qa-data/projects-integration` |
+| Bundle path | `$PWD/target/luna-macos-dev/LUNA QA Projects Integration.app` |
+
+All four overrides must be exported together from the integration checkout:
+
+```sh
+export LUNA_DEV_APP_NAME='LUNA QA Projects Integration'
+export LUNA_DEV_BUNDLE_ID='com.novnski.luna.qa.projects-integration'
+export LUNA_DEV_IPC_PORT=59791
+export LUNA_DEV_DATA_DIR="$PWD/target/luna-qa-data/projects-integration"
+export LUNA_PROJECT_DEFAULTS_QA_IDENTITY=projects-integration
+```
+
+The live helper accepts only this complete tuple or its original Defaults
+identity on port 59788. For this integration run, the explicit selector and
+all four values are mandatory. Do not point the helper at the old Defaults
+app, main port 59777 or a peer's data directory. The helper preflights the
+signed bundle, exact listener PID and data directory before integration reads
+or fixture mutations. Its `LUNA_IPC_PORT`, when set, must equal 59791.
+
+Identity admission failure cases to preserve before any app operation: an
+unknown selector, missing one of the four overrides, mismatched name/bundle/
+port/data, a main-app port, a foreign or unsigned listener, a bundle collision
+in another worktree, or a dirty/unapproved integration HEAD must stop the run.
+Record the failure and do not repair it by falling back to another app.
 
 Use the standard `scripts/run-macos-dev.sh --refresh` with those identity
 values and the coordinator-approved build settings. The earlier temporary
@@ -65,7 +94,7 @@ when a control is opaque. Never claim visual observations not actually captured.
 
 | Case | Native action and expected result | Required evidence |
 | --- | --- | --- |
-| N1 — identity and fixtures | Refresh the approved source, verify the exact bundle process, listener PID on 59788, plist identity/data directory and strict deep codesign. Record the main app PID/bundle fingerprint before and after without operating it. Seed A/B with the existing live helper; create two distinct linked worktrees A1/A2 from A and add the plain-folder fixture. Use `seed-command-tasks <absolute-A1> <absolute-A2>` only after verifying this app. It must mint UUID task/command IDs through local `ExecuteTaskCommand` CreateChat, never write task rows directly, and read back exact branch/cwd/space/device and applied receipts. | Build source/command/duration/log, budget before/after, process/port/plist/signature JSON/text, `WatchSpaces` and two UUID task receipts/readbacks, one app screenshot. |
+| N1 — identity and fixtures | Refresh the approved clean integration source, verify the exact bundle process, listener PID on 59791, plist identity/data directory and strict deep codesign. Record the main app PID/bundle fingerprint before and after without operating it. Seed A/B with the allowlisted integration live helper; create two distinct linked worktrees A1/A2 from A and add the plain-folder fixture. Use `seed-command-tasks <absolute-A1> <absolute-A2>` only after verifying this app. It must mint UUID task/command IDs through local `ExecuteTaskCommand` CreateChat, never write task rows directly, and read back exact branch/cwd/space/device and applied receipts. | Approved integration HEAD/test packet, build source/command/duration/log, budget before/after, process/port/plist/signature JSON/text, `WatchSpaces` and two UUID task receipts/readbacks, one app screenshot. |
 | N2 — project settings and global fallback | Establish a known global Codex/model/permission choice G through the ordinary new-task picker, then record `composer-defaults.json`. Configure A with a catalog-offered Codex `gpt-6-luna`, supported permission and New worktree. Configure B with a distinct supported provider/model or permission/checkout override. Every group must visibly offer inherit. Switch A → B → A in Projects and verify each saved value; global G must remain unchanged by project edits. | Settings screenshots with selected project, fresh `WatchSpaces` after each save, before/after global-default JSON limited to these non-secret fields. |
 | N3 — Commands card and current-frame controls | Before any provider run, add/edit/remove the transient row and verify A's saved commands; B's list stays independent. In the two UUID fixture tasks, run distinct Build A/Build B markers from A1/A2 and verify both cwd/branch/receipt paths stay separate. Probe an exit-7 failure and inspect output. Run the foreground preview server, open its output and preview, Stop it, Retry the captured run, then Stop it again. No command runs during editing/navigation or when a stale rendered control is clicked. These seeded tasks do not prove desktop new-task Defaults selection. | Saved command lists, settings/terminal/preview screenshots, two fixture task IDs/branches/cwds, run receipts/attempt/terminal IDs, markers, observed HTTP response, final stopped process state. |
 | N4 — actual new-task path and setup integration | After the separate provider grant, check desktop new-chat affordances against A's default chips without sending duplicates. Configure A's setup action with Wait for setup. Submit one short Codex prompt through the UI. Its new worktree A3 must differ from the seeded A1/A2 checkouts and base A. The initial setup failure must resolve the task's normal receipt visibly before a provider session starts. Repair the readiness marker in A3, retry the setup receipt, then explicitly retry the task. On success expect the exact smoke reply and task config from A; navigation/reuse must not create another setup run. | New-draft/chip screenshot, desktop-created task/Run receipt IDs, A3 cwd/branch, setup run ID/generation/attempt/exit/output, provider-session readback and exact final reply. |
@@ -148,7 +177,10 @@ actual executed source/dirty state, source-test prerequisites, app identity,
 exact commands/exits/durations, UI observations/screenshots, every relevant
 project/task/action/run/attempt/receipt ID and before/after readbacks.
 
-`scripts/qa-project-defaults-live.mjs` is already restricted to port 59788.
+`scripts/qa-project-defaults-live.mjs` must have the allowlisted integration
+identity change adopted into the approved integration source before use. Its
+default behavior remains restricted to the original port 59788; this run
+selects `projects-integration` and requires the complete tuple above.
 Its `seed` and `read` output paths are fixed; immediately copy each readback into
 its uniquely named stage artifact before another read overwrites the helper's
 latest file. `clear` is an explicit QA-project mutation, not cleanup to run

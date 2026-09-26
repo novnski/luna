@@ -1,37 +1,68 @@
 #!/usr/bin/env node
-// Repeatable native-app setup/readback. Only the isolated Defaults QA port is
-// accepted; this script never sends prompts or invokes providers.
+// Repeatable native-app setup/readback for two exact isolated QA identities.
+// This script never sends prompts or invokes providers.
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
-const port = Number(process.env.LUNA_IPC_PORT || 59788);
-assert.equal(port, 59788, 'Only LUNA QA Defaults port 59788 is allowed');
+const root = path.resolve(import.meta.dirname, '..');
+const identities = {
+  defaults: {
+    appName: 'LUNA QA Defaults', bundleId: 'com.novnski.luna.qa.defaults',
+    port: '59788', dataName: 'defaults', clientId: 'luna-qa-defaults',
+  },
+  'projects-integration': {
+    appName: 'LUNA QA Projects Integration',
+    bundleId: 'com.novnski.luna.qa.projects-integration',
+    port: '59791', dataName: 'projects-integration',
+    clientId: 'luna-qa-projects-integration',
+  },
+};
+const identityName = process.env.LUNA_PROJECT_DEFAULTS_QA_IDENTITY || 'defaults';
+assert.ok(Object.hasOwn(identities, identityName), 'Unknown Projects QA identity');
+const identity = identities[identityName];
+const expectedOverrides = {
+  LUNA_DEV_APP_NAME: identity.appName,
+  LUNA_DEV_BUNDLE_ID: identity.bundleId,
+  LUNA_DEV_IPC_PORT: identity.port,
+  LUNA_DEV_DATA_DIR: path.join(root, 'target/luna-qa-data', identity.dataName),
+};
+const suppliedOverrides = Object.keys(expectedOverrides).filter(key =>
+  Object.hasOwn(process.env, key));
+if (identityName === 'projects-integration' || suppliedOverrides.length) {
+  assert.equal(suppliedOverrides.length, 4, 'All four QA app overrides are required');
+  for (const [key, expected] of Object.entries(expectedOverrides)) {
+    assert.equal(process.env[key], expected, `${key} differs from selected QA identity`);
+  }
+}
+if (Object.hasOwn(process.env, 'LUNA_IPC_PORT')) {
+  assert.equal(process.env.LUNA_IPC_PORT, identity.port,
+    'LUNA_IPC_PORT differs from selected QA identity');
+}
+const port = Number(identity.port);
 const mode = process.argv[2] || 'read';
 assert.ok(['seed', 'read', 'clear', 'seed-command-tasks'].includes(mode));
-const root = path.resolve(import.meta.dirname, '..');
 const output = path.join(root, 'target/qa/project-defaults');
-fs.mkdirSync(output, { recursive: true });
 
 function command(cwd, args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 }
 function qaAppIdentity() {
   assert.equal(process.platform, 'darwin');
-  const bundle = path.join(root, 'target/luna-macos-dev/LUNA QA Defaults.app');
+  const bundle = path.join(root, 'target/luna-macos-dev', `${identity.appName}.app`);
   const executable = fs.realpathSync(path.join(bundle, 'Contents/MacOS/luna'));
   const plist = JSON.parse(execFileSync('plutil', [
     '-convert', 'json', '-o', '-', path.join(bundle, 'Contents/Info.plist'),
   ], { encoding: 'utf8' }));
-  assert.equal(plist.CFBundleIdentifier, 'com.novnski.luna.qa.defaults');
-  assert.equal(plist.CFBundleDisplayName, 'LUNA QA Defaults');
-  assert.equal(plist.LSEnvironment.LUNA_IPC_PORT, '59788');
+  assert.equal(plist.CFBundleIdentifier, identity.bundleId);
+  assert.equal(plist.CFBundleDisplayName, identity.appName);
+  assert.equal(plist.LSEnvironment.LUNA_IPC_PORT, identity.port);
   assert.equal(path.resolve(plist.LSEnvironment.LUNA_DATA_DIR),
-    path.join(root, 'target/luna-qa-data/defaults'));
+    expectedOverrides.LUNA_DEV_DATA_DIR);
   execFileSync('codesign', ['--verify', '--deep', '--strict', bundle]);
   const listeners = [...new Set(execFileSync('lsof', [
-    '-nP', '-iTCP:59788', '-sTCP:LISTEN', '-Fp',
+    '-nP', `-iTCP:${identity.port}`, '-sTCP:LISTEN', '-Fp',
   ], { encoding: 'utf8' }).match(/^p[0-9]+$/gm)?.map(line => Number(line.slice(1))) ?? [])];
   assert.equal(listeners.length, 1, 'one exact QA app listener is required');
   const pid = listeners[0];
@@ -70,7 +101,9 @@ function savePlan(file, value) {
   }
   fs.renameSync(staged, file);
 }
-const verifiedApp = mode === 'seed-command-tasks' ? qaAppIdentity() : null;
+const verifiedApp = identityName === 'projects-integration' || mode === 'seed-command-tasks'
+  ? qaAppIdentity() : null;
+fs.mkdirSync(output, { recursive: true });
 const ws = new WebSocket(`ws://127.0.0.1:${port}`);
 await new Promise((resolve, reject) => {
   ws.addEventListener('open', resolve, { once: true });
@@ -156,7 +189,7 @@ try {
       savePlan(file, plan);
       const receipt = await call('ExecuteTaskCommand', {
         commandId: task.commandId, taskId: task.taskId,
-        actorId: info.deviceId, clientId: 'luna-qa-defaults',
+        actorId: info.deviceId, clientId: identity.clientId,
         clientSessionId: plan.clientSessionId,
         intent: { kind: 'createChat', spaceId: project.id,
           cwd: task.checkout.cwd, branch: task.checkout.branch },
@@ -216,7 +249,8 @@ try {
   }
   const spaces = (await call('WatchSpaces')).filter(space => ['qa-defaults-a', 'qa-defaults-b'].includes(space.id));
   const chats = (await call('WatchChats')).filter(chat => spaces.some(space => space.id === chat.spaceId)).map(({ id, spaceId, config, cwd }) => ({ id, spaceId, config, cwd }));
-  const evidence = { time: new Date().toISOString(), mode, port, deviceId: info.deviceId, spaces, chats };
+  const evidence = { time: new Date().toISOString(), mode, identityName,
+    port, deviceId: info.deviceId, spaces, chats };
   fs.writeFileSync(path.join(output, `live-${mode}.json`), JSON.stringify(evidence, null, 2));
   console.log(JSON.stringify({ artifact: path.join(output, `live-${mode}.json`), projects: spaces.map(({ name, executionDefaults }) => ({ name, executionDefaults })), tasks: chats.length }));
 } finally { ws.close(); }
