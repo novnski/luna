@@ -136,5 +136,60 @@ at `remaining/ui-queue.log`; corrected UI/check/Clippy logs and commands are in
 
 The debug target is approximately 10 GiB after checks; no additional Cargo
 target was created. `budget-after-checks.json` records aggregate accounting.
-The unique native refresh/readback remains queued for `LUNA QA Tasks`, bundle
-`com.novnski.luna.qa.tasks`, IPC 59782, data `target/luna-qa-data/tasks`.
+The subsequent native refresh/readback is recorded below.
+
+## Native combined-code verification
+
+The clean branch fast-forwarded to reviewed consolidated source
+`8169b69219f5d1b598f64189a8e2b1b937aa3d7c` before building. With the native
+slot granted, the guarded refresh completed in **90 seconds** using
+`CARGO_INCREMENTAL=0` and exactly these overrides:
+
+```sh
+LUNA_DEV_APP_NAME='LUNA QA Tasks'
+LUNA_DEV_BUNDLE_ID='com.novnski.luna.qa.tasks'
+LUNA_DEV_IPC_PORT=59782
+LUNA_DEV_DATA_DIR="$PWD/target/luna-qa-data/tasks"
+```
+
+The app runs from this worktree's
+`target/luna-macos-dev/LUNA QA Tasks.app/Contents/MacOS/luna`. Its initial PID
+was **95051**, with that same process listening on **127.0.0.1:59782**.
+Strict deep codesign verification passed. The plist identity and data path
+matched the assigned values. The build slot was released immediately after
+launch, before the IPC checks. The main application and data were not touched.
+
+The repeatable IPC artifact is `native/persistence.mjs` under the audit artifact
+directory. It creates one disposable unconfigured task, persists a draft and
+recoverable submission, verifies same-target idempotence and changed-target
+rejection, and inserts two **Steer-intent** rows. Those rows cannot automatically
+become new turns. Local held-row editing and reordering both succeeded.
+Readback verified the draft/submission and exact queue contents, revisions,
+status and order, with an empty transcript and no started task session.
+
+An exact-PID graceful termination followed by LaunchServices reopening the same
+bundle (without Cargo) changed PID **95051 → 636**. All draft/submission and
+queue values survived unchanged. The repeated draft ID remained idempotent for
+the original target and rejected a null destination. The script then discarded
+the recoverable draft, removed both rows, archived the disposable task, and
+reread the empty queue, empty draft, absent submissions, archived task and empty
+transcript. Both phases passed with **17 recorded RPC responses each**, one
+expected draft-conflict response per phase and no other RPC errors. No provider
+turn was started; the provider audit owns real Codex turn/steer/interrupt coverage.
+
+Disposable task: `qa-tasks-ad4dc442-afac-495b-9109-3b62644574a0`.
+Final exact process/port and strict signature were reverified after restart.
+Signed executable SHA-256:
+`d249f92ac0659b97098eb23f69e51dbaf62f276984529986c6009672deba6978`.
+The source SHA, signed and pre-signing binary hashes, refresh output, plist,
+process/port/signature readbacks, before/after RPC records and restart log are
+retained in `native/`. The first seed attempt used an overly specific error-word
+matcher; the engine correctly rejected the changed destination. That script-only
+failure is retained as `seed-error-wording.log` and its RPC record; the corrected
+attempt reused the same disposable task rather than leaving another task behind.
+
+Final worktree debug storage is approximately **13 GiB**, with no release target.
+The post-readback budget snapshot was **123.74 GiB aggregate** and **409.54 GiB
+free**, below the shared guard limits. The QA app/data and all review artifacts
+are retained. Native verification changed no production source; this report is
+a new follow-up commit rather than an amendment to the verified fixes.
