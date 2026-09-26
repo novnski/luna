@@ -302,6 +302,7 @@ pub struct ProjectCommandPanel {
     snapshot: Option<ProjectCommandsSnapshot>,
     expanded: bool,
     busy: bool,
+    write_pending: bool,
     error: Option<String>,
     task: Option<Task<()>>,
     _observe: Subscription,
@@ -342,6 +343,7 @@ impl ProjectCommandPanel {
             snapshot: None,
             expanded: false,
             busy: false,
+            write_pending: false,
             error: None,
             task: None,
             _observe: observe,
@@ -360,10 +362,14 @@ impl ProjectCommandPanel {
         self.snapshot = None;
         self.error = None;
         self.busy = false;
+        self.write_pending = false;
         true
     }
     fn load(&mut self, cx: &mut Context<Self>) {
         self.sync_scope(cx);
+        if self.write_pending {
+            return;
+        }
         let scope = self.scope.clone();
         let Some(chat) = scope.chat.clone() else {
             return;
@@ -405,9 +411,9 @@ impl ProjectCommandPanel {
         cx: &mut Context<Self>,
     ) {
         self.sync_scope(cx);
-        // A still-painted enabled button is not admission authority while a
-        // request is already in flight. Preserve that request's UI waiter.
-        if self.busy {
+        // Stop may supersede a status read for a currently running command,
+        // but a painted control cannot start a second write.
+        if self.write_pending || (self.busy && method != methods::STOP_PROJECT_COMMAND) {
             return;
         }
         let scope = self.scope.clone();
@@ -417,7 +423,11 @@ impl ProjectCommandPanel {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        // Discard an in-flight status waiter before starting Stop. Its older
+        // snapshot must not replace the stopped run after this write.
+        self.task = None;
         self.busy = true;
+        self.write_pending = true;
         self.error = None;
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call_as::<ProjectCommandRun>(method,
@@ -425,8 +435,14 @@ impl ProjectCommandPanel {
             let _ = this.update(cx, |view, cx| {
                 if view.scope != scope || !scope.is_current(view.state.read(cx)) { return; }
                 view.busy = false;
+                view.write_pending = false;
                 match result {
                     Ok(run) => {
+                        if method == methods::STOP_PROJECT_COMMAND {
+                            if let Some(current) = view.snapshot.as_mut().and_then(|snapshot| snapshot.runs.iter_mut().find(|current| current.id == run.id)) {
+                                *current = run.clone();
+                            }
+                        }
                         if let Some(id) = run.terminal_id {
                             cx.emit(ProjectCommandEvent::Output { scope: scope.clone(), chat_id: run.chat_id, terminal_id: id });
                         }
@@ -557,7 +573,7 @@ impl Render for ProjectCommandPanel {
                                     el.debug_selector(|| format!("qa-command-control-{}", run.id))
                                 })
                                 .child(if active { "Stop" } else { "Retry" })
-                                .when(!self.busy, |el| {
+                                .when(!self.busy || (active && !self.write_pending), |el| {
                                     el.on_click(cx.listener(move |view, _, _, cx| {
                                         if !origin.is_current(view.state.read(cx)) {
                                             return;
