@@ -784,7 +784,10 @@ async fn capture_git(cwd: &Path, args: &[&str], max_bytes: usize) -> Result<Capt
         .take()
         .ok_or_else(|| EngineError::Other("git stdout unavailable".into()))?;
     let mut out: Vec<u8> = Vec::new();
-    let mut buf = [0u8; 64 * 1024];
+    // This buffer survives awaits through several nested diff/RPC futures.
+    // Keep it off the default Tokio worker stack, including temporary moves
+    // while those futures are constructed and polled in debug builds.
+    let mut buf = vec![0u8; 64 * 1024];
     let mut truncated = false;
     loop {
         let n = stdout

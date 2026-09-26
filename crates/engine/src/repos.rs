@@ -1268,7 +1268,7 @@ impl Repos {
         self.current_branch(worktree_path).await
     }
 
-    /// Best-effort worktree removal (if it still exists), then prune stale refs.
+    /// Git-verified worktree removal (if it still exists), then prune stale refs.
     /// Deletes the worktree's branch ONLY when LUNA created it (`luna/…`) — the
     /// user may have checked out their own branch inside the worktree.
     pub async fn delete_worktree(
@@ -1282,21 +1282,19 @@ impl Repos {
             String::new()
         };
         if worktree_path.exists() {
-            let removed = self
-                .git(
-                    &[
-                        "worktree",
-                        "remove",
-                        "--force",
-                        &worktree_path.to_string_lossy(),
-                    ],
-                    Some(repo_path),
-                )
-                .await;
-            if removed.is_err() {
-                // git refused (or the dir is half-gone) — delete the folder directly.
-                let _ = std::fs::remove_dir_all(worktree_path);
-            }
+            self.git(
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &worktree_path.to_string_lossy(),
+                ],
+                Some(repo_path),
+            )
+            .await?;
+            // A refusal can mean a locked worktree, the main checkout, or an
+            // unrelated folder. Never bypass Git's ownership checks with a
+            // recursive delete or remove its branch after a failed removal.
         }
         let _ = self.git(&["worktree", "prune"], Some(repo_path)).await;
         if branch.starts_with("luna/") {
