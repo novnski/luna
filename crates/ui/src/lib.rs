@@ -27,6 +27,8 @@ mod composer_dock;
 mod context_usage;
 pub mod drafts;
 pub mod edge_fade;
+#[cfg(test)]
+pub(crate) mod engine_epoch_fixture;
 pub mod file_icons;
 pub mod files;
 pub mod frost;
