@@ -370,6 +370,14 @@ impl ProjectsPage {
         let accent = theme.accent;
         widgets::ghost_action(theme)
             .id(id.into())
+            .when(
+                cfg!(test)
+                    && matches!(
+                        &action,
+                        Action::Checkout(Some(ProjectCheckout::NewWorktree))
+                    ),
+                |el| el.debug_selector(|| "qa-defaults-new-worktree".into()),
+            )
             .role(gpui::Role::Button)
             .tab_index(0)
             .aria_selected(selected)
@@ -699,3 +707,7 @@ impl Render for ProjectsPage {
 #[cfg(test)]
 #[path = "project_defaults_engine_epoch_tests.rs"]
 mod engine_epoch_tests;
+
+#[cfg(test)]
+#[path = "project_defaults_button_admission_tests.rs"]
+mod button_admission_tests;
