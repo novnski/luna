@@ -7,6 +7,9 @@ No provider reads, runtime changes or native actions have run. The branch remain
 based on committed main
 `def1b8a8`; supported caller behavior was also inspected at current main
 `570d951b72c950eceb9493e4a07fe7908039edbc`, without changing Sidebar-owned files.
+The lifecycle audit owner then reviewed this contract read-only against main
+`3a173e84a0d6f775499ef19e833e31709cf1ac74`. The refinements below incorporate that
+review; they do not authorize or implement runtime changes.
 
 ## Required invariant and current implementation trace
 
@@ -47,26 +50,57 @@ check that exact hash. Legacy queue delivery begins with no expected revision
 execution boundary; claiming the revision increment alone solves queued work
 would be incorrect.
 
-Proposed minimal execution contract:
+The lifecycle review confirms that durable W is necessary in addition to R for
+non-destructive preservation of old history/grants. It must cover every executable
+and recovery lineage, not just queued text or the repair endpoint.
 
-1. Apply only while the target task is quiescent: no active provider operation,
-   pending command/claim, recovery execution, or queued row awaiting delivery.
-   Pending work blocks **that task's repair** with an actionable reason; it is
-   never silently cancelled, released, copied, or assigned fresh authority.
-2. Persist W in the same transaction as R, mapping and receipt. Capture W with
-   every new local executable authority/claim; compare the captured value with
-   current W atomically at admission and immediately before dispatch. Legacy
-   unstamped grants cannot become executable after a repair. Normal unrelated
-   task revisions do not invalidate queue rows: W changes only on a workspace
-   association correction, not on every rename or queue edit.
-3. Revalidate quiescence while holding the task mutation/execution gates used by
-   admissions and drains. Serialize repair against the final dispatch decision;
-   never await provider work while holding the projection/SQLite lock. This needs
-   a narrow DocHost/store change in addition to identity allocation, coordinated
-   with the Commands owner. An execution already in flight blocks the repair.
-4. If old work reappears after restart/restore, its W mismatch holds it for review
-   before any provider call. It must not acquire the new W from the current task
-   merely because its payload hash still matches. Preserve its historical receipt.
+1. Apply only while the target task is quiescent: no active operation, pending
+   command/claim, queued row or nonterminal recovery. This includes Scheduled,
+   Held, RecoveryNeeded, WaitingForSignIn and CheckingDelivery, not only Running.
+   Command drains have their own executing set/processed ledger; an empty queue
+   is insufficient. Pending work blocks **that task's repair** without silently
+   cancelling, releasing, copying or re-authorizing it.
+2. Persist W in the same SQLite transaction as R, mapping and receipt. CAS expected
+   R/W/evidence; set W to the actual newly committed R. Capture original W with
+   local grant insertion, edit, move, claim and unknown/delivery transitions in
+   their existing hash-CAS transactions. Edits and claims preserve the captured W;
+   they must not reseal an old matching-hash row with current W. Legacy missing
+   stamps may mean zero only before the task's first repair; after repair they
+   hold/refuse. Normal renames/queue edits do not advance W.
+3. A request that passed an earlier check can wait behind repair. Compare its
+   **original** captured W after the Sessions transition gate, before a warm
+   mailbox send, fresh startup, or native steer. RecoveryRecord must persist that
+   original W and check it both at claim and at post-gate dispatch; unchanged
+   binding ID/G is not sufficient proof. Never substitute current W at restart.
+4. Respect the existing lane -> drain -> transition direction, or use fail-fast
+   quiescence if a drain is busy. Do not take transition then await drain_lock:
+   a drainer can already hold drain_lock while awaiting transition, creating a
+   cycle. Keep projection/SQLite locks synchronous and short. Admission, repair
+   and the final dispatch decision must share this serialization boundary.
+5. First repair version requires no retained idle provider runtime, even when
+   active_turn_id is None. A warm handle's current key lacks workspace/W. Block
+   with an actionable unload requirement unless an independently authorized
+   lifecycle action has gracefully retired it and observed positive EOF. Do not
+   force-kill, silently retire it, or reuse unstamped warm execution authority.
+
+A genuinely new, reviewed explicit Send/Steer command may re-admit held content
+with a fresh receipt/current W. Duplicate old receipts, edits, claims, import or
+recovery must not exploit that explicit adoption path. Historical applied receipts
+stay immutable and alone cannot create a fresh executable grant.
+
+W fences old-row reappearance only while its high-water mark survives. A full
+restore that rolls back W together with grants is **not** anti-replay protection.
+Restore/rebuild contracts must preserve v2/W or leave restored legacy execution
+unresolved until separately verified; no backup-internal patch is proposed here.
+
+### Reviewed current-source anchors (`3a173e84`)
+
+| Surface | Review evidence |
+| --- | --- |
+| Queue/admission/dispatch | `rpc.rs:2667` task lane; `doc_host.rs:5234/5252/5384` drain/hash/claim; `sessions.rs:2762-2764` transition waits and `:3029` warm send. |
+| Grant renewal | `store.rs:312-317/1474-1535` hash-only authority; `doc_host.rs:3459-3486` edits/inserts; `:3820-3860/4992-5030` explicit adoption. |
+| Recovery and idle runtime | `recovery.rs:22-36/346-350` unstamped record/CAS; `sessions.rs:4125-4190` recovery handling; `:1124-1149` idle live handles; `:540-545` binding key lacks workspace/W. |
+| Atomic repair | `task_identity.rs:2176-2206`, `workspace_host.rs:1032-1096`, `store.rs:3116-3153/3925-3947`: identity append, snapshots, receipt and applied R advance; extend the same transaction with W/evidence CAS. |
 
 ## Proposed API
 
@@ -176,9 +210,37 @@ select runnable tests. Set
 `LUNA_WORKSPACE_IDENTITY_REPORT_DIR` to a retained unique target/qa directory and
 capture stdout/stderr plus the original exit code, as in the parent design.
 
-Additional required tests before runtime changes to dispatch/storage: unchanged
-binding ID/G under a proven bound repair with injected read-only metadata, stale
-execution W at the last dispatch boundary, absence of default provider reads,
-snapshot/receipt/W atomic failure and idempotent recovery, unsupported old-reader
-refusal, and cross-task concurrent append. These require reviewed fault-injection
-seams; no new runtime seam is introduced by this source-only preparation.
+Required lifecycle-boundary fixtures before runtime implementation:
+
+- Pause queue/Run/native-steer and scheduled recovery after their early checks but
+  before the transition gate; race repair, then release dispatch and require the
+  original W to hold/refuse with zero provider starts/sends. Include an occupied
+  drain-lock case to prove the lock order does not deadlock.
+- Reimport an old locally matching-hash row after repair/restart; edit/move/claim
+  must retain old W and cannot execute it. A new reviewed Send/Steer can explicitly
+  re-admit; duplicate old receipt and implicit recovery cannot.
+- Exercise every nonterminal recovery state and an idle warm handle. Refusal must
+  preserve queued/recovery data and history; no forced termination or auto-start.
+- Inject failure before commit and after atomic R/W/snapshot commit but before
+  projection publication; reopen and prove one complete repair, immutable earlier
+  receipts, consistent execution authority, and independent task append.
+- Retain proven-bound ID/G with injected read-only metadata; prove no default
+  provider reads, old-reader refusal, and restoration of v2/W (or explicit restored
+  legacy fencing). Never claim a full rollback of both stamp and grants is fenced.
+
+These require reviewed fault-injection seams; no new runtime seam is introduced
+by this source-only preparation. The five unlinked API contracts are not claimed
+to cover these lifecycle races.
+
+## Proposed ownership for implementation review
+
+Workspace owns root/environment/source-scope allocation, versioned association
+events/proof, per-task preview/apply and identity fixtures. The original lifecycle
+owner should own DocHost admission/drains, Sessions post-gate/steer/idle guards and
+RecoveryRecord stamping. One coordinated sync/store migration and atomic-CAS patch
+must serve both, with only the necessary RPC/WorkspaceHost plumbing. This is a
+proposed split for the coordinator, not a parallel implementation grant.
+
+Do not alter `project_command_*` execution policy, Sidebar behavior, provider
+adapters or backup internals. Their owners review explicit compatibility/restore
+contracts separately. Foreign CRDT display integrity is a different concern.
