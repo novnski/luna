@@ -567,7 +567,7 @@ impl Render for ProjectCommandPanel {
                                 ))),
                         )
                         .child(
-                            command_action(&theme, !self.busy)
+                            command_action(&theme, !self.busy || (active && !self.write_pending))
                                 .id(SharedString::from(format!("control-command-{}", run.id)))
                                 .when(cfg!(test), |el| {
                                     el.debug_selector(|| format!("qa-command-control-{}", run.id))
