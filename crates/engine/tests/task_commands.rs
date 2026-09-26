@@ -697,7 +697,8 @@ async fn wait_for_receipt(
     command_id: &str,
     status: CommandReceiptStatus,
 ) -> CommandReceipt {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let last = Mutex::<Option<CommandReceipt>>::new(None);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let receipt: Option<CommandReceipt> = client
                 .call_as(
@@ -706,16 +707,43 @@ async fn wait_for_receipt(
                 )
                 .await
                 .unwrap();
-            if let Some(receipt) = receipt
-                && receipt.status == status
-            {
-                break receipt;
+            if let Some(receipt) = receipt {
+                if receipt.status == status {
+                    break receipt;
+                }
+                *last.lock().unwrap() = Some(receipt);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .unwrap()
+    .await;
+    outcome.unwrap_or_else(|_| {
+        let observed = last
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|receipt| {
+                let reason = receipt
+                    .reason
+                    .as_ref()
+                    .map(|reason| {
+                        format!(
+                            "{:?}: {}",
+                            reason.code,
+                            reason
+                                .message
+                                .replace('\n', " ")
+                                .chars()
+                                .take(160)
+                                .collect::<String>()
+                        )
+                    })
+                    .unwrap_or_else(|| "none".into());
+                format!("status={:?} reason={reason}", receipt.status)
+            })
+            .unwrap_or_else(|| "no receipt observed".into());
+        panic!("command {command_id} did not reach {status:?} within 5s; last {observed}");
+    })
 }
 
 async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
