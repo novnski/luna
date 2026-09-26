@@ -297,6 +297,8 @@ const MIGRATIONS: &[&str] = &[
         attempt INTEGER NOT NULL, updated_at INTEGER NOT NULL, receipt BLOB NOT NULL
      ) STRICT;
      CREATE INDEX project_command_runs_project ON project_command_runs(project_id,device_id);",
+    // v14 — profile-local side-chat leases, saved history and no-replay sends.
+    include_str!("migrations/side_chats.sql"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

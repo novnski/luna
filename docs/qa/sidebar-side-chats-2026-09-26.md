@@ -27,9 +27,12 @@ permissions can only become stricter afterward. No provider session ID from the
 parent is reused as the side session ID.
 
 Metadata, immutable creation hashes, no-replay send admission and transcript
-pages belong in profile `docs.sqlite3`. The required versioned migration is v14,
-after the separate commands worker's verified v13 prerequisite. The initial
-exploratory batch used ad hoc tables; it is not the final compatibility state.
+pages belong in profile `docs.sqlite3`. Migration v14 follows the commands
+storage prerequisite `fdefdfbababb0efa8587d333023d0e75437b6cfd` (adopted locally
+as `5d5cca95`). The source now registers v14 through DocsStore, removes ad hoc
+DDL from service/import connections, and raises backup compatibility to 14.
+The prerequisite's pre-WAL future-version guard is retained. Migration and
+backup runtime verification of the combined implementation is still pending.
 Native children remain hidden registry tasks for existing deletion/identity
 ownership. Parent deletion seals them and uses normal child deletion receipts.
 Local profile import copies ownership before publishing hidden child rows.
@@ -172,3 +175,23 @@ and follow-up reads, to 45 seconds; a timeout is an unknown outcome, not permiss
 to replay. Startup pending-adoption recovery excludes side IDs before native
 provider reads. Agent rendering stops collecting after the first 100 rows plus
 a one-row overflow signal; no roster-specific subscription is created.
+
+## Schema v14 source checkpoint
+
+The prerequisite applied without conflicts. Failure-first file-backed cases in
+`crates/sync/tests/side_chat_store.rs` cover upgrading an existing v13 profile
+without losing project-command config, idempotent reopen with side transcript
+and send records, transaction rollback after a midway DDL collision, and exact
+byte preservation when version 15 is refused before WAL changes.
+
+The existing backup future-schema fixture now uses version 15 and expects a
+ceiling of 14. Its synthetic v9 fixture removes every post-v9 table before
+restore, including v13 project commands and v14 side storage. Current-version
+expectations are 14. Backup validation also refuses a v13/v14 database missing
+the feature tables its version requires. The saved side-chat archive round trip
+checks metadata, origin quote and transcript bytes through the real service.
+
+No Cargo or native app command ran for this schema checkpoint. Required queued
+checks include the `project_command_store` and `side_chat_store` integration
+targets, the complete `backup_restore` target, and the sidebar lifecycle suites.
+The fake-Edge failing-before test still precedes export suppression.

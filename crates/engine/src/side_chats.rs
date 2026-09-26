@@ -17,23 +17,6 @@ pub const SIDE_CHAT_LIFETIME_MS: i64 = 2 * 60 * 60 * 1000;
 const LEASE_MS: i64 = 30_000;
 const PAGE_SIZE: usize = 50;
 
-const SIDE_CHAT_SCHEMA: &str = "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-            CREATE TABLE IF NOT EXISTS side_chats (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
-                parent_id TEXT NOT NULL, title TEXT NOT NULL, created_at_ms INTEGER NOT NULL,
-                expires_at_ms INTEGER NOT NULL, state TEXT NOT NULL, detail TEXT,
-                config TEXT NOT NULL, cwd TEXT NOT NULL, context TEXT NOT NULL,
-                context_mode TEXT NOT NULL, origin_message_id TEXT, anchor_text TEXT, creation_hash TEXT NOT NULL,
-                needs_recovery INTEGER NOT NULL DEFAULT 0);
-            CREATE INDEX IF NOT EXISTS side_chats_parent ON side_chats(parent_id,seq DESC);
-            CREATE TABLE IF NOT EXISTS side_chat_entries (
-                chat_id TEXT NOT NULL, seq INTEGER NOT NULL, entry TEXT NOT NULL,
-                PRIMARY KEY(chat_id,seq));
-            CREATE TABLE IF NOT EXISTS side_chat_sends (
-                chat_id TEXT NOT NULL, message_id TEXT NOT NULL, state TEXT NOT NULL, payload_hash TEXT NOT NULL,
-                PRIMARY KEY(chat_id,message_id));
-";
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SideChatMeta {
@@ -119,9 +102,11 @@ impl SideChats {
             .try_admit()
             .map_err(|error| anyhow::anyhow!("Side chat write admission denied: {error:?}"))?;
         let path = root.join("docs.sqlite3");
-        let db = Connection::open(&path)?;
+        // DocsStore has already applied the versioned migration under the
+        // profile's writer authority. This connection never creates a schema.
+        let db = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         db.busy_timeout(Duration::from_secs(3))?;
-        db.execute_batch(SIDE_CHAT_SCHEMA)?;
+        db.pragma_update(None, "synchronous", "FULL")?;
         db.execute_batch("            UPDATE side_chats SET state='recovered', needs_recovery=1,
                 detail='Recovered after restart. Saved history is read-only.'
                 WHERE state IN ('active','closing','closeFailed');
@@ -994,9 +979,9 @@ pub(crate) fn import_saved(source: &Path, target: &Path) -> Result<()> {
         return Ok(());
     }
     drop(source_db);
-    let mut db = Connection::open(target)?;
+    let mut db = Connection::open_with_flags(target, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     db.busy_timeout(Duration::from_secs(3))?;
-    db.execute_batch(SIDE_CHAT_SCHEMA)?;
+    db.pragma_update(None, "synchronous", "FULL")?;
     db.execute(
         "ATTACH DATABASE ?1 AS side_import",
         [source.to_string_lossy().as_ref()],
