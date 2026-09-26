@@ -75,6 +75,7 @@ pub struct SkillRoots {
 struct SkillLocation {
     base: PathBuf,
     root: PathBuf,
+    identity_root: PathBuf,
     source: &'static str,
     source_id: &'static str,
     scope: IntegrationSkillScope,
@@ -127,9 +128,32 @@ impl SkillRoots {
             ),
             _ => return Err(EngineError::Other("Unsupported skill provider".into())),
         };
+        let identity_root = base.join(suffix);
+        // A global provider config may deliberately link its skills folder to
+        // a shared user-owned library. Resolve that selected root once, then
+        // reject symlinks beneath it. Project roots never get this exception.
+        let linked_global_root = scope == IntegrationSkillScope::Global
+            && std::fs::symlink_metadata(&identity_root)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+        let root = if linked_global_root {
+            let canonical = identity_root.canonicalize()?;
+            if !canonical.is_dir() {
+                return Err(EngineError::Other(
+                    "Global skill root link does not point to a directory".into(),
+                ));
+            }
+            canonical
+        } else {
+            identity_root.clone()
+        };
         Ok(SkillLocation {
-            base: base.clone(),
-            root: base.join(suffix),
+            base: if linked_global_root {
+                root.clone()
+            } else {
+                base.clone()
+            },
+            root,
+            identity_root,
             source,
             source_id,
             scope,
@@ -183,7 +207,7 @@ pub fn skill_inventory(provider: HarnessId, roots: &SkillRoots) -> IntegrationIn
                     provider,
                     &roots.machine_id,
                     location.source_id,
-                    &location.root,
+                    &location.identity_root,
                     &name,
                 )),
                 name,
@@ -459,7 +483,7 @@ pub fn codex_inventory(
         machine_id: machine_id.into(),
         items,
         unavailable_reason,
-        help: "This read covers Codex-home skills, project .agents/skills, and mcp_servers in Codex config.toml. Provider-managed skills and live attachment are unverified. Manage entries with their owner, Codex or the chosen gateway; LUNA cannot enable, authenticate, or register a duplicate here.".into(),
+        help: "This read covers Codex-home skills, project .agents/skills, and mcp_servers in Codex config.toml. LUNA can manage regular skill folders here; provider availability and selected-session attachment remain separate checks. MCP servers stay with Codex or Executor.".into(),
     }
 }
 
@@ -546,7 +570,7 @@ pub fn apply_codex_skill_catalog(
     view.items.sort_by(|a, b| {
         (&a.kind, &a.scope, &a.name, &a.identity).cmp(&(&b.kind, &b.scope, &b.name, &b.identity))
     });
-    view.help = "Codex skills/list was read for the selected workspace and account. File discovery and provider-reported enablement are separate; neither proves selected-session attachment. MCP server health and attachment remain unverified. Manage integrations with Codex or the chosen gateway.".into();
+    view.help = "Codex skills/list was read for the selected workspace and account. LUNA can manage regular skill folders; provider-reported enablement still does not prove selected-session attachment. MCP server health and attachment remain unverified.".into();
 }
 
 pub fn mark_codex_catalog_unavailable(view: &mut IntegrationInventoryView) {
@@ -829,7 +853,7 @@ fn resolved_skill(
                     provider,
                     &roots.machine_id,
                     location.source_id,
-                    &location.root,
+                    &location.identity_root,
                     &name,
                 ) == identity
                 && entry.path().join("SKILL.md").is_file()
@@ -973,7 +997,7 @@ pub fn save_skill_document(
         provider,
         &roots.machine_id,
         location.source_id,
-        &location.root,
+        &location.identity_root,
         name,
     );
     skill_document(provider, roots, &identity)
@@ -1134,7 +1158,7 @@ pub fn install_skill(
         destination_provider,
         &roots.machine_id,
         destination.source_id,
-        &destination.root,
+        &destination.identity_root,
         &source.name,
     );
     skill_document(destination_provider, roots, &identity)

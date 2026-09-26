@@ -7,7 +7,9 @@ Codex, Claude, and OpenCode configuration roots.
 1. A project skill directory or `SKILL.md` symlink points to a synthetic secret
    outside the selected owner root. Discovery may report the entry, but
    `GetSkillDocument` must not return the secret bytes. Save, install, and
-   remove must leave the target untouched.
+   remove must leave the target untouched. A deliberately linked *global*
+   provider skill root may resolve to a shared user directory, while a nested
+   symlink inside it remains blocked.
 2. An existing skill changes after inspection. Save and remove with the old
    revision must fail without overwriting or deleting it. A supporting script
    changing after inspection must also block removal and installation.

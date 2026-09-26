@@ -186,6 +186,44 @@ fn outside_symlink_is_never_read_or_mutated() {
         std::fs::read_to_string(&secret).unwrap(),
         "SYNTHETIC_SECRET_DO_NOT_RETURN"
     );
+
+    // A user-owned global config can deliberately link its skill root to a
+    // shared directory. The root is trusted; nested skill links still are not.
+    let shared = temp.path().join("shared-global-skills");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(roots.codex_home.as_ref().unwrap()).unwrap();
+    symlink(&shared, roots.codex_home.as_ref().unwrap().join("skills")).unwrap();
+    let managed = save_skill_document(
+        HarnessId::Codex,
+        &roots,
+        IntegrationSkillScope::Global,
+        "linked-root",
+        &content("linked-root"),
+        None,
+    )
+    .unwrap();
+    assert!(shared.join("linked-root/SKILL.md").is_file());
+    assert_eq!(
+        skill_document(HarnessId::Codex, &roots, &managed.identity)
+            .unwrap()
+            .content,
+        content("linked-root")
+    );
+    let outside_skill = temp.path().join("outside-skill");
+    std::fs::create_dir(&outside_skill).unwrap();
+    std::fs::write(
+        outside_skill.join("SKILL.md"),
+        "SYNTHETIC_SECRET_DO_NOT_RETURN",
+    )
+    .unwrap();
+    symlink(&outside_skill, shared.join("nested-leak")).unwrap();
+    let nested_identity = skill_inventory(HarnessId::Codex, &roots)
+        .items
+        .into_iter()
+        .find(|item| item.name == "nested-leak")
+        .and_then(|item| item.identity)
+        .unwrap();
+    assert!(skill_document(HarnessId::Codex, &roots, &nested_identity).is_err());
 }
 
 #[test]
