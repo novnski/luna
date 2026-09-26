@@ -85,3 +85,21 @@ are asserted through actual MouseDown/Up delivery, establishing those bounds are
 still the delivered frame. Scope/busy/render observations before and after input
 are captured inside the same closure. Post-update eager drawing is recorded in
 a separate afterUpdateRender field and is not a stale-input premise.
+
+## Authentic baseline and minimal admission correction
+
+Coordinator and Commands owner read the exact `80bd8e08` baseline3 artifacts:
+fresh control1pass; four authenticated behavior failures. Stale Run/Retry/Stop
+each sent one RPC toB with old bounds retained and painted/before/after-input
+render counts2/2/2; the test-only post-update count was3. The busy case also sent
+one target Build RPC with busy=true and input render2. Actual live generation2
+and cached/painted generation1 were separately recorded. Logs and JSON remain
+in Defaults' `button-admission-baseline-3/`; earlier failed fixture evidence stays.
+
+Only after that baseline, the production source correction captures each Run
+and Retry/Stop button's rendered scope and checks it against live AppState before
+entering execute. execute rechecks live busy after synchronizing its current
+scope and returns without replacing an existing waiter when busy. The existing
+response/output fences, PTY ownership, backend receipts, polling cadence and UI
+layout/theme are unchanged. No fixture/assertion/helper/vendor changes or new
+tests accompany the correction. Fixed verification is pending an explicit grant.
