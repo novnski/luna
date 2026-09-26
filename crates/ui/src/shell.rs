@@ -70,7 +70,9 @@ use crate::transcript::{self, Transcript, TranscriptEvent};
 use crate::workspace_links::resolve_workspace_file_link;
 
 mod activity_center;
+mod agents;
 mod command_palette;
+mod side_chats;
 mod spaces;
 mod tabs;
 mod usage;
@@ -536,6 +538,8 @@ pub enum RightSurface {
     /// A subagent's transcript, read-only (per-subagent viz) — the handle
     /// keys [`Shell::subagent_tabs`].
     Subagent(u64),
+    Agents,
+    SideChats,
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
@@ -1684,6 +1688,9 @@ struct OrgGateUi {
 /// read-only transcript entity whose drop tears the view down.
 struct SubagentTab {
     doc_id: String,
+    chat_id: String,
+    frozen: bool,
+    paused: bool,
     title: SharedString,
     transcript: Entity<Transcript>,
     /// Keeps a frozen-blob fetch alive (it falls back to a live doc watch).
@@ -1723,6 +1730,69 @@ enum PendingExit {
     Quit,
     RuntimeChange,
     InstallUpdate(PathBuf),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarNoticeTone {
+    Status,
+    Error,
+}
+
+/// Clones retain ownership; every newly published notice has its own identity,
+/// including consecutive progress messages with identical text.
+#[derive(Clone, Debug)]
+struct SidebarNotice {
+    id: uuid::Uuid,
+    tone: SidebarNoticeTone,
+    message: SharedString,
+}
+
+impl SidebarNotice {
+    fn new(tone: SidebarNoticeTone, message: impl Into<SharedString>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            tone,
+            message: message.into(),
+        }
+    }
+
+    fn status(message: impl Into<SharedString>) -> Self {
+        Self::new(SidebarNoticeTone::Status, message)
+    }
+}
+
+// Existing error-strip callers keep their current presentation. Status is
+// explicit at the side-chat progress and confirmation call sites.
+impl From<SharedString> for SidebarNotice {
+    fn from(message: SharedString) -> Self {
+        Self::new(SidebarNoticeTone::Error, message)
+    }
+}
+
+impl From<String> for SidebarNotice {
+    fn from(message: String) -> Self {
+        Self::new(SidebarNoticeTone::Error, message)
+    }
+}
+
+impl From<&'static str> for SidebarNotice {
+    fn from(message: &'static str) -> Self {
+        Self::new(SidebarNoticeTone::Error, message)
+    }
+}
+
+impl std::fmt::Display for SidebarNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.message, f)
+    }
+}
+
+impl std::ops::Deref for SidebarNotice {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.message.as_ref()
+    }
 }
 
 pub struct Shell {
@@ -1800,6 +1870,8 @@ pub struct Shell {
     /// [`Transcript`] pinned to its subagent doc.
     subagent_tabs: std::collections::HashMap<u64, SubagentTab>,
     subagent_seq: u64,
+    side_chat_panel: Option<Entity<side_chats::SideChatPanel>>,
+    side_chat_events: Option<Subscription>,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
@@ -1911,8 +1983,8 @@ pub struct Shell {
     keep_awake: crate::power::KeepAwake<crate::power::SystemPower>,
     /// `settings.last_space_id` applied once after the first spaces frame.
     space_boot_applied: bool,
-    /// Inline sidebar error strip (mutation failures); click dismisses.
-    sidebar_notice: Option<SharedString>,
+    /// Inline sidebar status/error notice; dismissal retires its ownership.
+    sidebar_notice: Option<SidebarNotice>,
     cleanup_summary_generation: Option<u64>,
     cleanup_summary_last: Option<String>,
     /// Local lifecycle of an in-app update (macOS bundle swap) — the engine's
@@ -2260,6 +2332,8 @@ impl Shell {
             diff_seq: 0,
             subagent_tabs: std::collections::HashMap::new(),
             subagent_seq: 0,
+            side_chat_panel: None,
+            side_chat_events: None,
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
@@ -2707,6 +2781,13 @@ impl Shell {
         // Healing a persisted, deleted filter above changes the effective
         // Project scope without changing AppState again.
         self.reconcile_session_history_scope(false, cx);
+        if self
+            .side_chat_panel
+            .as_ref()
+            .is_some_and(|panel| !panel.read(cx).is_current(cx))
+        {
+            self.release_side_chat(cx);
+        }
         // Chat switch: restore THAT chat's panel state (per-session open flags;
         // snap, no tween — the panels belong to the destination chat).
         let selected = state.read(cx).selected_chat.clone().unwrap_or_default();
@@ -2714,6 +2795,8 @@ impl Shell {
             self.last_appshot_chat = Some(selected.clone());
         }
         if selected != self.active_chat {
+            self.release_side_chat(cx);
+            self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             self.active_chat = selected;
             // Route history: a chat switch is a navigation. The very first
@@ -2861,6 +2944,8 @@ impl Shell {
         let key = self.panel_key(cx);
         let open = self.panels.toggle_changes(&key);
         if !open {
+            self.release_side_chat(cx);
+            self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             // Closing always leaves takeover mode — reopening at full bleed
             // with the conversation gone read as a broken chat.
@@ -3019,6 +3104,8 @@ impl Shell {
                         browser.page.url.clone().map(Into::into),
                     )
                 }),
+                RightSurface::Agents => Some((*surface, "Agents".into(), false, None)),
+                RightSurface::SideChats => Some((*surface, "Side chats".into(), false, None)),
                 RightSurface::Picker => None,
             })
             .collect()
@@ -3038,6 +3125,8 @@ impl Shell {
             RightSurface::Picker
             | RightSurface::Diff(_)
             | RightSurface::Terminal(_)
+            | RightSurface::Agents
+            | RightSurface::SideChats
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_) => {
                 return None;
@@ -3110,6 +3199,8 @@ impl Shell {
 
     fn set_right_active(&mut self, surface: RightSurface, cx: &mut Context<Self>) {
         if self.resolved_right_active(cx) != surface {
+            self.release_side_chat(cx);
+            self.suspend_subagent_watches(Some(surface), cx);
             self.suspend_file_images(cx);
         }
         let key = self.panel_key(cx);
@@ -3141,7 +3232,10 @@ impl Shell {
             }
             // The tab's feed (watch or snapshot) runs from open to close —
             // activation needs no revalidation.
-            RightSurface::Subagent(_) | RightSurface::Browser(_) => {}
+            RightSurface::Subagent(_)
+            | RightSurface::Browser(_)
+            | RightSurface::Agents
+            | RightSurface::SideChats => {}
             RightSurface::Picker => {}
         }
         cx.notify();
@@ -3628,6 +3722,18 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match event {
+            TranscriptEvent::StartSideChat {
+                task_id,
+                message_id,
+                text,
+            } => {
+                if self.active_chat == *task_id {
+                    self.release_side_chat(cx);
+                    self.add_work_surface(RightSurface::SideChats, cx);
+                    self.create_side_chat_panel(Some((message_id.clone(), text.clone())), cx);
+                }
+            }
+            TranscriptEvent::SideChatResult { .. } => {}
             TranscriptEvent::OpenSubagent {
                 chat_id,
                 doc_id,
@@ -3710,6 +3816,9 @@ impl Shell {
             id,
             SubagentTab {
                 doc_id,
+                chat_id,
+                frozen,
+                paused: false,
                 title: title.into(),
                 transcript,
                 _fetch: fetch,
@@ -3722,6 +3831,38 @@ impl Shell {
             .or_default()
             .push(RightSurface::Subagent(id));
         self.set_right_active(RightSurface::Subagent(id), cx);
+    }
+
+    fn suspend_subagent_watches(&mut self, except: Option<RightSurface>, cx: &mut Context<Self>) {
+        for (id, tab) in &mut self.subagent_tabs {
+            if except == Some(RightSurface::Subagent(*id)) || tab.paused {
+                continue;
+            }
+            tab._fetch = None;
+            tab.paused = true;
+            self.state.update(cx, |state, cx| {
+                state.unwatch_subagent_doc(&tab.doc_id);
+                cx.notify();
+            });
+        }
+    }
+
+    fn resume_subagent_watch(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.subagent_tabs.get(&id).filter(|tab| tab.paused) else {
+            return;
+        };
+        let (chat, doc, frozen) = (tab.chat_id.clone(), tab.doc_id.clone(), tab.frozen);
+        let fetch = if frozen {
+            self.spawn_subagent_snapshot_fetch(&chat, &doc, cx)
+        } else {
+            self.state
+                .update(cx, |state, cx| state.watch_subagent_doc(doc, cx));
+            None
+        };
+        if let Some(tab) = self.subagent_tabs.get_mut(&id) {
+            tab._fetch = fetch;
+            tab.paused = false;
+        }
     }
 
     /// Fetch a finished subagent's frozen transcript blob
@@ -3822,7 +3963,8 @@ impl Shell {
                         .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
                 }
             }
-            RightSurface::Picker => {}
+            RightSurface::SideChats => self.release_side_chat(cx),
+            RightSurface::Agents | RightSurface::Picker => {}
         }
         self.panels.update(&key, |p| {
             if p.right_active == surface {
@@ -8101,8 +8243,11 @@ impl Shell {
             .when_some(self.render_update_strip(theme, cx), |el, strip| {
                 el.child(strip)
             })
-            // Inline mutation-failure notice.
+            // Keep error styling for existing callers; side-chat progress and
+            // confirmation use the activity notice's non-error theme tokens.
             .when_some(self.sidebar_notice.clone(), |el, notice| {
+                let notice_id = notice.id;
+                let is_status = notice.tone == SidebarNoticeTone::Status;
                 el.child(
                     div()
                         .id("sidebar-notice")
@@ -8112,18 +8257,29 @@ impl Shell {
                         .py(px(4.0))
                         .rounded(px(Theme::CONTROL_RADIUS))
                         .border_1()
-                        .border_color(theme.danger)
+                        .border_color(if is_status {
+                            theme.border
+                        } else {
+                            theme.danger
+                        })
+                        .when(is_status, |el| el.bg(theme.accent_wash))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.danger)
+                        .text_color(if is_status { theme.text } else { theme.danger })
                         .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar_notice = None;
-                            cx.notify();
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this
+                                .sidebar_notice
+                                .as_ref()
+                                .is_some_and(|current| current.id == notice_id)
+                            {
+                                this.sidebar_notice = None;
+                                cx.notify();
+                            }
                         }))
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .child(div().flex_1().min_w_0().child(notice))
+                        .child(div().flex_1().min_w_0().child(notice.message))
                         .child(
                             div()
                                 .flex_none()
@@ -10664,6 +10820,8 @@ impl Shell {
         let content: AnyElement = if self.right_pane_open(cx) || self.tween_active(self.right_tween)
         {
             match self.resolved_right_active(cx) {
+                RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
+                RightSurface::SideChats if self.right_pane_open(cx) => self.render_side_chats(cx),
                 // Rendering a Files surface activates its image. Keep it unmounted
                 // throughout the closing animation after suspending its resources.
                 RightSurface::Files | RightSurface::File(_) if !self.right_pane_open(cx) => {
@@ -10721,7 +10879,10 @@ impl Shell {
                     });
                     panel.into_any_element()
                 }
-                RightSurface::Subagent(id) if self.subagent_tabs.contains_key(&id) => {
+                RightSurface::Subagent(id)
+                    if self.right_pane_open(cx) && self.subagent_tabs.contains_key(&id) =>
+                {
+                    self.resume_subagent_watch(id, cx);
                     let transcript = self
                         .subagent_tabs
                         .get(&id)
@@ -10825,6 +10986,10 @@ impl Shell {
         let row = |id: &'static str, icon_path: &'static str, title: &'static str| {
             div()
                 .id(id)
+                .role(gpui::Role::Button)
+                .aria_label(title)
+                .tab_index(0)
+                .focus_visible(move |style| style.border_color(border_strong))
                 .w_full()
                 .h(px(44.0))
                 .px(px(14.0))
@@ -10860,6 +11025,42 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
+                    .when(!self.active_chat.is_empty(), |el| {
+                        el.child(
+                            row("surface-card-agents", icons::BOT, "Agents")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.add_work_surface(RightSurface::Agents, cx)
+                                }))
+                                .on_key_down(cx.listener(
+                                    |this, event: &gpui::KeyDownEvent, _, cx| {
+                                        if is_settings_nav_activation(
+                                            &event.keystroke.key,
+                                            event.is_held,
+                                        ) {
+                                            this.add_work_surface(RightSurface::Agents, cx);
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                )),
+                        )
+                        .child(
+                            row("surface-card-side-chats", icons::PLUS, "Side chats")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.add_work_surface(RightSurface::SideChats, cx)
+                                }))
+                                .on_key_down(cx.listener(
+                                    |this, event: &gpui::KeyDownEvent, _, cx| {
+                                        if is_settings_nav_activation(
+                                            &event.keystroke.key,
+                                            event.is_held,
+                                        ) {
+                                            this.add_work_surface(RightSurface::SideChats, cx);
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                )),
+                        )
+                    })
                     .child(
                         row("surface-card-files", icons::FOLDER_WITH_FILES, "Files").on_click(
                             cx.listener(|this, _, window, cx| {
@@ -11092,7 +11293,8 @@ impl Shell {
                         }
                     })
                     .unwrap_or(icons::LIST),
-                RightSurface::Subagent(_) => icons::BOT,
+                RightSurface::Subagent(_) | RightSurface::Agents => icons::BOT,
+                RightSurface::SideChats => icons::PLUS,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Browser(_) => icons::GLOBE,
                 RightSurface::Picker => icons::PLUS,
@@ -11407,6 +11609,66 @@ impl Shell {
                                 )
                                 .child(SharedString::from("Browser")),
                         )
+                        .when(!self.active_chat.is_empty(), |menu| {
+                            menu.child(
+                                popover::menu_row(&theme, false, "right-plus-agents")
+                                    .id("right-plus-agents-row")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Agents")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_work_surface(RightSurface::Agents, cx);
+                                        this.close_right_plus(cx);
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, _, cx| {
+                                            if is_settings_nav_activation(
+                                                &event.keystroke.key,
+                                                event.is_held,
+                                            ) {
+                                                this.add_work_surface(RightSurface::Agents, cx);
+                                                this.close_right_plus(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        icon(icons::BOT)
+                                            .size(px(13.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Agents"),
+                            )
+                            .child(
+                                popover::menu_row(&theme, false, "right-plus-side-chats")
+                                    .id("right-plus-side-chats-row")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Side chats")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_work_surface(RightSurface::SideChats, cx);
+                                        this.close_right_plus(cx);
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, _, cx| {
+                                            if is_settings_nav_activation(
+                                                &event.keystroke.key,
+                                                event.is_held,
+                                            ) {
+                                                this.add_work_surface(RightSurface::SideChats, cx);
+                                                this.close_right_plus(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        icon(icons::PLUS)
+                                            .size(px(13.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Side chats"),
+                            )
+                        })
                         .child(
                             popover::menu_row(&theme, false, "right-plus-terminal")
                                 .id("right-plus-terminal-row")
@@ -14760,6 +15022,568 @@ mod exit_regressions {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert!(done(cx), "session history fixture did not settle");
+    }
+
+    // Failure-first retained-Shell coverage; see the matrix in
+    // docs/qa/sidebar-notice-ownership-2026-09-26.md. This is a memory RPC
+    // boundary fixture, not a second implementation of the release callback.
+    mod sidebar_notice_regressions {
+        use super::*;
+        use crate::shell::side_chats::SideChatEvent;
+        use serde_json::{Value, json};
+
+        const DRAFT: &str = "Existing parent draft — keep this.";
+        const RESULT: &str = "SIDEBAR_NOTICE_HANDOFF_RESULT";
+        const CONFIRMATION: &str = "Added to the parent draft. Review it and press Send.";
+        const PROGRESS: &str = "Stopping side chat and saving its transcript…";
+        const NEW_ERROR: &str = "A newer operation failed; keep this error visible.";
+
+        struct HeldUnloadRpc {
+            drafts: ShellDraftRpc,
+            calls: Mutex<Vec<(String, Value)>>,
+            lifecycle: Mutex<Vec<Value>>,
+            gates: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<(), RpcError>>>>,
+            created: AtomicUsize,
+            returned: AtomicUsize,
+        }
+
+        impl HeldUnloadRpc {
+            fn new() -> Self {
+                Self {
+                    drafts: ShellDraftRpc::new(vec![shell_draft(
+                        HANDOFF_SOURCE,
+                        Some(HANDOFF_SOURCE),
+                        7,
+                        DRAFT,
+                    )]),
+                    calls: Mutex::new(Vec::new()),
+                    lifecycle: Mutex::new(Vec::new()),
+                    gates: Mutex::new(HashMap::new()),
+                    created: AtomicUsize::new(0),
+                    returned: AtomicUsize::new(0),
+                }
+            }
+
+            fn meta(id: &str) -> Value {
+                json!({
+                    "id": id, "parentId": HANDOFF_SOURCE, "title": "Held unload fixture",
+                    "createdAtMs": 1, "expiresAtMs": i64::MAX, "state": "active",
+                    "detail": null, "messageCount": 0,
+                    "config": {"harness": "mock", "model": "synthetic-notice", "sandbox": "read-only"},
+                    "contextMode": "snapshot", "originMessageId": "handoff-assistant",
+                    "anchorText": "Visible assistant context"
+                })
+            }
+
+            fn release(&self, id: &str, fail: bool) {
+                let sender = self.gates.lock().unwrap().remove(id).expect("held unload");
+                sender
+                    .send(if fail {
+                        Err(RpcError::Failed("fixture unload failed".into()))
+                    } else {
+                        Ok(())
+                    })
+                    .expect("production release is still awaiting its RPC reply");
+            }
+
+            fn record_lifecycle(&self, method: &str, phase: &str, detail: Value) {
+                let mut lifecycle = self.lifecycle.lock().unwrap();
+                if lifecycle.len() < 128 {
+                    let sequence = lifecycle.len();
+                    lifecycle.push(json!({
+                        "sequence": sequence, "method": method, "phase": phase, "detail": detail
+                    }));
+                }
+            }
+        }
+
+        #[async_trait]
+        impl RpcService for HeldUnloadRpc {
+            async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((method.into(), params.clone()));
+                self.record_lifecycle(
+                    method,
+                    "received",
+                    json!({
+                        "params_preview": params.to_string().chars().take(1024).collect::<String>()
+                    }),
+                );
+                // Preserve dispatch and reply semantics, including error
+                // returns, while recording the fixture's RPC lifecycle.
+                let result = async {
+                    match method {
+                        methods::CREATE_SIDE_CHAT => {
+                            assert_eq!(params["parentId"], HANDOFF_SOURCE);
+                            let n = self.created.fetch_add(1, Ordering::SeqCst) + 1;
+                            RpcReply::value(&json!({
+                                "meta": Self::meta(&format!("held-side-{n}")),
+                                "lease": format!("held-lease-{n}")
+                            }))
+                        }
+                        methods::READ_SIDE_CHAT => RpcReply::value(&json!({
+                            "meta": Self::meta(params["id"].as_str().expect("side id")),
+                            "entries": [], "before": null, "working": false, "status": null
+                        })),
+                        methods::LIST_SIDE_CHATS => {
+                            RpcReply::value(&json!({"items": [], "before": null}))
+                        }
+                        methods::UNLOAD_SIDE_CHAT => {
+                            let id = params["id"].as_str().expect("unload id").to_owned();
+                            let n = id.strip_prefix("held-side-").expect("created side id");
+                            assert_eq!(params["lease"], format!("held-lease-{n}"));
+                            let (sender, receiver) = tokio::sync::oneshot::channel();
+                            assert!(self.gates.lock().unwrap().insert(id, sender).is_none());
+                            let result =
+                                receiver.await.expect("test must release every held reply");
+                            self.returned.fetch_add(1, Ordering::SeqCst);
+                            result?;
+                            RpcReply::value(&json!({"unloaded": true}))
+                        }
+                        // Only these two fixture writes are allowed. Any accidental
+                        // command/queue/provider call remains recorded and fails.
+                        methods::GET_COMPOSER_DRAFT
+                        | methods::SAVE_COMPOSER_DRAFT
+                        | methods::GET_TASK_COMMAND_RECEIPT => {
+                            self.drafts.handle(method, params).await
+                        }
+                        _ => Err(RpcError::UnknownMethod(method.into())),
+                    }
+                }
+                .await;
+                let summary = match &result {
+                    Ok(RpcReply::Value(value)) => json!({
+                        "kind": "value", "preview": value.to_string().chars().take(1024).collect::<String>()
+                    }),
+                    Ok(RpcReply::Stream(_)) => json!({"kind": "stream"}),
+                    Err(error) => {
+                        json!({"kind": "error", "message": error.to_string().chars().take(1024).collect::<String>()})
+                    }
+                };
+                self.record_lifecycle(method, "returned", summary);
+                result
+            }
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum Newer {
+            None,
+            Handoff,
+            Error,
+            Dismiss,
+            IdenticalProgress,
+        }
+
+        fn notice(window: &gpui::WindowHandle<Shell>, cx: &mut TestAppContext) -> Option<String> {
+            window
+                .read_with(cx, |shell, _| {
+                    shell.sidebar_notice.as_ref().map(ToString::to_string)
+                })
+                .unwrap()
+        }
+
+        fn setup_failure_readback(
+            case_stage: (&str, &str),
+            polls: usize,
+            window: &gpui::WindowHandle<Shell>,
+            cx: &mut TestAppContext,
+            service: &HeldUnloadRpc,
+        ) {
+            let (case, stage) = case_stage;
+            let ui = window.read_with(cx, |shell, cx| {
+                let state = shell.state.read(cx);
+                let composer = shell.composer.read(cx);
+                json!({
+                    "active_chat": shell.active_chat, "selected_chat": state.selected_chat,
+                    "engine_present": state.engine().is_some(), "engine_generation": state.engine_generation(),
+                    "composer_owner": composer.current_key,
+                    "composer_text": composer.input.read(cx).text().chars().take(1024).collect::<String>(),
+                    "composer_failure": composer.failure.as_ref().map(|text| text.chars().take(1024).collect::<String>()),
+                    "notice": shell.sidebar_notice.as_ref().map(|text| text.chars().take(1024).collect::<String>()),
+                    "panel_present": shell.side_chat_panel.is_some(),
+                    "release_request": shell.side_chat_panel.as_ref().and_then(|panel|
+                        panel.read(cx).release_request().map(|(_, id, lease)| json!({"id":id,"lease":lease}))),
+                    "parent_transcript_entries": state.transcript.len()
+                })
+            }).unwrap();
+            let calls = service.calls.lock().unwrap();
+            let mut gates = service
+                .gates
+                .lock()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            gates.sort();
+            let evidence = json!({
+                "case": case, "stage": stage, "classification": "fixture_wait_did_not_settle",
+                "predicate_checks": polls, "ui": ui,
+                "persisted_parent_draft": service.drafts.text_for_task(Some(HANDOFF_SOURCE)).map(|text| text.chars().take(1024).collect::<String>()),
+                "rpc_call_count": calls.len(),
+                "rpc_calls_truncated": calls.len() > 64,
+                "rpc_calls": calls.iter().take(64).map(|(method,params)| json!({
+                    "method":method,"params_preview":params.to_string().chars().take(1024).collect::<String>()
+                })).collect::<Vec<_>>(),
+                "rpc_lifecycle": service.lifecycle.lock().unwrap().clone(),
+                "held_gate_ids": gates.into_iter().take(32).collect::<Vec<_>>(),
+                "created_count": service.created.load(Ordering::SeqCst),
+                "unload_returned_count": service.returned.load(Ordering::SeqCst),
+                "ownership_assertions_reached": false
+            });
+            if let Some(path) = std::env::var_os("LUNA_SIDEBAR_NOTICE_EVIDENCE_DIR") {
+                let path = PathBuf::from(path);
+                std::fs::create_dir_all(&path).unwrap();
+                let safe_stage: String = stage
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                    .collect();
+                std::fs::write(
+                    path.join(format!("{case}.{safe_stage}.setup-failure.json")),
+                    serde_json::to_vec_pretty(&evidence).unwrap(),
+                )
+                .unwrap();
+            }
+            eprintln!("SIDEBAR_NOTICE_SETUP_FAILURE case={case} stage={stage} checks={polls}");
+        }
+
+        fn wait_notice_stage(
+            case_stage: (&str, &str),
+            window: &gpui::WindowHandle<Shell>,
+            cx: &mut TestAppContext,
+            runtime: &tokio::runtime::Runtime,
+            service: &HeldUnloadRpc,
+            history_pump: bool,
+            mut done: impl FnMut(&mut TestAppContext) -> bool,
+        ) {
+            // Both existing helpers recheck their unchanged predicate once in
+            // the final assert (100+1 or 250+1). Capture only that failure, so
+            // diagnostics add no delay, sleep, or scheduling change to a wait.
+            let final_check = if history_pump { 251 } else { 101 };
+            let mut polls = 0;
+            let predicate = |cx: &mut TestAppContext| {
+                polls += 1;
+                let settled = done(cx);
+                if !settled && polls == final_check {
+                    setup_failure_readback(case_stage, polls, window, cx, service);
+                }
+                settled
+            };
+            if history_pump {
+                pump_history_until(cx, runtime, predicate);
+            } else {
+                pump_shell_until(cx, runtime, predicate);
+            }
+        }
+
+        fn begin_release(
+            case: &str,
+            window: &gpui::WindowHandle<Shell>,
+            cx: &mut TestAppContext,
+            runtime: &tokio::runtime::Runtime,
+            service: &HeldUnloadRpc,
+            id: &str,
+        ) {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.create_side_chat_panel(
+                        Some((
+                            "handoff-assistant".into(),
+                            "Visible assistant context".into(),
+                        )),
+                        cx,
+                    );
+                })
+                .unwrap();
+            wait_notice_stage(
+                (case, &format!("create-read-lease:{id}")),
+                window,
+                cx,
+                runtime,
+                service,
+                false,
+                |cx| {
+                    window
+                        .read_with(cx, |shell, cx| {
+                            shell.side_chat_panel.as_ref().is_some_and(|panel| {
+                                panel
+                                    .read(cx)
+                                    .release_request()
+                                    .is_some_and(|(_, actual, _)| actual == id)
+                            })
+                        })
+                        .unwrap()
+                },
+            );
+            window
+                .update(cx, |shell, _, cx| shell.release_side_chat(cx))
+                .unwrap();
+            wait_notice_stage(
+                (case, &format!("unload-request-held:{id}")),
+                window,
+                cx,
+                runtime,
+                service,
+                false,
+                |_| service.gates.lock().unwrap().contains_key(id),
+            );
+            assert_eq!(notice(window, cx).as_deref(), Some(PROGRESS));
+            assert!(
+                window
+                    .read_with(cx, |shell, _| shell.side_chat_panel.is_none())
+                    .unwrap()
+            );
+        }
+
+        fn finish_release(
+            case_window: (&str, &gpui::WindowHandle<Shell>),
+            cx: &mut TestAppContext,
+            runtime: &tokio::runtime::Runtime,
+            service: &HeldUnloadRpc,
+            id: &str,
+            fail: bool,
+            returned: usize,
+        ) {
+            service.release(id, fail);
+            wait_notice_stage(
+                (case_window.0, &format!("unload-server-return:{id}")),
+                case_window.1,
+                cx,
+                runtime,
+                service,
+                false,
+                |_| service.returned.load(Ordering::SeqCst) == returned,
+            );
+            // RPC return precedes transport delivery and the GPUI callback.
+            // Drain both executors; do not assert merely on the server return
+            // counter or advance the 20-second production timeout as a proxy.
+            for _ in 0..100 {
+                runtime.block_on(tokio::task::yield_now());
+                cx.run_until_parked();
+            }
+        }
+
+        fn run_case(name: &str, newer: Newer, fail: bool, cx: &mut TestAppContext) {
+            let dir = tempfile::tempdir().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            init_handoff_shell_test(cx, dir.path());
+            cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+            let service = Arc::new(HeldUnloadRpc::new());
+            let window = {
+                let _entered = runtime.enter();
+                command_palette_test_window(
+                    cx,
+                    dir.path(),
+                    Some(service.clone()),
+                    vec![palette_chat(
+                        HANDOFF_SOURCE,
+                        Some("project-a"),
+                        "Notice fixture",
+                    )],
+                    Some(HANDOFF_SOURCE),
+                )
+            };
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.active_chat = HANDOFF_SOURCE.into();
+                    shell.state.update(cx, |state, cx| {
+                        state.transcript = handoff_transcript();
+                        cx.notify();
+                    });
+                })
+                .unwrap();
+            wait_notice_stage(
+                (name, "initial-draft-restore"),
+                &window,
+                cx,
+                &runtime,
+                &service,
+                false,
+                |cx| shell_composer_snapshot(cx, &window).1 == DRAFT,
+            );
+            begin_release(name, &window, cx, &runtime, &service, "held-side-1");
+            let mut events =
+                vec![json!({"event": "release_a_held", "notice": notice(&window, cx)})];
+
+            match newer {
+                Newer::None => {}
+                Newer::Handoff => {
+                    window
+                        .update(cx, |shell, _, cx| {
+                            shell.create_side_chat_panel(None, cx);
+                            let generation = shell.state.read(cx).engine_generation();
+                            shell.side_chat_panel.as_ref().unwrap().update(cx, |_, cx| {
+                                cx.emit(SideChatEvent::ResultToParent {
+                                    parent: HANDOFF_SOURCE.into(),
+                                    engine_generation: generation,
+                                    text: RESULT.into(),
+                                });
+                            });
+                        })
+                        .unwrap();
+                    wait_notice_stage(
+                        (name, "handoff-durable-draft"),
+                        &window,
+                        cx,
+                        &runtime,
+                        &service,
+                        true,
+                        |cx| {
+                            notice(&window, cx).as_deref() == Some(CONFIRMATION)
+                                && service
+                                    .drafts
+                                    .text_for_task(Some(HANDOFF_SOURCE))
+                                    .as_deref()
+                                    == Some(format!("{DRAFT}\n\n{RESULT}").as_str())
+                        },
+                    );
+                }
+                Newer::Error | Newer::Dismiss => {
+                    window
+                        .update(cx, |shell, _, cx| {
+                            shell.sidebar_notice =
+                                matches!(newer, Newer::Error).then(|| NEW_ERROR.into());
+                            cx.notify();
+                        })
+                        .unwrap();
+                }
+                Newer::IdenticalProgress => {
+                    begin_release(name, &window, cx, &runtime, &service, "held-side-2");
+                }
+            }
+            let replacement = notice(&window, cx);
+            events.push(json!({"event": "intervening_action", "action": format!("{newer:?}"), "notice": replacement}));
+            finish_release(
+                (name, &window),
+                cx,
+                &runtime,
+                &service,
+                "held-side-1",
+                fail,
+                1,
+            );
+            let after_a = notice(&window, cx);
+            let ownership_passed = match newer {
+                Newer::None if fail => after_a.as_deref().is_some_and(|text| {
+                    text.starts_with("Side chat unload incomplete:")
+                        && text.contains("fixture unload failed")
+                }),
+                Newer::None => after_a.is_none(),
+                _ => after_a == replacement,
+            };
+            events.push(
+                json!({"event": "release_a_callback_drained", "failed": fail, "notice": after_a}),
+            );
+            let current_b_cleared = if matches!(newer, Newer::IdenticalProgress) {
+                finish_release(
+                    (name, &window),
+                    cx,
+                    &runtime,
+                    &service,
+                    "held-side-2",
+                    false,
+                    2,
+                );
+                events.push(
+                    json!({"event": "release_b_callback_drained", "notice": notice(&window, cx)}),
+                );
+                notice(&window, cx).is_none()
+            } else {
+                true
+            };
+            let expected_draft = if matches!(newer, Newer::Handoff) {
+                format!("{DRAFT}\n\n{RESULT}")
+            } else {
+                DRAFT.into()
+            };
+            let draft = shell_composer_snapshot(cx, &window).1;
+            let persisted = service.drafts.text_for_task(Some(HANDOFF_SOURCE));
+            let parent_unchanged = window
+                .read_with(cx, |shell, cx| {
+                    shell.state.read(cx).transcript == handoff_transcript()
+                })
+                .unwrap();
+            let calls = service.calls.lock().unwrap().clone();
+            let forbidden = calls
+                .iter()
+                .filter(|(method, _)| {
+                    !matches!(
+                        method.as_str(),
+                        methods::CREATE_SIDE_CHAT
+                            | methods::READ_SIDE_CHAT
+                            | methods::LIST_SIDE_CHATS
+                            | methods::UNLOAD_SIDE_CHAT
+                            | methods::SAVE_COMPOSER_DRAFT
+                    ) && (method.starts_with("Send")
+                        || method.starts_with("Submit")
+                        || method.starts_with("Queue")
+                        || method.starts_with("Run")
+                        || method.starts_with("Execute")
+                        || method.starts_with("Enqueue")
+                        || method.contains("QueuedMessage")
+                        || method == methods::RELAY_COMMAND
+                        || method == methods::RETRY_DELIVERY
+                        || method == methods::MUTATE)
+                })
+                .collect::<Vec<_>>();
+            let passed = ownership_passed
+                && current_b_cleared
+                && draft == expected_draft
+                && persisted.as_deref() == Some(expected_draft.as_str())
+                && parent_unchanged
+                && forbidden.is_empty()
+                && service.gates.lock().unwrap().is_empty();
+            let evidence = json!({
+                "case": name, "passed": passed, "events": events,
+                "ownership_passed": ownership_passed, "current_b_cleared": current_b_cleared,
+                "draft": draft, "persisted_draft": persisted, "expected_draft": expected_draft,
+                "parent_transcript_unchanged": parent_unchanged,
+                "forbidden_mutations": forbidden, "rpc_calls": calls,
+                "real_provider_calls": 0, "native_theme_verification": "pending separate grant"
+            });
+            if let Some(path) = std::env::var_os("LUNA_SIDEBAR_NOTICE_EVIDENCE_DIR") {
+                let path = PathBuf::from(path);
+                std::fs::create_dir_all(&path).unwrap();
+                std::fs::write(
+                    path.join(format!("{name}.json")),
+                    serde_json::to_vec_pretty(&evidence).unwrap(),
+                )
+                .unwrap();
+            }
+            assert!(passed, "held-unload retained-Shell case: {evidence}");
+        }
+
+        macro_rules! notice_case {
+            ($name:ident, $newer:ident, $fail:expr) => {
+                #[gpui::test]
+                fn $name(cx: &mut TestAppContext) {
+                    run_case(stringify!($name), Newer::$newer, $fail, cx);
+                }
+            };
+        }
+
+        notice_case!(newer_handoff_survives_old_success, Handoff, false);
+        notice_case!(newer_handoff_survives_old_failure, Handoff, true);
+        notice_case!(newer_error_survives_old_success, Error, false);
+        notice_case!(newer_error_survives_old_failure, Error, true);
+        notice_case!(dismissal_survives_old_success, Dismiss, false);
+        notice_case!(dismissal_survives_old_failure, Dismiss, true);
+        notice_case!(
+            identical_new_progress_survives_old_success,
+            IdenticalProgress,
+            false
+        );
+        notice_case!(
+            identical_new_progress_survives_old_failure,
+            IdenticalProgress,
+            true
+        );
+        notice_case!(current_release_success_clears_own_progress, None, false);
+        notice_case!(current_release_failure_remains_visible, None, true);
     }
 
     fn set_palette_query(window: &gpui::WindowHandle<Shell>, query: &str, cx: &mut TestAppContext) {

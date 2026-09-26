@@ -73,6 +73,7 @@ remain in their own worktrees and are outside this backend handoff.
 - [Task durability](task-durability-audit-2026-09-26.md)
 - [Workspace data](workspace-data-audit-2026-09-26.md)
 - [Idle archive failure-first cases and commands](idle-archive-2026-09-26.md)
+- [Real native archive and sibling verification](provider-idle-archive-native-2026-09-26.md)
 
 The coordinator tracker and detailed build/evidence paths are retained at
 `target/qa/parallel-audit-2026-09-26/coordination.json` in the primary checkout.
@@ -83,5 +84,25 @@ in-use cache, app, user data or audit evidence was deleted.
 
 ## Main handoff
 
-Pending fresh main-state review, local merge preserving the user's unrelated
-edits, and a signed primary app refresh.
+The verified changes merged into local main as `dbb38ee1` without conflicts.
+The coordinator checked SHA-256 hashes before and after the merge for all four
+unrelated user files: the two edited source comments and two untracked smoke
+files. They remained byte-identical, unstashed and uncommitted by the audit.
+
+`scripts/run-macos-dev.sh --refresh` built **LUNA Dev in 72 seconds**. The exact
+primary bundle executable ran as **PID 52217**, owned **127.0.0.1:59777**, passed
+`codesign --verify --deep --strict`, and answered a read-only `LocalDevice` RPC.
+Its data directory and incremental build cache were preserved. Build/readback
+artifacts are `main-refresh.log`, `main-ipc-smoke.json` and
+`main-native-handoff.json` beside the coordinator tracker. Binary SHA-256:
+`e8d5ea784989a7338aee56628212400cbc2616935daf400c3c86c197d51552a3`.
+
+The initial standalone Node smoke client received a valid RPC reply but raised
+a client error during WebSocket close. The final bounded read exits on its
+validated response; the application was neither changed nor restarted for
+that driver correction. The diagnostic note is retained with the evidence.
+
+Later commits add reports only; the built runtime is unchanged. Parallel
+sidebar, project defaults, commands/setup and pull-request feature work is
+still undergoing separate verification. The coordinator heartbeat remains
+active for that approved backlog. Nothing was pushed or deployed.

@@ -1249,6 +1249,10 @@ impl WorkspaceHost {
         Ok(self.read(|doc| doc.space(space_id))?)
     }
 
+    pub fn is_side_chat(&self, chat_id: &str) -> bool {
+        self.read(|doc| doc.side_chat_parent(chat_id).is_some())
+    }
+
     pub fn read_chats(&self) -> Result<Vec<Chat>, EngineError> {
         Ok(self.read(|doc| doc.read_chats())?)
     }
@@ -1407,6 +1411,9 @@ impl WorkspaceHost {
     /// Sidebar freshness on message persist: preview = first 120 chars of the last
     /// message's text. Claims the row first so a pre-workspace chat gains one.
     pub fn note_message(&self, chat_id: &str, text: &str) {
+        if self.is_side_chat(chat_id) {
+            return;
+        }
         let preview: String = text.chars().take(120).collect();
         let result = self.claim_chat(chat_id, None).and_then(|_| {
             self.mutate(|doc| doc.set_chat_last_message(chat_id, &preview, Utc::now()))
@@ -1704,6 +1711,15 @@ impl WorkspaceHost {
     /// and pushes like any other; the caller fixes `room_gen` beforehand.
     pub fn import_chat_row(&self, chat: &Chat) -> Result<(), EngineError> {
         self.mutate(|doc| doc.upsert_chat(chat))
+    }
+
+    pub(crate) fn import_side_chat_row(
+        &self,
+        chat: &Chat,
+        parent: &str,
+        permit: Option<&DeviceWritePermit>,
+    ) -> Result<(), EngineError> {
+        self.mutate_with_permit(permit, |doc| doc.upsert_side_chat(chat, parent))
     }
 
     pub(crate) fn import_chat_row_admitted(

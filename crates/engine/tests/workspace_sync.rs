@@ -816,3 +816,103 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
         "legacy snapshot retained for rollback"
     );
 }
+
+/// A peer receives only the generic registry visibility marker, not the local
+/// side-chat database. The marker must still hide the child from its main list.
+#[tokio::test]
+async fn side_chat_visibility_survives_registry_sync_without_loading_history() {
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let a = assemble(dir_a.path(), "side-owner");
+    let b = assemble(dir_b.path(), "side-viewer");
+    let link = bridge(&a, &b).await;
+    let client_a = luna_rpc::memory_client(a.rpc_service());
+    let client_b = luna_rpc::memory_client(b.rpc_service());
+    let parent = uuid::Uuid::new_v4().to_string();
+    client_a.call(methods::MUTATE, serde_json::json!({"op":"createChat","chatId":parent,"deviceId":a.device_id,
+        "config":{"harness":"mock","model":"fixture","reasoning":null,"sandbox":"workspace-write","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
+    let created = client_a
+        .call(
+            "CreateSideChat",
+            serde_json::json!({"parentId":parent,"requestId":uuid::Uuid::new_v4().to_string()}),
+        )
+        .await
+        .unwrap();
+    let child = created["meta"]["id"].as_str().unwrap();
+    wait_for(
+        || b.workspace.chat(child).unwrap().is_some() && b.workspace.is_side_chat(child),
+        "side child and visibility marker",
+    )
+    .await;
+    assert!(
+        !b.side_chats.contains(child),
+        "peer does not receive profile-local history storage"
+    );
+    assert!(b.doc_host.open(child).is_err());
+    assert!(
+        client_b
+            .call(
+                methods::QUEUE_MESSAGE,
+                serde_json::json!({"chatId":child,"text":"must not run"})
+            )
+            .await
+            .is_err()
+    );
+    let mut chats = client_b
+        .subscribe(methods::WATCH_CHATS, serde_json::json!({}))
+        .await
+        .unwrap();
+    let visible = tokio::time::timeout(Duration::from_secs(3), chats.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        visible
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|chat| chat["id"] == parent)
+    );
+    assert!(
+        !visible
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|chat| chat["id"] == child)
+    );
+    assert!(!b.doc_host.sync_statuses().iter().any(|(id, _)| id == child));
+    client_a
+        .call(
+            "UnloadSideChat",
+            serde_json::json!({"id":child,"lease":created["lease"]}),
+        )
+        .await
+        .unwrap();
+    a.shutdown().await;
+    b.shutdown().await;
+    drop(link);
+    drop(chats);
+    drop(client_b);
+    drop(b);
+    // A persisted peer marker still denies history and runtime after restart,
+    // even though that profile has never received the local metadata tables.
+    let reopened = assemble(dir_b.path(), "side-viewer");
+    assert!(reopened.workspace.is_side_chat(child));
+    assert!(!reopened.side_chats.contains(child));
+    assert!(reopened.doc_host.open(child).is_err());
+    assert!(
+        reopened
+            .doc_host
+            .open(&format!("{child}--sub--peer"))
+            .is_err()
+    );
+    assert!(
+        !reopened
+            .doc_host
+            .sync_statuses()
+            .iter()
+            .any(|(id, _)| id == child)
+    );
+    assert!(!reopened.sessions.turn_in_flight(child));
+    reopened.shutdown().await;
+}

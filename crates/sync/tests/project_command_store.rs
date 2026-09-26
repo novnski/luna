@@ -84,7 +84,7 @@ fn migration_snapshot_ownership_and_attempt_fence() {
         live.query_row("SELECT max(version) FROM schema_migrations", [], |r| r
             .get::<_, i64>(0))
             .unwrap(),
-        13
+        14
     );
     let copy = dir.path().join("snapshot.sqlite3");
     live.execute("VACUUM INTO ?1", [copy.to_str().unwrap()])

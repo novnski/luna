@@ -78,6 +78,12 @@ pub mod methods {
     /// fresh chat2 socket, host nudge, drain pass, and a new delivery escort
     /// per pending command. Params `{chatId}`; IPC-only.
     pub const RETRY_DELIVERY: &str = "RetryDelivery";
+    pub const CREATE_SIDE_CHAT: &str = "CreateSideChat";
+    pub const LIST_SIDE_CHATS: &str = "ListSideChats";
+    pub const READ_SIDE_CHAT: &str = "ReadSideChat";
+    pub const SEND_SIDE_CHAT: &str = "SendSideChat";
+    pub const ANSWER_SIDE_CHAT: &str = "AnswerSideChat";
+    pub const UNLOAD_SIDE_CHAT: &str = "UnloadSideChat";
     pub const WATCH_DOC_MESSAGES: &str = "WatchDocMessages";
     /// Messages typed while the agent was busy, held on the chat doc so every
     /// device sees the same queue. `{ chatId }` → `{ items: QueuedMessage[] }`.
@@ -312,6 +318,12 @@ pub mod methods {
         QUEUE_COMMAND,
         RELAY_COMMAND,
         RETRY_DELIVERY,
+        CREATE_SIDE_CHAT,
+        LIST_SIDE_CHATS,
+        READ_SIDE_CHAT,
+        SEND_SIDE_CHAT,
+        ANSWER_SIDE_CHAT,
+        UNLOAD_SIDE_CHAT,
         WATCH_DOC_MESSAGES,
         WATCH_QUEUE,
         QUEUE_MESSAGE,
