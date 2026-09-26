@@ -5171,7 +5171,7 @@ impl Composer {
     }
 
     fn current_prompt_is_empty(&self, cx: &App) -> bool {
-        self.input.read(cx).text().trim().is_empty()
+        self.input.read(cx).text().is_empty()
             && self
                 .attachments
                 .get(&self.current_key)
@@ -5182,6 +5182,10 @@ impl Composer {
                 .is_none_or(Vec::is_empty)
             && self
                 .draft_unavailable
+                .get(&self.current_key)
+                .is_none_or(Vec::is_empty)
+            && self
+                .draft_unavailable_appshot_metadata
                 .get(&self.current_key)
                 .is_none_or(Vec::is_empty)
             && self
@@ -5230,7 +5234,10 @@ impl Composer {
     }
 
     fn stash_current_prompt(&mut self, cx: &mut Context<Self>) {
-        if self.current_prompt_is_empty(cx) {
+        let staged = self.attachments.get(&self.current_key).map_or(0, Vec::len)
+            + self.appshots.get(&self.current_key).map_or(0, Vec::len);
+        let comments = self.state.read(cx).review_comments(&self.current_key).len();
+        if !composer_has_content(self.input.read(cx).text(), staged, comments) {
             self.toggle_stash_menu(cx);
             return;
         }
@@ -5270,15 +5277,19 @@ impl Composer {
             .collect::<Vec<_>>()
             .join(" ");
         let label = if label.is_empty() {
-            format!(
-                "{} attachment{}",
-                snapshot.attachments.len(),
-                if snapshot.attachments.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            )
+            if snapshot.attachments.is_empty() {
+                "Review comment".to_string()
+            } else {
+                format!(
+                    "{} attachment{}",
+                    snapshot.attachments.len(),
+                    if snapshot.attachments.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                )
+            }
         } else {
             label
         };
