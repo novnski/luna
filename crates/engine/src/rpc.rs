@@ -149,6 +149,58 @@ struct IntegrationInventoryParams {
     probe_provider: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillDocumentParams {
+    provider: HarnessId,
+    #[serde(default)]
+    project_id: Option<String>,
+    identity: String,
+    #[serde(default)]
+    target_device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveSkillDocumentParams {
+    provider: HarnessId,
+    #[serde(default)]
+    project_id: Option<String>,
+    scope: luna_proto::IntegrationSkillScope,
+    name: String,
+    content: String,
+    #[serde(default)]
+    expected_revision: Option<String>,
+    #[serde(default)]
+    target_device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallSkillParams {
+    source_provider: HarnessId,
+    #[serde(default)]
+    project_id: Option<String>,
+    source_identity: String,
+    expected_source_revision: String,
+    destination_provider: HarnessId,
+    destination_scope: luna_proto::IntegrationSkillScope,
+    #[serde(default)]
+    target_device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoveSkillParams {
+    provider: HarnessId,
+    #[serde(default)]
+    project_id: Option<String>,
+    identity: String,
+    expected_revision: String,
+    #[serde(default)]
+    target_device_id: Option<String>,
+}
+
 fn require_local_integration_target(target: Option<&str>, local: &str) -> Result<(), RpcError> {
     if target.is_some_and(|id| id != local) {
         return Err(RpcError::Failed(
@@ -1120,6 +1172,36 @@ impl Drop for EngineRpc {
 }
 
 impl EngineRpc {
+    fn skill_roots(
+        &self,
+        project_id: Option<&str>,
+    ) -> Result<crate::integration_settings::SkillRoots, RpcError> {
+        let project_root = if let Some(id) = project_id {
+            let space = self
+                .workspace
+                .space(id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .ok_or_else(|| RpcError::BadParams("unknown project id".into()))?;
+            if space.device_id != self.engine_info.device_id {
+                return Err(RpcError::Failed(
+                    "Skill library requires the owning device".into(),
+                ));
+            }
+            Some(std::path::PathBuf::from(space.path))
+        } else {
+            None
+        };
+        let codex_home = self.agent_accounts.codex_home_for_inventory().ok();
+        let (claude_home, opencode_home) = self.agent_accounts.skill_config_dirs();
+        Ok(crate::integration_settings::SkillRoots {
+            codex_home,
+            claude_home,
+            opencode_home,
+            project_root,
+            machine_id: self.engine_info.device_id.clone(),
+        })
+    }
+
     fn is_side_chat(&self, id: &str) -> bool {
         let owner = id.split_once("--sub--").map_or(id, |(owner, _)| owner);
         self.workspace.is_side_chat(owner) || self.store.is_side_chat(owner).unwrap_or(true)
@@ -8314,35 +8396,15 @@ impl RpcService for EngineRpc {
                     p.target_device_id.as_deref(),
                     &self.engine_info.device_id,
                 )?;
-                let project_root = if let Some(id) = p.project_id.as_deref() {
-                    let space = self
-                        .workspace
-                        .space(id)
-                        .map_err(|e| RpcError::Failed(e.to_string()))?
-                        .ok_or_else(|| RpcError::BadParams("unknown project id".into()))?;
-                    if space.device_id != self.engine_info.device_id {
-                        return Err(RpcError::Failed(
-                            "integration inventory requires the owning device".into(),
-                        ));
-                    }
-                    Some(space.path)
-                } else {
-                    None
-                };
+                let roots = self.skill_roots(p.project_id.as_deref())?;
+                let project_root = roots.project_root.as_deref();
                 let view = if p.provider == HarnessId::Codex {
                     let (home, force_file_auth) = self
                         .agent_accounts
                         .codex_usage_target()
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
-                    let mut view = crate::integration_settings::codex_inventory(
-                        &home,
-                        project_root.as_deref().map(std::path::Path::new),
-                        &self.engine_info.device_id,
-                    );
-                    let workspace = project_root
-                        .as_deref()
-                        .map(std::path::Path::new)
-                        .unwrap_or(&home);
+                    let mut view = crate::integration_settings::skill_inventory(p.provider, &roots);
+                    let workspace = project_root.unwrap_or(&home);
                     // The ordinary Settings read is filesystem-only. A native
                     // app-server process starts only on explicit Refresh.
                     if p.probe_provider && home.is_dir() && workspace.is_dir() {
@@ -8375,7 +8437,7 @@ impl RpcService for EngineRpc {
                                 &mut view,
                                 &catalog,
                                 &home,
-                                project_root.as_deref().map(std::path::Path::new),
+                                project_root,
                             );
                         } else {
                             crate::integration_settings::mark_codex_catalog_unavailable(&mut view);
@@ -8397,12 +8459,73 @@ impl RpcService for EngineRpc {
                     }
                     view
                 } else {
-                    crate::integration_settings::unavailable_inventory(
-                        p.provider,
-                        &self.engine_info.device_id,
-                    )
+                    crate::integration_settings::skill_inventory(p.provider, &roots)
                 };
                 RpcReply::value(&view)
+            }
+            methods::GET_SKILL_DOCUMENT => {
+                let p: SkillDocumentParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                let roots = self.skill_roots(p.project_id.as_deref())?;
+                let document =
+                    crate::integration_settings::skill_document(p.provider, &roots, &p.identity)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&document)
+            }
+            methods::SAVE_SKILL_DOCUMENT => {
+                let p: SaveSkillDocumentParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                let roots = self.skill_roots(p.project_id.as_deref())?;
+                let document = crate::integration_settings::save_skill_document(
+                    p.provider,
+                    &roots,
+                    p.scope,
+                    &p.name,
+                    &p.content,
+                    p.expected_revision.as_deref(),
+                )
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&document)
+            }
+            methods::INSTALL_SKILL => {
+                let p: InstallSkillParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                let roots = self.skill_roots(p.project_id.as_deref())?;
+                let document = crate::integration_settings::install_skill(
+                    p.source_provider,
+                    &p.source_identity,
+                    &p.expected_source_revision,
+                    p.destination_provider,
+                    p.destination_scope,
+                    &roots,
+                )
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&document)
+            }
+            methods::REMOVE_SKILL => {
+                let p: RemoveSkillParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                let roots = self.skill_roots(p.project_id.as_deref())?;
+                crate::integration_settings::remove_skill(
+                    p.provider,
+                    &roots,
+                    &p.identity,
+                    &p.expected_revision,
+                )
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&serde_json::json!({"removed": true}))
             }
             methods::GET_HISTORY_CAPABILITY => {
                 let p: TaskIdentityParams = parse_params(params)?;

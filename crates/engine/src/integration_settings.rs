@@ -1,4 +1,4 @@
-//! LUNA-owned instruction settings and read-only provider inventory.
+//! LUNA-owned instructions and provider-owned skill library.
 //!
 //! Every provider path is supplied by engine assembly. This module never
 //! discovers a credential home from HOME, CODEX_HOME, or a native login.
@@ -11,7 +11,7 @@ use luna_harness::codex::native::{CodexMcpConfigEntry, CodexSkillCatalogEntry};
 use luna_proto::{
     HarnessId, InstructionSettingsView, IntegrationActionAvailability, IntegrationActionFacts,
     IntegrationHelpRoute, IntegrationInventoryItem, IntegrationInventoryView, IntegrationKind,
-    IntegrationOwner, IntegrationSkillScope,
+    IntegrationOwner, IntegrationSkillScope, SkillDocumentView,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,16 +20,30 @@ use crate::EngineError;
 use crate::runtime_contract::InstructionContribution;
 
 const MAX_INSTRUCTION_CHARS: usize = 16_000;
+const MAX_SKILL_BYTES: usize = 128 * 1024;
+const MAX_SKILL_FILES: usize = 128;
+const MAX_INSTALL_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Identifier only, never an authorization token. Length framing prevents
 /// ambiguous tuples; the private source path is never returned to the UI.
-fn inventory_identity(machine_id: &str, source: &str, root: &Path, name: &str) -> String {
+fn provider_identity(
+    provider: HarnessId,
+    machine_id: &str,
+    source: &str,
+    root: &Path,
+    name: &str,
+) -> String {
     let mut hash = Sha256::new();
     let root_text = root.to_string_lossy();
     for value in [
         "luna-integration-v1",
         machine_id,
-        "codex",
+        match provider {
+            HarnessId::Codex => "codex",
+            HarnessId::ClaudeCode => "claude-code",
+            HarnessId::Opencode => "opencode",
+            _ => "unsupported",
+        },
         source,
         root_text.as_ref(),
         name,
@@ -40,12 +54,166 @@ fn inventory_identity(machine_id: &str, source: &str, root: &Path, name: &str) -
     format!("intg_v1_{:x}", hash.finalize())
 }
 
+fn inventory_identity(machine_id: &str, source: &str, root: &Path, name: &str) -> String {
+    provider_identity(HarnessId::Codex, machine_id, source, root, name)
+}
+
+/// Explicit engine-assembled provider locations. The selected Codex account
+/// home, Claude config home and OpenCode config home remain separate owners.
+pub struct SkillRoots {
+    pub codex_home: Option<PathBuf>,
+    pub claude_home: PathBuf,
+    pub opencode_home: PathBuf,
+    pub project_root: Option<PathBuf>,
+    pub machine_id: String,
+}
+
+struct SkillLocation {
+    base: PathBuf,
+    root: PathBuf,
+    source: &'static str,
+    source_id: &'static str,
+    scope: IntegrationSkillScope,
+}
+
+impl SkillRoots {
+    fn location(
+        &self,
+        provider: HarnessId,
+        scope: IntegrationSkillScope,
+    ) -> Result<SkillLocation, EngineError> {
+        let (base, suffix, source, source_id) = match (provider, scope) {
+            (HarnessId::Codex, IntegrationSkillScope::Global) => (
+                self.codex_home.as_ref().ok_or_else(|| {
+                    EngineError::Other("Selected Codex skill home is unavailable".into())
+                })?,
+                "skills",
+                "Codex home / skills",
+                "codex-home-skill",
+            ),
+            (HarnessId::Codex, IntegrationSkillScope::Project) => (
+                self.project_root.as_ref().ok_or_else(no_project_root)?,
+                ".agents/skills",
+                "project / .agents/skills",
+                "project-agents-skill",
+            ),
+            (HarnessId::ClaudeCode, IntegrationSkillScope::Global) => (
+                &self.claude_home,
+                "skills",
+                "Claude config / skills",
+                "claude-home-skill",
+            ),
+            (HarnessId::ClaudeCode, IntegrationSkillScope::Project) => (
+                self.project_root.as_ref().ok_or_else(no_project_root)?,
+                ".claude/skills",
+                "project / .claude/skills",
+                "project-claude-skill",
+            ),
+            (HarnessId::Opencode, IntegrationSkillScope::Global) => (
+                &self.opencode_home,
+                "skills",
+                "OpenCode config / skills",
+                "opencode-home-skill",
+            ),
+            (HarnessId::Opencode, IntegrationSkillScope::Project) => (
+                self.project_root.as_ref().ok_or_else(no_project_root)?,
+                ".opencode/skills",
+                "project / .opencode/skills",
+                "project-opencode-skill",
+            ),
+            _ => return Err(EngineError::Other("Unsupported skill provider".into())),
+        };
+        Ok(SkillLocation {
+            base: base.clone(),
+            root: base.join(suffix),
+            source,
+            source_id,
+            scope,
+        })
+    }
+}
+
+fn no_project_root() -> EngineError {
+    EngineError::Other("Select a project for project skills".into())
+}
+
+pub fn skill_inventory(provider: HarnessId, roots: &SkillRoots) -> IntegrationInventoryView {
+    let mut view = if provider == HarnessId::Codex {
+        roots.codex_home.as_ref().map_or_else(
+            || unavailable_inventory(provider, &roots.machine_id),
+            |home| codex_inventory(home, roots.project_root.as_deref(), &roots.machine_id),
+        )
+    } else {
+        unavailable_inventory(provider, &roots.machine_id)
+    };
+    if !matches!(
+        provider,
+        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+    ) {
+        return view;
+    }
+    if provider != HarnessId::Codex {
+        view.items.clear();
+        view.unavailable_reason = None;
+    }
+    for scope in [
+        IntegrationSkillScope::Global,
+        IntegrationSkillScope::Project,
+    ] {
+        let Ok(location) = roots.location(provider, scope) else {
+            continue;
+        };
+        if provider == HarnessId::Codex {
+            continue; // Keep Codex's existing native catalog identity and MCP inventory.
+        }
+        let Ok(entries) = std::fs::read_dir(&location.root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !entry.path().join("SKILL.md").is_file() {
+                continue;
+            }
+            view.items.push(IntegrationInventoryItem {
+                identity: Some(provider_identity(
+                    provider,
+                    &roots.machine_id,
+                    location.source_id,
+                    &location.root,
+                    &name,
+                )),
+                name,
+                kind: IntegrationKind::Skill,
+                source: location.source.into(),
+                scope: match scope {
+                    IntegrationSkillScope::Global => "global".into(),
+                    IntegrationSkillScope::Project => "project".into(),
+                },
+                configured: true,
+                available: None,
+                attached: None,
+                reason: Some("Found on disk; provider availability and selected-session attachment are unverified.".into()),
+                owner: IntegrationOwner::ProviderNative,
+                actions: unsupported_actions(),
+                help_route: IntegrationHelpRoute::SkillSource { scope },
+            });
+        }
+    }
+    view.items.sort_by(|a, b| {
+        (&a.kind, &a.scope, &a.name, &a.identity).cmp(&(&b.kind, &b.scope, &b.name, &b.identity))
+    });
+    if provider != HarnessId::Codex {
+        view.help = "This library reads the provider's global and selected project's skill folders. File presence does not prove provider availability or selected-session attachment. MCP connections remain with their provider or Executor.".into();
+    }
+    view
+}
+
 fn unsupported_actions() -> IntegrationActionFacts {
     IntegrationActionFacts {
         enable: IntegrationActionAvailability::Unavailable,
         disable: IntegrationActionAvailability::Unavailable,
         authenticate: IntegrationActionAvailability::Unavailable,
-        reason: Some("No verified LUNA action for this integration source.".into()),
+        reason: Some("Enable, disable, and authentication actions are unavailable for this source.".into()),
     }
 }
 
@@ -459,6 +627,376 @@ pub fn unavailable_inventory(provider: HarnessId, machine_id: &str) -> Integrati
         unavailable_reason: Some(reason.into()),
         help: "Manage integrations in the provider's own settings or the chosen MCP gateway. LUNA does not register duplicate servers or report an unverified live attachment.".into(),
     }
+}
+
+fn valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && !name.contains("--")
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn skill_revision(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn validate_skill_content(
+    provider: HarnessId,
+    name: &str,
+    content: &str,
+) -> Result<(), EngineError> {
+    if !valid_skill_name(name)
+        || content.len() > MAX_SKILL_BYTES
+        || content.contains('\0')
+        || !content.starts_with("---\n")
+    {
+        return Err(EngineError::Other(
+            "Skill requires a safe lowercase name and a SKILL.md under 128 KiB with YAML frontmatter"
+                .into(),
+        ));
+    }
+    let frontmatter = content[4..]
+        .split_once("\n---\n")
+        .map(|(frontmatter, _)| frontmatter)
+        .ok_or_else(|| EngineError::Other("SKILL.md frontmatter is not closed".into()))?;
+    let mut has_description = false;
+    let mut has_name = false;
+    for line in frontmatter.lines() {
+        if let Some(value) = line.strip_prefix("description:") {
+            has_description = !value.trim().is_empty();
+        }
+        if let Some(value) = line.strip_prefix("name:") {
+            let value = value.trim().trim_matches(['\'', '"']);
+            if value != name {
+                return Err(EngineError::Other(
+                    "Skill frontmatter name must match its folder".into(),
+                ));
+            }
+            has_name = true;
+        }
+    }
+    if !has_description || (provider == HarnessId::Opencode && !has_name) {
+        return Err(EngineError::Other(
+            "Skill frontmatter needs a description; OpenCode also needs a matching name".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn has_symlink_between(base: &Path, target: &Path) -> Result<bool, EngineError> {
+    let relative = target
+        .strip_prefix(base)
+        .map_err(|_| EngineError::Other("Skill path escapes its owner root".into()))?;
+    let mut path = base.to_path_buf();
+    if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Ok(true);
+    }
+    for component in relative.components() {
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(false)
+}
+
+fn skill_path(location: &SkillLocation, name: &str) -> Result<PathBuf, EngineError> {
+    if !valid_skill_name(name) {
+        return Err(EngineError::Other("Invalid skill name".into()));
+    }
+    Ok(location.root.join(name))
+}
+
+fn resolved_skill(
+    provider: HarnessId,
+    roots: &SkillRoots,
+    identity: &str,
+) -> Result<(SkillLocation, String), EngineError> {
+    for scope in [
+        IntegrationSkillScope::Global,
+        IntegrationSkillScope::Project,
+    ] {
+        let Ok(location) = roots.location(provider, scope) else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(&location.root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if valid_skill_name(&name)
+                && provider_identity(
+                    provider,
+                    &roots.machine_id,
+                    location.source_id,
+                    &location.root,
+                    &name,
+                ) == identity
+                && entry.path().join("SKILL.md").is_file()
+            {
+                return Ok((location, name));
+            }
+        }
+    }
+    Err(EngineError::Other(
+        "Skill is no longer present in the selected provider and scope".into(),
+    ))
+}
+
+fn supporting_files(skill_dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, prefix: &str, output: &mut Vec<String>, depth: usize) {
+        if depth > 4 || output.len() >= MAX_SKILL_FILES {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if output.len() >= MAX_SKILL_FILES {
+                return;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "SKILL.md" && prefix.is_empty() {
+                continue;
+            }
+            let relative = format!("{prefix}{name}");
+            output.push(relative.clone());
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                walk(&entry.path(), &format!("{relative}/"), output, depth + 1);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(skill_dir, "", &mut files, 0);
+    files.sort();
+    files
+}
+
+pub fn skill_document(
+    provider: HarnessId,
+    roots: &SkillRoots,
+    identity: &str,
+) -> Result<SkillDocumentView, EngineError> {
+    let (location, name) = resolved_skill(provider, roots, identity)?;
+    let directory = skill_path(&location, &name)?;
+    let file = directory.join("SKILL.md");
+    let bytes = std::fs::read(&file)?;
+    if bytes.len() > MAX_SKILL_BYTES {
+        return Err(EngineError::Other(
+            "SKILL.md exceeds the 128 KiB library limit".into(),
+        ));
+    }
+    let content = String::from_utf8(bytes.clone())
+        .map_err(|_| EngineError::Other("SKILL.md is not UTF-8".into()))?;
+    let read_only_reason = has_symlink_between(&location.base, &file)?.then(|| {
+        "This skill or its owner folder is a symlink; edit it at its original location.".into()
+    });
+    Ok(SkillDocumentView {
+        provider,
+        scope: location.scope,
+        identity: identity.into(),
+        name,
+        content,
+        revision: skill_revision(&bytes),
+        supporting_files: supporting_files(&directory),
+        read_only_reason,
+    })
+}
+
+pub fn save_skill_document(
+    provider: HarnessId,
+    roots: &SkillRoots,
+    scope: IntegrationSkillScope,
+    name: &str,
+    content: &str,
+    expected_revision: Option<&str>,
+) -> Result<SkillDocumentView, EngineError> {
+    validate_skill_content(provider, name, content)?;
+    let location = roots.location(provider, scope)?;
+    let directory = skill_path(&location, name)?;
+    let file = directory.join("SKILL.md");
+    if has_symlink_between(&location.base, &file)? {
+        return Err(EngineError::Other(
+            "Symlinked skill roots are read only".into(),
+        ));
+    }
+    match expected_revision {
+        Some(expected) => {
+            let current = std::fs::read(&file)?;
+            if skill_revision(&current) != expected {
+                return Err(EngineError::Other(
+                    "Skill changed elsewhere; reload before saving".into(),
+                ));
+            }
+        }
+        None if directory.exists() => {
+            return Err(EngineError::Other(
+                "Skill name already exists; choose another name or open it to edit".into(),
+            ));
+        }
+        None => {}
+    }
+    std::fs::create_dir_all(&directory)?;
+    if has_symlink_between(&location.base, &file)? {
+        return Err(EngineError::Other(
+            "Symlinked skill roots are read only".into(),
+        ));
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+    use std::io::Write as _;
+    temporary.write_all(content.as_bytes())?;
+    temporary.as_file_mut().sync_all()?;
+    if expected_revision.is_some() {
+        temporary.persist(&file).map_err(|error| error.error)?;
+    } else {
+        temporary
+            .persist_noclobber(&file)
+            .map_err(|error| error.error)?;
+    }
+    let identity = provider_identity(
+        provider,
+        &roots.machine_id,
+        location.source_id,
+        &location.root,
+        name,
+    );
+    skill_document(provider, roots, &identity)
+}
+
+fn copy_skill_tree(
+    source: &Path,
+    destination: &Path,
+    file_count: &mut usize,
+    total_bytes: &mut u64,
+) -> Result<(), EngineError> {
+    std::fs::create_dir(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        *file_count += 1;
+        if *file_count > MAX_SKILL_FILES {
+            return Err(EngineError::Other(
+                "Skill has too many supporting files".into(),
+            ));
+        }
+        let kind = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if kind.is_symlink() {
+            return Err(EngineError::Other(
+                "Cannot install a skill containing symlinked files".into(),
+            ));
+        }
+        if kind.is_dir() {
+            copy_skill_tree(&entry.path(), &target, file_count, total_bytes)?;
+        } else if kind.is_file() {
+            *total_bytes = total_bytes.saturating_add(entry.metadata()?.len());
+            if *total_bytes > MAX_INSTALL_BYTES {
+                return Err(EngineError::Other(
+                    "Skill files exceed the 2 MiB install limit".into(),
+                ));
+            }
+            std::fs::copy(entry.path(), target)?;
+        } else {
+            return Err(EngineError::Other(
+                "Unsupported file in skill folder".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Install a local skill into a different provider or scope. Copy the complete
+/// folder so relative scripts/references remain with their SKILL.md. The source
+/// revision and an absent destination are both required; no network registry
+/// or MCP server is involved.
+pub fn install_skill(
+    source_provider: HarnessId,
+    source_identity: &str,
+    expected_source_revision: &str,
+    destination_provider: HarnessId,
+    destination_scope: IntegrationSkillScope,
+    roots: &SkillRoots,
+) -> Result<SkillDocumentView, EngineError> {
+    let source = skill_document(source_provider, roots, source_identity)?;
+    if source.revision != expected_source_revision {
+        return Err(EngineError::Other(
+            "Source skill changed elsewhere; reload before installing".into(),
+        ));
+    }
+    validate_skill_content(destination_provider, &source.name, &source.content)?;
+    let (source_location, _) = resolved_skill(source_provider, roots, source_identity)?;
+    let source_dir = skill_path(&source_location, &source.name)?;
+    if has_symlink_between(&source_location.base, &source_dir)? {
+        return Err(EngineError::Other(
+            "Install from the original folder of this symlinked skill".into(),
+        ));
+    }
+    let destination = roots.location(destination_provider, destination_scope)?;
+    let destination_dir = skill_path(&destination, &source.name)?;
+    if destination_dir.exists() || has_symlink_between(&destination.base, &destination_dir)? {
+        return Err(EngineError::Other(
+            "Destination skill exists or its owner folder is symlinked".into(),
+        ));
+    }
+    std::fs::create_dir_all(&destination.root)?;
+    let temporary = tempfile::Builder::new()
+        .prefix(".luna-skill-install-")
+        .tempdir_in(&destination.root)?;
+    let staged = temporary.path().join(&source.name);
+    let mut file_count = 0;
+    let mut total_bytes = 0;
+    copy_skill_tree(&source_dir, &staged, &mut file_count, &mut total_bytes)?;
+    if skill_revision(&std::fs::read(source_dir.join("SKILL.md"))?) != expected_source_revision {
+        return Err(EngineError::Other(
+            "Source skill changed during install; retry from the library".into(),
+        ));
+    }
+    if destination_dir.exists() || has_symlink_between(&destination.base, &destination_dir)? {
+        return Err(EngineError::Other(
+            "Destination skill changed during install".into(),
+        ));
+    }
+    std::fs::rename(&staged, &destination_dir)?;
+    let identity = provider_identity(
+        destination_provider,
+        &roots.machine_id,
+        destination.source_id,
+        &destination.root,
+        &source.name,
+    );
+    skill_document(destination_provider, roots, &identity)
+}
+
+/// Remove the complete provider-owned skill folder after a fresh revision
+/// check. The UI presents its supporting files and requires an armed second
+/// click before calling this operation.
+pub fn remove_skill(
+    provider: HarnessId,
+    roots: &SkillRoots,
+    identity: &str,
+    expected_revision: &str,
+) -> Result<(), EngineError> {
+    let document = skill_document(provider, roots, identity)?;
+    if document.revision != expected_revision {
+        return Err(EngineError::Other(
+            "Skill changed elsewhere; reload before removing".into(),
+        ));
+    }
+    let (location, name) = resolved_skill(provider, roots, identity)?;
+    let directory = skill_path(&location, &name)?;
+    if has_symlink_between(&location.base, &directory)? {
+        return Err(EngineError::Other(
+            "Symlinked skill roots are read only".into(),
+        ));
+    }
+    std::fs::remove_dir_all(&directory)?;
+    Ok(())
 }
 
 #[cfg(test)]

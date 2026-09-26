@@ -486,6 +486,21 @@ impl AgentAccounts {
         self.codex_usage_target().map(|(home, _)| home)
     }
 
+    /// Provider-owned skill roots; no account or credential read is involved.
+    /// OpenCode has no account configuration in LUNA, so use its documented
+    /// process environment override or the standard XDG config location.
+    pub fn skill_config_dirs(&self) -> (PathBuf, PathBuf) {
+        let env_dir = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
+        let opencode = env_dir("OPENCODE_CONFIG_DIR")
+            .or_else(|| env_dir("XDG_CONFIG_HOME").map(|dir| dir.join("opencode")))
+            .unwrap_or_else(|| home_dir().join(".config/opencode"));
+        (self.inner.config.claude_config_dir.clone(), opencode)
+    }
+
     /// Provider-owned transcript locations and LUNA's own cache directory.
     /// This does not open credentials or materialize a named provider home.
     pub fn usage_history_paths(&self) -> (Option<PathBuf>, PathBuf, PathBuf) {
