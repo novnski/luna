@@ -763,3 +763,133 @@ fn commands_retry_current_stop_survives_status_poll(cx: &mut TestAppContext) {
     assert_eq!(rpc.calls(methods::STOP_PROJECT_COMMAND), 1);
     assert_eq!(after_stop["snapshot"]["runs"][0]["status"], "canceled");
 }
+
+#[gpui::test]
+fn commands_captured_setup_disclosure_uses_receipt_not_edited_action(cx: &mut TestAppContext) {
+    const CAPTURED_SELECTOR: &str = "qa-command-captured-A-run-printf captured-setup-v1";
+    const EDITED_SELECTOR: &str = "qa-command-captured-A-run-printf edited-v2";
+    const CHECKOUT_SELECTOR: &str = "qa-command-checkout-A-run-/fixture/setup-checkout";
+
+    let runtime = runtime(cx);
+    let _entered = runtime.enter();
+    let rpc = HeldRpc::new("captured-setup", "device-a");
+    let mut receipt = run("A", "device-a");
+    receipt["status"] = json!("failed");
+    receipt["setup"] = json!(true);
+    receipt["cwd"] = json!("/fixture/setup-checkout");
+    receipt["action"]["name"] = json!("Setup dependencies");
+    receipt["action"]["command"] = json!("printf captured-setup-v1");
+    let mut snapshot = status("A");
+    snapshot["actions"][0]["name"] = json!("Setup dependencies");
+    snapshot["actions"][0]["command"] = json!("printf edited-v2");
+    snapshot["runs"] = json!([receipt]);
+    rpc.reply(methods::PROJECT_COMMAND_STATUS, Ok(snapshot), false);
+
+    let scene = Scene::new(cx, &runtime, rpc.clone(), "device-a");
+    scene.open(cx);
+    fixture::pump_until(cx, &runtime, |cx| {
+        scene.view(cx)["snapshot"]["runs"][0]["status"] == "failed"
+            && scene.view(cx)["busy"] == false
+    });
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+    });
+    let commands = scene.commands(cx);
+    let window = cx.open_window(gpui::size(px(680.0), px(420.0)), move |_, _| {
+        ButtonSurface {
+            commands,
+            renders: Arc::new(AtomicUsize::new(0)),
+        }
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, app| window.draw(app).clear());
+    let before = scene.view(cx);
+    let disclosure = visual.debug_bounds("qa-command-disclose-A-run");
+    let initially_hidden = visual.debug_bounds(CAPTURED_SELECTOR).is_none();
+    fixture::write_trace(
+        "commands-captured-setup-disclosure-entry",
+        &json!({
+            "before":before.clone(),"disclosureBounds":disclosure.map(|bounds|format!("{bounds:?}")),
+            "initiallyHidden":initially_hidden,"rpc":rpc.trace(),
+            "source":{"file":file!(),"case":"commands_captured_setup_disclosure_uses_receipt_not_edited_action"}
+        }),
+    );
+    assert!(
+        disclosure.is_some(),
+        "failed setup receipt has no disclosure"
+    );
+    let mut expanded_command = None;
+    let mut expanded_checkout = None;
+    let mut edited_as_capture = None;
+    let mut hidden_again = None;
+    let mut after_open = Value::Null;
+    if let Some(bounds) = disclosure {
+        visual.update(|window, app| mouse_click_rendered(window, app, bounds.center()));
+        visual.update(|window, app| window.draw(app).clear());
+        expanded_command = visual.debug_bounds(CAPTURED_SELECTOR);
+        expanded_checkout = visual.debug_bounds(CHECKOUT_SELECTOR);
+        edited_as_capture = visual.debug_bounds(EDITED_SELECTOR);
+        after_open = scene.view(cx);
+        visual.update(|window, app| mouse_click_rendered(window, app, bounds.center()));
+        visual.update(|window, app| window.draw(app).clear());
+        hidden_again = Some(visual.debug_bounds(CAPTURED_SELECTOR).is_none());
+    }
+
+    scene.state.update(cx, |state, cx| {
+        state.selected_chat = None;
+        cx.notify();
+    });
+    fixture::drain(cx, &runtime);
+    scene.state.update(cx, |state, cx| {
+        state.selected_chat = Some(CHAT.into());
+        cx.notify();
+    });
+    fixture::pump_until(cx, &runtime, |cx| {
+        scene.view(cx)["snapshot"]["runs"][0]["id"] == "A-run" && scene.view(cx)["busy"] == false
+    });
+    visual.update(|window, app| window.draw(app).clear());
+    let after_navigation = scene.view(cx);
+    let disclosure_after_navigation = visual.debug_bounds("qa-command-disclose-A-run");
+    let trace = json!({
+        "before":before,"afterOpen":after_open,"afterNavigation":after_navigation,
+        "disclosureBounds":disclosure.map(|bounds|format!("{bounds:?}")),
+        "initiallyHidden":initially_hidden,
+        "capturedCommandBounds":expanded_command.map(|bounds|format!("{bounds:?}")),
+        "capturedCheckoutBounds":expanded_checkout.map(|bounds|format!("{bounds:?}")),
+        "editedCommandShownAsCapture":edited_as_capture.is_some(),
+        "hiddenAgain":hidden_again,
+        "disclosureAfterNavigation":disclosure_after_navigation.map(|bounds|format!("{bounds:?}")),
+        "rpc":rpc.trace(),"runCalls":rpc.calls(methods::RUN_PROJECT_COMMAND),
+        "retryCalls":rpc.calls(methods::RETRY_PROJECT_COMMAND),
+        "stopCalls":rpc.calls(methods::STOP_PROJECT_COMMAND),
+        "saveCalls":rpc.calls(methods::SAVE_PROJECT_COMMANDS),
+        "mousePath":"Window::dispatch_event(MouseDown/MouseUp)"
+    });
+    fixture::write_trace("commands-captured-setup-disclosure", &trace);
+    assert!(initially_hidden, "captured command should start collapsed");
+    assert!(
+        expanded_command.is_some(),
+        "captured receipt command was not rendered"
+    );
+    assert!(
+        expanded_checkout.is_some(),
+        "receipt checkout was not rendered"
+    );
+    assert!(
+        edited_as_capture.is_none(),
+        "mutable saved action replaced the capture"
+    );
+    assert_eq!(hidden_again, Some(true));
+    assert_eq!(before["snapshot"]["runs"][0]["attempt"], 1);
+    assert_eq!(after_open["snapshot"]["runs"][0]["id"], "A-run");
+    assert_eq!(
+        after_navigation["snapshot"]["runs"][0]["cwd"],
+        "/fixture/setup-checkout"
+    );
+    assert!(disclosure_after_navigation.is_some());
+    assert_eq!(rpc.calls(methods::RUN_PROJECT_COMMAND), 0);
+    assert_eq!(rpc.calls(methods::RETRY_PROJECT_COMMAND), 0);
+    assert_eq!(rpc.calls(methods::STOP_PROJECT_COMMAND), 0);
+    assert_eq!(rpc.calls(methods::SAVE_PROJECT_COMMANDS), 0);
+}
