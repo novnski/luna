@@ -301,6 +301,54 @@ async fn import_preview_does_not_mislabel_file_or_dangling_alias_as_missing_root
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_import_cwd_does_not_hide_an_ambiguous_selected_project() {
+    let fixture = Fixture::new();
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let alias = fixture.root_a.join("selected-project-alias");
+    std::os::unix::fs::symlink(&fixture.root_b, &alias).unwrap();
+    let project = uuid::Uuid::new_v4().to_string();
+    client
+        .call(
+            methods::MUTATE,
+            json!({"op":"createSpace","spaceId":project,
+        "deviceId":core.device_id,"path":alias}),
+        )
+        .await
+        .unwrap();
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(fixture.root_b.join("missing-project-root"), &alias).unwrap();
+    let provider_cwd = fixture.root_a.join("missing-native-root");
+    let original = core
+        .store
+        .load_snapshot("luna-task-identity-events-v1")
+        .unwrap();
+    let result = core.task_identity.preview_import_observation_for_tests(
+        synthetic_observation(&provider_cwd),
+        luna_proto::ImportOwnership::ProviderOwned,
+        Some(&project),
+        None,
+    );
+    evidence(
+        "ambiguous-import-project",
+        json!({"project":project,"projectPath":alias,
+        "providerCwd":provider_cwd,"error":result.as_ref().err().map(ToString::to_string)}),
+    );
+    assert!(
+        result.is_err(),
+        "dangling selected project cannot be collapsed into EnvironmentMissing"
+    );
+    assert_eq!(
+        core.store
+            .load_snapshot("luna-task-identity-events-v1")
+            .unwrap(),
+        original
+    );
+    close(core, client).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn canonical_aliases_share_only_the_same_environment_and_source_scope() {
     let fixture = Fixture::new();
     let alias = fixture.root_a.parent().unwrap().join("root-alias");

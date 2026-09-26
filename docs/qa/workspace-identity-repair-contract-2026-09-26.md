@@ -1,11 +1,12 @@
 # Workspace identity repair: API and authorization contract
 
-Source-only extension to `ea229301`; this contract module is unlinked and has not
-been compiled or run. A separate one-run Cargo grant reproduced only the original
+Source-only extension to `ea229301`; these contract cases are linked only to the
+separate `workspace_identity_repair` target and have not been compiled or run.
+A separate one-run Cargo grant reproduced only the original
 three allocation cases at `050dd9d7`; see the parent design's baseline evidence.
-No provider reads, runtime changes or native actions have run. The branch remains
-based on committed main
-`def1b8a8`; supported caller behavior was also inspected at current main
+No provider reads or native actions have run. Runtime source is implemented but
+unverified on committed main `3a173e84` plus lifecycle source `7c783f89`.
+The original failure-first base was `def1b8a8`; supported callers were inspected at
 `570d951b72c950eceb9493e4a07fe7908039edbc`, without changing Sidebar-owned files.
 The lifecycle audit owner then reviewed this contract read-only against main
 `3a173e84a0d6f775499ef19e833e31709cf1ac74`. The refinements below incorporate that
@@ -266,3 +267,20 @@ proposed split for the coordinator, not a parallel implementation grant.
 Do not alter `project_command_*` execution policy, Sidebar behavior, provider
 adapters or backup internals. Their owners review explicit compatibility/restore
 contracts separately. Foreign CRDT display integrity is a different concern.
+
+## Historical missing-root import preview
+
+Before changing the import handler, source regressions were written for a missing
+historical cwd, a valid root, byte-identical stored identity/transcript history,
+and distinct dangling-alias/non-directory failures, including an ambiguous selected
+project paired with a missing provider cwd. The existing preview DTO now
+uses an `unresolved:missing:<opaque id>` display reference, original cwd spelling,
+EnvironmentMissing and non-adoptable status only after verified NotFound. This is
+not a canonical v2 root identity and cannot be persisted as WorkspaceObserved.
+Permission and ambiguous-path errors remain errors. The existing adoption gate
+rejects the non-adoptable preview before any provider refresh or durable write.
+
+The synthetic-observation seam is available only to metadata-disabled fixture
+services, never as a new RPC or as a normal provider bypass. No provider was read.
+New adoption from a missing root remains unavailable until a fresh verified root;
+this does not claim full import/adoption behavior parity.

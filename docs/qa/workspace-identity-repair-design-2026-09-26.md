@@ -1,11 +1,15 @@
 # Workspace identity collision: failure-first repair design
 
-Status: the three allocation regressions were compiled and executed once against
-unchanged runtime source; all three reproduced the expected defect. Migration
-contract source remains unlinked, uncompiled and unexecuted; runtime repair is gated.
-Base: local main `def1b8a8021f3373919d0e6580677ee9f7e686eb`.
-Branch: `codex/workspace-identity-repair`. No runtime or migration change is
-included. The earlier audit branch `codex/audit-workspace-data` stays at
+Status: the original three allocation regressions reproduced the defect against
+unchanged runtime source. Reviewed runtime source now implements v2 allocation,
+local-only unbound repair and atomic first-run materialization; this composed
+runtime and the separate 15-case repair target are **not compiled or executed**.
+The final per-task registry witness requires Lifecycle's assigned WorkspaceHost
+wrapper follow-up before any atomicity claim or source checkpoint. Builds,
+native actions and provider reads remain gated.
+Original baseline: `def1b8a8021f3373919d0e6580677ee9f7e686eb`. Current source composition
+includes committed main `3a173e84` and lifecycle source `7c783f89`.
+Branch: `codex/workspace-identity-repair`. The earlier audit branch remains at
 `04074e6b1ce93989b5c3ade3588e0883cf75b606`.
 
 ## Failure cases recorded before implementation
