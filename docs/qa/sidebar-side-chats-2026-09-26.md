@@ -223,3 +223,31 @@ also do not count as disconnected remote rooms in connectivity status.
 from `68dbc36e`; `export-lifecycle-verification.json` records commands, outcomes
 and SHA-256 hashes. This batch does not establish native app/UI behavior or
 post-merge migration/backup/native-fork/peer behavior; those remain queued.
+
+## Verification after reviewed runtime integration
+
+Runtime `9bb805ac` merged without conflicts as
+`538c1cfc9b15a64cf7865e3d16485c02571bb687`. No source changed during these checks:
+
+| Check | Result | Log under `target/qa/sidebar/` |
+| --- | --- | --- |
+| Side lifecycle, permissions and export boundary | 12/12 | `post-merge-side-chats.log` |
+| Native fork receipt/dedupe and explicit snapshot alternative | 2/2 | `post-merge-native-fork.log` |
+| Synced peer visibility and missing-metadata restart | 1/1 | `post-merge-peer-restart.log` |
+| Project command store and v13→v14 side migration cases | 2/2 + 3/3 | `post-merge-migrations.log` |
+| Complete backup/restore target | 22/22 | `post-merge-backup-restore.log` |
+| Existing immediate checked-subscription cancellation regression | 1/1 | `post-merge-subscription-cancel.log` |
+| Engine/UI compile | Exit 0, 30.84s | `post-merge-ui-engine-check.log` |
+| Engine/UI library Clippy, no dependencies | Exit 0, 32.92s | `post-merge-clippy.log` |
+| Workspace formatting check | Exit 0 | `post-merge-format.log` |
+
+The 42 integration passes and separate existing RPC regression are recorded in
+`post-merge-verification.json` with exact commands, source SHA and log hashes.
+Compiler/lint warnings remain recorded; this is not a warning-free claim.
+Native UI, accessibility, app lifecycle and real-provider acceptance still need
+the separately granted isolated app build.
+
+Coordinator review additionally identified agent cards with no native transcript
+reference being presented as clickable buttons. Preserve this verification
+checkpoint before correcting those cards, then rerun affected UI compile/lint
+and include available and missing-reference cards in native screenshot/AX QA.
