@@ -10639,7 +10639,7 @@ impl Composer {
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .cursor_pointer()
-            .hover(|style| style.bg(theme.surface_raised_hover))
+            .hover(|style| style.bg(theme.glass_hover()))
             .on_click(cx.listener(|this, _, _, cx| this.stash_current_prompt(cx)))
             .child(
                 crate::icons::icon(crate::icons::FLOPPY_DISK)
@@ -10657,7 +10657,7 @@ impl Composer {
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .cursor_pointer()
-            .hover(|style| style.bg(theme.surface_raised_hover))
+            .hover(|style| style.bg(theme.glass_hover()))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_stash_menu(cx)))
             .child(if count == 0 {
                 "Saved prompts".to_string()
@@ -10674,17 +10674,18 @@ impl Composer {
                 .child(list),
         );
         if self.stash_menu_open {
+            let popup_theme = theme.for_popup();
             let mut rows = div()
                 .id("composer-stash-list")
                 .w_full()
                 .max_h(px(220.0))
                 .overflow_y_scroll()
-                .rounded(px(12.0))
+                .rounded(px(crate::popover::CARD_RADIUS))
                 .border_1()
                 .border_color(theme.border)
-                .bg(theme.surface_raised)
-                .shadow_md()
-                .p(px(6.0))
+                .bg(crate::popover::surface_bg(theme))
+                .when(!theme.is_frost(), |panel| panel.shadow_lg())
+                .p(px(crate::popover::CARD_INSET))
                 .flex()
                 .flex_col()
                 .gap(px(2.0));
@@ -10694,7 +10695,7 @@ impl Composer {
                         .px(px(8.0))
                         .py(px(10.0))
                         .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted)
+                        .text_color(popup_theme.text_muted)
                         .child(if busy {
                             "Loading saved prompts…"
                         } else {
@@ -10715,7 +10716,7 @@ impl Composer {
                         .items_center()
                         .gap(px(6.0))
                         .rounded(px(8.0))
-                        .hover(|style| style.bg(theme.surface_raised_hover))
+                        .hover(|style| style.bg(theme.glass_hover()))
                         .child(
                             div()
                                 .id(("composer-stash-restore", id.clone()))
@@ -10734,7 +10735,7 @@ impl Composer {
                                         .min_w_0()
                                         .truncate()
                                         .text_size(crate::typography::ui_rems(12.0))
-                                        .text_color(theme.text)
+                                        .text_color(popup_theme.text)
                                         .child(entry.label),
                                 ),
                         )
@@ -10743,7 +10744,7 @@ impl Composer {
                                 div()
                                     .flex_none()
                                     .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
+                                    .text_color(popup_theme.text_muted)
                                     .child(format!(
                                         "{attachment_count} file{}",
                                         if attachment_count == 1 { "" } else { "s" }
@@ -10759,7 +10760,7 @@ impl Composer {
                                 .py(px(8.0))
                                 .rounded(px(6.0))
                                 .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
+                                .text_color(popup_theme.text_muted)
                                 .cursor_pointer()
                                 .hover(|style| style.text_color(theme.danger_muted))
                                 .on_click(cx.listener(move |this, _, _, cx| {
