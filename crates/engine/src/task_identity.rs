@@ -24,7 +24,12 @@ use crate::device_write::{DeviceWriteHandle, DeviceWritePermit};
 use crate::workspace_host::{TaskProjectionError, WorkspaceHost};
 use crate::{EngineError, new_id, now_ms};
 
+mod workspace_repair;
+pub(crate) use workspace_repair::WorkspaceMaterializationContext;
+use workspace_repair::{WorkspaceAssociationRepair, WorkspaceMaterialization};
+
 const TASK_IDENTITY_LOG_ID: &str = "luna-task-identity-events-v1";
+const TASK_IDENTITY_LOG_VERSION: u32 = 2;
 const PREVIEW_TTL_MS: i64 = 10 * 60 * 1_000;
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -32,7 +37,9 @@ const PROVIDER_TIMEOUT: Duration = Duration::from_secs(10);
 #[serde(rename_all = "camelCase")]
 struct TaskIdentityLog {
     schema_version: u32,
-    events: Vec<TaskIdentityEvent>,
+    // Preserve the original event values, including unknown additive v1 fields.
+    // Decode a copy for projection; never deserialize/reserialize the old prefix.
+    events: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,7 +59,7 @@ struct TaskMaterializationIntent {
 impl Default for TaskIdentityLog {
     fn default() -> Self {
         Self {
-            schema_version: TASK_IDENTITY_SCHEMA_VERSION,
+            schema_version: TASK_IDENTITY_LOG_VERSION,
             events: Vec::new(),
         }
     }
@@ -63,6 +70,12 @@ impl Default for TaskIdentityLog {
 enum TaskIdentityEvent {
     WorkspaceObserved {
         workspace: WorkspaceIdentity,
+    },
+    WorkspaceAssociationRepaired {
+        repair: WorkspaceAssociationRepair,
+    },
+    WorkspaceMaterialized {
+        materialization: WorkspaceMaterialization,
     },
     TaskRegistered {
         task: LunaTaskIdentity,
@@ -105,6 +118,8 @@ enum TaskIdentityEvent {
 #[derive(Debug, Clone, Default)]
 struct Projection {
     workspaces: HashMap<String, WorkspaceIdentity>,
+    registration_workspaces: HashMap<String, WorkspaceIdentity>,
+    workspace_repairs: HashMap<String, WorkspaceAssociationRepair>,
     tasks: HashMap<String, LunaTaskIdentity>,
     bindings: HashMap<String, ExecutionBinding>,
     bindings_by_task: HashMap<String, Vec<String>>,
@@ -118,8 +133,15 @@ impl Projection {
     fn apply(&mut self, event: &TaskIdentityEvent) -> Result<(), EngineError> {
         match event {
             TaskIdentityEvent::WorkspaceObserved { workspace } => {
+                workspace_repair::validate_root_observation(&self.workspaces, workspace)?;
                 self.workspaces
                     .insert(workspace.workspace_id.clone(), workspace.clone());
+            }
+            TaskIdentityEvent::WorkspaceAssociationRepaired { repair } => {
+                self.apply_workspace_repair(repair)?;
+            }
+            TaskIdentityEvent::WorkspaceMaterialized { materialization } => {
+                self.apply_workspace_materialization(materialization)?;
             }
             TaskIdentityEvent::TaskRegistered { task } => {
                 if let Some(existing) = self.tasks.get(&task.task_id) {
@@ -144,6 +166,10 @@ impl Projection {
                     }
                     self.external_imports
                         .insert(key.clone(), task.task_id.clone());
+                }
+                if let Some(workspace) = self.workspaces.get(&task.workspace_id) {
+                    self.registration_workspaces
+                        .insert(task.task_id.clone(), workspace.clone());
                 }
                 self.tasks.insert(task.task_id.clone(), task.clone());
             }
@@ -361,15 +387,15 @@ pub(crate) fn offline_views_for_backup(
     };
     let log: TaskIdentityLog = serde_json::from_slice(&bytes)
         .map_err(|error| EngineError::Other(format!("task identity log decode failed: {error}")))?;
-    if log.schema_version != TASK_IDENTITY_SCHEMA_VERSION {
+    if !matches!(log.schema_version, 1 | TASK_IDENTITY_LOG_VERSION) {
         return Err(EngineError::Other(format!(
             "unsupported task identity schema {}, expected {}",
-            log.schema_version, TASK_IDENTITY_SCHEMA_VERSION
+            log.schema_version, TASK_IDENTITY_LOG_VERSION
         )));
     }
     let mut projection = Projection::default();
     for event in &log.events {
-        projection.apply(event)?;
+        projection.apply(&decode_identity_event(event)?)?;
     }
     if !projection.pending_materializations.is_empty() {
         return Err(EngineError::Other(
@@ -405,6 +431,7 @@ struct Inner {
     write_handle: OnceLock<DeviceWriteHandle>,
     state: Mutex<State>,
     previews: Mutex<HashMap<String, PendingPreview>>,
+    workspace_repair_previews: Mutex<HashMap<String, workspace_repair::PendingWorkspaceRepair>>,
     reconcile_gates: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     device_id: String,
     codex: CodexNativeClient,
@@ -479,15 +506,15 @@ impl TaskIdentityService {
             })?,
             None => TaskIdentityLog::default(),
         };
-        if log.schema_version != TASK_IDENTITY_SCHEMA_VERSION {
+        if !matches!(log.schema_version, 1 | TASK_IDENTITY_LOG_VERSION) {
             return Err(EngineError::Other(format!(
                 "unsupported task identity schema {}, expected {}",
-                log.schema_version, TASK_IDENTITY_SCHEMA_VERSION
+                log.schema_version, TASK_IDENTITY_LOG_VERSION
             )));
         }
         let mut projection = Projection::default();
         for event in &log.events {
-            projection.apply(event)?;
+            projection.apply(&decode_identity_event(event)?)?;
         }
         // Binding identity follows the canonical shared session store. A
         // selected Codex auth overlay is intentionally absent here: changing
@@ -502,6 +529,7 @@ impl TaskIdentityService {
                 write_handle: OnceLock::new(),
                 state: Mutex::new(State { log, projection }),
                 previews: Mutex::new(HashMap::new()),
+                workspace_repair_previews: Mutex::new(HashMap::new()),
                 reconcile_gates: Mutex::new(HashMap::new()),
                 device_id: device_id.to_string(),
                 codex,
@@ -831,21 +859,15 @@ impl TaskIdentityService {
                 "provider returned an empty task id".into(),
             ));
         }
-        let Some(mut view) = self.view(task_id) else {
+        let Some(view) = self.view(task_id) else {
             return Ok(None); // pre-L06 task: preserve it without auto-adoption
         };
         if view.task.tombstoned {
             return Err(EngineError::Other(format!("task {task_id} is tombstoned")));
         }
         let identity = self.provider_identity(provider_id);
+        self.validate_execution_workspace(task_id, cwd)?;
         let mut prefix_events = Vec::new();
-        if view.workspace.current_path == "~" && Path::new(cwd).is_absolute() {
-            view.workspace.current_path = cwd.to_string();
-            view.workspace.observed_at_ms = now_ms();
-            prefix_events.push(TaskIdentityEvent::WorkspaceObserved {
-                workspace: view.workspace.clone(),
-            });
-        }
         if let Some(current) = view.current_binding {
             if current.provider_task_id.is_empty() {
                 if current.provider_id != provider_id
@@ -998,6 +1020,7 @@ impl TaskIdentityService {
                     .into(),
             ));
         }
+        self.validate_execution_workspace(task_id, cwd)?;
         let binding = view
             .current_binding
             .ok_or_else(|| EngineError::Other("managed task has no provider binding".into()))?;
@@ -1052,6 +1075,7 @@ impl TaskIdentityService {
                     .into(),
             ));
         }
+        self.validate_execution_workspace(task_id, cwd)?;
         let Some(binding) = view.current_binding else {
             return Ok(None);
         };
@@ -1138,6 +1162,20 @@ impl TaskIdentityService {
             .current_binding
             .clone()
             .ok_or_else(|| EngineError::Other(format!("task {task_id} has no provider binding")))?;
+        if let Err(error) = self.validate_persisted_workspace_authority(task_id) {
+            self.record_reconciliation(
+                &binding.binding_id,
+                ReconciliationRecord {
+                    state: ReconciliationState::ExternalChange,
+                    reason: error.to_string(),
+                    observed_at_ms: now_ms(),
+                    provider: binding.reconciliation.provider.clone(),
+                },
+            )?;
+            return Ok(self
+                .view(task_id)
+                .expect("task survives fenced reconciliation"));
+        }
         if binding.provider_task_id.is_empty() {
             // Explicit clear/provider-switch generations intentionally have
             // no native id until their first accepted turn materializes them.
@@ -1367,8 +1405,45 @@ impl TaskIdentityService {
         .map_err(|_| EngineError::Other("provider import preview timed out".into()))??
         .ok_or_else(|| EngineError::Other("provider task was not found".into()))?;
         let provider_task = provider_observation(observation);
-        let workspace =
-            self.workspace_for_target(space_id, device_id, Some(provider_task.cwd.as_str()))?;
+        self.preview_import_observation(provider_id, provider_task, ownership, space_id, device_id)
+    }
+
+    /// Synthetic observation seam. It cannot be used by a native metadata
+    /// runtime and is not exposed over RPC; no provider process is consulted.
+    #[doc(hidden)]
+    pub fn preview_import_observation_for_tests(
+        &self,
+        provider_task: ProviderTaskObservation,
+        ownership: ImportOwnership,
+        space_id: Option<&str>,
+        device_id: Option<&str>,
+    ) -> Result<ProviderImportPreview, EngineError> {
+        if self.inner.native_codex_metadata {
+            return Err(EngineError::Other(
+                "Synthetic observations are unavailable to native metadata runtimes".into(),
+            ));
+        }
+        self.preview_import_observation(
+            HarnessId::Codex,
+            provider_task,
+            ownership,
+            space_id,
+            device_id,
+        )
+    }
+
+    fn preview_import_observation(
+        &self,
+        provider_id: HarnessId,
+        provider_task: ProviderTaskObservation,
+        ownership: ImportOwnership,
+        space_id: Option<&str>,
+        device_id: Option<&str>,
+    ) -> Result<ProviderImportPreview, EngineError> {
+        self.sweep_previews();
+        let provider_task_id = provider_task.provider_task_id.as_str();
+        let (workspace, missing_root) =
+            self.workspace_for_import_preview(space_id, device_id, &provider_task.cwd)?;
         let external_key = external_import_key(
             provider_id,
             &self.inner.provider_instance_id,
@@ -1422,6 +1497,11 @@ impl TaskIdentityService {
             (
                 ReconciliationState::ForeignActive,
                 Some("provider task is currently active in another client".into()),
+            )
+        } else if missing_root {
+            (
+                ReconciliationState::EnvironmentMissing,
+                Some("Historical workspace directory is missing. Metadata remains readable, but new adoption requires a fresh verified root.".into()),
             )
         } else if path_conflict {
             (
@@ -2160,7 +2240,7 @@ impl TaskIdentityService {
             projection.apply(event)?;
         }
         let mut log = state.log.clone();
-        log.events.extend(events);
+        append_identity_events(&mut log, events)?;
         let bytes = serde_json::to_vec(&log).map_err(|error| {
             EngineError::Other(format!("task identity log encode failed: {error}"))
         })?;
@@ -2195,7 +2275,7 @@ impl TaskIdentityService {
                 .map_err(TaskProjectionError::Mutation)?;
         }
         let mut log = state.log.clone();
-        log.events.extend(events);
+        append_identity_events(&mut log, events).map_err(TaskProjectionError::Mutation)?;
         let bytes = serde_json::to_vec(&log).map_err(|error| {
             TaskProjectionError::Mutation(EngineError::Other(format!(
                 "task identity log encode failed: {error}"
@@ -2213,52 +2293,7 @@ impl TaskIdentityService {
         device_id: Option<&str>,
         cwd: Option<&str>,
     ) -> Result<WorkspaceIdentity, EngineError> {
-        let at = now_ms();
-        if let Some(space_id) = space_id {
-            let space = self
-                .inner
-                .workspace
-                .read_spaces()?
-                .into_iter()
-                .find(|space| space.id == space_id)
-                .ok_or_else(|| EngineError::Other(format!("no such space: {space_id}")))?;
-            if space.device_id != self.inner.device_id {
-                return Err(EngineError::Other(
-                    "same-machine provider task cannot bind to a remote workspace".into(),
-                ));
-            }
-            let current_path = cwd
-                .filter(|cwd| !cwd.trim().is_empty())
-                .unwrap_or(&space.path)
-                .to_string();
-            return Ok(WorkspaceIdentity {
-                schema_version: TASK_IDENTITY_SCHEMA_VERSION,
-                workspace_id: space.id.clone(),
-                environment_id: space.device_id.clone(),
-                source_space_id: Some(space.id),
-                repository_id: space.checkout_id,
-                worktree_id: (normalized(&current_path) != normalized(&space.path))
-                    .then(|| digest(&current_path)),
-                current_path,
-                observed_at_ms: at,
-            });
-        }
-        let owner = device_id.unwrap_or(&self.inner.device_id);
-        if owner != self.inner.device_id {
-            return Err(EngineError::Other(
-                "same-machine provider task cannot bind to a remote environment".into(),
-            ));
-        }
-        Ok(WorkspaceIdentity {
-            schema_version: TASK_IDENTITY_SCHEMA_VERSION,
-            workspace_id: format!("projectless:{owner}"),
-            environment_id: owner.to_string(),
-            source_space_id: None,
-            repository_id: None,
-            current_path: cwd.unwrap_or("~").to_string(),
-            worktree_id: None,
-            observed_at_ms: at,
-        })
+        self.resolve_workspace_target(space_id, device_id, cwd)
     }
 
     fn provider_identity(&self, provider_id: HarnessId) -> ProviderIdentity {
@@ -2441,9 +2476,29 @@ fn stable_path(path: &Path) -> PathBuf {
 
 fn normalized(path: &str) -> String {
     if path == "~" {
-        return path.to_string();
+        return workspace_repair::owner_home_root()
+            .map(|path| stable_path(&path).to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string());
     }
     stable_path(Path::new(path)).to_string_lossy().into_owned()
+}
+
+fn decode_identity_event(value: &serde_json::Value) -> Result<TaskIdentityEvent, EngineError> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| EngineError::Other(format!("task identity event decode failed: {error}")))
+}
+
+fn append_identity_events(
+    log: &mut TaskIdentityLog,
+    events: Vec<TaskIdentityEvent>,
+) -> Result<(), EngineError> {
+    let values = events
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    log.schema_version = TASK_IDENTITY_LOG_VERSION;
+    log.events.extend(values);
+    Ok(())
 }
 
 fn is_missing_environment_path(path: &str) -> bool {

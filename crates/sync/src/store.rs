@@ -20,6 +20,10 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use crate::write_epoch::{FlushPermit, WriteEpoch, WritePermit};
 
 mod project_commands;
+mod workspace_repair;
+pub use workspace_repair::{
+    LocalExecutableAuthority, WorkspaceMaterializationFence, WorkspaceRepairFence,
+};
 
 /// Errors surfaced by [`DocsStore`].
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +60,8 @@ pub enum StoreError {
     DatabaseOpenConflict,
     #[error("local executable authority changed before projection commit")]
     LocalExecutableAuthorityConflict,
+    #[error("workspace repair authority: {0}")]
+    WorkspaceRepairConflict(String),
 }
 
 /// Ordered, append-only migrations. Each entry runs once inside a transaction;
@@ -299,6 +305,8 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX project_command_runs_project ON project_command_runs(project_id,device_id);",
     // v14 — profile-local side-chat leases, saved history and no-replay sends.
     include_str!("migrations/side_chats.sql"),
+    // v15 — original local execution authority survives association repair.
+    include_str!("migrations/workspace_repair.sql"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,6 +323,8 @@ pub struct LocalExecutableChange {
     pub row_id: String,
     pub expected_hash: Option<String>,
     pub replacement_hash: Option<String>,
+    pub expected_workspace_repair_revision: Option<u64>,
+    pub replacement_workspace_repair_revision: Option<u64>,
 }
 
 impl LocalExecutableKind {
@@ -1479,31 +1489,64 @@ impl DocsStore {
         payload_hash: &str,
         expected: Option<&str>,
     ) -> Result<bool, StoreError> {
-        let conn = self.conn();
+        let revision = self.workspace_repair_revision(doc_id)?;
+        self.record_local_executable_at_workspace_revision(
+            doc_id,
+            kind,
+            row_id,
+            payload_hash,
+            expected,
+            revision,
+        )
+    }
+
+    /// The stamp is captured at the original local admission, before any
+    /// asynchronous staging. Existing authority cannot be silently resealed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_local_executable_at_workspace_revision(
+        &self,
+        doc_id: &str,
+        kind: LocalExecutableKind,
+        row_id: &str,
+        payload_hash: &str,
+        expected: Option<&str>,
+        workspace_repair_revision: u64,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if workspace_repair::workspace_repair_revision_in(&tx, doc_id)? != workspace_repair_revision
+        {
+            return Ok(false);
+        }
         let changed = match expected {
-            Some(prior) => conn.execute(
+            Some(prior) => tx.execute(
                 "UPDATE local_executable_authority SET payload_hash=?4
-                 WHERE doc_id=?1 AND kind=?2 AND row_id=?3 AND payload_hash=?5",
-                params![doc_id, kind.as_str(), row_id, payload_hash, prior],
+                 WHERE doc_id=?1 AND kind=?2 AND row_id=?3 AND payload_hash=?5 AND workspace_repair_revision=?6",
+                params![doc_id, kind.as_str(), row_id, payload_hash, prior, workspace_repair_revision],
             )?,
-            None => conn.execute(
-                "INSERT OR IGNORE INTO local_executable_authority(doc_id,kind,row_id,payload_hash)
-                 VALUES (?1,?2,?3,?4)",
-                params![doc_id, kind.as_str(), row_id, payload_hash],
+            None => tx.execute(
+                "INSERT OR IGNORE INTO local_executable_authority(doc_id,kind,row_id,payload_hash,workspace_repair_revision)
+                 VALUES (?1,?2,?3,?4,?5)",
+                params![doc_id, kind.as_str(), row_id, payload_hash, workspace_repair_revision],
             )?,
         };
         if changed > 0 {
+            tx.commit()?;
             return Ok(true);
         }
-        Ok(conn
+        let matched = tx
             .query_row(
-                "SELECT payload_hash FROM local_executable_authority
+                "SELECT payload_hash,workspace_repair_revision FROM local_executable_authority
              WHERE doc_id=?1 AND kind=?2 AND row_id=?3",
                 params![doc_id, kind.as_str(), row_id],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
             )
             .optional()?
-            .is_some_and(|current| current == payload_hash))
+            .is_some_and(|(hash, revision)| {
+                hash == payload_hash && revision == workspace_repair_revision
+            });
+        tx.commit()?;
+        Ok(matched)
     }
 
     pub fn local_executable_hash(
@@ -1530,9 +1573,11 @@ impl DocsStore {
         row_id: &str,
         payload_hash: &str,
     ) -> Result<bool, StoreError> {
-        Ok(self
-            .local_executable_hash(doc_id, kind, row_id)?
-            .is_some_and(|expected| expected == payload_hash))
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_executable_authority
+             WHERE doc_id=?1 AND kind=?2 AND row_id=?3 AND payload_hash=?4
+             AND workspace_repair_revision=COALESCE((SELECT workspace_repair_revision FROM task_command_state WHERE task_id=?1),0))",
+            params![doc_id, kind.as_str(), row_id, payload_hash], |row| row.get(0))?)
     }
 
     /// Save the snapshot together with its chat2 room cursor and doc epoch —
@@ -2332,6 +2377,10 @@ impl DocsStore {
             "DELETE FROM task_recovery_state WHERE task_id=?1",
             params![task_id],
         )?;
+        tx.execute(
+            "DELETE FROM task_execution_lineage WHERE task_id=?1",
+            params![task_id],
+        )?;
         tx.execute("DELETE FROM snapshots WHERE doc_id=?1", params![task_id])?;
         tx.execute("DELETE FROM chat_outbox WHERE doc_id=?1", params![task_id])?;
         tx.execute(
@@ -2824,14 +2873,15 @@ impl DocsStore {
 
         let bytes = serde_json::to_vec(&receipt)?;
         tx.execute(
-            "INSERT INTO task_command_receipts(command_id,task_id,payload_hash,receipt_json,updated_at)
-             VALUES (?1,?2,?3,?4,?5)",
+            "INSERT INTO task_command_receipts(command_id,task_id,payload_hash,receipt_json,updated_at,workspace_repair_revision)
+             VALUES (?1,?2,?3,?4,?5,?6)",
             params![
                 receipt.command_id,
                 receipt.task_id,
                 receipt.payload_hash,
                 bytes,
-                now_ms()
+                now_ms(),
+                workspace_repair::workspace_repair_revision_in(&tx, &receipt.task_id)?
             ],
         )?;
         tx.commit()?;
@@ -3190,28 +3240,80 @@ impl DocsStore {
         tx: &rusqlite::Transaction<'_>,
         changes: &[LocalExecutableChange],
     ) -> Result<(), StoreError> {
+        Self::apply_local_executable_changes_with_consent_tx(tx, changes, None)
+    }
+
+    fn apply_local_executable_changes_with_consent_tx(
+        tx: &rusqlite::Transaction<'_>,
+        changes: &[LocalExecutableChange],
+        consent_command_id: Option<&str>,
+    ) -> Result<(), StoreError> {
         for change in changes {
-            let current: Option<String> = tx
+            let current: Option<(String, u64)> = tx
                 .query_row(
-                    "SELECT payload_hash FROM local_executable_authority
+                    "SELECT payload_hash,workspace_repair_revision FROM local_executable_authority
                      WHERE doc_id=?1 AND kind=?2 AND row_id=?3",
                     params![change.doc_id, change.kind.as_str(), change.row_id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            if current != change.expected_hash {
+            if current.as_ref().map(|(hash, _)| hash) != change.expected_hash.as_ref()
+                || current.as_ref().map(|(_, revision)| *revision)
+                    != change.expected_workspace_repair_revision
+            {
                 return Err(StoreError::LocalExecutableAuthorityConflict);
             }
             match &change.replacement_hash {
                 Some(hash) => {
+                    let revision = change
+                        .replacement_workspace_repair_revision
+                        .ok_or(StoreError::LocalExecutableAuthorityConflict)?;
+                    if revision
+                        != workspace_repair::workspace_repair_revision_in(tx, &change.doc_id)?
+                    {
+                        return Err(StoreError::WorkspaceRepairConflict(
+                            "the executable belongs to an earlier workspace association".into(),
+                        ));
+                    }
+                    if change
+                        .expected_workspace_repair_revision
+                        .is_some_and(|old| old != revision)
+                    {
+                        if change.kind != LocalExecutableKind::Queue {
+                            return Err(StoreError::LocalExecutableAuthorityConflict);
+                        }
+                        let command_id = consent_command_id
+                            .ok_or(StoreError::LocalExecutableAuthorityConflict)?;
+                        let bytes: Vec<u8> = tx.query_row(
+                            "SELECT receipt_json FROM task_command_receipts WHERE command_id=?1",
+                            [command_id],
+                            |row| row.get(0),
+                        )?;
+                        let consent: CommandReceipt = serde_json::from_slice(&bytes)?;
+                        if consent.task_id != change.doc_id
+                            || consent.status != CommandReceiptStatus::Pending
+                            || !matches!(
+                                consent.intent.as_str(),
+                                "sendQueuedNow" | "steerQueuedNow"
+                            )
+                            || consent.correlation_id.as_deref() != Some(change.row_id.as_str())
+                            || workspace_repair::command_workspace_revision_in(tx, command_id)?
+                                != Some(revision)
+                        {
+                            return Err(StoreError::LocalExecutableAuthorityConflict);
+                        }
+                    }
                     tx.execute(
-                        "INSERT INTO local_executable_authority(doc_id,kind,row_id,payload_hash)
-                         VALUES (?1,?2,?3,?4)
-                         ON CONFLICT(doc_id,kind,row_id) DO UPDATE SET payload_hash=excluded.payload_hash",
-                        params![change.doc_id, change.kind.as_str(), change.row_id, hash],
+                        "INSERT INTO local_executable_authority(doc_id,kind,row_id,payload_hash,workspace_repair_revision)
+                         VALUES (?1,?2,?3,?4,?5)
+                         ON CONFLICT(doc_id,kind,row_id) DO UPDATE SET payload_hash=excluded.payload_hash,workspace_repair_revision=excluded.workspace_repair_revision",
+                        params![change.doc_id, change.kind.as_str(), change.row_id, hash, revision],
                     )?;
                 }
                 None => {
+                    if change.replacement_workspace_repair_revision.is_some() {
+                        return Err(StoreError::LocalExecutableAuthorityConflict);
+                    }
                     tx.execute(
                         "DELETE FROM local_executable_authority
                          WHERE doc_id=?1 AND kind=?2 AND row_id=?3",
@@ -3382,6 +3484,17 @@ impl DocsStore {
             return Err(StoreError::LocalExecutableAuthorityConflict);
         }
         if !receipt.status.is_terminal() {
+            if !authority.is_empty()
+                && workspace_repair::command_workspace_revision_in(&tx, command_id)?
+                    != Some(workspace_repair::workspace_repair_revision_in(
+                        &tx,
+                        &receipt.task_id,
+                    )?)
+            {
+                return Err(StoreError::WorkspaceRepairConflict(
+                    "the command was admitted before workspace repair".into(),
+                ));
+            }
             receipt.correlation_id = Some(correlation_id.into());
             receipt.reason = Some(CommandReceiptReason {
                 code: CommandReasonCode::ProviderAcceptanceUnknown,
@@ -3401,7 +3514,7 @@ impl DocsStore {
         if let Some(recovery) = recovery {
             apply_task_recovery_transition_tx(&tx, recovery)?;
         }
-        Self::apply_local_executable_changes_tx(&tx, authority)?;
+        Self::apply_local_executable_changes_with_consent_tx(&tx, authority, Some(command_id))?;
         tx.commit()?;
         Ok(Some(receipt))
     }
@@ -3477,6 +3590,10 @@ impl DocsStore {
             let mut receipt: CommandReceipt = serde_json::from_slice(&bytes)?;
             if receipt.status != CommandReceiptStatus::Pending
                 || receipt.correlation_id.as_deref() != Some(correlation_id)
+                || workspace_repair::command_workspace_revision_in(&tx, &receipt.command_id)?
+                    != Some(workspace_repair::workspace_repair_revision_in(
+                        &tx, task_id,
+                    )?)
             {
                 continue;
             }
@@ -3758,6 +3875,29 @@ fn upsert_task_recovery_tx(
     tx: &rusqlite::Transaction<'_>,
     recovery: &StoredTaskRecovery,
 ) -> Result<(), StoreError> {
+    let original_w = workspace_repair::recovery_workspace_revision(&recovery.record_json)?;
+    if matches!(recovery.status.as_str(), "running" | "scheduled")
+        && original_w != workspace_repair::workspace_repair_revision_in(tx, &recovery.task_id)?
+    {
+        return Err(StoreError::WorkspaceRepairConflict(
+            "recovery belongs to an earlier workspace association".into(),
+        ));
+    }
+    let prior: Option<(String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT chain_id,record_json FROM task_recovery_state WHERE task_id=?1",
+            [&recovery.task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((chain, bytes)) = prior
+        && chain == recovery.chain_id
+        && workspace_repair::recovery_workspace_revision(&bytes)? != original_w
+    {
+        return Err(StoreError::WorkspaceRepairConflict(
+            "the original recovery workspace revision is immutable".into(),
+        ));
+    }
     tx.execute(
         "INSERT INTO task_recovery_state
          (task_id,chain_id,attempt_count,status,record_json,updated_at)

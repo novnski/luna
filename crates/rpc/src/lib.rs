@@ -146,6 +146,8 @@ pub mod methods {
     pub const ENGINE_READY: &str = "EngineReady";
     /// Durable LUNA task identity and all preserved execution-binding generations.
     pub const GET_TASK_IDENTITY: &str = "GetTaskIdentity";
+    /// Local-only proof for a legacy workspace association; never starts a provider.
+    pub const PREVIEW_WORKSPACE_IDENTITY_REPAIR: &str = "PreviewWorkspaceIdentityRepair";
     /// Redacted, provider-acknowledged LUNA runtime contract for one task.
     pub const GET_RUNTIME_CONTRACT: &str = "GetRuntimeContract";
     /// LUNA-owned global/project instruction settings, with revision readback.
@@ -349,6 +351,7 @@ pub mod methods {
         LOCAL_OWNER_ROOT_CLAIM,
         ENGINE_READY,
         GET_TASK_IDENTITY,
+        PREVIEW_WORKSPACE_IDENTITY_REPAIR,
         GET_RUNTIME_CONTRACT,
         GET_INSTRUCTION_SETTINGS,
         SET_INSTRUCTION_SETTINGS,

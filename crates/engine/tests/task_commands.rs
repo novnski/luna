@@ -697,7 +697,8 @@ async fn wait_for_receipt(
     command_id: &str,
     status: CommandReceiptStatus,
 ) -> CommandReceipt {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let last = Mutex::<Option<CommandReceipt>>::new(None);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let receipt: Option<CommandReceipt> = client
                 .call_as(
@@ -706,16 +707,43 @@ async fn wait_for_receipt(
                 )
                 .await
                 .unwrap();
-            if let Some(receipt) = receipt
-                && receipt.status == status
-            {
-                break receipt;
+            if let Some(receipt) = receipt {
+                if receipt.status == status {
+                    break receipt;
+                }
+                *last.lock().unwrap() = Some(receipt);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .unwrap()
+    .await;
+    outcome.unwrap_or_else(|_| {
+        let observed = last
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|receipt| {
+                let reason = receipt
+                    .reason
+                    .as_ref()
+                    .map(|reason| {
+                        format!(
+                            "{:?}: {}",
+                            reason.code,
+                            reason
+                                .message
+                                .replace('\n', " ")
+                                .chars()
+                                .take(160)
+                                .collect::<String>()
+                        )
+                    })
+                    .unwrap_or_else(|| "none".into());
+                format!("status={:?} reason={reason}", receipt.status)
+            })
+            .unwrap_or_else(|| "no receipt observed".into());
+        panic!("command {command_id} did not reach {status:?} within 5s; last {observed}");
+    })
 }
 
 async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
@@ -726,6 +754,20 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
             task_id,
             None,
             serde_json::json!({ "kind": "createChat", "deviceId": device_id }),
+        ),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+}
+
+async fn create_task_at_run_cwd(client: &RpcClient, task_id: &str, device_id: &str) {
+    let receipt = execute(
+        client,
+        envelope(
+            &format!("create-command-{task_id}"),
+            task_id,
+            None,
+            serde_json::json!({ "kind": "createChat", "deviceId": device_id, "cwd": "/tmp" }),
         ),
     )
     .await;
@@ -889,7 +931,7 @@ async fn steer_queue_case(
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble_with_steering(root.path(), runs, true, steering);
     let client = luna_rpc::memory_client(core.rpc_service());
-    create_task(&client, &task_id, &core.device_id).await;
+    create_task_at_run_cwd(&client, &task_id, &core.device_id).await;
 
     let run = execute(
         &client,
@@ -1996,7 +2038,7 @@ async fn duplicate_send_survives_two_clients_response_loss_and_restart() {
     let core = assemble(root.path(), runs.clone(), false);
     let client_a = luna_rpc::memory_client(core.rpc_service());
     let client_b = luna_rpc::memory_client(core.rpc_service());
-    create_task(&client_a, &task_id, &core.device_id).await;
+    create_task_at_run_cwd(&client_a, &task_id, &core.device_id).await;
     core.workspace.rename_chat(&task_id, "Pre-titled").unwrap();
     let before = snapshot(&client_a, &task_id).await;
     let mut published = client_a
@@ -2666,7 +2708,7 @@ async fn failed_durable_claim_never_reaches_the_provider_and_reopens_held() {
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), true);
     let client = luna_rpc::memory_client(core.rpc_service());
-    create_task(&client, &task_id, &core.device_id).await;
+    create_task_at_run_cwd(&client, &task_id, &core.device_id).await;
 
     let run = execute(
         &client,
@@ -2941,7 +2983,7 @@ async fn accepted_stop_fences_send_now_and_holds_the_queue() {
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs.clone(), true);
     let client = luna_rpc::memory_client(core.rpc_service());
-    create_task(&client, &task_id, &core.device_id).await;
+    create_task_at_run_cwd(&client, &task_id, &core.device_id).await;
     core.workspace.rename_chat(&task_id, "Pre-titled").unwrap();
     let before_run = snapshot(&client, &task_id).await;
     let run = execute(
@@ -3039,7 +3081,7 @@ async fn revision_binding_turn_and_lifecycle_fences_are_visible() {
     let task_id = uuid::Uuid::new_v4().to_string();
     let core = assemble(root.path(), runs, true);
     let client = luna_rpc::memory_client(core.rpc_service());
-    create_task(&client, &task_id, &core.device_id).await;
+    create_task_at_run_cwd(&client, &task_id, &core.device_id).await;
     core.workspace.rename_chat(&task_id, "Pre-titled").unwrap();
     let before = snapshot(&client, &task_id).await;
     execute(

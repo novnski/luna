@@ -62,6 +62,109 @@ fn service(root: &Path) -> BackupService {
 }
 
 #[test]
+fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
+    use luna_proto::{
+        RecoveryAcceptance, RecoveryAction, RecoveryFailure, RecoveryStatus, TaskRecovery,
+    };
+    let (_parent, root, backups) = fixture();
+    let task = "workspace-authority-backup";
+    let profile = root.join("profiles/local");
+    let view = TaskRecovery {
+        chain_id: "old-chain".into(),
+        task_id: task.into(),
+        original_message_id: "old-message".into(),
+        original_command_id: None,
+        original_acceptance: RecoveryAcceptance::Unknown,
+        acceptance: RecoveryAcceptance::Unknown,
+        failure: RecoveryFailure::Transport,
+        action: RecoveryAction::ObserveOnly,
+        status: RecoveryStatus::Held,
+        attempt_count: 0,
+        max_attempts: 4,
+        automatic: false,
+        retry_at_ms: None,
+        automatic_deadline_ms: i64::MAX,
+        environment_id: "synthetic-device".into(),
+        binding_id: None,
+        binding_generation: None,
+        detail: "Preserved older workspace lineage".into(),
+        created_at_ms: 1,
+        updated_at_ms: 1,
+    };
+    let request = luna_proto::RunRequest {
+        prompt: "old recovery".into(),
+        harness: Some(HarnessId::Mock),
+        provider_account_id: None,
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        cwd: "/synthetic".into(),
+        sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
+        auto_approve: false,
+        permission_mode: Default::default(),
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        resume: None,
+        attachments: vec![],
+        worktree: None,
+    };
+    let recovery = serde_json::to_vec(&serde_json::json!({
+        "workspaceRepairRevision":0, "view":view, "harness":"mock", "request":request,
+        "originalAcceptance":"unknown", "attemptAutomatic":false,
+    }))
+    .unwrap();
+    let sql = Connection::open(profile.join("docs.sqlite3")).unwrap();
+    sql.execute("INSERT INTO task_command_state(task_id,revision,workspace_repair_revision) VALUES (?1,9,7)", [task]).unwrap();
+    sql.execute("INSERT INTO local_executable_authority(doc_id,kind,row_id,payload_hash,workspace_repair_revision) VALUES (?1,'queue','old-row','old-hash',0)", [task]).unwrap();
+    sql.execute("INSERT INTO task_execution_lineage(task_id,message_id,workspace_repair_revision) VALUES (?1,'old-message',0)", [task]).unwrap();
+    sql.execute("INSERT INTO task_recovery_state(task_id,chain_id,attempt_count,status,record_json,updated_at) VALUES (?1,'old-chain',0,'held',?2,1)", params![task,recovery]).unwrap();
+    drop(sql);
+    let backup = service(&root)
+        .backup_now(&backups, 1_700_000_000_000)
+        .unwrap();
+    assert_eq!(backup.manifest.databases[0].schema_version, 15);
+    let staged = service(&root).stage_restore(&backup.archive).unwrap();
+    service(&root).verify_staged_for_tests(&staged).unwrap();
+    service(&root).activate(staged).unwrap();
+    let restored = DocsStore::open(&profile).unwrap();
+    assert_eq!(restored.workspace_repair_revision(task).unwrap(), 7);
+    assert_eq!(
+        restored
+            .execution_workspace_repair_revision(task, "old-message")
+            .unwrap(),
+        Some(0)
+    );
+    assert!(
+        !restored
+            .local_executable_matches(
+                task,
+                luna_sync::LocalExecutableKind::Queue,
+                "old-row",
+                "old-hash"
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        restored.task_recovery(task).unwrap().unwrap().record_json,
+        recovery
+    );
+    if let Some(dir) = std::env::var_os("LUNA_WORKSPACE_AUTHORITY_REPORT_DIR") {
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            PathBuf::from(dir).join("backup-restore-workspace-authority.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({"schema":15,"restoredW":7,
+                "grantW":0,"recoveryW":0,"messageW":0,"oldGrantExecutable":false,
+                "fullProfileRollbackProtectionClaimed":false}))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    // This preserves the W captured IN the archive. It makes no claim about
+    // detecting a restore that deliberately rolls back W and grants together.
+}
+
+#[test]
 fn bb_style_archive_is_gzip_manifest_verified_and_staged_without_a_key() {
     let (_parent, root, backups) = fixture();
     let backup = BackupService::new_bb_style(IsolatedRoot::open(&root).unwrap());
@@ -247,14 +350,14 @@ fn managed_offline_backup_refuses_unreviewed_future_schema() {
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
     conn.execute(
-        "INSERT INTO schema_migrations(version,applied_at) VALUES (15,1)",
+        "INSERT INTO schema_migrations(version,applied_at) VALUES (16,1)",
         [],
     )
     .unwrap();
     drop(conn);
     let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
     assert!(
-        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 14"))
+        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 15"))
     );
 }
 
@@ -280,6 +383,7 @@ fn managed_offline_backup_refuses_missing_v13_v14_feature_tables() {
         "side_chats",
         "side_chat_entries",
         "side_chat_sends",
+        "task_execution_lineage",
     ] {
         let (_parent, root, _backups) = fixture();
         fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
@@ -290,6 +394,30 @@ fn managed_offline_backup_refuses_missing_v13_v14_feature_tables() {
         assert!(
             matches!(result, Err(BackupError::Invalid(message)) if message.contains(&format!("missing table {table}"))),
             "missing {table} was not refused"
+        );
+    }
+}
+
+#[test]
+fn backup_refuses_schema15_without_its_workspace_authority_columns() {
+    for table in [
+        "task_command_state",
+        "task_command_receipts",
+        "local_executable_authority",
+        "task_execution_lineage",
+    ] {
+        let (_parent, root, backups) = fixture();
+        let sql = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
+        sql.execute(
+            &format!("ALTER TABLE {table} DROP COLUMN workspace_repair_revision"),
+            [],
+        )
+        .unwrap();
+        drop(sql);
+        assert!(
+            matches!(service(&root).backup_now(&backups, 1_700_000_000_000),
+            Err(BackupError::Invalid(message)) if message.contains("workspace_repair_revision")),
+            "{table}"
         );
     }
 }
@@ -310,6 +438,9 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
          DROP TABLE side_chat_entries;
          DROP TABLE side_chat_sends;
          DROP TABLE side_chats;
+         DROP TABLE task_execution_lineage;
+         ALTER TABLE task_command_state DROP COLUMN workspace_repair_revision;
+         ALTER TABLE task_command_receipts DROP COLUMN workspace_repair_revision;
          DELETE FROM schema_migrations WHERE version > 9;",
     )
     .unwrap();
@@ -333,7 +464,7 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 14);
+    assert_eq!(schema, 15);
 }
 
 #[test]
@@ -585,7 +716,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 14);
+    assert_eq!(backup.manifest.databases[0].schema_version, 15);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)
@@ -1060,7 +1191,7 @@ fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
     let backup = service(&root)
         .export(&backups.join("side-chat.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 14);
+    assert_eq!(backup.manifest.databases[0].schema_version, 15);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();

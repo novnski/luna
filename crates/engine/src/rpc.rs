@@ -278,6 +278,11 @@ enum TaskCommandIntent {
         lineage: TaskLineage,
     },
     #[serde(rename_all = "camelCase")]
+    RepairWorkspaceIdentity {
+        preview_id: String,
+        evidence_digest: String,
+    },
+    #[serde(rename_all = "camelCase")]
     Session {
         command: SessionCommandPayload,
         #[serde(default)]
@@ -468,6 +473,7 @@ impl TaskCommandIntent {
     fn name(&self) -> &'static str {
         match self {
             Self::CreateChat { .. } => "createChat",
+            Self::RepairWorkspaceIdentity { .. } => "repairWorkspaceIdentity",
             Self::Session { command, .. } => match command {
                 SessionCommandPayload::Run { .. } => "run",
                 SessionCommandPayload::Steer { .. } => "steer",
@@ -512,6 +518,7 @@ impl TaskCommandIntent {
         matches!(
             self,
             Self::Rename { .. }
+                | Self::RepairWorkspaceIdentity { .. }
                 | Self::SetPinned { .. }
                 | Self::SetRead { .. }
                 | Self::SetSettled { .. }
@@ -553,6 +560,7 @@ impl TaskCommandIntent {
         matches!(
             self,
             Self::SetArchived { .. }
+                | Self::RepairWorkspaceIdentity { .. }
                 | Self::SetSettled { .. }
                 | Self::MoveProject { .. }
                 | Self::ForkTask { .. }
@@ -4406,6 +4414,28 @@ impl EngineRpc {
         send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
     ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
         match intent {
+            TaskCommandIntent::RepairWorkspaceIdentity {
+                preview_id,
+                evidence_digest,
+            } => {
+                // Admission already owns the task-command lane. Exempt only
+                // this exact pending repair receipt from the quiescence check.
+                let _quiescence = self
+                    .doc_host
+                    .prepare_workspace_identity_repair(task_id, Some(command_id))
+                    .await
+                    .map_err(TaskProjectionError::Mutation)?;
+                let receipt = self
+                    .task_identity
+                    .apply_workspace_identity_repair(
+                        task_id,
+                        command_id,
+                        &preview_id,
+                        &evidence_digest,
+                    )
+                    .await?;
+                Ok(Some(receipt))
+            }
             TaskCommandIntent::CreateChat {
                 side_parent_id,
                 space_id,
@@ -4703,10 +4733,12 @@ impl EngineRpc {
                         kind: LocalExecutableKind::Command,
                         row_id: local_command_id,
                         expected_hash: None,
+                        expected_workspace_repair_revision: None,
                         replacement_hash: Some(
                             crate::doc_host::executable_row_hash(&command)
                                 .map_err(TaskProjectionError::ProviderUnknown)?,
                         ),
+                        replacement_workspace_repair_revision: Some(0),
                     });
                 }
                 let target_snapshot = target_doc
@@ -7969,6 +8001,52 @@ impl RpcService for EngineRpc {
             methods::GET_TASK_IDENTITY => {
                 let p: TaskIdentityParams = parse_params(params)?;
                 RpcReply::value(&self.task_identity.view(&p.task_id))
+            }
+            methods::PREVIEW_WORKSPACE_IDENTITY_REPAIR => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    task_id: String,
+                    #[serde(default)]
+                    provider_proof: Option<String>,
+                    #[serde(default)]
+                    target_device_id: Option<String>,
+                }
+                let p: P = parse_params(params)?;
+                if p.provider_proof.as_deref().unwrap_or("localOnly") != "localOnly" {
+                    return Err(RpcError::BadParams("Only localOnly workspace proof is available; provider reads are not enabled".into()));
+                }
+                if p.target_device_id
+                    .as_deref()
+                    .is_some_and(|id| id != self.engine_info.device_id)
+                    || !self.workspace.is_host(&p.task_id)
+                {
+                    return Err(RpcError::BadParams(
+                        "Workspace repair requires the task's local owning device".into(),
+                    ));
+                }
+                let _lane = self.doc_host.task_command_gate(&p.task_id).await;
+                let guard = self
+                    .doc_host
+                    .prepare_workspace_identity_repair(&p.task_id, None)
+                    .await;
+                let blocker = guard.as_ref().err().map(ToString::to_string);
+                let snapshot = self.current_task_command_snapshot(&p.task_id)?;
+                let workspace_revision = self
+                    .store
+                    .workspace_repair_revision(&p.task_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let preview = self
+                    .task_identity
+                    .preview_workspace_identity_repair(
+                        &p.task_id,
+                        snapshot.task_revision,
+                        workspace_revision,
+                        blocker,
+                    )
+                    .await
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&preview)
             }
             methods::GET_RUNTIME_CONTRACT => {
                 let p: TaskIdentityParams = parse_params(params)?;

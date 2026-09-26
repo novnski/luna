@@ -174,6 +174,10 @@ struct WorkspaceHostInner {
     /// commit, including task projections and the delayed worker. Otherwise
     /// an older capture can commit after an explicit flush.
     snapshot_persist: Mutex<()>,
+    /// Deterministic synthetic race seam. Only debug Rust callers can place
+    /// an out-of-lane registry change between proof read and commit lock.
+    #[cfg(debug_assertions)]
+    workspace_repair_before_registry_lock: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     snapshot_after_capture: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     chats_tx: watch::Sender<Vec<Chat>>,
@@ -409,6 +413,8 @@ impl WorkspaceHost {
                 snapshot_write_handle,
                 reg: Arc::new(Mutex::new(doc)),
                 snapshot_persist: Mutex::new(()),
+                #[cfg(debug_assertions)]
+                workspace_repair_before_registry_lock: Mutex::new(None),
                 #[cfg(test)]
                 snapshot_after_capture: Mutex::new(None),
                 chats_tx,
@@ -1120,6 +1126,102 @@ impl WorkspaceHost {
         };
         drop(reg);
         Ok((result, receipt))
+    }
+
+    /// Association-only repair: keep the registry bytes unchanged while the
+    /// identity projection, receipt and R/W boundary commit together. The
+    /// caller holds the task-command lane and lifecycle quiescence guard.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit_workspace_identity_repair(
+        &self,
+        command_id: &str,
+        task_id: &str,
+        fence: &luna_sync::WorkspaceRepairFence,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+        identity_snapshot: (&str, &[u8]),
+        validate: impl FnOnce(&RegistryDoc) -> Result<(), EngineError>,
+    ) -> Result<CommandReceipt, TaskProjectionError> {
+        #[cfg(debug_assertions)]
+        {
+            let hook = lock(&self.inner.workspace_repair_before_registry_lock).take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        let _persist = lock(&self.inner.snapshot_persist);
+        let reg = lock(&self.inner.reg);
+        validate(&reg).map_err(TaskProjectionError::Mutation)?;
+        let bytes = reg.to_bytes().map_err(|error| {
+            TaskProjectionError::Commit(EngineError::Other(format!(
+                "registry snapshot export failed: {error}"
+            )))
+        })?;
+        self.inner
+            .store
+            .complete_task_command_with_snapshot_changes_and_workspace_repair(
+                command_id,
+                task_id,
+                fence,
+                binding_id,
+                binding_generation,
+                &[(REGISTRY_DOC_ID, bytes.as_slice()), identity_snapshot],
+            )
+            .map_err(|error| match error {
+                luna_sync::StoreError::WorkspaceRepairConflict(_) => {
+                    TaskProjectionError::Mutation(error.into())
+                }
+                _ => TaskProjectionError::Commit(error.into()),
+            })
+    }
+
+    /// Synthetic integration seam; it is absent from release builds and is
+    /// never exposed through ControlRpc or provider tools.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn set_workspace_repair_precommit_hook_for_tests(
+        &self,
+        hook: impl FnOnce() + Send + 'static,
+    ) {
+        *lock(&self.inner.workspace_repair_before_registry_lock) = Some(Box::new(hook));
+    }
+
+    pub(crate) fn commit_workspace_materialization<R>(
+        &self,
+        command_id: &str,
+        task_id: &str,
+        fence: &luna_sync::WorkspaceMaterializationFence,
+        identity_snapshot: Option<(&str, &[u8])>,
+        mutation: impl FnOnce(&mut RegistryDoc) -> Result<R, EngineError>,
+    ) -> Result<R, TaskProjectionError> {
+        let _persist = lock(&self.inner.snapshot_persist);
+        let mut reg = lock(&self.inner.reg);
+        let before = reg
+            .to_bytes()
+            .map_err(|error| TaskProjectionError::Commit(error.into()))?;
+        let result = (|| {
+            let result = mutation(&mut reg).map_err(TaskProjectionError::Mutation)?;
+            let bytes = reg
+                .to_bytes()
+                .map_err(|error| TaskProjectionError::Commit(error.into()))?;
+            let mut snapshots = vec![(REGISTRY_DOC_ID, bytes.as_slice())];
+            snapshots.extend(identity_snapshot);
+            self.inner
+                .store
+                .persist_workspace_materialization(command_id, task_id, fence, &snapshots)
+                .map_err(|error| match error {
+                    luna_sync::StoreError::WorkspaceRepairConflict(_) => {
+                        TaskProjectionError::Mutation(error.into())
+                    }
+                    _ => TaskProjectionError::Commit(error.into()),
+                })?;
+            Ok(result)
+        })();
+        if result.is_err() {
+            *reg = RegistryDoc::from_bytes(&before, &self.inner.config.device_id)
+                .map_err(|error| TaskProjectionError::Commit(error.into()))?;
+        }
+        result
     }
 
     /// L11 boundary form: include prepared chat snapshots/publication batches
