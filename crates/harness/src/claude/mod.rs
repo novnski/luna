@@ -861,7 +861,22 @@ async fn run_session(session: Session) {
                             }
                             continue 'main;
                         }
-                        match written_rx.await {
+                        let written = tokio::select! {
+                            biased;
+                            _ = interrupt.cancelled() => None,
+                            _ = event_tx.closed() => None,
+                            written = written_rx => Some(written),
+                        };
+                        let Some(written) = written else {
+                            if let Some(tx) = msg.acceptance {
+                                let _ = tx.send(crate::SteerAcceptance::Unknown(
+                                    "Claude session stopped before confirming the write".into(),
+                                ));
+                            }
+                            interrupted = interrupt.is_cancelled();
+                            break 'main;
+                        };
+                        match written {
                             Ok(Ok(())) => {
                                 explicit_steer_unconfirmed = true;
                                 if let Some(tx) = msg.acceptance {
