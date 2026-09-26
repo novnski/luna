@@ -46,6 +46,7 @@ pub mod notify;
 pub mod pickers;
 pub mod popover;
 mod power;
+pub mod project_commands;
 pub mod queue;
 pub mod rail;
 pub mod remote_read;

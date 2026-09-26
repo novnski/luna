@@ -803,6 +803,22 @@ fn tool_file_path(call: &ToolCall) -> Option<&str> {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProjectCommandsParams {
+    #[serde(default)]
+    project_id: String,
+    #[serde(default)]
+    chat_id: String,
+    #[serde(default)]
+    action_id: String,
+    #[serde(default)]
+    request_id: String,
+    #[serde(default)]
+    run_id: String,
+    actions: Option<Vec<luna_proto::ProjectAction>>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenTerminalParams {
@@ -1053,6 +1069,7 @@ pub struct EngineRpc {
     git_checkpoints: Option<crate::git_checkpoints::GitCheckpoints>,
     workspace_files: crate::WorkspaceFiles,
     terminals: Terminals,
+    project_commands: Option<crate::project_commands::ProjectCommands>,
     previews: Option<luna_preview::PreviewService>,
     change_requests: CheckoutChangeRequests,
     diff_sync: CheckoutDiffSync,
@@ -1290,6 +1307,7 @@ impl EngineRpc {
             repos,
             workspace_files,
             terminals,
+            project_commands: None,
             previews: None,
             change_requests,
             diff_sync,
@@ -1312,6 +1330,14 @@ impl EngineRpc {
         rpc.spawn_activity_bootstrap();
         rpc.model_cache.start_background_refresh();
         rpc
+    }
+
+    pub(crate) fn with_project_commands(
+        mut self,
+        commands: crate::project_commands::ProjectCommands,
+    ) -> Self {
+        self.project_commands = Some(commands);
+        self
     }
 
     pub(crate) fn resume_cleanup_initial(&self) -> (String, String) {
@@ -9561,6 +9587,52 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::GET_PROJECT_COMMANDS
+            | methods::SAVE_PROJECT_COMMANDS
+            | methods::PROJECT_COMMAND_STATUS
+            | methods::RUN_PROJECT_COMMAND
+            | methods::STOP_PROJECT_COMMAND
+            | methods::RETRY_PROJECT_COMMAND => {
+                let commands = self
+                    .project_commands
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Project commands unavailable".into()))?;
+                let p: ProjectCommandsParams = parse_params(params)?;
+                let failed = |e: EngineError| RpcError::Failed(e.to_string());
+                match method {
+                    methods::GET_PROJECT_COMMANDS => {
+                        RpcReply::value(&commands.configuration(&p.project_id).map_err(failed)?)
+                    }
+                    methods::SAVE_PROJECT_COMMANDS => {
+                        commands
+                            .configure(
+                                &p.project_id,
+                                p.actions
+                                    .ok_or_else(|| RpcError::Failed("Missing actions".into()))?,
+                            )
+                            .map_err(failed)?;
+                        RpcReply::value(&commands.configuration(&p.project_id).map_err(failed)?)
+                    }
+                    methods::PROJECT_COMMAND_STATUS => {
+                        RpcReply::value(&commands.snapshot(&p.chat_id).await.map_err(failed)?)
+                    }
+                    methods::RUN_PROJECT_COMMAND => RpcReply::value(
+                        &commands
+                            .run(&p.chat_id, &p.action_id, &p.request_id)
+                            .await
+                            .map_err(failed)?,
+                    ),
+                    methods::STOP_PROJECT_COMMAND => RpcReply::value(
+                        &commands.stop(&p.chat_id, &p.run_id).await.map_err(failed)?,
+                    ),
+                    _ => RpcReply::value(
+                        &commands
+                            .retry(&p.chat_id, &p.run_id)
+                            .await
+                            .map_err(failed)?,
+                    ),
+                }
             }
             methods::OPEN_TERMINAL => {
                 let p: OpenTerminalParams = parse_params(params)?;

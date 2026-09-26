@@ -235,6 +235,12 @@ pub mod methods {
     pub const CREATE_WORKTREE: &str = "CreateWorktree";
     pub const DELETE_WORKTREE: &str = "DeleteWorktree";
     // Terminals (ControlRpc, relay-forwardable; SubscribeTerminal streams).
+    pub const GET_PROJECT_COMMANDS: &str = "GetProjectCommands";
+    pub const SAVE_PROJECT_COMMANDS: &str = "SaveProjectCommands";
+    pub const PROJECT_COMMAND_STATUS: &str = "ProjectCommandStatus";
+    pub const RUN_PROJECT_COMMAND: &str = "RunProjectCommand";
+    pub const STOP_PROJECT_COMMAND: &str = "StopProjectCommand";
+    pub const RETRY_PROJECT_COMMAND: &str = "RetryProjectCommand";
     pub const OPEN_TERMINAL: &str = "OpenTerminal";
     pub const SUBSCRIBE_TERMINAL: &str = "SubscribeTerminal";
     pub const WRITE_TERMINAL: &str = "WriteTerminal";

@@ -39,7 +39,8 @@ const CHUNK: usize = 64 * 1024;
 // Review new DocsStore migrations before raising this ceiling. v10/v11 keep
 // owned cleanup checkpoints; v12 keeps exact local executable authority in
 // the copied SQLite snapshot. v9 Appshot sources still rebuild the activity index.
-const CURRENT_SCHEMA: i64 = 12;
+// v13 adds device-owned project commands and their execution receipts.
+const CURRENT_SCHEMA: i64 = 13;
 
 const EXCLUDED: &[&str] = &[
     "OS Keychain and LUNA credential vault",

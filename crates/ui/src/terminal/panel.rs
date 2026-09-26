@@ -378,11 +378,33 @@ pub struct TerminalPanel {
     /// than a permanently painted rail beside the panel: the terminal owns
     /// the cursor.
     bar: MenuScrollbarState,
+    commands: Entity<crate::project_commands::ProjectCommandPanel>,
+    _command_events: Subscription,
     _observe: Subscription,
 }
 
 impl TerminalPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let commands =
+            cx.new(|cx| crate::project_commands::ProjectCommandPanel::new(state.clone(), cx));
+        let command_events = cx.subscribe(&commands, |panel: &mut Self, _, event, cx| {
+            let crate::project_commands::ProjectCommandEvent::Output {
+                chat_id,
+                terminal_id,
+            } = event;
+            if panel
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .any(|chat| chat.id == *chat_id)
+            {
+                panel
+                    .state
+                    .update(cx, |state, cx| state.select_chat(Some(chat_id.clone()), cx));
+                panel.focus_terminal_id(chat_id, terminal_id, cx);
+            }
+        });
         let engine_generation = state.read(cx).engine_generation();
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));
         Self {
@@ -407,6 +429,8 @@ impl TerminalPanel {
             selection_scroll_task: None,
             rail_tab_key: None,
             bar: MenuScrollbarState::default(),
+            commands,
+            _command_events: command_events,
             _observe: observe,
         }
     }
@@ -1934,6 +1958,7 @@ impl Render for TerminalPanel {
             .when(corner_bl, |el| el.rounded_bl(corner))
             .when(corner_br, |el| el.rounded_br(corner))
             .children(tab_bar)
+            .child(self.commands.clone())
             .child(
                 div()
                     .id("terminal-body")

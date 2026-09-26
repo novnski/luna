@@ -12398,6 +12398,11 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewSession, _, cx| this.open_new_session(cx)))
             // Native Settings menu item and the platform convention (Cmd+, on
             // macOS, Ctrl+, elsewhere) always land on the default section.
+            .on_action(cx.listener(
+                |this, action: &crate::project_commands::OpenCommandPreview, window, cx| {
+                    this.add_browser_surface(Some(action.0.clone()), window, cx);
+                },
+            ))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                 this.open_settings(SettingsSection::DEFAULT, cx)
             }))

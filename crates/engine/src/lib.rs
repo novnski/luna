@@ -141,6 +141,7 @@ mod macos_keychain;
 mod model_cache;
 pub mod permissions;
 pub mod profile;
+pub mod project_commands;
 mod provider_updates;
 pub mod recovery;
 pub mod registry;
@@ -291,6 +292,7 @@ pub struct EngineCore {
     pub repos: Repos,
     pub workspace_files: WorkspaceFiles,
     pub terminals: Terminals,
+    pub project_commands: project_commands::ProjectCommands,
     pub previews: luna_preview::PreviewService,
     pub change_requests: CheckoutChangeRequests,
     pub diff_sync: CheckoutDiffSync,
@@ -580,6 +582,15 @@ impl EngineCore {
             WorkspaceFiles::new(repos.clone(), workspace.clone(), device_id.clone());
         let terminals =
             Terminals::open_with_history(&profile.store_root().join("terminals"), &device_id)?;
+        let project_commands = project_commands::ProjectCommands::open(
+            store.clone(),
+            workspace.clone(),
+            terminals.clone(),
+            repos.clone(),
+            device_id.clone(),
+            device_write.handle(),
+        )?;
+        doc_host.set_project_commands(project_commands.clone());
         let previews = luna_preview::PreviewService::new(
             profile.store_root().join("previews.json"),
             device_id.clone(),
@@ -653,6 +664,7 @@ impl EngineCore {
             repos,
             workspace_files,
             terminals,
+            project_commands,
             previews,
             change_requests,
             diff_sync,
@@ -853,6 +865,10 @@ impl EngineCore {
         )
         .with_auth(self.auth())
         .with_previews(self.previews.clone());
+        if include_backup {
+            // Saved shell commands are a local desktop workflow, never relay RPCs.
+            rpc = rpc.with_project_commands(self.project_commands.clone());
+        }
         if let Some(remote_auth) = &self.remote_auth {
             rpc = rpc.with_remote_auth(remote_auth.clone());
         }

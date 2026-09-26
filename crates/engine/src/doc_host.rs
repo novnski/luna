@@ -228,6 +228,7 @@ struct DocHostInner {
     workspace: OnceLock<WorkspaceHost>,
     /// Worktree materialization for Run commands (see `set_repos`).
     repos: OnceLock<crate::repos::Repos>,
+    project_commands: OnceLock<crate::project_commands::ProjectCommands>,
     /// Cancels every worker spawned through `spawn_worker` — the loops'
     /// own exit conditions (weak handle death, closed channels) don't cover
     /// runtime replacement, where Edge-capable tasks must stop doing
@@ -908,6 +909,7 @@ impl DocHost {
                 sessions: Mutex::new(None),
                 workspace: OnceLock::new(),
                 repos: OnceLock::new(),
+                project_commands: OnceLock::new(),
                 shutdown: CancellationToken::new(),
                 edge_disconnected: AtomicBool::new(false),
                 tasks: TaskTracker::new(),
@@ -1539,6 +1541,10 @@ impl DocHost {
 
     /// Wire the repos engine (engine assembly) — worktree materialization for
     /// Run commands carrying a [`luna_proto::WorktreeSpec`].
+    pub fn set_project_commands(&self, commands: crate::project_commands::ProjectCommands) {
+        let _ = self.inner.project_commands.set(commands);
+    }
+
     pub fn set_repos(&self, repos: crate::repos::Repos) {
         let _ = self.inner.repos.set(repos);
     }
@@ -6757,13 +6763,20 @@ impl DocHost {
                     // worktree, and stamp the actual `luna/<name>` branch so
                     // the footer and the title-rename flow see it.
                     if let Some(wt) = &fresh_worktree {
-                        if let Err(err) = ws.set_chat_cwd(chat_id, &wt.path) {
-                            tracing::warn!(chat = %chat_id, error = %err, "worktree cwd stamp failed");
-                        }
+                        ws.set_chat_cwd(chat_id, &wt.path)?;
                         if let Err(err) = ws.set_chat_branch(chat_id, &wt.branch) {
                             tracing::warn!(chat = %chat_id, error = %err, "worktree branch stamp failed");
                         }
+                        // Publish the existing checkout receipt durably before
+                        // any captured setup can receive its launch handshake.
+                        ws.flush_checked()?;
                     }
+                }
+                if let Some(commands) = self.inner.project_commands.get() {
+                    if fresh_worktree.is_some() {
+                        commands.setup_new_worktree(chat_id, &request.cwd).await?;
+                    }
+                    commands.wait_for_setup(chat_id, &request.cwd).await?;
                 }
                 let harness = self.harness_for_request(chat_id, &request);
                 // A row with no config renders no harness glyph (and every
@@ -7233,6 +7246,11 @@ impl DocHost {
         let worktree = repos
             .create_worktree(std::path::Path::new(&spec.repo_path), &spec.base)
             .await?;
+        if let Some(commands) = self.inner.project_commands.get() {
+            commands
+                .prepare_new_worktree(chat_id, &worktree.path)
+                .await?;
+        }
         tracing::info!(
             chat = %chat_id,
             path = %worktree.path,

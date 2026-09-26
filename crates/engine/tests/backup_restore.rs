@@ -306,7 +306,7 @@ fn managed_offline_v9_archive_remains_restorable_after_v12_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 12);
+    assert_eq!(schema, 13);
 }
 
 #[test]
@@ -557,7 +557,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 12);
+    assert_eq!(backup.manifest.databases[0].schema_version, 13);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)

@@ -241,6 +241,50 @@ impl Terminals {
         rows: u16,
         shell: Option<&str>,
     ) -> Result<TerminalSession, EngineError> {
+        self.open_process_for_task(chat_id, cwd, cols, rows, shell, None)
+    }
+
+    /// Saved commands use a noninteractive POSIX shell, in an exact cwd. The
+    /// user command cannot execute until its durable receipt authorizes the
+    /// random handshake through the existing terminal input channel.
+    pub(crate) fn open_command_for_task(
+        &self,
+        chat_id: &str,
+        cwd: &str,
+        command: &str,
+        handshake: &str,
+    ) -> Result<TerminalSession, EngineError> {
+        self.open_process_for_task(
+            chat_id,
+            cwd,
+            100,
+            28,
+            Some("/bin/sh"),
+            Some((command, handshake)),
+        )
+    }
+
+    pub(crate) fn process_id(&self, terminal_id: &str) -> Option<u32> {
+        self.session(terminal_id)
+            .ok()
+            .and_then(|s| lock(&s).process_id)
+    }
+
+    fn open_process_for_task(
+        &self,
+        chat_id: &str,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        shell: Option<&str>,
+        command: Option<(&str, &str)>,
+    ) -> Result<TerminalSession, EngineError> {
+        #[cfg(windows)]
+        if command.is_some() {
+            return Err(EngineError::Other(
+                "Saved project commands require a POSIX host".into(),
+            ));
+        }
         if lock(&self.inner.sessions).len() >= MAX_TERMINALS {
             return Err(EngineError::Other(format!(
                 "Too many open terminals (maximum {MAX_TERMINALS})"
@@ -270,7 +314,11 @@ impl Terminals {
                 .openpty(clamp_size(cols, rows))
                 .map_err(|e| EngineError::Other(format!("could not open a pty: {e}")))?;
             let mut cmd = CommandBuilder::new(&shell);
-            if !explicit_shell {
+            if let Some((command, handshake)) = command {
+                let quote = |text: &str| format!("'{}'", text.replace('\'', "'\"'\"'"));
+                cmd.arg("-c");
+                cmd.arg(format!("IFS= read -r luna_command_gate; [ \"$luna_command_gate\" = {} ] || exit 125; exec /bin/sh -c {}", quote(handshake), quote(command)));
+            } else if !explicit_shell {
                 cmd.arg("-l"); // login shell — the user's real PATH/profile
             } else {
                 // Explicit shell overrides are fixture-only today. Keep them
