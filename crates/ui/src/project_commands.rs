@@ -21,6 +21,8 @@ fn command_settings_button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
+    // GPUI sends Enter/Space on a focused on_click control as one keyboard
+    // click on key-up. A separate key-down handler would activate it twice.
     let accent = theme.accent;
     command_action(theme, enabled)
         .id(id.into())
@@ -30,10 +32,6 @@ fn command_settings_button(
             el.tab_index(0)
                 .focus_visible(move |style| style.border_2().border_color(accent))
         })
-}
-
-fn command_key_activated(event: &gpui::KeyDownEvent) -> bool {
-    !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space")
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -218,14 +216,6 @@ impl Render for ProjectCommandSettings {
                                 .child(if self.busy { "Loading…" } else { "Add command" })
                                 .when(!self.busy, |el| {
                                     el.on_click(cx.listener(|view, _, _, cx| view.edit(None, cx)))
-                                        .on_key_down(cx.listener(
-                                            |view, event: &gpui::KeyDownEvent, _, cx| {
-                                                if command_key_activated(event) {
-                                                    view.edit(None, cx);
-                                                    cx.stop_propagation();
-                                                }
-                                            },
-                                        ))
                                 }),
                         )
                     }),
@@ -233,11 +223,9 @@ impl Render for ProjectCommandSettings {
             .child(widgets::page_subtitle(&theme, "Saved on this device. Run commands from Terminal → Commands in the selected task’s checkout. Foreground commands use /bin/sh; shell operators and environment variables are supported."));
         for action in self.actions.clone() {
             let edit_click = action.clone();
-            let edit_key = action.clone();
             let edit_selector_id = action.id.clone();
             let remove_selector_id = action.id.clone();
             let remove_click_id = action.id.clone();
-            let remove_key_id = action.id.clone();
             card = card.child(
                 div()
                     .flex()
@@ -273,14 +261,6 @@ impl Render for ProjectCommandSettings {
                             el.on_click(cx.listener(move |view, _, _, cx| {
                                 view.edit(Some(edit_click.clone()), cx)
                             }))
-                            .on_key_down(cx.listener(
-                                move |view, event: &gpui::KeyDownEvent, _, cx| {
-                                    if command_key_activated(event) {
-                                        view.edit(Some(edit_key.clone()), cx);
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            ))
                         }),
                     )
                     .child(
@@ -300,14 +280,6 @@ impl Render for ProjectCommandSettings {
                             el.on_click(cx.listener(move |view, _, _, cx| {
                                 view.remove(&remove_click_id, cx);
                             }))
-                            .on_key_down(cx.listener(
-                                move |view, event: &gpui::KeyDownEvent, _, cx| {
-                                    if command_key_activated(event) {
-                                        view.remove(&remove_key_id, cx);
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            ))
                         }),
                     ),
             );
@@ -325,26 +297,14 @@ impl Render for ProjectCommandSettings {
                         .aria_toggled(if self.setup { gpui::Toggled::True } else { gpui::Toggled::False })
                         .when(cfg!(test), |el| el.debug_selector(|| "qa-command-setup".into()))
                         .child(if self.setup { "✓ Run on new worktree creation" } else { "Run on new worktree creation" })
-                        .on_click(cx.listener(|view, _, _, cx| view.toggle_setup(cx)))
-                        .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
-                            if command_key_activated(event) {
-                                view.toggle_setup(cx);
-                                cx.stop_propagation();
-                            }
-                        })),
+                        .on_click(cx.listener(|view, _, _, cx| view.toggle_setup(cx))),
                 )
                 .child(
                     command_settings_button(&theme, true, "command-wait", "Wait for setup before dependent work")
                         .aria_toggled(if self.wait { gpui::Toggled::True } else { gpui::Toggled::False })
                         .when(cfg!(test), |el| el.debug_selector(|| "qa-command-wait".into()))
                         .child(if self.wait { "✓ Wait for setup before dependent work" } else { "Allow work while setup runs" })
-                        .on_click(cx.listener(|view, _, _, cx| view.toggle_wait(cx)))
-                        .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
-                            if command_key_activated(event) {
-                                view.toggle_wait(cx);
-                                cx.stop_propagation();
-                            }
-                        })),
+                        .on_click(cx.listener(|view, _, _, cx| view.toggle_wait(cx))),
                 )
                 .child(widgets::page_subtitle(&theme,"Setup runs only for newly created worktrees. Interrupted or failed setup stays visible and requires an explicit retry. Editing this command does not rerun existing setup."))
                 .child(
@@ -357,25 +317,13 @@ impl Render for ProjectCommandSettings {
                                 .child(if self.busy { "Saving…" } else { "Save command" })
                                 .when(!self.busy, |el| {
                                     el.on_click(cx.listener(|view, _, _, cx| view.save(cx)))
-                                        .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
-                                            if command_key_activated(event) {
-                                                view.save(cx);
-                                                cx.stop_propagation();
-                                            }
-                                        }))
                                 }),
                         )
                         .child(
                             command_settings_button(&theme, true, "cancel-command-edit", "Cancel command edit")
                                 .when(cfg!(test), |el| el.debug_selector(|| "qa-command-cancel".into()))
                                 .child("Cancel")
-                                .on_click(cx.listener(|view, _, _, cx| view.cancel_edit(cx)))
-                                .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
-                                    if command_key_activated(event) {
-                                        view.cancel_edit(cx);
-                                        cx.stop_propagation();
-                                    }
-                                })),
+                                .on_click(cx.listener(|view, _, _, cx| view.cancel_edit(cx))),
                         ),
                 );
         }
@@ -392,12 +340,6 @@ impl Render for ProjectCommandSettings {
                     .child("Reload saved commands (keep draft)")
                     .when(!self.busy, |el| {
                         el.on_click(cx.listener(|view, _, _, cx| view.reload(cx)))
-                            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
-                                if command_key_activated(event) {
-                                    view.reload(cx);
-                                    cx.stop_propagation();
-                                }
-                            }))
                     }),
                 );
         }
