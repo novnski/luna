@@ -155,7 +155,7 @@ impl Render for ArchivedPage {
                             .child(
                                 crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
                                     .size(px(16.0))
-                                    .text_color(theme.text_muted.opacity(0.6)),
+                                    .text_color(theme.readable_muted(0.6)),
                             ),
                     )
                     .child(
@@ -183,7 +183,7 @@ impl Render for ArchivedPage {
                                         div()
                                             .flex_none()
                                             .text_size(crate::typography::ui_rems(11.0))
-                                            .text_color(theme.text_muted.opacity(0.5))
+                                            .text_color(theme.readable_muted(0.5))
                                             .child(time_ago),
                                     ),
                             )
@@ -198,7 +198,7 @@ impl Render for ArchivedPage {
                                     .items_center()
                                     .gap(px(6.0))
                                     .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted.opacity(0.55));
+                                    .text_color(theme.readable_muted(0.55));
                                 let both = device.is_some() && location.is_some();
                                 if let Some(device) = device {
                                     meta = meta.child(device);
@@ -260,13 +260,13 @@ impl Render for ArchivedPage {
                 .flex_col()
                 .items_center()
                 .text_center()
-                .text_color(theme.text_muted.opacity(0.5))
+                .text_color(theme.readable_muted(0.5))
                 .child(
                     // `opacity-40` on top of the inherited muted/50 — an
                     // effectively ~20% glyph (luna settings.archived.tsx).
                     crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
                         .size(px(28.0))
-                        .text_color(theme.text_muted.opacity(0.2)),
+                        .text_color(theme.readable_muted(0.2)),
                 )
                 .child(
                     div()
@@ -278,7 +278,7 @@ impl Render for ArchivedPage {
                     div()
                         .mt(px(4.0))
                         .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted.opacity(0.4))
+                        .text_color(theme.readable_muted(0.4))
                         .child(SharedString::from(
                             "Right-click a session in the sidebar to archive it.",
                         )),

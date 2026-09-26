@@ -3550,7 +3550,7 @@ impl Changes {
         let chevron = div().flex_none().size(px(14.0)).child(
             crate::icons::icon(chevron_icon)
                 .size(px(13.0))
-                .text_color(theme.text_muted.opacity(0.7)),
+                .text_color(theme.readable_muted(0.7)),
         );
         let chevron: AnyElement = if fold.animating() {
             chevron
@@ -3759,7 +3759,7 @@ impl Changes {
                     .text_color(if active {
                         theme.text
                     } else {
-                        theme.text_muted.opacity(0.7)
+                        theme.readable_muted(0.7)
                     }),
             )
     }
@@ -3908,7 +3908,7 @@ impl Changes {
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                     .size(px(12.0))
-                    .text_color(theme.text_muted.opacity(0.7)),
+                    .text_color(theme.readable_muted(0.7)),
             );
         let trigger = if scope == DiffScope::History {
             // The tab already identifies this as History; use the fixed title
@@ -4136,7 +4136,7 @@ impl Changes {
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                     .size(px(11.0))
                     .flex_none()
-                    .text_color(theme.text_muted.opacity(0.7)),
+                    .text_color(theme.readable_muted(0.7)),
             );
         let trigger = if self.ref_menu.get().is_some() {
             let closing = self.ref_menu.closing_since();
@@ -4313,7 +4313,7 @@ impl Changes {
                             .py(px(2.0))
                             .rounded(px(4.0))
                             .bg(theme.warning.opacity(0.08))
-                            .text_color(theme.warning.opacity(0.75))
+                            .text_color(theme.readable_tone(theme.warning, 0.75))
                             .child(SharedString::from("Partial snapshot")),
                     )
                 })
@@ -4462,10 +4462,10 @@ fn diff_line_row(
         ),
         _ => (
             "·",
-            theme.text_faint.opacity(0.5),
+            theme.readable_faint(0.5),
             None,
             None,
-            theme.text_faint.opacity(0.8),
+            theme.readable_faint(0.8),
         ),
     };
     let gutter = |no: Option<u32>, color: gpui::Hsla| {
@@ -4525,7 +4525,7 @@ fn diff_line_row(
             if line.kind == LineKind::Del {
                 number_color
             } else {
-                theme.text_faint.opacity(0.8)
+                theme.readable_faint(0.8)
             },
         ))
         .child(gutter(
@@ -4533,7 +4533,7 @@ fn diff_line_row(
             if line.kind == LineKind::Add {
                 number_color
             } else {
-                theme.text_faint.opacity(0.8)
+                theme.readable_faint(0.8)
             },
         ))
         .child(
@@ -4632,10 +4632,10 @@ fn split_line_cell(
         ),
         _ => (
             "·",
-            theme.text_faint.opacity(0.5),
+            theme.readable_faint(0.5),
             None,
             None,
-            theme.text_faint.opacity(0.8),
+            theme.readable_faint(0.8),
         ),
     };
     let content_width = match code_width {

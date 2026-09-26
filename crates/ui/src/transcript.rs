@@ -8060,7 +8060,7 @@ fn chip_header_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme.text_muted.opacity(0.8));
+                .text_color(theme.readable_muted(0.8));
             row.child(match trail {
                 ChipTrail::Chevron { open } => tile.child(
                     crate::icons::icon(if open {
@@ -8079,7 +8079,7 @@ fn chip_header_row(
                 ChipTrail::OpenArrow => tile.child(
                     crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
                         .size(px(11.0))
-                        .text_color(theme.text_muted.opacity(0.8)),
+                        .text_color(theme.readable_muted(0.8)),
                 ),
             })
         })

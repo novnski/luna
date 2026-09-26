@@ -371,7 +371,7 @@ impl ShortcutsPage {
                         .tab_index(0)
                         .focus_visible(move |style| style.border_2().border_color(accent))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted.opacity(0.7))
+                        .text_color(theme.readable_muted(0.7))
                         .cursor_pointer()
                         .hover(|s| s.text_color(theme.text))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -583,7 +583,7 @@ impl Render for ShortcutsPage {
                                 .max_w(px(430.0))
                                 .text_size(crate::typography::ui_rems(11.5))
                                 .line_height(px(17.0))
-                                .text_color(theme.text_muted.opacity(0.65))
+                                .text_color(theme.readable_muted(0.65))
                                 .child(SharedString::from(
                                     "When no dialog, menu, picker, or terminal handles Escape, stop the agent in the active session.",
                                 )),
@@ -694,7 +694,7 @@ impl Render for ShortcutsPage {
                                     .max_w(px(430.0))
                                     .text_size(px(11.5))
                                     .line_height(px(17.0))
-                                    .text_color(theme.text_muted.opacity(0.65))
+                                    .text_color(theme.readable_muted(0.65))
                                     .child(SharedString::from(
                                         "Choose whether Enter sends immediately or starts a new paragraph. Cmd/Ctrl+Enter always submits; with an empty composer it sends the most recently queued message. Shift+Enter always inserts a line break.",
                                     )),

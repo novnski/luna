@@ -543,7 +543,7 @@ impl AccountsPage {
                     icon(icons::SORT_VERTICAL)
                         .size(px(14.0))
                         .flex_none()
-                        .text_color(theme.text_muted.opacity(if open { 0.9 } else { 0.4 })),
+                        .text_color(theme.readable_muted(if open { 0.9 } else { 0.4 })),
                 );
 
         if self.device_menu.get().is_some() {
@@ -583,7 +583,7 @@ impl AccountsPage {
                                 div()
                                     .flex_none()
                                     .text_size(crate::typography::ui_rems(10.5))
-                                    .text_color(theme.text_muted.opacity(0.35))
+                                    .text_color(theme.readable_muted(0.35))
                                     .child(SharedString::from("You")),
                             )
                         })
@@ -1149,7 +1149,7 @@ impl AccountsPage {
             .items_center()
             .gap(px(8.0))
             .text_size(crate::typography::ui_rems(11.5))
-            .text_color(theme.text_muted.opacity(0.7))
+            .text_color(theme.readable_muted(0.7))
             .child(
                 div()
                     .w(px(48.0))
@@ -1193,7 +1193,7 @@ impl AccountsPage {
                     div()
                         .flex_none()
                         .truncate()
-                        .text_color(theme.text_muted.opacity(0.45))
+                        .text_color(theme.readable_muted(0.45))
                         .child(SharedString::from(reset)),
                 )
             })
@@ -1363,7 +1363,7 @@ impl AccountsPage {
                                 .mt(px(2.0))
                                 .truncate()
                                 .text_size(crate::typography::ui_rems(11.5))
-                                .text_color(theme.text_muted.opacity(0.7))
+                                .text_color(theme.readable_muted(0.7))
                                 .child(identity),
                         )
                     })
@@ -1376,7 +1376,7 @@ impl AccountsPage {
                                     .mt(px(6.0))
                                     .truncate()
                                     .text_size(crate::typography::ui_rems(11.5))
-                                    .text_color(theme.text_muted.opacity(0.6))
+                                    .text_color(theme.readable_muted(0.6))
                                     .child(SharedString::from("Usage unavailable")),
                             )
                         } else {
@@ -2045,7 +2045,7 @@ impl Render for AccountsPage {
                                     .py(px(32.0))
                                     .text_center()
                                     .text_size(crate::typography::ui_rems(14.0))
-                                    .text_color(theme.text_muted.opacity(0.6))
+                                    .text_color(theme.readable_muted(0.6))
                                     .child(SharedString::from(empty_copy)),
                             )
                         } else {
@@ -2264,7 +2264,7 @@ impl Render for AccountsPage {
                                     .mt(px(24.0))
                                     .text_size(crate::typography::ui_rems(12.0))
                                     .line_height(px(19.0))
-                                    .text_color(theme.text_muted.opacity(0.6))
+                                    .text_color(theme.readable_muted(0.6))
                                     .child(SharedString::from(
                                         "Provider sign-in updates the CLI's native login on this \
                                          device. Existing CLI sessions stay with their provider.",

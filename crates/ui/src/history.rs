@@ -1595,7 +1595,7 @@ impl Render for GitHistoryFetchButton {
             } else {
                 crate::icons::icon(crate::icons::CLOUD)
                     .size(px(crate::surface_chrome::ICON_SIZE))
-                    .text_color(theme.text_muted.opacity(0.75))
+                    .text_color(theme.readable_muted(0.75))
                     .into_any_element()
             })
             .child(
@@ -1889,7 +1889,7 @@ impl Render for GitHistoryCount {
                                                     .whitespace_nowrap()
                                                     .text_size(px(10.5))
                                                     .line_height(px(13.0))
-                                                    .text_color(theme.accent.opacity(0.88))
+                                                    .text_color(theme.readable_tone(theme.accent, 0.88))
                                                     .child(SharedString::from(format!(
                                                         "{ahead} ahead"
                                                     ))),
@@ -1909,7 +1909,7 @@ impl Render for GitHistoryCount {
                                                     .whitespace_nowrap()
                                                     .text_size(px(10.5))
                                                     .line_height(px(13.0))
-                                                    .text_color(theme.warning.opacity(0.82))
+                                                    .text_color(theme.readable_tone(theme.warning, 0.82))
                                                     .child(SharedString::from(format!(
                                                         "{behind} behind"
                                                     ))),
@@ -3630,7 +3630,7 @@ impl GitHistory {
                         crate::icons::FOLD_VERTICAL
                     })
                     .size(px(9.0))
-                    .text_color(color.opacity(0.9)),
+                    .text_color(theme.readable_tone(color, 0.9)),
                 )
                 .tooltip(move |_, cx| {
                     cx.new(|_| HistoryRefTooltip {
@@ -3707,12 +3707,12 @@ impl GitHistory {
             .rounded(px(4.0))
             .bg(color.opacity(0.07))
             .text_size(px(10.0))
-            .text_color(color.opacity(0.9))
+            .text_color(theme.readable_tone(color, 0.9))
             .child(
                 crate::icons::icon(icon)
                     .size(px(10.0))
                     .mt(px(1.0))
-                    .text_color(color.opacity(0.78)),
+                    .text_color(theme.readable_tone(color, 0.78)),
             )
             .child(
                 div()

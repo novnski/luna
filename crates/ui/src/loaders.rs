@@ -362,7 +362,7 @@ pub fn splash_overlay(theme: &Theme, fading: bool, view: EntityId, cx: &mut App)
         .child(
             div()
                 .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text_muted.opacity(0.7))
+                .text_color(theme.readable_muted(0.7))
                 .child(SharedString::from("Setting up LUNA environment")),
         );
     if fading {

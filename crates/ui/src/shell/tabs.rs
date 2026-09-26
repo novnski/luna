@@ -363,7 +363,7 @@ impl Shell {
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(if on_canvas {
-                                    theme.text_muted.opacity(0.7)
+                                    theme.readable_muted(0.7)
                                 } else {
                                     theme.text.opacity(0.85)
                                 })
@@ -374,7 +374,7 @@ impl Shell {
                                 div()
                                     .flex_none()
                                     .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.text_muted.opacity(0.5))
+                                    .text_color(theme.readable_muted(0.5))
                                     .child(target),
                             )
                         }),

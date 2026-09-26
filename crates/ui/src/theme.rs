@@ -781,6 +781,34 @@ impl TerminalColors {
 }
 
 impl Theme {
+    /// Secondary text keeps its authored contrast in light appearance. Dark
+    /// appearance retains the quieter opacity used by existing components.
+    pub fn readable_muted(&self, dark_opacity: f32) -> Hsla {
+        if self.appearance.is_light() {
+            self.text_muted
+        } else {
+            self.text_muted.opacity(dark_opacity)
+        }
+    }
+
+    /// The faint light token already sits near the body-text contrast floor.
+    pub fn readable_faint(&self, dark_opacity: f32) -> Hsla {
+        if self.appearance.is_light() {
+            self.text_faint
+        } else {
+            self.text_faint.opacity(dark_opacity)
+        }
+    }
+
+    /// Keep semantic copy legible on pale surfaces without changing dark UI.
+    pub fn readable_tone(&self, tone: Hsla, dark_opacity: f32) -> Hsla {
+        if self.appearance.is_light() {
+            tone
+        } else {
+            tone.opacity(dark_opacity)
+        }
+    }
+
     // ---- numbers drive layout (px) ----
     /// Frost translucency over the blurred window background (macOS vibrancy
     /// or Windows Acrylic). Linux stays opaque because compositor blur is not

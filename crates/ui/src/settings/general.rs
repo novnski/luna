@@ -166,7 +166,7 @@ impl GeneralPage {
                             .max_w(px(430.0))
                             .text_size(px(11.5))
                             .line_height(px(17.0))
-                            .text_color(theme.text_muted.opacity(0.65))
+                            .text_color(theme.readable_muted(0.65))
                             .child(SharedString::from(description)),
                     ),
             )
@@ -238,7 +238,7 @@ impl Render for GeneralPage {
                         div()
                             .mt(px(4.0))
                             .text_size(px(11.5))
-                            .text_color(theme.text_muted.opacity(0.65))
+                            .text_color(theme.readable_muted(0.65))
                             .child("Choose whether Enter sends or inserts a line break."),
                     ),
             )
@@ -326,7 +326,7 @@ impl Render for GeneralPage {
                             .max_w(px(430.0))
                             .text_size(px(11.5))
                             .line_height(px(17.0))
-                            .text_color(theme.text_muted.opacity(0.65))
+                            .text_color(theme.readable_muted(0.65))
                             .child(SharedString::from(
                                 "Choose what sending a message does during a live run. Cmd/Ctrl+Shift+Enter performs the opposite once; Shift+Enter remains a line break.",
                             )),

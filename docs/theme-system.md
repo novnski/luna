@@ -24,6 +24,15 @@ Accent overlays affect controls, focus, selections, caret, activity and the
 three-tone glyph. They do not recolor syntax, terminal ANSI, status, or diff
 semantics.
 
+Light appearance uses the variant's full muted and faint text colors for
+secondary copy. Those tokens already carry the intended contrast; applying a
+second opacity to them makes small labels hard to read. Shared UI uses
+`Theme::readable_muted`, `readable_faint`, and `readable_tone` when dark
+appearance needs a quieter value. Floating surfaces such as the compact Usage
+card take their light colors from the active theme instead of fixed dark RGB
+values. Provider brand marks can retain their identity where they remain
+distinguishable on the surface.
+
 Appearance also stores a separate diff color scheme in device-local
 `ui-settings.json`: the theme's red/green semantic pair or a blue/orange pair.
 The alternate pair changes addition and deletion colors in open and future

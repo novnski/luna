@@ -183,7 +183,7 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
             el.child(
                 div()
                     .text_size(crate::typography::ui_rems(13.0))
-                    .text_color(theme.text_muted.opacity(0.7))
+                    .text_color(theme.readable_muted(0.7))
                     .child(SharedString::from(format!("{count}"))),
             )
         })
@@ -407,7 +407,7 @@ pub fn badge_active(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div 
         .rounded_full()
         .bg(emerald.opacity(0.12))
         .text_size(crate::typography::ui_rems(10.5))
-        .text_color(emerald_text.opacity(0.9))
+        .text_color(theme.readable_tone(emerald_text, 0.9))
         .child(label.into())
 }
 
@@ -484,7 +484,7 @@ pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div
         .border_color(red.opacity(0.2))
         .bg(red.opacity(0.06))
         .text_size(crate::typography::ui_rems(12.5))
-        .text_color(red_text.opacity(0.9))
+        .text_color(theme.readable_tone(red_text, 0.9))
         .flex()
         .flex_row()
         .items_start()
@@ -493,7 +493,7 @@ pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div
             div().flex_none().mt(px(2.0)).child(
                 crate::icons::icon(crate::icons::DANGER_TRIANGLE)
                     .size(px(16.0))
-                    .text_color(red_text.opacity(0.9)),
+                    .text_color(theme.readable_tone(red_text, 0.9)),
             ),
         )
         .child(div().min_w_0().child(message.into()))
@@ -514,7 +514,7 @@ pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::D
         .border_color(amber.opacity(0.2))
         .bg(amber.opacity(0.06))
         .text_size(crate::typography::ui_rems(12.0))
-        .text_color(amber_text.opacity(0.9))
+        .text_color(theme.readable_tone(amber_text, 0.9))
         .flex()
         .flex_row()
         .items_start()
@@ -523,7 +523,7 @@ pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::D
             div().flex_none().mt(px(2.0)).child(
                 crate::icons::icon(crate::icons::DANGER_TRIANGLE)
                     .size(px(14.0))
-                    .text_color(amber_text.opacity(0.9)),
+                    .text_color(theme.readable_tone(amber_text, 0.9)),
             ),
         )
         .child(div().min_w_0().child(message.into()))

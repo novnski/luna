@@ -229,6 +229,19 @@ fn main() -> anyhow::Result<()> {
                         cx,
                         &capture_output.join("usage-opencode.png"),
                     )?;
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
+                    capture(
+                        window.into(),
+                        cx,
+                        &capture_output.join("usage-light-opencode.png"),
+                    )?;
+                    click(window.into(), cx, 29.0, 347.0)?;
+                    capture(
+                        window.into(),
+                        cx,
+                        &capture_output.join("usage-light-codex.png"),
+                    )?;
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
                     click(window.into(), cx, 101.0, 474.0)?;
                     window.update(cx, |shell, _, _| {
                         assert!(!shell.fixture_usage_card_is_open());
@@ -318,6 +331,8 @@ fn main() -> anyhow::Result<()> {
         "usage-closed.png",
         "usage-reopened.png",
         "usage-opencode.png",
+        "usage-light-opencode.png",
+        "usage-light-codex.png",
         "usage-low-auto-open.png",
         "usage-low-dismissed.png",
     ]

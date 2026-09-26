@@ -234,7 +234,7 @@ fn main() -> anyhow::Result<()> {
                         window.update(cx, |shell, _, cx| shell.fixture_provider_usage(cx))?;
                         capture(window.into(), cx, &output.join("sidebar.png"))?;
                         window.update(cx, |shell, _, cx| {
-                            shell.fixture_accounts_settings(snapshot, cx)
+                            shell.fixture_accounts_settings(snapshot.clone(), cx)
                         })?;
                         cx.background_executor()
                             .timer(Duration::from_millis(500))
@@ -244,6 +244,16 @@ fn main() -> anyhow::Result<()> {
                             shell.fixture_appshots_settings(false, cx)
                         })?;
                         capture(window.into(), cx, &output.join("sidebar-with-update.png"))?;
+                        cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
+                        capture(
+                            window.into(),
+                            cx,
+                            &output.join("sidebar-with-update-light.png"),
+                        )?;
+                        window.update(cx, |shell, _, cx| {
+                            shell.fixture_accounts_settings(snapshot, cx)
+                        })?;
+                        capture(window.into(), cx, &output.join("providers-light.png"))?;
                         Ok(())
                     }
                     .await;

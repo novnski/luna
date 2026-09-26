@@ -34,6 +34,92 @@ fn provider_tone(provider: UsageProvider, theme: &Theme) -> gpui::Hsla {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CompactUsagePalette {
+    card: gpui::Hsla,
+    border: gpui::Hsla,
+    divider: gpui::Hsla,
+    selected_rule: gpui::Hsla,
+    idle_rule: gpui::Hsla,
+    hover: gpui::Hsla,
+    heading: gpui::Hsla,
+    secondary: gpui::Hsla,
+    quiet: gpui::Hsla,
+    selected_icon: gpui::Hsla,
+    idle_icon: gpui::Hsla,
+    control_icon: gpui::Hsla,
+    refresh_active: gpui::Hsla,
+    opencode_icon: gpui::Hsla,
+    environment: gpui::Hsla,
+    environment_text: gpui::Hsla,
+    badge: gpui::Hsla,
+    badge_text: gpui::Hsla,
+    track: gpui::Hsla,
+    codex_fill: gpui::Hsla,
+    other_fill: gpui::Hsla,
+    status: gpui::Hsla,
+    dot: gpui::Hsla,
+}
+
+impl CompactUsagePalette {
+    fn for_theme(theme: &Theme) -> Self {
+        if theme.appearance.is_light() {
+            Self {
+                card: theme.surface_overlay,
+                border: theme.border_strong,
+                divider: theme.border,
+                selected_rule: theme.accent,
+                idle_rule: theme.surface_overlay,
+                hover: theme.element_hover,
+                heading: theme.text,
+                secondary: theme.text_muted,
+                quiet: theme.text_muted,
+                selected_icon: theme.text,
+                idle_icon: theme.text_muted,
+                control_icon: theme.text_muted,
+                refresh_active: theme.text,
+                opencode_icon: gpui::rgb(0x1d4ed8).into(),
+                environment: theme.surface_raised,
+                environment_text: theme.text,
+                badge: theme.surface_raised,
+                badge_text: theme.text_muted,
+                track: theme.surface_raised,
+                codex_fill: theme.danger,
+                other_fill: theme.text_muted,
+                status: theme.warning,
+                dot: theme.danger,
+            }
+        } else {
+            // Preserve the compact dark card's established appearance.
+            Self {
+                card: gpui::rgb(0x242424).into(),
+                border: gpui::rgb(0x3a3a3a).into(),
+                divider: gpui::rgb(0x363636).into(),
+                selected_rule: gpui::rgb(0xcacacc).into(),
+                idle_rule: gpui::rgb(0x242424).into(),
+                hover: gpui::rgb(0x303030).into(),
+                heading: gpui::rgb(0xd1d1d3).into(),
+                secondary: gpui::rgb(0xb5b5b8).into(),
+                quiet: gpui::rgb(0xa7a7aa).into(),
+                selected_icon: gpui::rgb(0xd1d1d3).into(),
+                idle_icon: gpui::rgb(0xa5a5a8).into(),
+                control_icon: gpui::rgb(0xbdbdc0).into(),
+                refresh_active: gpui::rgb(0xe0e0e2).into(),
+                opencode_icon: gpui::rgb(0x3976f6).into(),
+                environment: gpui::rgb(0x292929).into(),
+                environment_text: gpui::rgb(0xc7c7ca).into(),
+                badge: gpui::rgb(0x303030).into(),
+                badge_text: gpui::rgb(0xa8a8ab).into(),
+                track: gpui::rgb(0x393939).into(),
+                codex_fill: gpui::rgb(0xd34351).into(),
+                other_fill: gpui::rgb(0xc9c9ca).into(),
+                status: gpui::rgb(0xffce46).into(),
+                dot: gpui::rgb(0xd34351).into(),
+            }
+        }
+    }
+}
+
 fn compact_tokens(value: u64) -> String {
     for (threshold, suffix) in [
         (1_000_000_000_000, "T"),
@@ -1089,7 +1175,11 @@ fn compact_plan_label(limit: &UsageLimitSnapshot, plan: &str) -> String {
     }
 }
 
-fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
+fn compact_limit_row(
+    limit: &UsageLimitSnapshot,
+    now_ms: i64,
+    palette: CompactUsagePalette,
+) -> AnyElement {
     let mut row = div()
         .w_full()
         .min_w_0()
@@ -1111,7 +1201,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
                         .text_size(crate::typography::ui_rems(12.0))
                         .line_height(px(15.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(gpui::rgb(0xd1d1d3))
+                        .text_color(palette.heading)
                         .child(match limit.provider {
                             UsageProvider::OpenCodeGo => "opencode",
                             provider => provider.label(),
@@ -1124,10 +1214,10 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
                             .px(px(5.0))
                             .py(px(1.0))
                             .rounded(px(5.0))
-                            .bg(gpui::rgb(0x303030))
+                            .bg(palette.badge)
                             .text_size(crate::typography::ui_rems(10.0))
                             .line_height(px(12.0))
-                            .text_color(gpui::rgb(0xa8a8ab))
+                            .text_color(palette.badge_text)
                             .child(compact_plan_label(limit, &plan)),
                     )
                 }),
@@ -1139,7 +1229,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
                 .truncate()
                 .text_size(crate::typography::ui_rems(10.0))
                 .line_height(px(14.0))
-                .text_color(gpui::rgb(0xa7a7aa))
+                .text_color(palette.quiet)
                 .child(account.to_owned()),
         );
     }
@@ -1147,7 +1237,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
         row = row.child(
             div()
                 .text_size(crate::typography::ui_rems(10.0))
-                .text_color(gpui::rgb(0xa7a7aa))
+                .text_color(palette.quiet)
                 .child("Quota unavailable"),
         );
     }
@@ -1159,9 +1249,9 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
             (50.0, 43.0)
         };
         let fill = if limit.provider == UsageProvider::Codex {
-            gpui::rgb(0xd34351)
+            palette.codex_fill
         } else {
-            gpui::rgb(0xc9c9ca)
+            palette.other_fill
         };
         row = row.child(
             div()
@@ -1171,7 +1261,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
                 .gap(px(6.0))
                 .text_size(crate::typography::ui_rems(10.0))
                 .line_height(px(14.0))
-                .text_color(gpui::rgb(0xb5b5b8))
+                .text_color(palette.secondary)
                 .child(
                     div()
                         .w(px(label_width))
@@ -1185,7 +1275,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
                         .flex_1()
                         .min_w_0()
                         .rounded(px(2.0))
-                        .bg(gpui::rgb(0x393939))
+                        .bg(palette.track)
                         .child(
                             div()
                                 .h_full()
@@ -1219,7 +1309,7 @@ fn compact_limit_row(limit: &UsageLimitSnapshot, now_ms: i64) -> AnyElement {
             div()
                 .truncate()
                 .text_size(crate::typography::ui_rems(9.0))
-                .text_color(gpui::rgb(0xffce46))
+                .text_color(palette.status)
                 .child(status),
         );
     }
@@ -2679,12 +2769,13 @@ impl Shell {
 
     pub(super) fn render_usage_card(
         &mut self,
-        _theme: &Theme,
+        theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if !self.usage_card_open {
             return div().into_any_element();
         }
+        let palette = CompactUsagePalette::for_theme(theme);
         let environment_label = self.compact_usage_environment_label(cx);
         let snapshot = self.selected_usage_snapshot();
         let mut providers: Vec<_> = [UsageProvider::Codex, UsageProvider::OpenCodeGo]
@@ -2763,11 +2854,11 @@ impl Shell {
                     .justify_center()
                     .border_b_2()
                     .border_color(if selected {
-                        gpui::rgb(0xcacacc)
+                        palette.selected_rule
                     } else {
-                        gpui::rgb(0x242424)
+                        palette.idle_rule
                     })
-                    .hover(|el| el.bg(gpui::rgb(0x303030)))
+                    .hover(|el| el.bg(palette.hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.usage_provider_filter = Some(provider);
                         cx.notify();
@@ -2797,11 +2888,11 @@ impl Shell {
                                         18.0
                                     }))
                                     .text_color(if provider == UsageProvider::OpenCodeGo {
-                                        gpui::rgb(0x3976f6)
+                                        palette.opencode_icon
                                     } else if selected {
-                                        gpui::rgb(0xd1d1d3)
+                                        palette.selected_icon
                                     } else {
-                                        gpui::rgb(0xa5a5a8)
+                                        palette.idle_icon
                                     }),
                             )
                             .when(update_available, |el| {
@@ -2812,7 +2903,7 @@ impl Shell {
                                         .right(px(-3.0))
                                         .size(px(6.0))
                                         .rounded(px(3.0))
-                                        .bg(gpui::rgb(0xd34351)),
+                                        .bg(palette.dot),
                                 )
                             }),
                     )
@@ -2837,19 +2928,19 @@ impl Shell {
                     div()
                         .p(px(10.0))
                         .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(gpui::rgb(0xa7a7aa))
+                        .text_color(palette.quiet)
                         .child("No verified account limits available"),
                 );
             }
             for limit in limits {
-                content = content.child(compact_limit_row(limit, now));
+                content = content.child(compact_limit_row(limit, now, palette));
             }
         } else {
             content = content.child(
                 div()
                     .p(px(10.0))
                     .text_size(crate::typography::ui_rems(10.0))
-                    .text_color(gpui::rgb(0xa7a7aa))
+                    .text_color(palette.quiet)
                     .child(if self.usage_refreshing {
                         "Refreshing usage…"
                     } else {
@@ -2864,8 +2955,8 @@ impl Shell {
             .min_w_0()
             .rounded(px(9.0))
             .border_1()
-            .border_color(gpui::rgb(0x3a3a3a))
-            .bg(gpui::rgb(0x242424))
+            .border_color(palette.border)
+            .bg(palette.card)
             .flex()
             .flex_col()
             .child(
@@ -2889,11 +2980,11 @@ impl Shell {
                             .px(px(5.0))
                             .py(px(4.0))
                             .rounded(px(5.0))
-                            .bg(gpui::rgb(0x292929))
+                            .bg(palette.environment)
                             .cursor_pointer()
                             .text_size(crate::typography::ui_rems(12.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(gpui::rgb(0xc7c7ca))
+                            .text_color(palette.environment_text)
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)),
                             )
@@ -2924,7 +3015,7 @@ impl Shell {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .hover(|el| el.bg(gpui::rgb(0x303030)))
+                            .hover(|el| el.bg(palette.hover))
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                                 if matches!(
@@ -2937,9 +3028,9 @@ impl Shell {
                             }))
                             .child(icon(icons::REFRESH).size(px(15.0)).text_color(
                                 if self.usage_refreshing {
-                                    gpui::rgb(0xe0e0e2)
+                                    palette.refresh_active
                                 } else {
-                                    gpui::rgb(0xbdbdc0)
+                                    palette.control_icon
                                 },
                             )),
                     )
@@ -2968,14 +3059,14 @@ impl Shell {
                             .child(
                                 icon(icons::ALT_ARROW_DOWN)
                                     .size(px(13.0))
-                                    .text_color(gpui::rgb(0xbdbdc0)),
+                                    .text_color(palette.control_icon),
                             ),
                     ),
             )
             .child(
                 div()
                     .border_t_1()
-                    .border_color(gpui::rgb(0x363636))
+                    .border_color(palette.divider)
                     .child(content),
             )
             .when_some(self.usage_error.clone(), |el, error| {
@@ -2984,7 +3075,7 @@ impl Shell {
                         .px(px(10.0))
                         .pb(px(7.0))
                         .text_size(crate::typography::ui_rems(9.0))
-                        .text_color(gpui::rgb(0xffce46))
+                        .text_color(palette.status)
                         .child(error),
                 )
             })

@@ -2898,7 +2898,7 @@ impl Pickers {
                                         crate::icons::icon(crate::icons::WIFI_OFF)
                                             .size(px(12.0))
                                             .flex_none()
-                                            .text_color(theme.warning.opacity(0.8)),
+                                            .text_color(theme.readable_tone(theme.warning, 0.8)),
                                     )
                                 })
                             },
@@ -3289,7 +3289,7 @@ impl Pickers {
                         .flex_shrink(1000.0)
                         .min_w_0()
                         .truncate()
-                        .text_color(tint.unwrap_or(theme.text_muted.opacity(0.7)))
+                        .text_color(tint.unwrap_or(theme.readable_muted(0.7)))
                         .child(suffix),
                 )
             })
@@ -3322,7 +3322,7 @@ impl Pickers {
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(motion::hover_blend(
                 id,
-                theme.text_muted.opacity(0.7),
+                theme.readable_muted(0.7),
                 theme.text.opacity(0.8),
             ))
             .bg(if open {
@@ -3343,14 +3343,14 @@ impl Pickers {
                 crate::icons::icon(icon_path)
                     .size(px(12.0))
                     .flex_none()
-                    .text_color(theme.text_muted.opacity(0.7)),
+                    .text_color(theme.readable_muted(0.7)),
             )
             .child(div().min_w_0().truncate().child(label))
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                     .size(px(12.0))
                     .flex_none()
-                    .text_color(theme.text_muted.opacity(0.5)),
+                    .text_color(theme.readable_muted(0.5)),
             )
     }
 
@@ -3372,11 +3372,11 @@ impl Pickers {
             .px(px(8.0))
             .text_size(crate::typography::ui_rems(12.0))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text_muted.opacity(0.6))
+            .text_color(theme.readable_muted(0.6))
             .child(
                 crate::icons::icon(icon_path)
                     .size(px(12.0))
-                    .text_color(theme.text_muted.opacity(0.6)),
+                    .text_color(theme.readable_muted(0.6)),
             )
             .child(div().min_w_0().truncate().child(label))
     }
@@ -3425,7 +3425,9 @@ impl Pickers {
                 &theme,
                 cx,
             )
-            .when(offline, |el| el.text_color(theme.warning.opacity(0.8)));
+            .when(offline, |el| {
+                el.text_color(theme.readable_tone(theme.warning, 0.8))
+            });
         let project_chip = self.footer_chip(
             PickerKind::Space,
             "picker-project",
@@ -3969,7 +3971,7 @@ impl Pickers {
                         .px(px(Theme::SPACE_SM))
                         .py(px(4.0))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.danger.opacity(0.9))
+                        .text_color(theme.readable_tone(theme.danger, 0.9))
                         .child(SharedString::from(error.clone())),
                 ),
             );

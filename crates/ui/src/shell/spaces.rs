@@ -1130,7 +1130,7 @@ impl Shell {
                             div()
                                 .text_size(crate::typography::ui_rems(10.0))
                                 .font_weight(gpui::FontWeight::NORMAL)
-                                .text_color(theme.text_muted.opacity(0.45))
+                                .text_color(theme.readable_muted(0.45))
                                 .child(tag),
                         ))
                         // Disconnected glyph, not the word (user request).
@@ -1139,7 +1139,7 @@ impl Shell {
                                 icon(icons::WIFI_OFF)
                                     .size(px(12.0))
                                     .flex_none()
-                                    .text_color(theme.warning.opacity(0.8)),
+                                    .text_color(theme.readable_tone(theme.warning, 0.8)),
                             )
                         })
                     }),
@@ -1148,7 +1148,7 @@ impl Shell {
                 icon(icons::ALT_ARROW_DOWN)
                     .size(px(14.0))
                     .flex_none()
-                    .text_color(theme.text_muted.opacity(0.6)),
+                    .text_color(theme.readable_muted(0.6)),
             );
         let trigger = if self.spaces_menu.get().is_some() {
             let closing = self.spaces_menu.closing_since();
@@ -1380,7 +1380,7 @@ impl Shell {
                                     icon(icons::WIFI_OFF)
                                         .size(px(12.0))
                                         .flex_none()
-                                        .text_color(theme.warning.opacity(0.8)),
+                                        .text_color(theme.readable_tone(theme.warning, 0.8)),
                                 )
                             })
                             // No check glyph — the selected row's wash (menu_row's
@@ -1993,7 +1993,7 @@ impl Shell {
                     .child(
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted.opacity(0.55))
+                            .text_color(theme.readable_muted(0.55))
                             .child(SharedString::from(time_ago)),
                     ),
             );
@@ -2303,7 +2303,7 @@ impl Shell {
                         .px(px(Theme::SPACE_SM))
                         .rounded(px(6.0))
                         .text_size(crate::typography::ui_rems(13.0))
-                        .text_color(theme.text_muted.opacity(0.55))
+                        .text_color(theme.readable_muted(0.55))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
                         .on_click(cx.listener(move |this, _, _, cx| {

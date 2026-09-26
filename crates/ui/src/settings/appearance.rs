@@ -2351,7 +2351,7 @@ impl AppearancePage {
             .child(
                 icons::icon(icons::SORT_VERTICAL)
                     .size(px(14.0))
-                    .text_color(theme.text_muted.opacity(if open { 0.9 } else { 0.45 })),
+                    .text_color(theme.readable_muted(if open { 0.9 } else { 0.45 })),
             );
 
         if self.theme_menu(appearance_kind).get().is_some() {

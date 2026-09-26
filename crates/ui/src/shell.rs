@@ -7014,7 +7014,7 @@ impl Shell {
                             .pb(px(4.0))
                             .text_size(crate::typography::ui_rems(11.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text_muted.opacity(0.6))
+                            .text_color(theme.readable_muted(0.6))
                             .child(SharedString::from("Settings")),
                     )
                     .child(
@@ -7289,7 +7289,7 @@ impl Shell {
                     .bg(tone.opacity(0.08))
                     .text_size(crate::typography::ui_rems(10.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(tone.opacity(0.85))
+                    .text_color(theme.readable_tone(tone, 0.85))
                     .font_family(theme.font_mono.clone())
                     .child(label)
                     .into_any_element()
@@ -8230,8 +8230,16 @@ impl Shell {
                 .h(px(24.0))
                 .rounded(px(12.0))
                 .border_1()
-                .border_color(gpui::rgb(0x3a3a3a))
-                .bg(gpui::rgb(0x242424))
+                .border_color(if theme.appearance.is_light() {
+                    theme.border_strong
+                } else {
+                    gpui::rgb(0x3a3a3a).into()
+                })
+                .bg(if theme.appearance.is_light() {
+                    theme.surface_raised
+                } else {
+                    gpui::rgb(0x242424).into()
+                })
                 .cursor_pointer()
                 .hover(|el| el.bg(theme.glass_hover()))
                 .flex()
@@ -9407,7 +9415,7 @@ impl Shell {
                         .child(
                             div()
                                 .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(theme.text_muted.opacity(0.55))
+                                .text_color(theme.readable_muted(0.55))
                                 .child("New worktree: unavailable for conversation-only forks"),
                         )
                         .child(
@@ -10108,7 +10116,11 @@ impl Shell {
                                 .font_family(theme.font_mono.clone())
                                 .text_size(px(10.0 * moon_scale))
                                 .line_height(px(moon_line_height))
-                                .text_color(theme.text.opacity(0.48))
+                                .text_color(if theme.appearance.is_light() {
+                                    theme.text_muted
+                                } else {
+                                    theme.text.opacity(0.48)
+                                })
                                 .children(moon.lines().map(|line| {
                                     div()
                                         .h(px(moon_line_height))
@@ -11229,7 +11241,7 @@ impl Shell {
                                         .text_color(if is_active {
                                             theme.text_muted
                                         } else {
-                                            theme.text_muted.opacity(0.7)
+                                            theme.readable_muted(0.7)
                                         })
                                         .into_any_element()
                                 }),
@@ -11687,7 +11699,7 @@ impl Shell {
                             .pb(px(8.0))
                             .text_size(crate::typography::ui_rems(11.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text_muted.opacity(0.6))
+                            .text_color(theme.readable_muted(0.6))
                             .child(SharedString::from(
                                 "Or continue in a workspace you belong to",
                             )),
@@ -11814,7 +11826,7 @@ impl Shell {
                         .mt(px(16.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .line_height(px(17.0))
-                        .text_color(theme.danger_muted.opacity(0.9)) // red-300
+                        .text_color(theme.readable_tone(theme.danger_muted, 0.9))
                         .child(message),
                 )
             })
@@ -11823,7 +11835,7 @@ impl Shell {
                     div()
                         .id("org-signout")
                         .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted.opacity(0.6))
+                        .text_color(theme.readable_muted(0.6))
                         .cursor_pointer()
                         .hover(|s| s.text_color(theme.text))
                         .on_click(cx.listener(|this, _, _, cx| this.cancel_auth_setup(cx)))
@@ -12119,7 +12131,7 @@ fn nav_history_button(
             .child(
                 icon(icon_path)
                     .size(px(16.0))
-                    .text_color(theme.text_muted.opacity(0.35)),
+                    .text_color(theme.readable_muted(0.35)),
             )
             .into_any_element();
     }

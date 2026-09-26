@@ -2388,7 +2388,7 @@ impl FilesSurface {
                     div()
                         .mx(px(4.0))
                         .text_size(px(11.0))
-                        .text_color(theme.text_faint.opacity(0.65))
+                        .text_color(theme.readable_faint(0.65))
                         .child("›"),
                 );
             }
@@ -3206,7 +3206,7 @@ impl FilesSurface {
                     .justify_end()
                     .font_family(theme.font_mono.clone())
                     .text_size(px(10.0))
-                    .text_color(theme.text_faint.opacity(0.7))
+                    .text_color(theme.readable_faint(0.7))
                     .child((index + 1).to_string()),
             )
             .child(

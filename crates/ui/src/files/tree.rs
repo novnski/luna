@@ -292,7 +292,7 @@ impl FilesSurface {
                 index,
                 padding + TREE_INDENT,
                 "Empty folder",
-                theme.text_faint.opacity(0.7),
+                theme.readable_faint(0.7),
                 &theme,
             ),
             VisibleRowKind::Error { directory, message } => div()
@@ -322,7 +322,7 @@ impl FilesSurface {
                         .min_w_0()
                         .truncate()
                         .text_size(px(10.5))
-                        .text_color(theme.danger.opacity(0.82))
+                        .text_color(theme.readable_tone(theme.danger, 0.82))
                         .child(format!("{message} — Retry")),
                 )
                 .into_any_element(),

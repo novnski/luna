@@ -85,7 +85,7 @@ pub fn render(
         .child(
             crate::icons::icon(badge.icon)
                 .size(px(ICON_SIZE))
-                .text_color(theme.text_muted.opacity(0.7)),
+                .text_color(theme.readable_muted(0.7)),
         )
         .child(badge.label.clone())
         .when(!badge.details.is_empty(), |el| {

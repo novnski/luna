@@ -62,7 +62,7 @@ pub fn notice_chip(
         frame(12.0)
             .text_size(crate::typography::ui_rems(12.0))
             .line_height(px(16.0))
-            .text_color(muted.opacity(0.9))
+            .text_color(theme.readable_tone(muted, 0.9))
     };
     let header_icon: AnyElement = if tile {
         div()
@@ -76,13 +76,13 @@ pub fn notice_chip(
             .child(
                 crate::icons::icon(crate::icons::DANGER_TRIANGLE)
                     .size(px(12.0))
-                    .text_color(muted.opacity(0.8)),
+                    .text_color(theme.readable_tone(muted, 0.8)),
             )
             .into_any_element()
     } else {
         crate::icons::icon(crate::icons::DANGER_TRIANGLE)
             .size(px(14.0))
-            .text_color(muted.opacity(0.9))
+            .text_color(theme.readable_tone(muted, 0.9))
             .into_any_element()
     };
     // The tile pins its own label/message colors; the plain icon inherits the
@@ -96,7 +96,9 @@ pub fn notice_chip(
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
-                    .when(tile, |label| label.text_color(muted.opacity(0.8)))
+                    .when(tile, |label| {
+                        label.text_color(theme.readable_tone(muted, 0.8))
+                    })
                     .child(label),
             )
             .child(div().flex_1())
@@ -122,7 +124,7 @@ pub fn notice_chip(
                     .child(
                         crate::icons::icon(crate::icons::COPY)
                             .size(px(12.0))
-                            .text_color(muted.opacity(0.8)),
+                            .text_color(theme.readable_tone(muted, 0.8)),
                     ),
             ),
     )
@@ -130,7 +132,13 @@ pub fn notice_chip(
         div()
             .min_w_0()
             .w_full()
-            .when(tile, |message| message.text_color(theme.text.opacity(0.8)))
+            .when(tile, |message| {
+                message.text_color(if theme.appearance.is_light() {
+                    theme.text
+                } else {
+                    theme.text.opacity(0.8)
+                })
+            })
             .child(message),
     )
 }

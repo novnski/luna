@@ -708,7 +708,7 @@ impl Composer {
             .child(
                 icon(icons::QUEUE_DRAG_HANDLE)
                     .size(px(QUEUE_ICON_SIZE))
-                    .text_color(theme.text_muted.opacity(0.5)),
+                    .text_color(theme.readable_muted(0.5)),
             );
 
         let row = div()
@@ -1169,7 +1169,7 @@ impl Composer {
             .child(
                 icon(glyph)
                     .size(px(QUEUE_ICON_SIZE))
-                    .text_color(theme.text_muted.opacity(0.8))
+                    .text_color(theme.readable_muted(0.8))
                     .group_hover(own, |s| s.text_color(theme.text)),
             )
             .into_any_element()

@@ -145,7 +145,7 @@ pub(crate) fn pull_request_badge_with_query(
         .bg(color.opacity(0.08))
         .text_size(px(if composer { 11.0 } else { 10.0 }))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(color.opacity(0.85))
+        .text_color(theme.readable_tone(color, 0.85))
         .cursor_pointer()
         .hover(move |style| style.bg(color.opacity(0.16)).text_color(color))
         .on_click(move |_, _, cx| {
@@ -162,7 +162,7 @@ pub(crate) fn pull_request_badge_with_query(
                 crate::icons::icon(crate::icons::PULL_REQUEST)
                     .size(px(11.0))
                     .flex_none()
-                    .text_color(color.opacity(0.85)),
+                    .text_color(theme.readable_tone(color, 0.85)),
             )
         })
         // Monospace digits give the badge a stable tabular width as PR numbers change.

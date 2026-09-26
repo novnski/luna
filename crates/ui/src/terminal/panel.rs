@@ -1667,11 +1667,7 @@ impl TerminalPanel {
                         let (text_color, bg, glyph_alpha) = if selected {
                             (theme.text, crate::theme::ink(0.08), 0.8)
                         } else {
-                            (
-                                theme.text_muted.opacity(0.6),
-                                gpui::transparent_black(),
-                                0.6,
-                            )
+                            (theme.readable_muted(0.6), gpui::transparent_black(), 0.6)
                         };
                         let close_btn = div()
                             .id(("terminal-tab-close", key))
@@ -1691,7 +1687,7 @@ impl TerminalPanel {
                             .child(
                                 crate::icons::icon(crate::icons::CLOSE)
                                     .size(px(12.0))
-                                    .text_color(theme.text_muted.opacity(0.8)),
+                                    .text_color(theme.readable_muted(0.8)),
                             );
                         let tab_el = div()
                             .id(("terminal-tab", key))
@@ -1740,11 +1736,21 @@ impl TerminalPanel {
                                     },
                                 )
                             })
-                            .when(exited, |el| el.opacity(0.55))
+                            .when(exited, |el| {
+                                el.opacity(if theme.appearance.is_light() {
+                                    0.8
+                                } else {
+                                    0.55
+                                })
+                            })
                             .child(
                                 crate::icons::icon(crate::icons::TERMINAL)
                                     .size(px(16.0))
-                                    .text_color(text_color.opacity(glyph_alpha)),
+                                    .text_color(if theme.appearance.is_light() {
+                                        text_color
+                                    } else {
+                                        text_color.opacity(glyph_alpha)
+                                    }),
                             )
                             .child(div().flex_1().min_w_0().truncate().child(title))
                             .child(close_btn);
@@ -1802,7 +1808,7 @@ impl TerminalPanel {
                     .child(
                         crate::icons::icon(crate::icons::PLUS)
                             .size(px(16.0))
-                            .text_color(theme.text_muted.opacity(0.6)),
+                            .text_color(theme.readable_muted(0.6)),
                     ),
             )
             // Collapse chevron pinned right (luna "Hide terminal" ⌘J).
@@ -1829,7 +1835,7 @@ impl TerminalPanel {
                     .child(
                         crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                             .size(px(13.0))
-                            .text_color(theme.text_muted.opacity(0.55)),
+                            .text_color(theme.readable_muted(0.55)),
                     ),
             )
     }
