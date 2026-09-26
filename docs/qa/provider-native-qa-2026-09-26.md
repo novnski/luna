@@ -1,5 +1,9 @@
 # Providers native QA — 26 September 2026
 
+Post-fix follow-up: `provider-idle-archive-native-2026-09-26.md` records the
+successful same-process idle archive and warm sibling continuation on reviewed
+source `9bb805ac`. The workaround evidence below remains historical and intact.
+
 This follows `provider-audit-2026-09-26.md`. The signed app was built from clean
 consolidated source **8169b69219f5d1b598f64189a8e2b1b937aa3d7c**. This report
 adds no runtime changes and does not amend the verified audit commit.
