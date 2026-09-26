@@ -744,7 +744,7 @@ impl Render for ProjectCommandPanel {
                         .flex()
                         .flex_col()
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.code_text);
                     for line in run.action.command.split('\n') {
                         command_lines = command_lines.child(div().whitespace_nowrap().child(
@@ -768,8 +768,8 @@ impl Render for ProjectCommandPanel {
                             .flex_col()
                             .child(
                                 div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.text_faint)
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
                                     .child(SharedString::from(format!(
                                         "Captured for attempt {}",
                                         run.attempt
@@ -785,7 +785,7 @@ impl Render for ProjectCommandPanel {
                                     })
                                     .min_w_0()
                                     .whitespace_normal()
-                                    .text_size(px(11.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from(format!("Checkout: {}", run.cwd))),
                             )
