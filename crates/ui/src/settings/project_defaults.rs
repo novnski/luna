@@ -604,14 +604,15 @@ impl Render for ProjectsPage {
                     choices,
                 );
                 if self.models_open {
-                    let mut models = div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .child(popover::dialog_field(
-                            self.model_search.clone().into_any_element(),
-                        ));
+                    let mut models =
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(popover::dialog_field(
+                                self.model_search.clone().into_any_element(),
+                            ));
                     match &self.models {
                         popover::Loadable::Ready(list) => {
                             let query = self.model_search.read(cx).text().to_lowercase();

@@ -42,13 +42,11 @@ impl ProjectCommandSettings {
             actions: vec![],
             editing: None,
             name: cx.new(|cx| {
-                ComposerInput::new("Command name (Build, Test, Start app…)", cx)
-                    .with_single_line()
+                ComposerInput::new("Command name (Build, Test, Start app…)", cx).with_single_line()
             }),
             command: cx.new(|cx| ComposerInput::new("Command to run", cx)),
-            preview: cx.new(|cx| {
-                ComposerInput::new("Preview URL (optional)", cx).with_single_line()
-            }),
+            preview: cx
+                .new(|cx| ComposerInput::new("Preview URL (optional)", cx).with_single_line()),
             setup: false,
             wait: true,
             busy: false,
