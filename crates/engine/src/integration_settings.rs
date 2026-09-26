@@ -23,6 +23,10 @@ const MAX_INSTRUCTION_CHARS: usize = 16_000;
 const MAX_SKILL_BYTES: usize = 128 * 1024;
 const MAX_SKILL_FILES: usize = 128;
 const MAX_INSTALL_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_SKILL_DEPTH: usize = 8;
+// One engine process owns the local IPC data root. This serializes LUNA writes;
+// external provider/editor writes are caught by revision checks when observed.
+static SKILL_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Identifier only, never an authorization token. Length framing prevents
 /// ambiguous tuples; the private source path is never returned to the UI.
@@ -213,7 +217,9 @@ fn unsupported_actions() -> IntegrationActionFacts {
         enable: IntegrationActionAvailability::Unavailable,
         disable: IntegrationActionAvailability::Unavailable,
         authenticate: IntegrationActionAvailability::Unavailable,
-        reason: Some("Enable, disable, and authentication actions are unavailable for this source.".into()),
+        reason: Some(
+            "Enable, disable, and authentication actions are unavailable for this source.".into(),
+        ),
     }
 }
 
@@ -640,8 +646,95 @@ fn valid_skill_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn skill_revision(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+fn read_regular_file(path: &Path, limit: usize) -> Result<Vec<u8>, EngineError> {
+    use std::io::Read as _;
+
+    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(EngineError::Other(
+            "Symlinked or special skill file cannot be read".into(),
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let mut content = Vec::new();
+    file.take((limit as u64).saturating_add(1))
+        .read_to_end(&mut content)?;
+    if content.len() > limit {
+        return Err(EngineError::Other(
+            "Skill file exceeds the library limit".into(),
+        ));
+    }
+    Ok(content)
+}
+
+/// This revision includes scripts and references so an old read cannot remove
+/// or overwrite a skill after any supporting file has changed.
+fn tree_revision(directory: &Path) -> Result<String, EngineError> {
+    fn walk(
+        directory: &Path,
+        relative: &str,
+        depth: usize,
+        count: &mut usize,
+        bytes: &mut u64,
+        hash: &mut Sha256,
+    ) -> Result<(), EngineError> {
+        if depth > MAX_SKILL_DEPTH {
+            return Err(EngineError::Other("Skill folder is too deep".into()));
+        }
+        let mut entries = std::fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            *count += 1;
+            if *count > MAX_SKILL_FILES {
+                return Err(EngineError::Other("Skill has too many files".into()));
+            }
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| EngineError::Other("Skill filename is not UTF-8".into()))?;
+            let path = format!("{relative}{name}");
+            hash.update((path.len() as u64).to_be_bytes());
+            hash.update(path.as_bytes());
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                hash.update(b"directory");
+                walk(
+                    &entry.path(),
+                    &format!("{path}/"),
+                    depth + 1,
+                    count,
+                    bytes,
+                    hash,
+                )?;
+            } else if kind.is_file() {
+                hash.update(b"file");
+                let content = read_regular_file(&entry.path(), MAX_INSTALL_BYTES as usize)?;
+                *bytes = bytes.saturating_add(content.len() as u64);
+                if *bytes > MAX_INSTALL_BYTES {
+                    return Err(EngineError::Other("Skill files exceed 2 MiB".into()));
+                }
+                hash.update((content.len() as u64).to_be_bytes());
+                hash.update(&content);
+            } else {
+                return Err(EngineError::Other(
+                    "Symlinked or special files in a skill folder are not managed".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"luna-skill-tree-v1\0");
+    let mut count = 0;
+    let mut bytes = 0;
+    walk(directory, "", 0, &mut count, &mut bytes, &mut hash)?;
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 fn validate_skill_content(
@@ -787,26 +880,30 @@ pub fn skill_document(
     let (location, name) = resolved_skill(provider, roots, identity)?;
     let directory = skill_path(&location, &name)?;
     let file = directory.join("SKILL.md");
-    let bytes = std::fs::read(&file)?;
-    if bytes.len() > MAX_SKILL_BYTES {
+    if has_symlink_between(&location.base, &file)? {
         return Err(EngineError::Other(
-            "SKILL.md exceeds the 128 KiB library limit".into(),
+            "Symlinked skill or owner folder cannot be inspected through LUNA".into(),
         ));
     }
-    let content = String::from_utf8(bytes.clone())
-        .map_err(|_| EngineError::Other("SKILL.md is not UTF-8".into()))?;
-    let read_only_reason = has_symlink_between(&location.base, &file)?.then(|| {
-        "This skill or its owner folder is a symlink; edit it at its original location.".into()
-    });
+    let revision_before = tree_revision(&directory)?;
+    let bytes = read_regular_file(&file, MAX_SKILL_BYTES)?;
+    let content =
+        String::from_utf8(bytes).map_err(|_| EngineError::Other("SKILL.md is not UTF-8".into()))?;
+    let revision = tree_revision(&directory)?;
+    if revision != revision_before {
+        return Err(EngineError::Other(
+            "Skill changed while being inspected; reload it".into(),
+        ));
+    }
     Ok(SkillDocumentView {
         provider,
         scope: location.scope,
         identity: identity.into(),
         name,
         content,
-        revision: skill_revision(&bytes),
+        revision,
         supporting_files: supporting_files(&directory),
-        read_only_reason,
+        read_only_reason: None,
     })
 }
 
@@ -818,6 +915,9 @@ pub fn save_skill_document(
     content: &str,
     expected_revision: Option<&str>,
 ) -> Result<SkillDocumentView, EngineError> {
+    let _write_guard = SKILL_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     validate_skill_content(provider, name, content)?;
     let location = roots.location(provider, scope)?;
     let directory = skill_path(&location, name)?;
@@ -829,8 +929,7 @@ pub fn save_skill_document(
     }
     match expected_revision {
         Some(expected) => {
-            let current = std::fs::read(&file)?;
-            if skill_revision(&current) != expected {
+            if tree_revision(&directory)? != expected {
                 return Err(EngineError::Other(
                     "Skill changed elsewhere; reload before saving".into(),
                 ));
@@ -843,7 +942,10 @@ pub fn save_skill_document(
         }
         None => {}
     }
-    std::fs::create_dir_all(&directory)?;
+    if expected_revision.is_none() {
+        std::fs::create_dir_all(&location.root)?;
+        std::fs::create_dir(&directory)?;
+    }
     if has_symlink_between(&location.base, &file)? {
         return Err(EngineError::Other(
             "Symlinked skill roots are read only".into(),
@@ -853,6 +955,13 @@ pub fn save_skill_document(
     use std::io::Write as _;
     temporary.write_all(content.as_bytes())?;
     temporary.as_file_mut().sync_all()?;
+    if let Some(expected) = expected_revision {
+        if tree_revision(&directory)? != expected {
+            return Err(EngineError::Other(
+                "Skill changed before save; reload it".into(),
+            ));
+        }
+    }
     if expected_revision.is_some() {
         temporary.persist(&file).map_err(|error| error.error)?;
     } else {
@@ -875,7 +984,11 @@ fn copy_skill_tree(
     destination: &Path,
     file_count: &mut usize,
     total_bytes: &mut u64,
+    depth: usize,
 ) -> Result<(), EngineError> {
+    if depth > MAX_SKILL_DEPTH {
+        return Err(EngineError::Other("Skill folder is too deep".into()));
+    }
     std::fs::create_dir(destination)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
@@ -893,7 +1006,7 @@ fn copy_skill_tree(
             ));
         }
         if kind.is_dir() {
-            copy_skill_tree(&entry.path(), &target, file_count, total_bytes)?;
+            copy_skill_tree(&entry.path(), &target, file_count, total_bytes, depth + 1)?;
         } else if kind.is_file() {
             *total_bytes = total_bytes.saturating_add(entry.metadata()?.len());
             if *total_bytes > MAX_INSTALL_BYTES {
@@ -911,6 +1024,55 @@ fn copy_skill_tree(
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn rename_directory_noreplace(source: &Path, destination: &Path) -> Result<(), EngineError> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| EngineError::Other("Invalid install path".into()))?;
+    let destination = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| EngineError::Other("Invalid install path".into()))?;
+    #[cfg(target_os = "macos")]
+    let result = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn rename_directory_noreplace(source: &Path, destination: &Path) -> Result<(), EngineError> {
+    // Windows RenameFile does not replace an existing directory.
+    std::fs::rename(source, destination)?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn rename_directory_noreplace(_source: &Path, _destination: &Path) -> Result<(), EngineError> {
+    Err(EngineError::Other(
+        "Atomic no-replace skill install is unavailable on this platform".into(),
+    ))
+}
+
 /// Install a local skill into a different provider or scope. Copy the complete
 /// folder so relative scripts/references remain with their SKILL.md. The source
 /// revision and an absent destination are both required; no network registry
@@ -923,6 +1085,9 @@ pub fn install_skill(
     destination_scope: IntegrationSkillScope,
     roots: &SkillRoots,
 ) -> Result<SkillDocumentView, EngineError> {
+    let _write_guard = SKILL_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let source = skill_document(source_provider, roots, source_identity)?;
     if source.revision != expected_source_revision {
         return Err(EngineError::Other(
@@ -951,8 +1116,10 @@ pub fn install_skill(
     let staged = temporary.path().join(&source.name);
     let mut file_count = 0;
     let mut total_bytes = 0;
-    copy_skill_tree(&source_dir, &staged, &mut file_count, &mut total_bytes)?;
-    if skill_revision(&std::fs::read(source_dir.join("SKILL.md"))?) != expected_source_revision {
+    copy_skill_tree(&source_dir, &staged, &mut file_count, &mut total_bytes, 0)?;
+    if tree_revision(&source_dir)? != expected_source_revision
+        || tree_revision(&staged)? != expected_source_revision
+    {
         return Err(EngineError::Other(
             "Source skill changed during install; retry from the library".into(),
         ));
@@ -962,7 +1129,7 @@ pub fn install_skill(
             "Destination skill changed during install".into(),
         ));
     }
-    std::fs::rename(&staged, &destination_dir)?;
+    rename_directory_noreplace(&staged, &destination_dir)?;
     let identity = provider_identity(
         destination_provider,
         &roots.machine_id,
@@ -982,6 +1149,9 @@ pub fn remove_skill(
     identity: &str,
     expected_revision: &str,
 ) -> Result<(), EngineError> {
+    let _write_guard = SKILL_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let document = skill_document(provider, roots, identity)?;
     if document.revision != expected_revision {
         return Err(EngineError::Other(
@@ -993,6 +1163,11 @@ pub fn remove_skill(
     if has_symlink_between(&location.base, &directory)? {
         return Err(EngineError::Other(
             "Symlinked skill roots are read only".into(),
+        ));
+    }
+    if tree_revision(&directory)? != expected_revision {
+        return Err(EngineError::Other(
+            "Skill changed before removal; reload it".into(),
         ));
     }
     std::fs::remove_dir_all(&directory)?;

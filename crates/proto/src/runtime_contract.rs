@@ -274,7 +274,8 @@ pub struct SkillDocumentView {
     pub revision: String,
     /// Relative names for files alongside SKILL.md, never absolute paths.
     pub supporting_files: Vec<String>,
-    /// Symlinks and other externally owned entries remain inspectable.
+    /// A future owner may permit inspection but prohibit mutation. Unsafe
+    /// symlinked paths are rejected before content read and never returned.
     pub read_only_reason: Option<String>,
 }
 
