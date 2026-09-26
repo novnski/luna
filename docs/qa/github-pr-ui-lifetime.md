@@ -1,0 +1,75 @@
+# PR UI lifetime failure matrix — before runtime correction
+
+Source baseline: `b6dad9fda9203301e1a13c7941bc0ddb05fd9a7b`.
+The backend26-case subprocess acceptance and backup preservation already pass;
+this matrix concerns the retained native Changes entity's asynchronous UI state.
+No production fence changes precede these reproductions. The Commands owner owns
+the shared generic held-RPC helper; this feature owns only PR cases/registration.
+
+## Source evidence
+
+- `changes/pull_requests.rs:120` and `:213` fence completions by panel request
+  generation and `git_context` (device, cwd, chat), not engine generation.
+- `changes/git_actions.rs:11` does not include engine, Git branch/remote or token.
+- `changes/pull_requests.rs:177` clones a cached preview; `:183` selects the
+  current engine independently, without checking preview provenance.
+- `Changes` stays in `Shell.diffs` until surface close (`shell.rs:3566`, `:3801`).
+  The tab key is chat ID (`:2784`). Runtime replacement increments AppState's
+  engine generation (`state.rs:1923`, `:2040`) without recreating this entity.
+- State observation calls `Changes::sync` (`changes.rs:1785`, `:2327`), while PR
+  reset is only in render when the Git context key differs (`:4964`). A hidden
+  pane need not render the cleared-selection interval.
+- `load_git` replaces its Git preview (`changes/git_actions.rs:57`) but does not
+  advance/invalidate PR request provenance on a different same-cwd token.
+
+## Failure-first integration matrix
+
+Each case uses the real `Changes` entity and real in-memory RPC envelopes. The
+shared helper holds responses deterministically and records request/reply JSON.
+No hosted service, real gh, agent run, main app or user Git repository is involved.
+A/B have separate RPC identities; same-device/same-chat/same-cwd values deliberately
+exercise the missing engine-generation boundary. Cases must run independently
+so one expected failure cannot hide later observations.
+
+| Case | Interleaving | Required invariant |
+| --- | --- | --- |
+| Preview success/error | Start A preview, attach B without drawing retained Changes, release A | B preview, text, notice and busy state receive no A result |
+| Details/checks success/error | Start held A details (check rollup included), attach B with same selection, release A | B details/checks and errors remain B-owned |
+| Create success/error | A accepts one create, attach B without drawing, finish A | A completes once; B Create count0; no A PR badge/detail/notice/reconcile state applied to B |
+| Cached A preview dispatch | Load A preview, attach B while same selection persists, click real submit | B Create count0 until a fresh B preview has been obtained |
+| Same-cwd branch token | Hold A PR read/create, replace Git preview by real load_git with changed branch/token, release A | Old PR reply cannot populate the new branch context |
+| Same-cwd remote token | Hold A PR read/create, replace Git preview by real load_git with changed remote/token, release A | Old PR reply cannot populate the new remote context |
+| Unchanged Git refresh | Refresh identical Git preview while editing title/body or awaiting PR response | Preserve draft text and valid provenance; do not reset unconditionally |
+| Selection change | Hold PR result, select different chat before release | Existing live selection guard rejects stale result |
+| Cwd change | Hold PR result, change selected chat cwd before release | Existing live cwd guard rejects stale result |
+| Close | Hold PR result, close PR panel before release | Closed panel is not repopulated; accepted create is not replayed |
+| Replacement gap | Clear runtime, reattach B and restore selection without a Changes render between | A result stays fenced despite the transient selection being skipped |
+
+For retained-state assertions, the test records complete semantic PR state:
+preview identity/operation ID, details/checks, badge, notice, busy/reconcile state,
+and title/body/base/head text. It compares the B-context snapshot immediately
+before releasing A with the snapshot afterward, rather than asserting one field.
+Request/reply traces establish that A was already accepted and completed once;
+there must be no synthetic retry or cancellation request and no B create call.
+
+## Narrow repair design (not yet applied)
+
+Bind preview, in-flight requests and completed details to engine generation plus
+selected device/chat/cwd and Git checkout identity/branch/remote/token. Reconcile
+that context on state observation and before submit, independently of rendering.
+Invalidate stale preview authority when engine/context changes; preserve the
+user's title/body where it is safe to re-review, and require a fresh preview
+before submitting through B. Do not automatically move an accepted A operation
+to B. Let its host-side operation complete once and discard only its stale UI
+completion; original journal reconciliation remains available on A.
+
+Only an actual changed Git snapshot should invalidate the preview. Repeating an
+identical Git refresh must preserve draft text and request provenance. Keep
+existing request-generation and selection guards, component styles, tokens,
+spacing and public backend contracts.
+
+## Baseline status
+
+Source report and matrix authored before test/runtime edits. Shared helper API
+and prerequisite commit requested from Commands. No Cargo/native run, production
+patch or claim of a runtime reproduction in this preparation checkpoint.
