@@ -3,6 +3,7 @@
 use crate::{
     composer::{ComposerInput, ComposerInputEvent},
     popover,
+    project_commands::ProjectCommandSettings,
     settings::{composer::ComposerDefaults, widgets},
     state::AppState,
     theme::Theme,
@@ -66,6 +67,8 @@ enum Action {
 pub struct ProjectsPage {
     state: Entity<AppState>,
     selected_project_id: Option<String>,
+    command_card_key: Option<(String, String, u64, Option<String>)>,
+    command_card: Option<Entity<ProjectCommandSettings>>,
     scroll: widgets::PageScroll,
     models: popover::Loadable<Vec<Model>>,
     model_search: Entity<ComposerInput>,
@@ -114,6 +117,8 @@ impl ProjectsPage {
         Self {
             state,
             selected_project_id,
+            command_card_key: None,
+            command_card: None,
             scroll: Default::default(),
             models: popover::Loadable::Idle,
             model_search,
@@ -342,6 +347,25 @@ impl popover::ScrollRailHost for ProjectsPage {
 
 impl Render for ProjectsPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Commands are device-local. Keep the editor only for this exact
+        // project/backend identity; dropping it cancels any stale card request.
+        let command_card_key = self.selected(cx).map(|space| {
+            let state = self.state.read(cx);
+            (
+                space.id,
+                space.device_id,
+                state.engine_generation(),
+                state
+                    .engine()
+                    .map(|engine| engine.engine_info().device_id.clone()),
+            )
+        });
+        if self.command_card_key != command_card_key {
+            self.command_card_key = command_card_key.clone();
+            self.command_card = command_card_key.map(|(space_id, _, _, _)| {
+                cx.new(|cx| ProjectCommandSettings::new(self.state.clone(), space_id, cx))
+            });
+        }
         let theme = Theme::of(cx).clone();
         let projects = self
             .state
@@ -564,7 +588,9 @@ impl Render for ProjectsPage {
             } else if self.saved {
                 body = body.child(widgets::page_subtitle(&theme, "Saved for new tasks."));
             }
-            // ProjectCommandSettings child card is composed here by its owner.
+            if let Some(commands) = &self.command_card {
+                body = body.child(commands.clone());
+            }
         } else {
             body = body.child(widgets::page_subtitle(
                 &theme,

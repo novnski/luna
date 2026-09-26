@@ -40,3 +40,8 @@ receiving the coordinator's build slot. Keep its artifact directory for review.
    current-API baseline in `two-client-config-baseline.json` before adding the
    proposed required `expectedActions` field and comparison under the configure
    gate. No new request field is sent in the baseline reproduction.
+10. Combined Projects-page composition: switching selected project or engine
+    identity recreates the Commands card, so pending reads/drafts cannot cross
+    project/device boundaries. Defaults controls, page route, title and scroll
+    remain owned by ProjectsPage. A stale Commands save preserves its draft;
+    explicit reload updates the saved list without discarding that draft.
