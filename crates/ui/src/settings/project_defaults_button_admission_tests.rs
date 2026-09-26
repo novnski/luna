@@ -27,10 +27,15 @@ fn runtime(cx: &mut TestAppContext) -> Runtime {
     runtime
 }
 fn space(id: &str, device: &str) -> Space {
+    let permission = if id == B {
+        PermissionMode::Full
+    } else {
+        PermissionMode::Auto
+    };
     serde_json::from_value(json!({
         "id":id,"deviceId":device,"path":format!("/fixture/{device}/{id}"),
         "name":id,"gitDetected":true,"createdAt":"2026-09-26T00:00:00Z",
-        "executionDefaults":{"permissionMode":"auto","checkout":"local"}
+        "executionDefaults":{"permissionMode":permission,"checkout":"local"}
     }))
     .unwrap()
 }
@@ -214,7 +219,10 @@ fn stale(cx: &mut TestAppContext, kind: Replacement, name: &str) {
     } else {
         A
     };
-    let expected = space(target, device).execution_defaults;
+    let mut expected = space(target, device).execution_defaults;
+    if !matches!(kind, Replacement::Project) {
+        expected.permission_mode = Some(PermissionMode::Full);
+    }
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
     let retained = visual.debug_bounds(BUTTON).is_some();
     let delivery=visual.update(|window,app| {
@@ -224,7 +232,9 @@ fn stale(cx: &mut TestAppContext, kind: Replacement, name: &str) {
                 state.attach_engine_for_epoch_fixture(replacement,cx);
                 state.selected_device=Some(device.into());
                 state.selected_space=Some(A.into());
-                state.apply_spaces(vec![space(A,device),space(B,device)]);
+                let mut current = space(A,device);
+                current.execution_defaults = expected.clone();
+                state.apply_spaces(vec![current,space(B,device)]);
                 cx.notify();
             }),
         }

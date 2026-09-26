@@ -1,10 +1,11 @@
 # Project execution defaults — 26 September 2026
 
-Latest combined verification on `04da0cf3`: **17 affected UI cases passed**,
-with full format, focused engine/UI compile and Clippy all exiting 0. Both
-Defaults and Commands reject the evidenced stale-engine results. Native app
-acceptance remains pending its separately granted desktop handoff. Earlier
-failures and exact-source proofs are preserved below.
+Latest affected verification on `59fbe099`: **22 UI cases passed**, with full
+format, focused UI compile and Clippy all exiting 0. Defaults and Commands
+reject the previously evidenced stale results; Commands also rejects stale
+rendered action admission. Defaults' separate six-case rendered-choice suite is
+source-only, not yet executed or fixed. Native app acceptance remains pending
+composition review and its own grant. Exact-source proof and failures follow.
 
 Branch: `codex/project-execution-defaults`.
 Worktree: `/Users/iulian/.codex/worktrees/9f21/luna`.
