@@ -113,20 +113,68 @@ an all-provider listing. All 11 account/upload/title tests then pass. No provide
 production code is modified here. That identical fixture hunk is the only
 expected overlap with the provider branch.
 
-## Handoff limits
+## Native handoff on consolidated audit source
 
-Native QA is **pending**, by coordinator instruction, until the four audit
-branches are consolidated. The reserved identity remains `LUNA QA Workspace`,
-`com.novnski.luna.qa.workspace`, IPC `59783`, with data in this worktree's
-`target/luna-qa-data/workspace`. No primary app was refreshed or user data changed.
-No real provider sessions were created by this workspace audit.
+Native QA completed on reviewed combined source
+`8169b69219f5d1b598f64189a8e2b1b937aa3d7c`. The guarded refresh built in **145 seconds**
+(147 seconds including packaging/launch), with `CARGO_INCREMENTAL=0` and all four
+assigned app overrides. `LUNA QA Workspace` runs as PID **8868** from this exact
+worktree's `target/luna-macos-dev/LUNA QA Workspace.app/Contents/MacOS/luna`.
+Its listener is `127.0.0.1:59783`; the bundle ID is
+`com.novnski.luna.qa.workspace`, and its data directory is this worktree's
+`target/luna-qa-data/workspace`. Strict deep code-signature verification passes.
+Executable SHA-256:
+`a9393729223050e51595a441fb4de7c2b8da579abf6e54cfd17a457495f68265`.
+
+The real app passed four IPC scenarios on disposable local fixtures:
+
+1. File read/save succeeds; a stale content hash returns a conflict and preserves
+   the newer saved bytes.
+2. Working-tree diff and exact old/new file-source readback complete on the native
+   worker; the app remains responsive after the formerly aborting endpoint.
+3. A colliding upload is rejected without replacing the first blob. ReadAttachment
+   returns the original bytes, staged bytes remain retryable with a distinct name,
+   and identical-byte replay succeeds.
+4. Fixture-seeded checkpoint refs list and diff correctly, including a force-added
+   ignored file. Restore preview refuses the shared disposable checkout; HEAD,
+   the index tree, and worktree bytes remain unchanged.
+
+The first driver run passed all four checks. A second pass added exact executable
+targeting and verified cleanup readback: both disposable task/project cleanup
+states are `completed`, uploaded test files and repository roots are removed.
+Neither run had a driver/contract error or product failure. Checkpoints were
+seeded directly in the disposable Git repository: this verifies native read/diff
+and refusal contracts, **not** provider-triggered capture or native isolated
+restore. Capture/restoration remain covered by the source integration tests.
+
+Repeat with the separately built Workspace QA app:
+
+```sh
+LUNA_IPC_PORT=59783 \
+LUNA_NATIVE_BUILD_REVISION=8169b69219f5d1b598f64189a8e2b1b937aa3d7c \
+node scripts/qa-workspace-native.mjs
+```
+
+Evidence: `target/qa/workspace-data-2026-09-26/native/` contains build/refresh logs,
+source revision, plist identity, process/listener readback, signature result,
+executable hash and budget snapshots. `ipc-final/events.jsonl` records every
+native reply and `ipc-final/result.json` records the four successful scenarios
+and fixture removal. `ipc-first/` preserves the initial pass. The primary app's
+59777 listener was identical before and after refresh. No primary app was
+refreshed, user repository mutated, or provider session/prompt created.
+
+## Handoff limits
 
 The final source-verification target occupies 3.6 GiB (`target/debug`); no release
 target or extra build directories were created. Normally terminated fixtures
 remove their disposable roots. The aborting baseline may leave anonymous OS
 temporary roots; no broad temp cleanup was attempted without ownership proof.
-Retain the target and QA artifacts for native QA and
-coordinator review. No push or merge to main was performed by this worker.
+After native packaging, `target/debug` occupies 9.3 GiB. Aggregate budget snapshots
+were 123.74 GiB before and 132.54 GiB after, below the 170 GiB operating ceiling;
+no guard bypass or manual cache cleanup was used. The build slot was released
+immediately after launch/readback while native IPC continued. Retain the target,
+isolated app/data and QA artifacts for coordinator review. No push or merge to main
+was performed by this worker.
 
 This bounded audit is macOS filesystem/subprocess/RPC coverage. Windows/Linux
 behavior, hostile external writers racing filesystem publication, and full

@@ -5252,6 +5252,16 @@ impl EngineRpc {
             }
             TaskCommandIntent::SetArchived { archived } => {
                 let native = self.task_identity.has_native_codex_binding(task_id);
+                let _archive_transition = if native {
+                    Some(
+                        self.sessions
+                            .prepare_native_archive(task_id)
+                            .await
+                            .map_err(TaskProjectionError::Mutation)?,
+                    )
+                } else {
+                    None
+                };
                 if native {
                     self.task_identity
                         .reconcile_task(task_id, self.sessions.has_live_run(task_id))
