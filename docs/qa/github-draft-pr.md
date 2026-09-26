@@ -83,3 +83,35 @@ not plaintext title/body. Reusing the same UUID with changed content is rejected
 A true retry returns its confirmed PR even after closure. Advisory lock files
 remain on disk and are never unlinked while live; the OS releases their locks.
 They are omitted from archives and restored-state fingerprints.
+
+## Verification checkpoint — 26 September 2026
+
+Base merged: `dbb38ee14d6913bc6e79f6de2bd33be398b3d839` (merge `b9c8273d`).
+No primary checkout edits, hosted GitHub writes or pushes. Shared settings fixture
+repair was cherry-picked as `6023afe3` (same change as `65c3800d`).
+
+Evidence directory: `target/qa/github-pr-initial/`.
+
+- `before-fix.log`: authentic advanced-branch regression; compilation passed
+  in52.39s, test failed at the old-UUID replay (`Rejected` vs `Existing`).
+- `after-fix.log`: advanced-branch replay passed; a separate restore-fixture
+  identity mismatch failed. A different device legitimately needs a fresh
+  checkout preview; the fixture now asserts that rejection first, then retries
+  with refreshed checkout identity and the original operation UUID.
+- `final-integration.log`, `result.json`, `calls.jsonl`: production service,
+  real disposable Git repo and fake-gh subprocess acceptance.26 named cases
+  cover create/readback/checks, target guards, auth/CLI failures, bounded output,
+  cancellation, independent lane OS-lock contention, uncertain outcomes,
+  restart/restore, changed UUID payload, terminal reuse and advanced-SHA replay.
+- `backup.log`: journal archive/stage byte preservation and absence of lock
+  sidecars passed1/1. `ui-check.log`: UI+engine compilation passed43.62s.
+- `clippy.log`: engine/UI library Clippy exit0, existing repository warnings;
+  a new collapsible-if style warning was fixed and rerun in
+  `engine-clippy-final.log`. `format.log`: workspace formatting check exit0.
+
+The ordering correction retains checkout/repository/branch/upstream and payload
+identity checks for replay. Known operation IDs cannot reach POST. New UUIDs
+still require the reviewed Git token, live published SHA and final target check.
+
+Native app and screenshot QA remain a separate coordinator-gated step. This
+checkpoint does not claim the UI has been visually verified or an app refreshed.

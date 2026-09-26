@@ -72,6 +72,15 @@ impl GitHubPullRequests {
 
     async fn preview_inner(&self, cwd: &str) -> Result<GitPrDraftPreview, String> {
         let checkout = self.actions.preview(cwd).await?;
+        let preview = self.preview_checkout(checkout).await?;
+        same_checkout(&preview.checkout, &self.actions.preview(cwd).await?)?;
+        Ok(preview)
+    }
+
+    async fn preview_checkout(
+        &self,
+        checkout: GitActionPreview,
+    ) -> Result<GitPrDraftPreview, String> {
         let (source, repository) = self.source(&checkout).await?;
         let upstream = source.branch.upstream_ref.clone().ok_or_else(|| {
             "Push branch first with an upstream, then refresh the PR preview".to_owned()
@@ -105,8 +114,6 @@ impl GitHubPullRequests {
         let title = self
             .git(&source.checkout_root, &["log", "-1", "--format=%s"])
             .await?;
-        let after = self.actions.preview(cwd).await?;
-        same_checkout(&checkout, &after)?;
         Ok(GitPrDraftPreview {
             operation_id: uuid::Uuid::new_v4().to_string(),
             head: checkout.branch.clone(),
@@ -222,26 +229,13 @@ impl GitHubPullRequests {
         if !valid_branch(&request.base) || request.base == request.head {
             return Err("Choose a valid base branch different from head".into());
         }
-        let prior_target = Target {
-            repository: request.preview.repository.clone(),
-            base: request.base.clone(),
-            head: request.head.clone(),
-        };
-        let current = match self.preview(&request.preview.checkout.cwd).await {
-            Ok(current) => current,
-            Err(error) if self.attempt_path(&prior_target).exists() => {
-                return Ok(reconciliation_error(error));
-            }
-            Err(error) => return Err(error),
-        };
-        same_checkout(&request.preview.checkout, &current.checkout)?;
-        if current.repository != request.preview.repository
-            || current.upstream != request.preview.upstream
-        {
-            return Err("Repository or upstream changed; refresh the PR preview".into());
-        }
-        let root = Path::new(&current.checkout.cwd);
+        // Reconciliation needs the original target and immutable payload, not
+        // an unchanged commit/worktree. Freshness still gates every NEW POST.
+        let snapshot = self.actions.preview(&request.preview.checkout.cwd).await?;
+        let root_path = PathBuf::from(&snapshot.cwd);
+        let root = root_path.as_path();
         let _lane = self.actions.lane(root).lock_owned().await;
+        let snapshot = crate::git_actions::inspect(root, &snapshot.checkout_id).await?;
         let _permit = self
             .authority
             .as_ref()
@@ -250,12 +244,23 @@ impl GitHubPullRequests {
             .map_err(|_| {
                 "This profile is retiring or being backed up; retry when it is ready".to_owned()
             })?;
+        let (source, repository) = self.source(&snapshot).await?;
+        let original = &request.preview.checkout;
+        if original.checkout_id != snapshot.checkout_id
+            || original.cwd != snapshot.cwd
+            || original.branch != snapshot.branch
+            || original.remote != snapshot.remote
+            || repository != request.preview.repository
+            || source.branch.upstream_ref.as_deref() != Some(&request.preview.upstream)
+            || source.branch.head_branch != request.head
+        {
+            return Err("Repository, branch or upstream changed; refresh the PR preview".into());
+        }
         let target = Target {
-            repository: current.repository.clone(),
+            repository: repository.clone(),
             base: request.base.clone(),
             head: request.head.clone(),
         };
-        let (source, repository) = self.source(&current.checkout).await?;
         let path = self.attempt_path(&target);
         let _file_lock = self.lock_target(&path)?;
         let mut journal = self.read_journal(&path, &target)?;
@@ -303,6 +308,14 @@ impl GitHubPullRequests {
             }
             return Ok(unresolved());
         }
+        // Only new operation IDs need a fresh reviewed Git snapshot and live
+        // published SHA. Known IDs above are incapable of reaching POST.
+        let current = match self.preview_checkout(snapshot).await {
+            Ok(current) => current,
+            Err(error) if !journal.attempts.is_empty() => return Ok(reconciliation_error(error)),
+            Err(error) => return Err(error),
+        };
+        same_checkout(&request.preview.checkout, &current.checkout)?;
         // New intent: an unresolved predecessor can only be reconciled. A known
         // predecessor must be authoritatively terminal before a new POST.
         if let Some(index) = journal.attempts.len().checked_sub(1) {
@@ -687,10 +700,10 @@ impl GitHubPullRequests {
             return Err("Unsafe PR attempt directory".into());
         }
         let lock_path = path.with_extension("lock");
-        if let Ok(meta) = std::fs::symlink_metadata(&lock_path) {
-            if !meta.is_file() || meta.file_type().is_symlink() {
-                return Err("Unsafe PR operation lock".into());
-            }
+        if let Ok(meta) = std::fs::symlink_metadata(&lock_path)
+            && (!meta.is_file() || meta.file_type().is_symlink())
+        {
+            return Err("Unsafe PR operation lock".into());
         }
         let mut options = std::fs::OpenOptions::new();
         options.create(true).read(true).write(true).truncate(false);

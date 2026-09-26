@@ -90,6 +90,27 @@ async fn draft_pr_subprocess_acceptance() {
     let actions = GitActions::new(Repos::new(&root.join("data"), "fixture"));
     let service = GitHubPullRequests::new(actions.clone(), journal.clone());
     let cwd = checkout.to_str().unwrap();
+    // The preplanned missing-CLI path must not discover a real gh fallback.
+    let no_gh_bin = root.join("no-gh-bin");
+    std::fs::create_dir(&no_gh_bin).unwrap();
+    let git_executable = std::env::split_paths(&old_path)
+        .map(|p| p.join("git"))
+        .find(|p| p.is_file())
+        .unwrap();
+    std::os::unix::fs::symlink(git_executable, no_gh_bin.join("git")).unwrap();
+    unsafe {
+        std::env::set_var("PATH", &no_gh_bin);
+    }
+    assert!(
+        service
+            .preview(cwd)
+            .await
+            .unwrap_err()
+            .contains("not installed")
+    );
+    unsafe {
+        std::env::set_var("PATH", format!("{}:{old_path}", fixture.display()));
+    }
     mode(root, "auth");
     assert!(
         service
@@ -359,21 +380,43 @@ async fn draft_pr_subprocess_acceptance() {
         GitActions::new(Repos::new(&root.join("restored"), "restored")),
         copy,
     );
+    // Restoring under another device identity requires a fresh checkout preview;
+    // the original operation UUID/payload still must not authorize a second POST.
     assert_eq!(
         restored.create(request.clone()).await.unwrap().outcome,
+        GitPrCreateOutcome::Rejected
+    );
+    let mut restored_request = request.clone();
+    restored_request.preview = restored.preview(cwd).await.unwrap();
+    restored_request.preview.operation_id = request.preview.operation_id.clone();
+    assert_eq!(
+        restored.create(restored_request).await.unwrap().outcome,
         GitPrCreateOutcome::Uncertain
     );
     assert_eq!(writes(root), 1);
     reset(root, &journal);
     mode(root, "wait");
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            restarted.create(request.clone())
-        )
-        .await
-        .is_err()
+    let running_service = restarted.clone();
+    let running_request = request.clone();
+    let pending = tokio::spawn(async move { running_service.create(running_request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while writes(root) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("fake POST starts before cancellation");
+    // Independent GitActions lane still obeys the durable target's OS lock.
+    let peer = GitHubPullRequests::new(
+        GitActions::new(Repos::new(&root.join("data"), "fixture")),
+        journal.clone(),
     );
+    let busy = peer.create(request.clone()).await.unwrap();
+    assert_eq!(busy.outcome, GitPrCreateOutcome::Rejected);
+    assert!(busy.message.contains("Another PR operation is active"));
+    assert_eq!(writes(root), 1);
+    pending.abort();
+    let _ = pending.await;
     mode(root, "success");
     assert_eq!(
         restarted.create(request.clone()).await.unwrap().outcome,
@@ -411,6 +454,6 @@ async fn draft_pr_subprocess_acceptance() {
         let out = Path::new(&artifact);
         std::fs::create_dir_all(out).unwrap();
         std::fs::write(out.join("calls.jsonl"), calls).unwrap();
-        std::fs::write(out.join("result.json"), serde_json::json!({"passed":true,"hostedWrites":0,"cases":["auth","malformed","output cap","no upstream","divergent remote","remote head mismatch","edited head","same base","changed upstream","changed remote","concurrent dedupe","draft success","detail checks","lost response reconciliation","uncertain restart","restored journal","cancelled write","wrong fork","malformed journal"]}).to_string()).unwrap();
+        std::fs::write(out.join("result.json"), serde_json::json!({"passed":true,"hostedWrites":0,"cases":["missing gh","auth","malformed","output cap","no upstream","divergent remote","remote head mismatch","edited head","same base","changed upstream","changed remote","concurrent dedupe","cross-lane OS lock","payload UUID mismatch","closed rollover","merged rollover","advanced SHA replay","stale new intent","draft success","detail checks","lost response reconciliation","uncertain restart","restored journal","cancelled write","wrong fork","malformed journal"]}).to_string()).unwrap();
     }
 }
