@@ -269,6 +269,185 @@ async fn ambiguous_relative_creation_is_refused_without_identity_side_effects() 
     close(core, client).await;
 }
 
+async fn nested_project_move(
+    fixture: &Fixture,
+    core: &EngineCore,
+    client: &RpcClient,
+    bound: bool,
+) -> (String, String, String, TaskIdentityView, TaskIdentityView) {
+    let nested = fixture.root_a.join("sub");
+    std::fs::create_dir(&nested).unwrap();
+    let origin = uuid::Uuid::new_v4().to_string();
+    let parent = uuid::Uuid::new_v4().to_string();
+    for (space, path) in [(&origin, &nested), (&parent, &fixture.root_a)] {
+        client
+            .call(
+                methods::MUTATE,
+                json!({"op":"createSpace","spaceId":space,
+            "deviceId":core.device_id,"path":path}),
+            )
+            .await
+            .unwrap();
+    }
+    let task = uuid::Uuid::new_v4().to_string();
+    create(client, &task, &core.device_id, Some(&origin), &nested).await;
+    if bound {
+        core.task_identity
+            .record_session_binding(
+                &task,
+                HarnessId::Mock,
+                "synthetic-move-session",
+                nested.to_str().unwrap(),
+            )
+            .unwrap();
+    }
+    let before = identity(client, &task).await;
+    let state: luna_proto::TaskCommandRead = client
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":task}))
+        .await
+        .unwrap();
+    let moved: CommandReceipt = client
+        .call_as(
+            methods::EXECUTE_TASK_COMMAND,
+            json!({
+                "commandId":uuid::Uuid::new_v4().to_string(),"taskId":task,
+                "expectedTaskRevision":state.snapshot.task_revision,
+                "expectedBindingGeneration":state.snapshot.binding_generation,
+                "intent":{"kind":"moveProject","destinationSpaceId":parent}
+            }),
+        )
+        .await
+        .unwrap();
+    let after = identity(client, &task).await;
+    evidence(
+        "nested-project-move",
+        json!({"before":before,"after":after,
+        "move":moved,"chat":core.workspace.chat(&task).unwrap(),"origin":origin,"currentProject":parent}),
+    );
+    assert_eq!(moved.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        moved.snapshot.task_revision,
+        state.snapshot.task_revision + 1
+    );
+    assert_eq!(
+        core.workspace
+            .chat(&task)
+            .unwrap()
+            .unwrap()
+            .space_id
+            .as_deref(),
+        Some(parent.as_str())
+    );
+    (task, origin, parent, before, after)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_grouping_move_preserves_execution_identity_and_binding() {
+    let fixture = Fixture::new();
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let (task, origin, _, before, after) =
+        nested_project_move(&fixture, &core, &client, true).await;
+    assert_eq!(after.workspace, before.workspace);
+    assert_eq!(
+        after.workspace.source_space_id.as_deref(),
+        Some(origin.as_str())
+    );
+    let mut old_binding = serde_json::to_value(before.current_binding.as_ref().unwrap()).unwrap();
+    let mut new_binding = serde_json::to_value(after.current_binding.as_ref().unwrap()).unwrap();
+    for value in [&mut old_binding, &mut new_binding] {
+        value.as_object_mut().unwrap().remove("reconciliation");
+        value.as_object_mut().unwrap().remove("lastObservedAtMs");
+    }
+    assert_eq!(
+        new_binding, old_binding,
+        "grouping must preserve binding identity and provenance"
+    );
+    assert_eq!(core.store.workspace_repair_revision(&task).unwrap(), 0);
+    core.task_identity
+        .validate_explicit_resume(
+            &task,
+            HarnessId::Mock,
+            fixture.root_a.join("sub").to_str().unwrap(),
+            "synthetic-move-session",
+        )
+        .unwrap();
+    close(core, client).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_unbound_repair_after_project_move_preserves_origin_and_current_group() {
+    let fixture = Fixture::new();
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let (task, origin, current, _, _) = nested_project_move(&fixture, &core, &client, false).await;
+    let store = core.store.clone();
+    close(core, client).await;
+    let mut log: Value = serde_json::from_slice(
+        &store
+            .load_snapshot("luna-task-identity-events-v1")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    log["schemaVersion"] = json!(1);
+    for event in log["events"].as_array_mut().unwrap() {
+        let field = match event["type"].as_str() {
+            Some("workspaceObserved") => "workspace",
+            Some("taskRegistered") => "task",
+            _ => continue,
+        };
+        event[field]["schemaVersion"] = json!(1);
+        event[field]["workspaceId"] = json!(origin);
+    }
+    store
+        .save_snapshot(
+            "luna-task-identity-events-v1",
+            &serde_json::to_vec(&log).unwrap(),
+        )
+        .unwrap();
+    drop(store);
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let state: luna_proto::TaskCommandRead = client
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":task}))
+        .await
+        .unwrap();
+    let plan = client
+        .call(
+            "PreviewWorkspaceIdentityRepair",
+            json!({"taskId":task,"providerProof":"localOnly"}),
+        )
+        .await
+        .unwrap();
+    evidence(
+        "legacy-moved-project-preview",
+        json!({"plan":plan,"origin":origin,"currentProject":current}),
+    );
+    assert_eq!(plan["status"], "ready");
+    let receipt:CommandReceipt=client.call_as(methods::EXECUTE_TASK_COMMAND,json!({
+        "commandId":uuid::Uuid::new_v4().to_string(),"taskId":task,"expectedTaskRevision":state.snapshot.task_revision,
+        "intent":{"kind":"repairWorkspaceIdentity","previewId":plan["previewId"],"evidenceDigest":plan["evidenceDigest"]}
+    })).await.unwrap();
+    let view = identity(&client, &task).await;
+    let chat = core.workspace.chat(&task).unwrap().unwrap();
+    evidence(
+        "legacy-moved-project-repaired",
+        json!({"receipt":receipt,"identity":view,"chat":chat}),
+    );
+    close(core, client).await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+    assert_eq!(
+        view.workspace.source_space_id.as_deref(),
+        Some(origin.as_str())
+    );
+    assert_eq!(chat.space_id.as_deref(), Some(current.as_str()));
+    assert_eq!(
+        view.workspace.current_path,
+        fixture.root_a.join("sub").to_string_lossy()
+    );
+}
+
 // Scope HOME and the materialization root to a child test process; never mutate
 // process-global environment in parallel tests or create a worktree in user data.
 fn isolated_child(test: &str) -> bool {
