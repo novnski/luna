@@ -624,3 +624,6 @@ impl Changes {
 
 #[cfg(test)]
 mod lifetime_tests;
+
+#[cfg(test)]
+mod cold_git_preview_tests;

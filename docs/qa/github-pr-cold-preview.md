@@ -64,3 +64,26 @@ fencing need explicit, separately validated treatment.
 
 Source review only at this checkpoint. No new Cargo/native actions, runtime
 correction or claim of an executed cold-preview reproduction.
+
+## Source-only reproduction checkpoint
+
+Three independent cases are prepared in
+`crates/ui/src/changes/pull_requests/cold_git_preview_tests.rs`, registered only
+under cfg(test). They reuse the unchanged generic HeldRpc helper, retain actual
+Changes, call its real load_git, and attach B through the real AppState path.
+Settlement counters are captured before admission/transition; late reads may
+reply or cancel. Before assertions each case saves busy/preview/notice/key state,
+A/B calls and raw traces, with explicit zero write-RPC assertions.
+
+Exact later granted-slot command (not executed during preparation):
+
+```bash
+LUNA_EPOCH_QA_ARTIFACTS="$PWD/target/qa/github-pr-cold-preview-baseline" \
+  CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-ui --lib \
+  pr_ui_cold_git_preview_ -- --test-threads=1 --nocapture
+```
+
+The original `pr_ui_lifetime_` filter still selects the frozen22 cases only.
+The original source/helper/22-case files were checked unchanged; only this
+report, a new test file and its cfg(test) registration are added. Rustfmt and
+diff checks pass. No Cargo/native run or cold-preview runtime correction yet.
