@@ -132,6 +132,8 @@ try {
           'retained task must point to its new worktree');
         check(task.config?.harness === 'codex' && task.config?.model === 'gpt-6-luna',
           'retained task config must be Codex GPT-6 Luna');
+        check(!task.harnessSessionId,
+          'setup failure must not create a provider session ID');
         const reads = await Promise.allSettled([
           call('ProjectCommandStatus', { chatId: task.id }),
           call('GetTaskCommandSnapshot', { taskId: task.id, afterTaskSequence: 0, limit: 50 }),
@@ -160,7 +162,8 @@ try {
             && submission.state === 'recoverable' && submission.snapshot.text === prompt),
           'the original prompt must remain recoverable on the same task');
           check(!sessions.some(session => session.chatId === task.id
-            && session.status === 'running'), 'provider must not run before setup succeeds');
+            && ['working', 'awaitingApproval', 'awaitingInput'].includes(session.status)),
+          'provider must not be active before setup succeeds');
         }
       }
     } else {

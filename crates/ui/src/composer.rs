@@ -29,10 +29,10 @@ use unicode_segmentation::UnicodeSegmentation;
 use luna_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
 use luna_engine::sessions::LunaApprovalOutcome;
 use luna_proto::{
-    CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot, DraftBlob,
-    DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState, FileSearchMatch,
-    HarnessId, RunRequest, SandboxLevel, SlashCommand, UserInputAnswer, UserInputQuestion,
-    capabilities,
+    CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot,
+    DraftBlob, DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState,
+    FileSearchMatch, HarnessId, ProjectCommandStatus, ProjectCommandsSnapshot, RunRequest,
+    SandboxLevel, SlashCommand, UserInputAnswer, UserInputQuestion, capabilities,
 };
 use luna_rpc::{RpcError, methods};
 
@@ -4616,6 +4616,7 @@ struct RestoredComposerDraft {
     unavailable_appshots: HashSet<String>,
     unavailable_appshot_metadata: Vec<DraftAppshot>,
     warning: Option<String>,
+    recovery_action: Option<String>,
     pending_submission: bool,
     pending_same_revision: bool,
     recoverable_submission: bool,
@@ -4632,6 +4633,40 @@ enum ComposerSendOutcome {
 enum ComposerSendFailure {
     Rejected(String),
     Unknown(String),
+}
+
+fn receipt_failure_message(receipt: &CommandReceipt, fallback: &str) -> String {
+    receipt
+        .recovery_action
+        .clone()
+        .or_else(|| receipt.reason.as_ref().map(|reason| reason.message.clone()))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+// A rejected first Run may have already created a checkout and a durable setup
+// receipt. The task is the only native route to inspect/retry that receipt.
+async fn retain_failed_worktree_setup(engine: &crate::state::EngineHandle, task_id: &str) -> bool {
+    match engine
+        .client()
+        .call_as::<ProjectCommandsSnapshot>(
+            methods::PROJECT_COMMAND_STATUS,
+            serde_json::json!({ "chatId": task_id }),
+        )
+        .await
+    {
+        Ok(snapshot) => snapshot.runs.iter().any(|run| {
+            run.setup
+                && run.chat_id == task_id
+                && run.cwd == snapshot.cwd
+                && run.action.wait_for_setup
+                && run.status != ProjectCommandStatus::Succeeded
+        }),
+        Err(error) => {
+            // A lost status read cannot prove the worktree was never created.
+            tracing::warn!(task_id, %error, "retaining rejected new task until setup status is readable");
+            true
+        }
+    }
 }
 
 fn submission_has_newer_draft(
@@ -6184,6 +6219,25 @@ impl Composer {
                         })
                         .cloned()
                         .collect();
+                    let recovery_action = if let Some(submission) = read
+                        .submissions
+                        .iter()
+                        .rev()
+                        .find(|submission| submission.state == DraftSubmissionState::Recoverable)
+                    {
+                        engine
+                            .client()
+                            .call_as::<Option<CommandReceipt>>(
+                                methods::GET_TASK_COMMAND_RECEIPT,
+                                serde_json::json!({ "commandId": submission.command_id.clone() }),
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|receipt| receipt.recovery_action)
+                    } else {
+                        None
+                    };
                     let mut record = match read.draft {
                         Some(record) => record,
                         None => match read.submissions.last() {
@@ -6333,6 +6387,7 @@ impl Composer {
                                 warnings.join(", ")
                             )
                         }),
+                        recovery_action,
                         pending_submission,
                         pending_same_revision,
                         recoverable_submission,
@@ -6466,7 +6521,12 @@ impl Composer {
                     composer.failure_key = Some(load_key.clone());
                 } else if restored.recoverable_submission {
                     composer.failure = Some(
-                        "A previously rejected message was restored as a recoverable draft."
+                        restored
+                            .recovery_action
+                            .unwrap_or_else(|| {
+                                "A previously rejected message was restored as a recoverable draft."
+                                    .into()
+                            })
                             .into(),
                     );
                     composer.failure_key = Some(load_key.clone());
@@ -6486,6 +6546,7 @@ impl Composer {
         draft_key: String,
         submitted_revision: u64,
         superseded_recoverable: Vec<String>,
+        may_have_setup: bool,
         engine: crate::state::EngineHandle,
         cx: &mut Context<Self>,
     ) {
@@ -6549,6 +6610,14 @@ impl Composer {
                     continue;
                 }
                 let applied = receipt.status == CommandReceiptStatus::Applied;
+                let recovery_text = receipt_failure_message(
+                    &receipt,
+                    "The submitted message was rejected and its draft was preserved.",
+                );
+                let retain_setup_task = !applied
+                    && draft_key.is_empty()
+                    && may_have_setup
+                    && retain_failed_worktree_setup(&engine, &task_id).await;
                 let outcome = if applied { "applied" } else { "recoverable" };
                 let queue_id = (receipt.intent == "queueMessage").then_some(command_id.as_str());
                 if crate::drafts::settle_submission(&engine, &command_id, outcome, queue_id)
@@ -6557,7 +6626,7 @@ impl Composer {
                 {
                     return;
                 }
-                if !applied && draft_key.is_empty() {
+                if !applied && draft_key.is_empty() && !retain_setup_task {
                     let _ = crate::task_commands::execute(
                         &engine,
                         &task_id,
@@ -6569,8 +6638,14 @@ impl Composer {
                     composer.draft_receipt_tasks.remove(&receipt_key);
                     composer.draft_submitting.remove(&draft_key);
                     if !applied {
-                        composer.draft_loaded.remove(&draft_key);
+                        let restore_key = if retain_setup_task {
+                            task_id.clone()
+                        } else {
+                            draft_key.clone()
+                        };
+                        composer.draft_loaded.remove(&restore_key);
                         if draft_key.is_empty()
+                            && !retain_setup_task
                             && composer.state.read(cx).selected_chat.as_deref()
                                 == Some(task_id.as_str())
                         {
@@ -6578,12 +6653,14 @@ impl Composer {
                                 .state
                                 .update(cx, |state, cx| state.select_chat(None, cx));
                         }
-                        composer.failure = Some(
-                            "The submitted message was rejected and its draft was preserved."
-                                .into(),
-                        );
-                        composer.failure_key = Some(draft_key.clone());
-                        composer.load_draft(draft_key.clone(), cx);
+                        if retain_setup_task {
+                            // The immutable rejected submission belongs to this
+                            // task; clear only the old canvas's submitted revision.
+                            composer.finish_applied_draft(&draft_key, submitted_revision, cx);
+                        }
+                        composer.failure = Some(recovery_text.into());
+                        composer.failure_key = Some(restore_key.clone());
+                        composer.load_draft(restore_key, cx);
                     } else {
                         composer.finish_applied_draft(&draft_key, submitted_revision, cx);
                         if queue_id.is_none() {
@@ -8342,6 +8419,9 @@ impl Composer {
         };
         let space_id = space.as_ref().map(|s| s.id.clone());
         let space_path = space.as_ref().map(|s| s.path.clone());
+        let may_have_setup = is_new
+            && space_path.is_some()
+            && matches!(&plan, crate::pickers::CheckoutPlan::NewWorktree { .. });
         if queue && !is_new {
             let capability = if self.staged().is_empty() && self.staged_appshots().is_empty() {
                 capabilities::MESSAGE_QUEUE_V1
@@ -8607,6 +8687,7 @@ impl Composer {
         let err_message_id = message_id.clone();
         let send_engine_generation = self.state.read(cx).engine_generation();
         self.send_task = Some(cx.spawn(async move |this, cx| {
+            let mut create_chat_attempted = false;
             let mut result: Result<ComposerSendOutcome, ComposerSendFailure> = async {
                 let saved = crate::drafts::save(&engine, &draft_snapshot)
                     .await
@@ -8900,6 +8981,7 @@ impl Composer {
                         object.remove("chatId");
                         object.insert("kind".into(), "createChat".into());
                     }
+                    create_chat_attempted = true;
                     if let Err(err) = crate::task_commands::execute(&engine, &chat_id, mutate).await
                     {
                         tracing::warn!(error = %err, "CreateChat mutate unavailable; doc host will materialize the chat");
@@ -8999,12 +9081,10 @@ impl Composer {
                 match receipt.status {
                     CommandReceiptStatus::Applied => Ok(ComposerSendOutcome::Applied),
                     CommandReceiptStatus::Pending => Ok(ComposerSendOutcome::Pending),
-                    _ => Err(ComposerSendFailure::Rejected(
-                        receipt
-                            .reason
-                            .map(|reason| reason.message)
-                            .unwrap_or_else(|| "The task rejected this message".into()),
-                    )),
+                    _ => Err(ComposerSendFailure::Rejected(receipt_failure_message(
+                        &receipt,
+                        "The task rejected this message",
+                    ))),
                 }
             }
             .await;
@@ -9023,12 +9103,10 @@ impl Composer {
                     result = match receipt.status {
                         CommandReceiptStatus::Applied => Ok(ComposerSendOutcome::Applied),
                         CommandReceiptStatus::Pending => Ok(ComposerSendOutcome::Pending),
-                        _ => Err(ComposerSendFailure::Rejected(
-                            receipt
-                                .reason
-                                .map(|reason| reason.message)
-                                .unwrap_or_else(|| "The task rejected this message".into()),
-                        )),
+                        _ => Err(ComposerSendFailure::Rejected(receipt_failure_message(
+                            &receipt,
+                            "The task rejected this message",
+                        ))),
                     };
                 }
             }
@@ -9065,13 +9143,15 @@ impl Composer {
                     result = Ok(ComposerSendOutcome::Pending);
                 }
             }
-            if matches!(&result, Err(ComposerSendFailure::Rejected(_))) && is_new {
-                // A failed new-chat send must not strand a just-minted empty
-                // chat in the sidebar (v0.2.12 "empty transcript" report).
-                // Staging now runs before CreateChat, so usually nothing was
-                // created — but a post-mutate failure (QueueCommand) still
-                // leaves a row. Best-effort delete; a no-op if the chat was
-                // never materialized.
+            let rejected_new_chat =
+                is_new && matches!(&result, Err(ComposerSendFailure::Rejected(_)));
+            let retain_setup_task = rejected_new_chat
+                && create_chat_attempted
+                && may_have_setup
+                && retain_failed_worktree_setup(&engine, &err_chat_id).await;
+            if rejected_new_chat && create_chat_attempted && !retain_setup_task {
+                // Clean up only a minted task without a durable setup receipt.
+                // Failed setup needs this task for output and Retry.
                 let _ = crate::task_commands::execute(
                     &engine,
                     &err_chat_id,
@@ -9121,6 +9201,7 @@ impl Composer {
                             submitted_key.clone(),
                             submitted_revision,
                             superseded_recoverable.clone(),
+                            may_have_setup,
                             engine.clone(),
                             cx,
                         );
@@ -9134,6 +9215,7 @@ impl Composer {
                             submitted_key.clone(),
                             submitted_revision,
                             superseded_recoverable.clone(),
+                            may_have_setup,
                             engine.clone(),
                             cx,
                         );
@@ -9142,15 +9224,20 @@ impl Composer {
                 }
                 if let Err(ComposerSendFailure::Rejected(message)) = result {
                     // Failure: red banner, echo removed, prompt back in the
-                    // draft, staged files back in the stash. A failed NEW
-                    // chat restores to the CANVAS (key "") and navigates back
-                    // there — the minted chat is gone (deleted above), so
-                    // nothing may restore under its key.
-                    let restore_key = if is_new {
+                    // draft, staged files back in the stash. A failed setup
+                    // keeps its materialized task and task-scoped recovery;
+                    // an empty or pre-creation rejection returns to the canvas.
+                    let restore_key = if is_new && !retain_setup_task {
                         String::new()
                     } else {
                         err_chat_id.clone()
                     };
+                    if retain_setup_task {
+                        // The submission record is already durable under the
+                        // task id. Clear only the submitted canvas revision so
+                        // reopening New chat cannot offer a duplicate send.
+                        composer.finish_applied_draft(&submitted_key, submitted_revision, cx);
+                    }
                     let current_text = (composer.current_key == restore_key)
                         .then(|| composer.input.read(cx).text().to_string())
                         .unwrap_or_default();
@@ -9173,7 +9260,10 @@ impl Composer {
                     composer.state.update(cx, |s, cx| {
                         s.remove_echo(&err_chat_id, &err_message_id);
                         s.end_pending_send(&err_chat_id, &err_message_id);
-                        if is_new && s.selected_chat.as_deref() == Some(err_chat_id.as_str()) {
+                        if is_new
+                            && !retain_setup_task
+                            && s.selected_chat.as_deref() == Some(err_chat_id.as_str())
+                        {
                             // Back to the canvas; the navigation draft-swap
                             // loads the restored draft below.
                             s.select_chat(None, cx);
@@ -9189,16 +9279,12 @@ impl Composer {
                         // The immutable submission record remains recoverable;
                         // never merge it into text typed after dispatch.
                     } else if is_new && composer.current_key != restore_key {
-                        // A re-key swap to the canvas is pending (the
-                        // select_chat(None) above); it loads this draft into
-                        // the input on flush — setting the input directly
-                        // here would be clobbered by that same swap.
+                        // A navigation re-key is pending; avoid clobbering its
+                        // input before the restored draft key becomes current.
                         composer.drafts.insert(restore_key.clone(), restore_text.clone());
                     } else {
-                        // Already keyed to the restore target (either an
-                        // existing chat, or the deleted row's watch event
-                        // re-keyed to the canvas before this handler ran —
-                        // no further swap will fire). Set the input directly.
+                        // Already keyed to the restore target; no navigation
+                        // swap can overwrite this prompt.
                         composer.set_input_text_without_draft_edit(restore_text, cx);
                     }
                     if !has_newer_draft && !ordinary_staged.is_empty() {
