@@ -14939,6 +14939,7 @@ mod exit_regressions {
         struct HeldUnloadRpc {
             drafts: ShellDraftRpc,
             calls: Mutex<Vec<(String, Value)>>,
+            lifecycle: Mutex<Vec<Value>>,
             gates: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<(), RpcError>>>>,
             created: AtomicUsize,
             returned: AtomicUsize,
@@ -14954,6 +14955,7 @@ mod exit_regressions {
                         DRAFT,
                     )]),
                     calls: Mutex::new(Vec::new()),
+                    lifecycle: Mutex::new(Vec::new()),
                     gates: Mutex::new(HashMap::new()),
                     created: AtomicUsize::new(0),
                     returned: AtomicUsize::new(0),
@@ -14981,6 +14983,16 @@ mod exit_regressions {
                     })
                     .expect("production release is still awaiting its RPC reply");
             }
+
+            fn record_lifecycle(&self, method: &str, phase: &str, detail: Value) {
+                let mut lifecycle = self.lifecycle.lock().unwrap();
+                if lifecycle.len() < 128 {
+                    let sequence = lifecycle.len();
+                    lifecycle.push(json!({
+                        "sequence": sequence, "method": method, "phase": phase, "detail": detail
+                    }));
+                }
+            }
         }
 
         #[async_trait]
@@ -14990,40 +15002,66 @@ mod exit_regressions {
                     .lock()
                     .unwrap()
                     .push((method.into(), params.clone()));
-                match method {
-                    methods::CREATE_SIDE_CHAT => {
-                        assert_eq!(params["parentId"], HANDOFF_SOURCE);
-                        let n = self.created.fetch_add(1, Ordering::SeqCst) + 1;
-                        RpcReply::value(&json!({
-                            "meta": Self::meta(&format!("held-side-{n}")),
-                            "lease": format!("held-lease-{n}")
-                        }))
+                self.record_lifecycle(
+                    method,
+                    "received",
+                    json!({
+                        "params_preview": params.to_string().chars().take(1024).collect::<String>()
+                    }),
+                );
+                // Preserve dispatch and reply semantics, including error
+                // returns, while recording the fixture's RPC lifecycle.
+                let result = async {
+                    match method {
+                        methods::CREATE_SIDE_CHAT => {
+                            assert_eq!(params["parentId"], HANDOFF_SOURCE);
+                            let n = self.created.fetch_add(1, Ordering::SeqCst) + 1;
+                            RpcReply::value(&json!({
+                                "meta": Self::meta(&format!("held-side-{n}")),
+                                "lease": format!("held-lease-{n}")
+                            }))
+                        }
+                        methods::READ_SIDE_CHAT => RpcReply::value(&json!({
+                            "meta": Self::meta(params["id"].as_str().expect("side id")),
+                            "entries": [], "before": null, "working": false, "status": null
+                        })),
+                        methods::LIST_SIDE_CHATS => {
+                            RpcReply::value(&json!({"items": [], "before": null}))
+                        }
+                        methods::UNLOAD_SIDE_CHAT => {
+                            let id = params["id"].as_str().expect("unload id").to_owned();
+                            let n = id.strip_prefix("held-side-").expect("created side id");
+                            assert_eq!(params["lease"], format!("held-lease-{n}"));
+                            let (sender, receiver) = tokio::sync::oneshot::channel();
+                            assert!(self.gates.lock().unwrap().insert(id, sender).is_none());
+                            let result =
+                                receiver.await.expect("test must release every held reply");
+                            self.returned.fetch_add(1, Ordering::SeqCst);
+                            result?;
+                            RpcReply::value(&json!({"unloaded": true}))
+                        }
+                        // Only these two fixture writes are allowed. Any accidental
+                        // command/queue/provider call remains recorded and fails.
+                        methods::GET_COMPOSER_DRAFT
+                        | methods::SAVE_COMPOSER_DRAFT
+                        | methods::GET_TASK_COMMAND_RECEIPT => {
+                            self.drafts.handle(method, params).await
+                        }
+                        _ => Err(RpcError::UnknownMethod(method.into())),
                     }
-                    methods::READ_SIDE_CHAT => RpcReply::value(&json!({
-                        "meta": Self::meta(params["id"].as_str().expect("side id")),
-                        "entries": [], "before": null, "working": false, "status": null
-                    })),
-                    methods::LIST_SIDE_CHATS => {
-                        RpcReply::value(&json!({"items": [], "before": null}))
-                    }
-                    methods::UNLOAD_SIDE_CHAT => {
-                        let id = params["id"].as_str().expect("unload id").to_owned();
-                        let n = id.strip_prefix("held-side-").expect("created side id");
-                        assert_eq!(params["lease"], format!("held-lease-{n}"));
-                        let (sender, receiver) = tokio::sync::oneshot::channel();
-                        assert!(self.gates.lock().unwrap().insert(id, sender).is_none());
-                        let result = receiver.await.expect("test must release every held reply");
-                        self.returned.fetch_add(1, Ordering::SeqCst);
-                        result?;
-                        RpcReply::value(&json!({"unloaded": true}))
-                    }
-                    // Only these two fixture writes are allowed. Any accidental
-                    // command/queue/provider call remains recorded and fails.
-                    methods::GET_COMPOSER_DRAFT
-                    | methods::SAVE_COMPOSER_DRAFT
-                    | methods::GET_TASK_COMMAND_RECEIPT => self.drafts.handle(method, params).await,
-                    _ => Err(RpcError::UnknownMethod(method.into())),
                 }
+                .await;
+                let summary = match &result {
+                    Ok(RpcReply::Value(value)) => json!({
+                        "kind": "value", "preview": value.to_string().chars().take(1024).collect::<String>()
+                    }),
+                    Ok(RpcReply::Stream(_)) => json!({"kind": "stream"}),
+                    Err(error) => {
+                        json!({"kind": "error", "message": error.to_string().chars().take(1024).collect::<String>()})
+                    }
+                };
+                self.record_lifecycle(method, "returned", summary);
+                result
             }
         }
 
@@ -15044,7 +15082,101 @@ mod exit_regressions {
                 .unwrap()
         }
 
+        fn setup_failure_readback(
+            case_stage: (&str, &str),
+            polls: usize,
+            window: &gpui::WindowHandle<Shell>,
+            cx: &mut TestAppContext,
+            service: &HeldUnloadRpc,
+        ) {
+            let (case, stage) = case_stage;
+            let ui = window.read_with(cx, |shell, cx| {
+                let state = shell.state.read(cx);
+                let composer = shell.composer.read(cx);
+                json!({
+                    "active_chat": shell.active_chat, "selected_chat": state.selected_chat,
+                    "engine_present": state.engine().is_some(), "engine_generation": state.engine_generation(),
+                    "composer_owner": composer.current_key,
+                    "composer_text": composer.input.read(cx).text().chars().take(1024).collect::<String>(),
+                    "composer_failure": composer.failure.as_ref().map(|text| text.chars().take(1024).collect::<String>()),
+                    "notice": shell.sidebar_notice.as_ref().map(|text| text.chars().take(1024).collect::<String>()),
+                    "panel_present": shell.side_chat_panel.is_some(),
+                    "release_request": shell.side_chat_panel.as_ref().and_then(|panel|
+                        panel.read(cx).release_request().map(|(_, id, lease)| json!({"id":id,"lease":lease}))),
+                    "parent_transcript_entries": state.transcript.len()
+                })
+            }).unwrap();
+            let calls = service.calls.lock().unwrap();
+            let mut gates = service
+                .gates
+                .lock()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            gates.sort();
+            let evidence = json!({
+                "case": case, "stage": stage, "classification": "fixture_wait_did_not_settle",
+                "predicate_checks": polls, "ui": ui,
+                "persisted_parent_draft": service.drafts.text_for_task(Some(HANDOFF_SOURCE)).map(|text| text.chars().take(1024).collect::<String>()),
+                "rpc_call_count": calls.len(),
+                "rpc_calls_truncated": calls.len() > 64,
+                "rpc_calls": calls.iter().take(64).map(|(method,params)| json!({
+                    "method":method,"params_preview":params.to_string().chars().take(1024).collect::<String>()
+                })).collect::<Vec<_>>(),
+                "rpc_lifecycle": service.lifecycle.lock().unwrap().clone(),
+                "held_gate_ids": gates.into_iter().take(32).collect::<Vec<_>>(),
+                "created_count": service.created.load(Ordering::SeqCst),
+                "unload_returned_count": service.returned.load(Ordering::SeqCst),
+                "ownership_assertions_reached": false
+            });
+            if let Some(path) = std::env::var_os("LUNA_SIDEBAR_NOTICE_EVIDENCE_DIR") {
+                let path = PathBuf::from(path);
+                std::fs::create_dir_all(&path).unwrap();
+                let safe_stage: String = stage
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                    .collect();
+                std::fs::write(
+                    path.join(format!("{case}.{safe_stage}.setup-failure.json")),
+                    serde_json::to_vec_pretty(&evidence).unwrap(),
+                )
+                .unwrap();
+            }
+            eprintln!("SIDEBAR_NOTICE_SETUP_FAILURE case={case} stage={stage} checks={polls}");
+        }
+
+        fn wait_notice_stage(
+            case_stage: (&str, &str),
+            window: &gpui::WindowHandle<Shell>,
+            cx: &mut TestAppContext,
+            runtime: &tokio::runtime::Runtime,
+            service: &HeldUnloadRpc,
+            history_pump: bool,
+            mut done: impl FnMut(&mut TestAppContext) -> bool,
+        ) {
+            // Both existing helpers recheck their unchanged predicate once in
+            // the final assert (100+1 or 250+1). Capture only that failure, so
+            // diagnostics add no delay, sleep, or scheduling change to a wait.
+            let final_check = if history_pump { 251 } else { 101 };
+            let mut polls = 0;
+            let predicate = |cx: &mut TestAppContext| {
+                polls += 1;
+                let settled = done(cx);
+                if !settled && polls == final_check {
+                    setup_failure_readback(case_stage, polls, window, cx, service);
+                }
+                settled
+            };
+            if history_pump {
+                pump_history_until(cx, runtime, predicate);
+            } else {
+                pump_shell_until(cx, runtime, predicate);
+            }
+        }
+
         fn begin_release(
+            case: &str,
             window: &gpui::WindowHandle<Shell>,
             cx: &mut TestAppContext,
             runtime: &tokio::runtime::Runtime,
@@ -15062,24 +15194,38 @@ mod exit_regressions {
                     );
                 })
                 .unwrap();
-            pump_shell_until(cx, runtime, |cx| {
-                window
-                    .read_with(cx, |shell, cx| {
-                        shell.side_chat_panel.as_ref().is_some_and(|panel| {
-                            panel
-                                .read(cx)
-                                .release_request()
-                                .is_some_and(|(_, actual, _)| actual == id)
+            wait_notice_stage(
+                (case, &format!("create-read-lease:{id}")),
+                window,
+                cx,
+                runtime,
+                service,
+                false,
+                |cx| {
+                    window
+                        .read_with(cx, |shell, cx| {
+                            shell.side_chat_panel.as_ref().is_some_and(|panel| {
+                                panel
+                                    .read(cx)
+                                    .release_request()
+                                    .is_some_and(|(_, actual, _)| actual == id)
+                            })
                         })
-                    })
-                    .unwrap()
-            });
+                        .unwrap()
+                },
+            );
             window
                 .update(cx, |shell, _, cx| shell.release_side_chat(cx))
                 .unwrap();
-            pump_shell_until(cx, runtime, |_| {
-                service.gates.lock().unwrap().contains_key(id)
-            });
+            wait_notice_stage(
+                (case, &format!("unload-request-held:{id}")),
+                window,
+                cx,
+                runtime,
+                service,
+                false,
+                |_| service.gates.lock().unwrap().contains_key(id),
+            );
             assert_eq!(notice(window, cx).as_deref(), Some(PROGRESS));
             assert!(
                 window
@@ -15089,6 +15235,7 @@ mod exit_regressions {
         }
 
         fn finish_release(
+            case_window: (&str, &gpui::WindowHandle<Shell>),
             cx: &mut TestAppContext,
             runtime: &tokio::runtime::Runtime,
             service: &HeldUnloadRpc,
@@ -15097,9 +15244,15 @@ mod exit_regressions {
             returned: usize,
         ) {
             service.release(id, fail);
-            pump_shell_until(cx, runtime, |_| {
-                service.returned.load(Ordering::SeqCst) == returned
-            });
+            wait_notice_stage(
+                (case_window.0, &format!("unload-server-return:{id}")),
+                case_window.1,
+                cx,
+                runtime,
+                service,
+                false,
+                |_| service.returned.load(Ordering::SeqCst) == returned,
+            );
             // RPC return precedes transport delivery and the GPUI callback.
             // Drain both executors; do not assert merely on the server return
             // counter or advance the 20-second production timeout as a proxy.
@@ -15141,10 +15294,16 @@ mod exit_regressions {
                     });
                 })
                 .unwrap();
-            pump_shell_until(cx, &runtime, |cx| {
-                shell_composer_snapshot(cx, &window).1 == DRAFT
-            });
-            begin_release(&window, cx, &runtime, &service, "held-side-1");
+            wait_notice_stage(
+                (name, "initial-draft-restore"),
+                &window,
+                cx,
+                &runtime,
+                &service,
+                false,
+                |cx| shell_composer_snapshot(cx, &window).1 == DRAFT,
+            );
+            begin_release(name, &window, cx, &runtime, &service, "held-side-1");
             let mut events =
                 vec![json!({"event": "release_a_held", "notice": notice(&window, cx)})];
 
@@ -15164,14 +15323,22 @@ mod exit_regressions {
                             });
                         })
                         .unwrap();
-                    pump_history_until(cx, &runtime, |cx| {
-                        notice(&window, cx).as_deref() == Some(CONFIRMATION)
-                            && service
-                                .drafts
-                                .text_for_task(Some(HANDOFF_SOURCE))
-                                .as_deref()
-                                == Some(format!("{DRAFT}\n\n{RESULT}").as_str())
-                    });
+                    wait_notice_stage(
+                        (name, "handoff-durable-draft"),
+                        &window,
+                        cx,
+                        &runtime,
+                        &service,
+                        true,
+                        |cx| {
+                            notice(&window, cx).as_deref() == Some(CONFIRMATION)
+                                && service
+                                    .drafts
+                                    .text_for_task(Some(HANDOFF_SOURCE))
+                                    .as_deref()
+                                    == Some(format!("{DRAFT}\n\n{RESULT}").as_str())
+                        },
+                    );
                 }
                 Newer::Error | Newer::Dismiss => {
                     window
@@ -15183,12 +15350,20 @@ mod exit_regressions {
                         .unwrap();
                 }
                 Newer::IdenticalProgress => {
-                    begin_release(&window, cx, &runtime, &service, "held-side-2");
+                    begin_release(name, &window, cx, &runtime, &service, "held-side-2");
                 }
             }
             let replacement = notice(&window, cx);
             events.push(json!({"event": "intervening_action", "action": format!("{newer:?}"), "notice": replacement}));
-            finish_release(cx, &runtime, &service, "held-side-1", fail, 1);
+            finish_release(
+                (name, &window),
+                cx,
+                &runtime,
+                &service,
+                "held-side-1",
+                fail,
+                1,
+            );
             let after_a = notice(&window, cx);
             let ownership_passed = match newer {
                 Newer::None if fail => after_a.as_deref().is_some_and(|text| {
@@ -15202,7 +15377,15 @@ mod exit_regressions {
                 json!({"event": "release_a_callback_drained", "failed": fail, "notice": after_a}),
             );
             let current_b_cleared = if matches!(newer, Newer::IdenticalProgress) {
-                finish_release(cx, &runtime, &service, "held-side-2", false, 2);
+                finish_release(
+                    (name, &window),
+                    cx,
+                    &runtime,
+                    &service,
+                    "held-side-2",
+                    false,
+                    2,
+                );
                 events.push(
                     json!({"event": "release_b_callback_drained", "notice": notice(&window, cx)}),
                 );

@@ -106,3 +106,53 @@ scripts/cargo.sh test --locked -p luna-ui --lib \
 Capture its original exit status and complete output in a baseline log. Fixture
 or compile failures must be resolved and identified separately from the expected
 notice-ownership failures before any runtime implementation proceeds.
+
+## Baseline result and diagnostic-only follow-up
+
+The one granted run on frozen `3ce0b9ce827a0b39a56c6aadbbc3d65718a43fb5`
+compiled successfully in 1m 41s, then ran exactly ten tests. All ten failed at
+the shared `pump_shell_until` assertion, “shell draft fixture did not settle”,
+in 0.07s total test time. Overall elapsed time was 108.71s and the original exit
+status was 101, not budget exit 75. No final per-case JSON was reached. These
+are fixture failures; none validates the intended ownership bug.
+
+The immutable baseline source/command/budget/log/result/classification packet
+is retained under
+`target/qa/sidebar-notices/baseline-3ce0b9ce-20260926T065518Z/`. The Cargo slot
+was explicitly released. There was no retry or runtime patch.
+
+Source tracing identifies the first predicate as exact composer text equal to
+the preloaded draft. State notification invokes `Composer::on_state_changed`,
+which calls `load_draft`; that uses `GetComposerDraft` through the real memory
+transport, then restores the response into the composer. The same generic pump
+also wraps later panel-create/read/lease and unload-delivery stages. The original
+run did not retain its in-memory RPC call vector when the pump panicked, so it
+does not prove which stage failed or whether a draft RPC was received/returned.
+No root cause is inferred solely from the short elapsed time, and the production
+20-second unload timeout is not treated as the failure.
+
+The approved diagnostic-only follow-up labels these waits:
+
+- `initial-draft-restore`
+- `create-read-lease:<side id>`
+- `unload-request-held:<side id>`
+- `unload-server-return:<side id>`
+- `handoff-durable-draft`
+
+Each wrapper still calls the existing pump with the same predicate and bounds.
+Only the final failed predicate evaluation records a snapshot immediately before
+the existing assertion. No sleep, retry, timeout increase, or predicate
+relaxation was added. The existing handoff pump's timing remains unchanged.
+Readbacks include composer owner/text/error, active and selected task, engine
+generation, current notice, release lease, durable draft, RPC inputs and
+received/returned lifecycle, held gate IDs, create count and unload-return count.
+RPC history is capped at 64 calls/128 lifecycle records, text previews at 1,024
+characters, and gate IDs at 32. The original behavior assertions remain intact.
+
+Failure readbacks use `<case>.<stage>.setup-failure.json` in the separately
+provided evidence directory. The next proposed run is only the
+`current_release_success_clears_own_progress` control, with `RUST_BACKTRACE=1`,
+after a new explicit grant. Its purpose is to identify the fixture phase; a
+concrete repair requires that evidence and correction review before the full
+ten-case baseline can be repeated. Runtime tone/ownership and native checks
+remain outside this diagnostic checkpoint.
