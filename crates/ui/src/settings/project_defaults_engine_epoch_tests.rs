@@ -63,8 +63,9 @@ fn retained_defaults_case(
     different_device: bool,
     completion: Completion,
 ) {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+    // The shared pump drives real memory RPC on the GPUI test thread; a
+    // worker-thread wake violates GPUI's deterministic scheduler contract.
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();

@@ -228,3 +228,24 @@ it is not classified here as an additional confirmed stale-engine defect.
 All six JSON artifacts and exact source/log/exit/budget evidence are retained
 under `target/qa/project-defaults/commands-epoch-baseline-1`. Cargo was released,
 and no Commands production code was changed by the Defaults worker.
+
+
+### Fixed-run fixture scheduling repair (no pass claimed)
+
+The first fixed run on `b133f357` compiled and emitted all eight traces with
+unchanged B state and canceled A requests, but reported **0 passed / 8 failed**
+at GPUI's end-of-test deterministic-scheduler check. The failure was a Tokio
+worker-thread wake into the test foreground executor, not the stale-state
+assertion. The exact Commands control was not reached because the batch stopped.
+Evidence is retained under `target/qa/project-defaults/epoch-fixed-1`.
+
+The narrow fixture correction changes only the Defaults test runtime from a
+multi-thread Tokio runtime to `new_current_thread`, matching the Commands
+fixture and the shared pump's `runtime.block_on(yield_now())` topology. Real
+memory RPC, actual engine attachment, held reply/cancellation boundaries,
+before/after snapshots and every assertion remain unchanged. Commands helper
+owner confirmed this topology; shared helper and production code are unchanged.
+This is a source diagnosis, not a passing run. Prior baseline traces still show
+actual late A mutations; their early assertion panics did not reach the final
+scheduler check. The runtime topology difference is retained explicitly in the
+baseline/fixed evidence rather than treating the failed fixed run as a pass.
