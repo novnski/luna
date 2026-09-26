@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Deterministic CLI boundary. Only fixture files are read/written; no network."""
+import json, os, pathlib, sys, time
+root = pathlib.Path(os.environ['LUNA_PR_FIXTURE'])
+args = sys.argv[1:]
+with (root / 'calls.jsonl').open('a') as f:
+    f.write(json.dumps({'args': args, 'cwd': os.getcwd()}) + '\n')
+mode = (root / 'mode').read_text().strip()
+if mode == 'auth':
+    sys.stderr.write('not logged into github.com\n'); sys.exit(1)
+if mode == 'invalid':
+    print('{invalid'); sys.exit(0)
+if mode == 'oversized':
+    print('x' * (1024 * 1024 + 1)); sys.exit(0)
+state = root / 'pr.json'
+pr = json.loads(state.read_text()) if state.exists() else None
+if args[:2] == ['pr', 'list']:
+    print(json.dumps([pr] if pr else []))
+elif args[:2] == ['pr', 'view']:
+    number = int(args[2])
+    if not pr or pr['number'] != number:
+        history = root / 'history' / f'{number}.json'
+        pr = json.loads(history.read_text()) if history.exists() else None
+    if not pr: sys.exit(1)
+    print(json.dumps(pr))
+elif args[:2] == ['repo', 'view']:
+    print(json.dumps({'defaultBranchRef': {'name': 'main'}}))
+elif args and args[0] == 'api':
+    endpoint = args[args.index('--hostname') + 2]
+    if '--method' in args and args[args.index('--method')+1] == 'POST':
+        payload = json.loads(pathlib.Path(args[args.index('--input')+1]).read_text())
+        with (root / 'writes.jsonl').open('a') as f: f.write(json.dumps(payload)+'\n')
+        if mode == 'reject': sys.exit(1)
+        history = root / 'history'
+        history.mkdir(exist_ok=True)
+        if pr: (history / f"{pr['number']}.json").write_text(json.dumps(pr))
+        number = 41 + len((root / 'writes.jsonl').read_text().splitlines())
+        pr = {'number': number, 'title': payload['title'], 'body': payload['body'],
+              'url': f'https://github.com/acme/luna/pull/{number}', 'state': 'OPEN',
+              'baseRefName': payload['base'], 'headRefName': payload['head'],
+              'isDraft': True, 'isCrossRepository': False,
+              'headRepositoryOwner': {'login': 'acme'},
+              'headRepository': {'name': 'luna', 'owner': {'login': 'acme'}},
+              'updatedAt': '2026-09-26T12:00:00Z',
+              'statusCheckRollup': [{'__typename': 'CheckRun', 'name': 'Build',
+                'status': 'COMPLETED', 'conclusion': 'SUCCESS', 'detailsUrl': 'https://github.com/acme/luna/actions/runs/1'},
+                {'__typename': 'StatusContext', 'context': 'Deploy', 'state': 'PENDING', 'targetUrl': None}]}
+        state.write_text(json.dumps(pr))
+        if mode == 'lost': sys.exit(1)
+        if mode == 'wait': time.sleep(60)
+        print(json.dumps({'number': number}))
+    elif '/branches/' in endpoint:
+        print(json.dumps({'commit': {'sha': (root / 'sha').read_text().strip() if mode != 'diverged' else '0'*40}}))
+    elif endpoint.endswith('/pulls/42'):
+        print(json.dumps({'number': 42}))
+    else:
+        print(json.dumps({'default_branch': 'main', 'full_name': 'acme/luna', 'fork': False}))
+else:
+    sys.stderr.write('Unexpected fixture invocation\n'); sys.exit(2)

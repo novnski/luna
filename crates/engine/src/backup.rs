@@ -987,6 +987,10 @@ fn collect_profile(
     if journals.exists() {
         collect_tree(root, &journals, "journal", entries, true)?;
     }
+    let attempts = profile.join("github-pr-attempts");
+    if attempts.exists() {
+        collect_tree(root, &attempts, "github-pr-attempt", entries, false)?;
+    }
     let uploads = profile.join("uploads");
     if uploads.exists() {
         collect_tree(root, &uploads, "attachment", entries, false)?;
@@ -1003,6 +1007,11 @@ fn collect_profile(
     Ok(())
 }
 
+fn pr_lock_name(name: &str) -> bool {
+    name.strip_suffix(".lock")
+        .is_some_and(|key| key.len() == 64 && key.bytes().all(|c| c.is_ascii_hexdigit()))
+}
+
 fn collect_tree(
     root: &Path,
     dir: &Path,
@@ -1013,6 +1022,11 @@ fn collect_tree(
     ensure_real_dir(dir)?;
     for path in sorted_children(dir)? {
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if category == "github-pr-attempt"
+            && (name.starts_with(".pending-pr-") || pr_lock_name(name))
+        {
+            continue; // unpublished crash leftovers cannot authorize an external write
+        }
         if !journals_only
             && name == "tmp"
             && path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("uploads"))
@@ -1626,6 +1640,13 @@ fn validate_entry_path(path: &str, category: &str) -> Result<()> {
         "journal" => profile_tail.is_some_and(|tail| {
             tail.len() >= 2 && tail[0] == "journals" && path.ends_with(".jsonl")
         }),
+        "github-pr-attempt" => profile_tail.is_some_and(|tail| {
+            tail.len() == 2
+                && tail[0] == "github-pr-attempts"
+                && tail[1].strip_suffix(".json").is_some_and(|name| {
+                    name.len() == 64 && name.bytes().all(|c| c.is_ascii_hexdigit())
+                })
+        }),
         "attachment" => profile_tail
             .is_some_and(|tail| tail.len() >= 2 && tail[0] == "uploads" && tail[1] != "tmp"),
         _ => false,
@@ -1796,6 +1817,10 @@ fn latest_authoritative_mtime(root: &Path) -> Result<i64> {
         if journals.exists() {
             tree_mtime(&journals, latest, true)?;
         }
+        let attempts = profile.join("github-pr-attempts");
+        if attempts.exists() {
+            tree_mtime(&attempts, latest, false)?;
+        }
         let uploads = profile.join("uploads");
         if uploads.exists() {
             ensure_real_dir(&uploads)?;
@@ -1943,7 +1968,13 @@ pub(crate) fn ensure_no_pending_managed_restore(root: &Path) -> Result<()> {
 }
 
 fn validate_managed_restore_path(path: &str) -> Result<()> {
-    for category in ["settings", "database", "journal", "attachment"] {
+    for category in [
+        "settings",
+        "database",
+        "journal",
+        "attachment",
+        "github-pr-attempt",
+    ] {
         if validate_entry_path(path, category).is_ok() {
             return Ok(());
         }
@@ -3150,6 +3181,15 @@ fn replaceable_root_fingerprint(root: &Path) -> Result<String> {
                 visit(root, &child, files)?;
             }
         } else if md.is_file() {
+            if path.parent().and_then(Path::file_name)
+                == Some(std::ffi::OsStr::new("github-pr-attempts"))
+                && path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(pr_lock_name)
+            {
+                return Ok(()); // OS coordination only; never restore held locks.
+            }
             if rel == ISOLATION_MARKER
                 || rel == "engine.lock"
                 || rel == "engine.lock.pid"
@@ -3176,6 +3216,8 @@ fn replaceable_root_fingerprint(root: &Path) -> Result<String> {
                     "database"
                 } else if rel.contains("/journals/") {
                     "journal"
+                } else if rel.contains("/github-pr-attempts/") {
+                    "github-pr-attempt"
                 } else if rel.contains("/uploads/") {
                     "attachment"
                 } else {

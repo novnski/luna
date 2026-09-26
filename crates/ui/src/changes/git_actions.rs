@@ -7,6 +7,21 @@ use luna_proto::{
     GitMessageRequest, GitPrStatus, GitPrStatusRequest,
 };
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct GitUiScope {
+    engine_generation: u64,
+    engine_device: String,
+    selection: String,
+    checkout_id: Option<String>,
+    branch: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct GitWriteOwner {
+    scope: GitUiScope,
+    generation: u64,
+}
+
 impl Changes {
     pub(super) fn git_context(&self, cx: &App) -> Option<(String, Option<String>, String)> {
         let state = self.state.read(cx);
@@ -18,19 +33,134 @@ impl Changes {
         Some((cwd, target, key))
     }
 
+    pub(super) fn git_chat_id(&self, cx: &App) -> Option<String> {
+        self.state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.id.clone())
+    }
+
+    fn live_git_scope(&self, cx: &App) -> Option<GitUiScope> {
+        let (_, _, selection) = self.git_context(cx)?;
+        let state = self.state.read(cx);
+        let engine = state.engine()?;
+        let chat = state.selected_chat_row()?;
+        Some(GitUiScope {
+            engine_generation: state.engine_generation(),
+            engine_device: engine.engine_info().device_id.clone(),
+            selection,
+            checkout_id: chat.checkout_id.clone(),
+            branch: chat.branch.clone(),
+        })
+    }
+
+    /// Retire view/read ownership, never the independently running write.
+    pub(super) fn reconcile_git_context(&mut self, cx: &mut Context<Self>) {
+        let scope = self.live_git_scope(cx);
+        if self.git_scope == scope {
+            return;
+        }
+        self.git_scope = scope.clone();
+        self.git_target = scope.as_ref().map(|scope| scope.selection.clone());
+        self.git_read_generation += 1;
+        self.checkpoint_generation += 1;
+        self.git_task = None;
+        self.checkpoint_task = None;
+        self.git_pr_task = None;
+        self.git_write_owner = None;
+        self.git_busy = false;
+        self.git_needs_refresh = scope.is_some();
+        self.git_preview = None;
+        self.git_selected.clear();
+        self.git_notice = None;
+        self.git_pr_status = None;
+        self.checkpoints = None;
+        self.checkpoint_diff = None;
+        self.checkpoint_restore = None;
+        self.checkpoint_restore_scope = None;
+        self.checkpoint_notice = None;
+        self.checkpoint_receipt = None;
+        self.reconcile_pr_context(cx);
+        cx.notify();
+    }
+
+    fn git_scope_current(&self, scope: &GitUiScope, cx: &App) -> bool {
+        self.git_scope.as_ref() == Some(scope) && self.live_git_scope(cx).as_ref() == Some(scope)
+    }
+
+    fn git_read_current(&self, scope: &GitUiScope, generation: u64, cx: &App) -> bool {
+        self.git_scope_current(scope, cx)
+            && self.git_read_generation == generation
+            && self.git_write_owner.is_none()
+    }
+
+    fn checkpoint_read_current(&self, scope: &GitUiScope, generation: u64, cx: &App) -> bool {
+        self.git_scope_current(scope, cx)
+            && self.checkpoint_generation == generation
+            && self.git_write_owner.is_none()
+    }
+
+    fn begin_git_write(&mut self, cx: &mut Context<Self>) -> Option<GitWriteOwner> {
+        if self.git_busy || self.git_write_owner.is_some() {
+            return None;
+        }
+        let scope = self.live_git_scope(cx)?;
+        self.git_write_generation += 1;
+        let owner = GitWriteOwner {
+            scope,
+            generation: self.git_write_generation,
+        };
+        self.git_write_owner = Some(owner.clone());
+        self.git_read_generation += 1;
+        self.checkpoint_generation += 1;
+        self.git_task = None;
+        self.checkpoint_task = None;
+        self.checkpoint_restore = None;
+        self.checkpoint_restore_scope = None;
+        self.git_busy = true;
+        cx.notify();
+        Some(owner)
+    }
+
+    fn finish_git_write(&mut self, owner: &GitWriteOwner, cx: &App) -> bool {
+        if self.git_write_owner.as_ref() != Some(owner) || !self.git_scope_current(&owner.scope, cx)
+        {
+            return false;
+        }
+        self.git_write_owner = None;
+        self.git_busy = false;
+        true
+    }
+
     pub(super) fn load_git(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_git_context(cx);
+        if self.git_write_owner.is_some() {
+            return;
+        }
+        let Some(scope) = self.live_git_scope(cx) else {
+            return;
+        };
         let Some((cwd, target, key)) = self.git_context(cx) else {
+            return;
+        };
+        let Some(chat_id) = self.git_chat_id(cx) else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        self.git_read_generation += 1;
+        let generation = self.git_read_generation;
+        self.git_needs_refresh = false;
         self.git_target = Some(key.clone());
         self.git_busy = true;
         self.git_pr_status = None;
         self.git_pr_task = None;
         self.git_task = Some(cx.spawn(async move |this, cx| {
-            let mut params = serde_json::json!({ "cwd": cwd });
+            let mut params = serde_json::json!({ "cwd": cwd, "chatId": chat_id });
+            if let Some(checkout_id) = scope.checkout_id.as_deref() {
+                params["expectedCheckoutId"] = checkout_id.into();
+            }
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -39,7 +169,7 @@ impl Changes {
                 .call(methods::GET_GIT_ACTION_PREVIEW, params)
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(key.as_str()) {
+                if !pane.git_read_current(&scope, generation, cx) {
                     return;
                 }
                 pane.git_busy = false;
@@ -55,12 +185,14 @@ impl Changes {
                             .map(|file| file.path.clone())
                             .collect();
                         pane.git_preview = Some(preview);
+                        pane.reconcile_pr_context(cx);
                         pane.git_notice = None;
                         pane.load_git_pr(cx);
                         pane.load_checkpoints(cx);
                     }
                     Err(error) => {
                         pane.git_preview = None;
+                        pane.reconcile_pr_context(cx);
                         pane.git_pr_status = None;
                         pane.git_notice = Some(error.to_string());
                     }
@@ -69,6 +201,7 @@ impl Changes {
             })
             .ok();
         }));
+        cx.notify();
     }
 
     fn checkpoint_context(&self, cx: &App) -> Option<(String, String, String, bool)> {
@@ -85,11 +218,21 @@ impl Changes {
     }
 
     fn load_checkpoints(&mut self, cx: &mut Context<Self>) {
-        let Some((chat_id, cwd, key, local)) = self.checkpoint_context(cx) else {
+        self.reconcile_git_context(cx);
+        if self.git_write_owner.is_some() {
+            return;
+        }
+        let Some(scope) = self.live_git_scope(cx) else {
+            return;
+        };
+        self.checkpoint_generation += 1;
+        let generation = self.checkpoint_generation;
+        let Some((chat_id, cwd, _, local)) = self.checkpoint_context(cx) else {
             return;
         };
         self.checkpoint_diff = None;
         self.checkpoint_restore = None;
+        self.checkpoint_restore_scope = None;
         if !local {
             self.checkpoints = None;
             self.checkpoint_notice =
@@ -108,7 +251,7 @@ impl Changes {
                 )
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(&key) {
+                if !pane.checkpoint_read_current(&scope, generation, cx) {
                     return;
                 }
                 match result.and_then(|value| {
@@ -131,7 +274,16 @@ impl Changes {
     }
 
     fn diff_checkpoint(&mut self, turn_id: String, cx: &mut Context<Self>) {
-        let Some((chat_id, cwd, key, true)) = self.checkpoint_context(cx) else {
+        self.reconcile_git_context(cx);
+        if self.git_write_owner.is_some() {
+            return;
+        }
+        let Some(scope) = self.live_git_scope(cx) else {
+            return;
+        };
+        self.checkpoint_generation += 1;
+        let generation = self.checkpoint_generation;
+        let Some((chat_id, cwd, _, true)) = self.checkpoint_context(cx) else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -147,7 +299,7 @@ impl Changes {
                 )
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(&key) {
+                if !pane.checkpoint_read_current(&scope, generation, cx) {
                     return;
                 }
                 match result.and_then(|value| {
@@ -167,21 +319,31 @@ impl Changes {
     }
 
     fn preview_checkpoint_restore(&mut self, turn_id: String, cx: &mut Context<Self>) {
-        let Some((chat_id, cwd, key, true)) = self.checkpoint_context(cx) else {
+        self.reconcile_git_context(cx);
+        if self.git_write_owner.is_some() {
+            return;
+        }
+        let Some(scope) = self.live_git_scope(cx) else {
+            return;
+        };
+        self.checkpoint_generation += 1;
+        let generation = self.checkpoint_generation;
+        let Some((chat_id, cwd, _, true)) = self.checkpoint_context(cx) else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
         self.checkpoint_restore = None;
+        self.checkpoint_restore_scope = None;
         self.checkpoint_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::PREVIEW_GIT_CHECKPOINT_RESTORE,
                 serde_json::json!({ "chatId": chat_id, "cwd": cwd, "turnId": turn_id, "point": "before" })).await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(&key) { return; }
+                if !pane.checkpoint_read_current(&scope, generation, cx) { return; }
                 match result.and_then(|value| serde_json::from_value::<GitCheckpointRestorePreview>(value)
                     .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))) {
-                    Ok(preview) => { pane.checkpoint_restore = Some(preview); pane.checkpoint_notice = None; }
+                    Ok(preview) => { pane.checkpoint_restore = Some(preview); pane.checkpoint_restore_scope = Some(scope.clone()); pane.checkpoint_notice = None; }
                     Err(error) => pane.checkpoint_notice = Some(error.to_string()),
                 }
                 cx.notify();
@@ -190,10 +352,20 @@ impl Changes {
     }
 
     fn restore_checkpoint(&mut self, cx: &mut Context<Self>) {
-        let Some(preview) = self.checkpoint_restore.take() else {
+        self.reconcile_git_context(cx);
+        if self.git_busy || self.git_write_owner.is_some() {
+            return;
+        }
+        let Some(scope) = self.live_git_scope(cx) else {
             return;
         };
-        let Some((chat_id, cwd, key, true)) = self.checkpoint_context(cx) else {
+        if self.checkpoint_restore_scope.as_ref() != Some(&scope) {
+            return;
+        }
+        let Some(preview) = self.checkpoint_restore.clone() else {
+            return;
+        };
+        let Some((chat_id, cwd, _, true)) = self.checkpoint_context(cx) else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -206,7 +378,10 @@ impl Changes {
             point: preview.point,
             expected_token: preview.token,
         };
-        self.checkpoint_task = Some(cx.spawn(async move |this, cx| {
+        let Some(owner) = self.begin_git_write(cx) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(
@@ -215,7 +390,7 @@ impl Changes {
                 )
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(&key) {
+                if !pane.finish_git_write(&owner, cx) {
                     return;
                 }
                 match result.and_then(|value| {
@@ -235,7 +410,8 @@ impl Changes {
                 cx.notify();
             })
             .ok();
-        }));
+        })
+        .detach();
     }
 
     fn load_git_pr(&mut self, cx: &mut Context<Self>) {
@@ -245,9 +421,13 @@ impl Changes {
         let Some((cwd, target, key)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        let engine_generation = self.state.read(cx).engine_generation();
         let expected_token = preview.token.clone();
         let request = GitPrStatusRequest {
             cwd,
@@ -259,6 +439,7 @@ impl Changes {
         self.git_pr_status = None;
         self.git_pr_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).unwrap_or_default();
+            params["chatId"] = chat_id.into();
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -267,7 +448,9 @@ impl Changes {
                 .call(methods::GET_GIT_PR_STATUS, params)
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(key.as_str())
+                if pane.state.read(cx).engine_generation() != engine_generation
+                    || pane.git_context(cx).map(|(_, _, key)| key).as_deref() != Some(key.as_str())
+                    || pane.git_target.as_deref() != Some(key.as_str())
                     || pane
                         .git_preview
                         .as_ref()
@@ -296,7 +479,8 @@ impl Changes {
     }
 
     fn git_action(&mut self, kind: GitActionKind, paths: Vec<String>, cx: &mut Context<Self>) {
-        if self.git_busy {
+        self.reconcile_git_context(cx);
+        if self.git_busy || self.git_write_owner.is_some() {
             return;
         }
         let Some(preview) = self.git_preview.clone() else {
@@ -305,25 +489,32 @@ impl Changes {
         let Some((cwd, target, key)) = self.git_context(cx) else {
             return;
         };
+        let Some(chat_id) = self.git_chat_id(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
         if self.git_target.as_deref() != Some(key.as_str()) {
             return;
         }
+        let before_message = self.git_message.read(cx).text().to_string();
         let request = GitActionRequest {
             cwd,
             checkout_id: preview.checkout_id,
             expected_token: preview.token,
             kind,
             paths,
-            message: Some(self.git_message.read(cx).text().to_string()),
+            message: Some(before_message.clone()),
             remote: preview.remote,
         };
-        self.git_busy = true;
+        let Some(owner) = self.begin_git_write(cx) else {
+            return;
+        };
         self.git_notice = None;
-        self.git_task = Some(cx.spawn(async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).unwrap_or_default();
+            params["chatId"] = chat_id.into();
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -332,10 +523,9 @@ impl Changes {
                 .call(methods::EXECUTE_GIT_ACTION, params)
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(key.as_str()) {
+                if !pane.finish_git_write(&owner, cx) {
                     return;
                 }
-                pane.git_busy = false;
                 match result.and_then(|value| {
                     serde_json::from_value::<GitActionReceipt>(value)
                         .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))
@@ -349,6 +539,7 @@ impl Changes {
                             .map(|file| file.path.clone())
                             .collect();
                         pane.git_preview = Some(receipt.preview);
+                        pane.reconcile_pr_context(cx);
                         pane.load_git_pr(cx);
                         pane.git_notice = receipt.error.or_else(|| {
                             Some(if receipt.pushed {
@@ -367,7 +558,7 @@ impl Changes {
                                 "Git selection updated".into()
                             })
                         });
-                        if receipt.committed {
+                        if receipt.committed && pane.git_message.read(cx).text() == before_message {
                             pane.git_message
                                 .update(cx, |input, cx| input.set_text("", cx));
                         }
@@ -377,18 +568,27 @@ impl Changes {
                 cx.notify();
             })
             .ok();
-        }));
+        })
+        .detach();
         cx.notify();
     }
 
     fn generate_git_message(&mut self, cx: &mut Context<Self>) {
-        if self.git_busy {
+        self.reconcile_git_context(cx);
+        if self.git_busy || self.git_write_owner.is_some() {
             return;
         }
         let Some(preview) = self.git_preview.clone() else {
             return;
         };
-        let Some((cwd, target, key)) = self.git_context(cx) else {
+        let Some(scope) = self.live_git_scope(cx) else {
+            return;
+        };
+        let expected_token = preview.token.clone();
+        let Some((cwd, target, _)) = self.git_context(cx) else {
+            return;
+        };
+        let Some(chat_id) = self.git_chat_id(cx) else {
             return;
         };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -406,9 +606,12 @@ impl Changes {
                 .selected_chat_row()
                 .and_then(|chat| chat.config.as_ref().map(|config| config.harness)),
         };
+        self.git_read_generation += 1;
+        let generation = self.git_read_generation;
         self.git_busy = true;
         self.git_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::to_value(request).unwrap_or_default();
+            params["chatId"] = chat_id.into();
             if let Some(target) = target {
                 params["targetDeviceId"] = target.into();
             }
@@ -417,10 +620,18 @@ impl Changes {
                 .call(methods::GENERATE_GIT_COMMIT_MESSAGE, params)
                 .await;
             this.update(cx, |pane, cx| {
-                if pane.git_target.as_deref() != Some(key.as_str()) {
+                if !pane.git_read_current(&scope, generation, cx) {
                     return;
                 }
                 pane.git_busy = false;
+                if pane
+                    .git_preview
+                    .as_ref()
+                    .is_none_or(|preview| preview.token != expected_token)
+                {
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(value) => {
                         if let Some(message) = value.get("message").and_then(|value| value.as_str())
@@ -443,7 +654,7 @@ impl Changes {
 }
 
 impl Changes {
-    fn git_button(
+    pub(super) fn git_button(
         id: impl Into<SharedString>,
         label: &'static str,
         theme: &Theme,
@@ -534,6 +745,7 @@ impl Changes {
                     ),
             );
             card = card.child(self.render_pr_status(theme));
+            card = card.child(self.render_pr_panel(theme, cx));
             card = card.child(self.render_checkpoint_section(theme, cx));
             let selected = self.git_selected.clone();
             let rows = preview.files.into_iter().map(|file| {
@@ -664,6 +876,12 @@ impl Changes {
             } else {
                 "Git status unavailable; refresh to retry"
             });
+            if self.git_context(cx).is_some() && self.state.read(cx).engine().is_some() {
+                card = card.child(
+                    Self::git_button("git-refresh", "Refresh", theme)
+                        .on_click(cx.listener(|this, _, _, cx| this.load_git(cx))),
+                );
+            }
         }
         if let Some(notice) = &self.git_notice {
             card = card.child(
@@ -846,3 +1064,9 @@ impl Changes {
         section.into_any_element()
     }
 }
+
+#[cfg(test)]
+mod lifetime_tests;
+
+#[cfg(test)]
+mod ownership_tests;

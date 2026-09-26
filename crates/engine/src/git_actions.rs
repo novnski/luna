@@ -409,7 +409,7 @@ fn selected_staged(snapshot: &GitActionPreview, paths: &[String]) -> Result<(), 
     Ok(())
 }
 
-async fn inspect(root: &Path, checkout_id: &str) -> Result<GitActionPreview, String> {
+pub(crate) async fn inspect(root: &Path, checkout_id: &str) -> Result<GitActionPreview, String> {
     let branch = git_string(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .await
         .unwrap_or_else(|_| "HEAD".into());

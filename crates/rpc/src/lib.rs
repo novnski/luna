@@ -265,6 +265,9 @@ pub mod methods {
     pub const GET_GIT_ACTION_PREVIEW: &str = "GetGitActionPreview";
     pub const EXECUTE_GIT_ACTION: &str = "ExecuteGitAction";
     pub const GENERATE_GIT_COMMIT_MESSAGE: &str = "GenerateGitCommitMessage";
+    pub const GET_GITHUB_PR_PREVIEW: &str = "GetGitHubPrPreview";
+    pub const GET_GITHUB_PR_DETAILS: &str = "GetGitHubPrDetails";
+    pub const CREATE_GITHUB_DRAFT_PR: &str = "CreateGitHubDraftPr";
     pub const GET_GIT_PR_STATUS: &str = "GetGitPrStatus";
     pub const LIST_GIT_CHECKPOINTS: &str = "ListGitCheckpoints";
     pub const DIFF_GIT_CHECKPOINT: &str = "DiffGitCheckpoint";
@@ -428,6 +431,9 @@ pub mod methods {
         EXECUTE_GIT_ACTION,
         GENERATE_GIT_COMMIT_MESSAGE,
         GET_GIT_PR_STATUS,
+        GET_GITHUB_PR_PREVIEW,
+        GET_GITHUB_PR_DETAILS,
+        CREATE_GITHUB_DRAFT_PR,
         LIST_GIT_CHECKPOINTS,
         DIFF_GIT_CHECKPOINT,
         PREVIEW_GIT_CHECKPOINT_RESTORE,

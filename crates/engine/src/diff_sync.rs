@@ -359,6 +359,12 @@ async fn resolve_identity(
     }
 }
 
+pub(crate) fn has_checkout_marker(root: &Path) -> bool {
+    std::fs::symlink_metadata(root.join(".git")).is_ok_and(|metadata| {
+        !metadata.file_type().is_symlink() && (metadata.is_file() || metadata.is_dir())
+    })
+}
+
 async fn reconcile(inner: &Arc<DiffSyncInner>, chats: Vec<Chat>, fresh: bool) {
     // One pass at a time — see `reconcile_gate`.
     let _gate = inner.reconcile_gate.lock().await;
@@ -384,11 +390,31 @@ async fn reconcile(inner: &Arc<DiffSyncInner>, chats: Vec<Chat>, fresh: bool) {
         let Some(identity) = identity else {
             continue;
         };
-        // Stamp the row's checkoutId so every device groups this chat correctly.
-        if chat.checkout_id.as_deref() != Some(identity.id.as_str())
-            && let Err(err) = inner.workspace.set_chat_checkout(&chat.id, &identity.id)
-        {
-            tracing::debug!(chat = %chat.id, error = %err, "diff-sync: checkoutId write failed");
+        // Cached identities may outlive a linked worktree's .git marker. Never
+        // publish an ancestor's diff under the vanished checkout's identity.
+        if !has_checkout_marker(&identity.root) {
+            continue;
+        }
+        match chat.checkout_id.as_deref() {
+            Some(recorded) if recorded != identity.id => {
+                tracing::warn!(chat = %chat.id, "diff-sync: checkout changed without a task cwd move");
+                continue;
+            }
+            Some(_) => {}
+            None => {
+                // A missing nested .git makes git rev-parse walk to an ancestor.
+                // An unbound task can only bootstrap itself at a checkout root
+                // with its own marker; subdirectories need an explicit rebind.
+                let at_root =
+                    std::fs::canonicalize(&cwd).is_ok_and(|canonical| canonical == identity.root);
+                if !at_root {
+                    continue;
+                }
+                if let Err(err) = inner.workspace.set_chat_checkout(&chat.id, &identity.id) {
+                    tracing::debug!(chat = %chat.id, error = %err, "diff-sync: checkoutId write failed");
+                    continue;
+                }
+            }
         }
         groups
             .entry(identity.id.clone())
