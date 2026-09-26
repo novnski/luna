@@ -1,7 +1,10 @@
 # Workspace identity repair: API and authorization contract
 
-Source-only extension to `ea229301`; no Cargo, provider reads, runtime changes or
-native actions have run. The working branch remains based on committed main
+Source-only extension to `ea229301`; this contract module is unlinked and has not
+been compiled or run. A separate one-run Cargo grant reproduced only the original
+three allocation cases at `050dd9d7`; see the parent design's baseline evidence.
+No provider reads, runtime changes or native actions have run. The branch remains
+based on committed main
 `def1b8a8`; supported caller behavior was also inspected at current main
 `570d951b72c950eceb9493e4a07fe7908039edbc`, without changing Sidebar-owned files.
 
@@ -162,6 +165,8 @@ or provider calls are needed. The RPC strings intentionally describe a proposed
 interface; they do not add a runtime endpoint. If wired against the current
 baseline, they would fail at the absent API, which must be classified separately
 from the three original aliasing failures. They have not been compiled or run.
+The original three-case target's authentic baseline remains separate and contains
+no proposed migration API tests.
 
 After API review, explicitly wire the contract module in a separate source change
 before any runtime implementation. Its prospective filtered command is

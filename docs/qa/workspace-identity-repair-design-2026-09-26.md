@@ -1,6 +1,8 @@
 # Workspace identity collision: failure-first repair design
 
-Status: source-only proposal and regression source; **not compiled or executed**.
+Status: the three allocation regressions were compiled and executed once against
+unchanged runtime source; all three reproduced the expected defect. Migration
+contract source remains unlinked, uncompiled and unexecuted; runtime repair is gated.
 Base: local main `def1b8a8021f3373919d0e6580677ee9f7e686eb`.
 Branch: `codex/workspace-identity-repair`. No runtime or migration change is
 included. The earlier audit branch `codex/audit-workspace-data` stays at
@@ -129,7 +131,7 @@ DocsStore, memory RPC, UUID command/task IDs and disposable roots. Native Codex
 metadata is disabled, the registry is empty, and all provider homes are synthetic
 with Claude keychain fallback disabled. It queues no run and reads no credentials.
 The reused-worktree case prepares actual local Git worktrees when execution is
-later authorized. No fixture or subprocess has run in this phase.
+authorized. The separately granted baseline executed only these three cases.
 
 Three allocation tests record RPC identities, expected paths, chat rows and
 creation receipts to JSON before their expected failing assertions. The restart
@@ -151,10 +153,31 @@ printf 'exit=%s\n' "$code" > "$report/result.txt"
 exit "$code"
 ```
 
-Expected baseline: the three isolation assertions fail because A resolves to B.
-This is a prediction from source and native evidence, **not a newly executed test
-result**. Preserve compile/contract errors separately if the first run finds any.
-Exit 75 requires coordination and must not be retried by bypassing the guard.
+## Authentic baseline result
+
+At clean checkpoint `050dd9d770cc42087866f72c28065e8eafd16667`, the original three-test
+source was byte-identical to `ea229301` (blob
+`b45d29b0c46006f76dbebd934b0e903064016c95`), runtime directories were unchanged, and
+the proposed migration module was not linked into the target. The exact focused
+command above ran once with `CARGO_INCREMENTAL=0` and the default 25 GiB growth
+reservation. Compilation succeeded; **0 passed / 3 expected assertion failures**,
+53 seconds including compilation and 0.26 seconds of test runtime. No retries,
+guard rejection, compiler error or fixture failure occurred.
+
+Each case failed at `workspace_identity_roots.rs:189`: A's observed root was B's
+directory. Individual evidence confirms the shared workspace ID in registration,
+restart replay, and the supported reused-worktree case. Restart receipt/task checks
+and worktree source-space checks completed before the expected root assertion.
+
+Retained artifact directory:
+`target/qa/workspace-identity-baseline.HSp2GK/`. It contains `test.log`, `result.txt`,
+`command.txt`, `revision.txt`, the exact test source, `cache.json`, budget admission
+evidence and `summary.json`. The three `project*.json` files were emitted before
+assertions. Their recorded fixture roots were confirmed removed afterward.
+
+Cargo was explicitly released immediately after this run. No native app, provider
+or credential calls were made. No runtime code was changed. Exit 75 on any future
+grant still requires coordination, never a guard bypass.
 
 Before implementation, extend failure-first coverage to poisoned-v1 proof/refusal,
 repair replay/crash atomicity, downgrade refusal, same-root/home normalization and
