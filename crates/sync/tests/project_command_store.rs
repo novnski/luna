@@ -104,6 +104,21 @@ fn migration_snapshot_ownership_and_attempt_fence() {
             .unwrap(),
         1
     );
+    let mut setup = run.clone();
+    setup.id = "setup-generation".into();
+    setup.setup = true;
+    setup.status = ProjectCommandStatus::Succeeded;
+    assert!(store.save_project_command_run(&setup, None, None).unwrap());
+    store
+        .prepare_task_cleanup("device", "task", "fixture-boot")
+        .unwrap();
+    store.retire_task_local_records("device", "task").unwrap();
+    let retained = store.project_command_runs("device").unwrap();
+    assert_eq!(retained.len(), 1);
+    assert!(
+        retained[0].setup,
+        "checkout setup replay guard survives task retirement"
+    );
     store.retire_project_local_records("project").unwrap();
     assert!(
         store

@@ -429,6 +429,16 @@ async fn generation_ownership_deletion_and_backup() {
             Some(checkout.to_string_lossy().into()),
         )
         .unwrap();
+    // Match backup_restore.rs's supported imported-task fixture: a legacy
+    // transcript with no chat2 remote frontier to reconcile. The separate
+    // existing chat2 restore negative case continues to cover that limitation.
+    let mut imported = core.workspace.chat("a").unwrap().unwrap();
+    imported.room_gen = None;
+    core.workspace.import_chat_row(&imported).unwrap();
+    let transcript = luna_doc::SessionDoc::init("a").unwrap();
+    core.store
+        .save_snapshot("a", &transcript.export_snapshot().unwrap())
+        .unwrap();
     core.project_commands
         .configure("p", &[], vec![action("setup", "echo prepared", true)])
         .unwrap();
@@ -453,6 +463,7 @@ async fn generation_ownership_deletion_and_backup() {
     assert_ne!(first.checkout_generation, replacement.checkout_generation);
     assert_ne!(first.id, replacement.id);
     completed(&core, "a", &replacement.id).await;
+    let original_device = core.device_id.clone();
     core.workspace.flush();
     core.terminals.shutdown();
     core.shutdown().await;
@@ -462,9 +473,48 @@ async fn generation_ownership_deletion_and_backup() {
         "L17 synthetic or copy-isolated root\n",
     )
     .unwrap();
+    let backups = root.join("backups");
+    std::fs::create_dir(&backups).unwrap();
+    std::fs::write(
+        backups.join(".luna-l17-isolated-backups"),
+        "L17 synthetic or copy-isolated backup destination\n",
+    )
+    .unwrap();
     let service = BackupService::new_bb_style(IsolatedRoot::open(&data).unwrap());
-    let receipt = service.export(&root.join("backups")).unwrap();
-    let staged = service.stage_restore(&receipt.archive).unwrap();
+    let receipt = service.backup_now(&backups, 1_700_000_000_000).unwrap();
+    let foreign_target = root.join("unsupported-foreign-restore");
+    std::fs::create_dir(&foreign_target).unwrap();
+    std::fs::write(
+        foreign_target.join(".luna-l17-isolated-root"),
+        "L17 synthetic or copy-isolated root\n",
+    )
+    .unwrap();
+    std::fs::write(foreign_target.join("device-id"), "another-device").unwrap();
+    let foreign_restore = BackupService::new_bb_style(IsolatedRoot::open(&foreign_target).unwrap());
+    let foreign_stage = foreign_restore.stage_restore(&receipt.archive).unwrap();
+    assert!(!foreign_stage.preview.unsupported.is_empty());
+    assert!(
+        foreign_restore.activate(foreign_stage).is_err(),
+        "foreign activation remains unsupported"
+    );
+    // Isolated restore deliberately supports the original absolute location
+    // and device only. Preserve the original synthetic data (including excluded
+    // terminal output) beside it, then restore into that same now-empty path.
+    std::fs::rename(&data, root.join("preserved-source-data")).unwrap();
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(
+        data.join(".luna-l17-isolated-root"),
+        "L17 synthetic or copy-isolated root\n",
+    )
+    .unwrap();
+    std::fs::write(data.join("device-id"), &original_device).unwrap();
+    let restore = BackupService::new_bb_style(IsolatedRoot::open(&data).unwrap());
+    let staged = restore.stage_restore(&receipt.archive).unwrap();
+    assert!(
+        staged.preview.unsupported.is_empty(),
+        "{:?}",
+        staged.preview.unsupported
+    );
     let mut databases = vec![];
     fn find_db(path: &Path, found: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(path).unwrap() {
@@ -487,6 +537,62 @@ async fn generation_ownership_deletion_and_backup() {
         .unwrap()
             == 1
     }));
+    restore.activate(staged).unwrap();
+    let restored_owner = EngineCore::assemble(
+        &data,
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        restored_owner
+            .project_commands
+            .configuration("p")
+            .unwrap()
+            .len(),
+        1
+    );
+    let restored_receipts = restored_owner
+        .store
+        .project_command_runs(&original_device)
+        .unwrap();
+    assert_eq!(restored_receipts.len(), 2);
+    assert!(restored_receipts.iter().all(|run| !run.status.is_active()));
+    assert!(
+        restored_owner.terminals.list(None).unwrap().is_empty(),
+        "restore must never launch commands"
+    );
+    restored_owner.shutdown().await;
+    drop(restored_owner);
+    // Probe the restored metadata under a different synthetic device identity.
+    // No commands or foreign project config may execute on this device.
+    std::fs::write(data.join("device-id"), "foreign-restored-device").unwrap();
+    let restored_foreign = EngineCore::assemble(
+        &data,
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+    )
+    .unwrap();
+    assert_ne!(restored_foreign.device_id, original_device);
+    assert!(
+        restored_foreign
+            .project_commands
+            .configuration("p")
+            .is_err()
+    );
+    assert!(
+        restored_foreign
+            .project_commands
+            .run("a", "setup", "foreign-restored-run")
+            .await
+            .is_err()
+    );
+    assert!(restored_foreign.terminals.list(None).unwrap().is_empty());
+    restored_foreign.shutdown().await;
+    drop(restored_foreign);
+    std::fs::write(data.join("device-id"), &original_device).unwrap();
     let reopened = EngineCore::assemble(
         &data,
         Arc::new(HarnessRegistry::new()),
@@ -567,7 +673,7 @@ async fn durable_task_run_waits_for_setup_and_records_failure() {
         )
         .unwrap();
     let payload = |message: &str| {
-        let request: RunRequest = serde_json::from_value(serde_json::json!({"prompt":"fixture", "cwd":repo, "sandbox":"workspaceWrite", "model":null, "reasoning":null, "resume":null, "worktree":{"repoPath":repo,"base":"main"}})).unwrap();
+        let request: RunRequest = serde_json::from_value(serde_json::json!({"prompt":"fixture", "cwd":repo, "sandbox":"workspace-write", "model":null, "reasoning":null, "resume":null, "worktree":{"repoPath":repo,"base":"main"}})).unwrap();
         SessionCommandPayload::Run {
             request,
             message_id: message.into(),
