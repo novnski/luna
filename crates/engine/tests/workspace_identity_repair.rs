@@ -192,7 +192,7 @@ async fn missing_import_preview_is_display_only_and_preserves_stored_history() {
     doc.push_message(&luna_doc::SessionMessageEntry {
         id: "stored-user-message".into(),
         role: luna_doc::MessageRole::User,
-        parts: vec![luna_proto::MessagePart::Text {
+        parts: vec![luna_doc::MessagePart::Text {
             id: "stored-part".into(),
             text: "Preserved synthetic history".into(),
         }],
