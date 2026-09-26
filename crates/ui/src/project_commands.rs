@@ -446,6 +446,9 @@ impl Render for ProjectCommandPanel {
                 let mut row = div().flex().items_center().gap(px(8.0)).child(
                     widgets::ghost_action(&theme)
                         .id(SharedString::from(format!("run-command-{}", action.id)))
+                        .when(cfg!(test), |el| {
+                            el.debug_selector(|| format!("qa-command-run-{}", action.id))
+                        })
                         .child(SharedString::from(action.name))
                         .when(!self.busy, |el| {
                             el.on_click(cx.listener(move |view, _, _, cx| {
@@ -495,6 +498,9 @@ impl Render for ProjectCommandPanel {
                         .child(
                             widgets::ghost_action(&theme)
                                 .id(SharedString::from(format!("control-command-{}", run.id)))
+                                .when(cfg!(test), |el| {
+                                    el.debug_selector(|| format!("qa-command-control-{}", run.id))
+                                })
                                 .child(if active { "Stop" } else { "Retry" })
                                 .when(!self.busy, |el| {
                                     el.on_click(cx.listener(move |view, _, _, cx| {
