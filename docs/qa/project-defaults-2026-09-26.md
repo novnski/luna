@@ -200,3 +200,31 @@ All eight before/after/transport traces, a compact `summary.json`, exact source,
 command, dirty-doc patch, exit and pre/post budget are preserved under
 `target/qa/project-defaults/epoch-baseline-1`. The sole Cargo slot was released
 at completion. No production identity fence has been applied at this baseline.
+
+### Defaults correction prepared after the failing baseline
+
+The Defaults-owned production correction is limited to its settings module.
+Each save/catalog request captures project ID, project owner, engine generation
+and engine device. The retained page retires waits and stale busy/catalog/error
+indicators when that identity changes. Completion callbacks also compare the
+live identity before publishing success, errors, catalogs or project-row updates,
+covering replies that become runnable before the state observer executes.
+Model replies additionally retain the existing per-request generation/provider
+checks. Project selection, composer drafts and the shared Commands card contract
+are unchanged. Cancellation of the UI wait does not undo a write already
+committed by the old engine.
+
+This source correction was made only after the eight authentic failures were
+recorded. Test assertions and the shared fixture were not changed. Direct
+rustfmt and diff checks passed; no fixed-run pass is claimed before the next
+granted verification batch.
+
+The separate Commands baseline on clean `97804ba0` compiled and ran six cases,
+with an observed **0 passed / 6 failed**, not the hypothesized 5+1. Five stale
+status/error/output/busy assertions failed; the same-engine control reached its
+final dropped-view polling assertion and also failed (3 calls versus 2).
+That sixth failure is awaiting ownership/timing diagnosis by its test owner;
+it is not classified here as an additional confirmed stale-engine defect.
+All six JSON artifacts and exact source/log/exit/budget evidence are retained
+under `target/qa/project-defaults/commands-epoch-baseline-1`. Cargo was released,
+and no Commands production code was changed by the Defaults worker.

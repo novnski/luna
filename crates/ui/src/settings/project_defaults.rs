@@ -64,9 +64,33 @@ enum Action {
     Reset,
 }
 
+/// Identity of the project and connection that own an in-flight settings request.
+#[derive(Clone, PartialEq, Eq)]
+struct ProjectRequestScope {
+    project_id: String,
+    project_device_id: String,
+    engine_generation: u64,
+    engine_device_id: Option<String>,
+}
+
+impl ProjectRequestScope {
+    fn current(state: &AppState, project_id: Option<&str>) -> Option<Self> {
+        let space = state.space_row(project_id?)?;
+        Some(Self {
+            project_id: space.id.clone(),
+            project_device_id: space.device_id.clone(),
+            engine_generation: state.engine_generation(),
+            engine_device_id: state
+                .engine()
+                .map(|engine| engine.engine_info().device_id.clone()),
+        })
+    }
+}
+
 pub struct ProjectsPage {
     state: Entity<AppState>,
     selected_project_id: Option<String>,
+    request_scope: Option<ProjectRequestScope>,
     command_card_key: Option<(String, String, u64, Option<String>)>,
     command_card: Option<Entity<ProjectCommandSettings>>,
     scroll: widgets::PageScroll,
@@ -91,7 +115,10 @@ impl ProjectsPage {
             .selected_space
             .clone()
             .or_else(|| state.read(cx).spaces_sorted().first().map(|s| s.id.clone()));
+        let request_scope =
+            ProjectRequestScope::current(state.read(cx), selected_project_id.as_deref());
         let observe = cx.observe(&state, |page: &mut Self, _, cx| {
+            page.retire_changed_scope(cx);
             let harness = page.selected(cx).and_then(|space| {
                 space
                     .execution_defaults
@@ -117,6 +144,7 @@ impl ProjectsPage {
         Self {
             state,
             selected_project_id,
+            request_scope,
             command_card_key: None,
             command_card: None,
             scroll: Default::default(),
@@ -141,6 +169,35 @@ impl ProjectsPage {
         self.selected_project_id.as_deref()
     }
 
+    fn current_request_scope(&self, cx: &gpui::App) -> Option<ProjectRequestScope> {
+        ProjectRequestScope::current(self.state.read(cx), self.selected_project_id.as_deref())
+    }
+
+    /// A retained settings page can outlive its engine. Cancel waits owned by
+    /// the retired connection and release their UI state without changing the
+    /// selected project, project rows, or any composer draft.
+    fn retire_changed_scope(&mut self, cx: &gpui::App) {
+        let scope = self.current_request_scope(cx);
+        if self.request_scope == scope {
+            return;
+        }
+        self.request_scope = scope;
+        self.task = None;
+        self.busy = false;
+        self.error = None;
+        self.saved = false;
+        self.catalog_generation = self.catalog_generation.wrapping_add(1);
+        self.catalog_task = None;
+        self.catalog_harness = self.selected(cx).and_then(|space| {
+            space
+                .execution_defaults
+                .provider
+                .map(|provider| provider.harness)
+        });
+        self.models = popover::Loadable::Idle;
+        self.models_open = false;
+    }
+
     fn selected(&self, cx: &gpui::App) -> Option<Space> {
         self.selected_project_id
             .as_deref()
@@ -149,6 +206,10 @@ impl ProjectsPage {
     }
 
     fn load_models(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        self.retire_changed_scope(cx);
+        let Some(scope) = self.current_request_scope(cx) else {
+            return;
+        };
         let Some(space) = self.selected(cx) else {
             return;
         };
@@ -166,8 +227,15 @@ impl ProjectsPage {
         self.catalog_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::LIST_MODELS, params).await;
             this.update(cx, |page, cx| {
-                if page.catalog_generation != generation
+                if page.current_request_scope(cx).as_ref() != Some(&scope)
+                    || page.catalog_generation != generation
                     || page.selected_project_id.as_deref() != Some(project_id.as_str())
+                    || page.selected(cx).and_then(|space| {
+                        space
+                            .execution_defaults
+                            .provider
+                            .map(|provider| provider.harness)
+                    }) != Some(harness)
                 {
                     return;
                 }
@@ -189,10 +257,7 @@ impl ProjectsPage {
         }
         if let Action::Project(id) = action {
             self.selected_project_id = Some(id);
-            self.catalog_generation = self.catalog_generation.wrapping_add(1);
-            self.catalog_task = None;
-            self.catalog_harness = None;
-            self.models = popover::Loadable::Idle;
+            self.retire_changed_scope(cx);
             self.models_open = false;
             self.error = None;
             self.saved = false;
@@ -245,6 +310,10 @@ impl ProjectsPage {
     }
 
     fn save(&mut self, space: Space, defaults: ProjectExecutionDefaults, cx: &mut Context<Self>) {
+        self.retire_changed_scope(cx);
+        let Some(scope) = self.current_request_scope(cx) else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.error = Some("Connect to the project's device before saving defaults.".into());
             cx.notify();
@@ -257,6 +326,11 @@ impl ProjectsPage {
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::MUTATE, params).await;
             this.update(cx, |page, cx| {
+                // Check live identity as well as observer cancellation: the
+                // old reply can become runnable before the observer executes.
+                if page.current_request_scope(cx).as_ref() != Some(&scope) {
+                    return;
+                }
                 page.busy = false;
                 match result {
                     Ok(_) => {
@@ -264,9 +338,10 @@ impl ProjectsPage {
                         // supplies the authoritative projection.
                         // Apply only this owned field so unrelated live state is kept.
                         page.state.update(cx, |state, cx| {
-                            if let Some(row) =
-                                state.spaces.iter_mut().find(|row| row.id == space.id)
-                            {
+                            if let Some(row) = state.spaces.iter_mut().find(|row| {
+                                row.id == scope.project_id
+                                    && row.device_id == scope.project_device_id
+                            }) {
                                 row.execution_defaults = defaults;
                             }
                             cx.notify();
