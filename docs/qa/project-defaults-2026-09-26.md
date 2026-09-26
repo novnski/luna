@@ -4,7 +4,9 @@ Branch: `codex/project-execution-defaults`.
 Worktree: `/Users/iulian/.codex/worktrees/9f21/luna`.
 Base: `d1c71c3a31d6ef7c895adc9084c27293940fce39`.
 Preimplementation regression cases: `8ab4632b`.
-Source checkpoint: `3650bd0e` (verification pending).
+Source checkpoint: `3650bd0e`; catalog race guard `25d06a81`.
+Reviewed backend base `dbb38ee1` adopted without conflicts in `aabb52a1`.
+Shared fixture repair `65c3800d` was adopted as `7d4b5f0b` before that merge.
 
 ## Contract and scope
 
@@ -59,7 +61,9 @@ scripts/qa-project-defaults.sh
 ```
 
 The runner saves logs and `persistence.json` under
-`target/qa/project-defaults`, preserves exit codes and stops on the shared guard.
+a timestamped directory beneath `target/qa/project-defaults`, preserves exact
+commands/source/exit codes and stops on the shared guard. An explicit
+`LUNA_DEFAULTS_QA_OUTPUT` selects a named batch directory.
 The first-written cases are in `project-defaults-cases.md`, the engine RPC /
 registry restart integration target and the GPUI picker integration module.
 No provider invocation is required for these cases.
@@ -83,6 +87,24 @@ projects to inherit. Keep fixtures while the packaged QA app refers to them.
 
 ## Verification status
 
-Source formatting with rustfmt, shell syntax, Node syntax and git diff checks
-passed. Cargo, focused regressions, Clippy and native QA are pending the shared
-build slots. Do not report this source checkpoint as runtime-verified.
+The first granted batch ran with `CARGO_INCREMENTAL=0` and the standard wrapper
+on `aabb52a1` (only the logging script differed). Initial failures are retained.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Engine RPC/registry/restart integration | 2 passed, 0 failed; compile 51.28s, tests 0.05s | `target/qa/project-defaults/batch-1/engine.log`, `persistence.json` |
+| Picker GPUI integration compilation | Exit 101: new Projects category missing from existing sidebar icon match | `target/qa/project-defaults/batch-1/picker.log` |
+| Picker retry after one-line existing-icon fix | Exit 75 before compilation: aggregate reservation blocked | `target/qa/project-defaults/batch-2/picker.log` |
+| Source formatting, shell/Node syntax, diff whitespace | Passed static checks | Source checkpoint / git diff checks |
+| Full format, focused Clippy, picker runtime and native app | Pending build-slot regrant | No pass claimed |
+
+Engine coverage confirms missing-field migration through serialized registry
+state, owner/missing-project/malformed-value rejection, stale expected-value
+rejection, restart persistence, explicit inherit clearing and unchanged existing
+task rows. UI runtime behavior remains unverified until its GPUI cases run.
+
+The second admission observed 156,642,626,920 bytes (145.89 GiB) in aggregate;
+adding the default 25 GiB reservation would exceed the 170 GiB operating limit.
+No reservation override, retry loop, cache cleanup or native launch followed.
+The build slot was released and the coordinator notified. This checkout's
+`target/debug` measured 7.1 GiB; it is preserved for the pending verification.

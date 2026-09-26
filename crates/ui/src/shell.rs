@@ -6997,6 +6997,7 @@ impl Shell {
         });
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::General => icons::SETTINGS_MINIMALISTIC,
+            SettingsSection::Projects => icons::FOLDER_WITH_FILES,
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Providers => icons::WIDGET,
             SettingsSection::Appearance => icons::TUNING,
