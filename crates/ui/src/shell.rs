@@ -14922,6 +14922,385 @@ mod exit_regressions {
         assert!(done(cx), "session history fixture did not settle");
     }
 
+    // Failure-first retained-Shell coverage; see the matrix in
+    // docs/qa/sidebar-notice-ownership-2026-09-26.md. This is a memory RPC
+    // boundary fixture, not a second implementation of the release callback.
+    mod sidebar_notice_regressions {
+        use super::*;
+        use crate::shell::side_chats::SideChatEvent;
+        use serde_json::{Value, json};
+
+        const DRAFT: &str = "Existing parent draft — keep this.";
+        const RESULT: &str = "SIDEBAR_NOTICE_HANDOFF_RESULT";
+        const CONFIRMATION: &str = "Added to the parent draft. Review it and press Send.";
+        const PROGRESS: &str = "Stopping side chat and saving its transcript…";
+        const NEW_ERROR: &str = "A newer operation failed; keep this error visible.";
+
+        struct HeldUnloadRpc {
+            drafts: ShellDraftRpc,
+            calls: Mutex<Vec<(String, Value)>>,
+            gates: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<(), RpcError>>>>,
+            created: AtomicUsize,
+            returned: AtomicUsize,
+        }
+
+        impl HeldUnloadRpc {
+            fn new() -> Self {
+                Self {
+                    drafts: ShellDraftRpc::new(vec![shell_draft(
+                        HANDOFF_SOURCE,
+                        Some(HANDOFF_SOURCE),
+                        7,
+                        DRAFT,
+                    )]),
+                    calls: Mutex::new(Vec::new()),
+                    gates: Mutex::new(HashMap::new()),
+                    created: AtomicUsize::new(0),
+                    returned: AtomicUsize::new(0),
+                }
+            }
+
+            fn meta(id: &str) -> Value {
+                json!({
+                    "id": id, "parentId": HANDOFF_SOURCE, "title": "Held unload fixture",
+                    "createdAtMs": 1, "expiresAtMs": i64::MAX, "state": "active",
+                    "detail": null, "messageCount": 0,
+                    "config": {"harness": "mock", "model": "synthetic-notice"},
+                    "contextMode": "snapshot", "originMessageId": "handoff-assistant",
+                    "anchorText": "Visible assistant context"
+                })
+            }
+
+            fn release(&self, id: &str, fail: bool) {
+                let sender = self.gates.lock().unwrap().remove(id).expect("held unload");
+                sender
+                    .send(if fail {
+                        Err(RpcError::Failed("fixture unload failed".into()))
+                    } else {
+                        Ok(())
+                    })
+                    .expect("production release is still awaiting its RPC reply");
+            }
+        }
+
+        #[async_trait]
+        impl RpcService for HeldUnloadRpc {
+            async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((method.into(), params.clone()));
+                match method {
+                    methods::CREATE_SIDE_CHAT => {
+                        assert_eq!(params["parentId"], HANDOFF_SOURCE);
+                        let n = self.created.fetch_add(1, Ordering::SeqCst) + 1;
+                        RpcReply::value(&json!({
+                            "meta": Self::meta(&format!("held-side-{n}")),
+                            "lease": format!("held-lease-{n}")
+                        }))
+                    }
+                    methods::READ_SIDE_CHAT => RpcReply::value(&json!({
+                        "meta": Self::meta(params["id"].as_str().expect("side id")),
+                        "entries": [], "before": null, "working": false, "status": null
+                    })),
+                    methods::LIST_SIDE_CHATS => {
+                        RpcReply::value(&json!({"items": [], "before": null}))
+                    }
+                    methods::UNLOAD_SIDE_CHAT => {
+                        let id = params["id"].as_str().expect("unload id").to_owned();
+                        let n = id.strip_prefix("held-side-").expect("created side id");
+                        assert_eq!(params["lease"], format!("held-lease-{n}"));
+                        let (sender, receiver) = tokio::sync::oneshot::channel();
+                        assert!(self.gates.lock().unwrap().insert(id, sender).is_none());
+                        let result = receiver.await.expect("test must release every held reply");
+                        self.returned.fetch_add(1, Ordering::SeqCst);
+                        result?;
+                        RpcReply::value(&json!({"unloaded": true}))
+                    }
+                    // Only these two fixture writes are allowed. Any accidental
+                    // command/queue/provider call remains recorded and fails.
+                    methods::GET_COMPOSER_DRAFT
+                    | methods::SAVE_COMPOSER_DRAFT
+                    | methods::GET_TASK_COMMAND_RECEIPT => self.drafts.handle(method, params).await,
+                    _ => Err(RpcError::UnknownMethod(method.into())),
+                }
+            }
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum Newer {
+            None,
+            Handoff,
+            Error,
+            Dismiss,
+            IdenticalProgress,
+        }
+
+        fn notice(window: &gpui::WindowHandle<Shell>, cx: &mut TestAppContext) -> Option<String> {
+            window
+                .read_with(cx, |shell, _| {
+                    shell.sidebar_notice.as_ref().map(ToString::to_string)
+                })
+                .unwrap()
+        }
+
+        fn begin_release(
+            window: &gpui::WindowHandle<Shell>,
+            cx: &mut TestAppContext,
+            runtime: &tokio::runtime::Runtime,
+            service: &HeldUnloadRpc,
+            id: &str,
+        ) {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.create_side_chat_panel(
+                        Some((
+                            "handoff-assistant".into(),
+                            "Visible assistant context".into(),
+                        )),
+                        cx,
+                    );
+                })
+                .unwrap();
+            pump_shell_until(cx, runtime, |cx| {
+                window
+                    .read_with(cx, |shell, cx| {
+                        shell.side_chat_panel.as_ref().is_some_and(|panel| {
+                            panel
+                                .read(cx)
+                                .release_request()
+                                .is_some_and(|(_, actual, _)| actual == id)
+                        })
+                    })
+                    .unwrap()
+            });
+            window
+                .update(cx, |shell, _, cx| shell.release_side_chat(cx))
+                .unwrap();
+            pump_shell_until(cx, runtime, |_| {
+                service.gates.lock().unwrap().contains_key(id)
+            });
+            assert_eq!(notice(window, cx).as_deref(), Some(PROGRESS));
+            assert!(
+                window
+                    .read_with(cx, |shell, _| shell.side_chat_panel.is_none())
+                    .unwrap()
+            );
+        }
+
+        fn finish_release(
+            cx: &mut TestAppContext,
+            runtime: &tokio::runtime::Runtime,
+            service: &HeldUnloadRpc,
+            id: &str,
+            fail: bool,
+            returned: usize,
+        ) {
+            service.release(id, fail);
+            pump_shell_until(cx, runtime, |_| {
+                service.returned.load(Ordering::SeqCst) == returned
+            });
+            // RPC return precedes transport delivery and the GPUI callback.
+            // Drain both executors; do not assert merely on the server return
+            // counter or advance the 20-second production timeout as a proxy.
+            for _ in 0..100 {
+                runtime.block_on(tokio::task::yield_now());
+                cx.run_until_parked();
+            }
+        }
+
+        fn run_case(name: &str, newer: Newer, fail: bool, cx: &mut TestAppContext) {
+            let dir = tempfile::tempdir().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            init_handoff_shell_test(cx, dir.path());
+            cx.update(|cx| gpui_tokio::init_from_handle(cx, runtime.handle().clone()));
+            let service = Arc::new(HeldUnloadRpc::new());
+            let window = {
+                let _entered = runtime.enter();
+                command_palette_test_window(
+                    cx,
+                    dir.path(),
+                    Some(service.clone()),
+                    vec![palette_chat(
+                        HANDOFF_SOURCE,
+                        Some("project-a"),
+                        "Notice fixture",
+                    )],
+                    Some(HANDOFF_SOURCE),
+                )
+            };
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.active_chat = HANDOFF_SOURCE.into();
+                    shell.state.update(cx, |state, cx| {
+                        state.transcript = handoff_transcript();
+                        cx.notify();
+                    });
+                })
+                .unwrap();
+            pump_shell_until(cx, &runtime, |cx| {
+                shell_composer_snapshot(cx, &window).1 == DRAFT
+            });
+            begin_release(&window, cx, &runtime, &service, "held-side-1");
+            let mut events =
+                vec![json!({"event": "release_a_held", "notice": notice(&window, cx)})];
+
+            match newer {
+                Newer::None => {}
+                Newer::Handoff => {
+                    window
+                        .update(cx, |shell, _, cx| {
+                            shell.create_side_chat_panel(None, cx);
+                            let generation = shell.state.read(cx).engine_generation();
+                            shell.side_chat_panel.as_ref().unwrap().update(cx, |_, cx| {
+                                cx.emit(SideChatEvent::ResultToParent {
+                                    parent: HANDOFF_SOURCE.into(),
+                                    engine_generation: generation,
+                                    text: RESULT.into(),
+                                });
+                            });
+                        })
+                        .unwrap();
+                    pump_history_until(cx, &runtime, |cx| {
+                        notice(&window, cx).as_deref() == Some(CONFIRMATION)
+                            && service
+                                .drafts
+                                .text_for_task(Some(HANDOFF_SOURCE))
+                                .as_deref()
+                                == Some(format!("{DRAFT}\n\n{RESULT}").as_str())
+                    });
+                }
+                Newer::Error | Newer::Dismiss => {
+                    window
+                        .update(cx, |shell, _, cx| {
+                            shell.sidebar_notice =
+                                matches!(newer, Newer::Error).then(|| NEW_ERROR.into());
+                            cx.notify();
+                        })
+                        .unwrap();
+                }
+                Newer::IdenticalProgress => {
+                    begin_release(&window, cx, &runtime, &service, "held-side-2");
+                }
+            }
+            let replacement = notice(&window, cx);
+            events.push(json!({"event": "intervening_action", "action": format!("{newer:?}"), "notice": replacement}));
+            finish_release(cx, &runtime, &service, "held-side-1", fail, 1);
+            let after_a = notice(&window, cx);
+            let ownership_passed = match newer {
+                Newer::None if fail => after_a.as_deref().is_some_and(|text| {
+                    text.starts_with("Side chat unload incomplete:")
+                        && text.contains("fixture unload failed")
+                }),
+                Newer::None => after_a.is_none(),
+                _ => after_a == replacement,
+            };
+            events.push(
+                json!({"event": "release_a_callback_drained", "failed": fail, "notice": after_a}),
+            );
+            let current_b_cleared = if matches!(newer, Newer::IdenticalProgress) {
+                finish_release(cx, &runtime, &service, "held-side-2", false, 2);
+                events.push(
+                    json!({"event": "release_b_callback_drained", "notice": notice(&window, cx)}),
+                );
+                notice(&window, cx).is_none()
+            } else {
+                true
+            };
+            let expected_draft = if matches!(newer, Newer::Handoff) {
+                format!("{DRAFT}\n\n{RESULT}")
+            } else {
+                DRAFT.into()
+            };
+            let draft = shell_composer_snapshot(cx, &window).1;
+            let persisted = service.drafts.text_for_task(Some(HANDOFF_SOURCE));
+            let parent_unchanged = window
+                .read_with(cx, |shell, cx| {
+                    shell.state.read(cx).transcript == handoff_transcript()
+                })
+                .unwrap();
+            let calls = service.calls.lock().unwrap().clone();
+            let forbidden = calls
+                .iter()
+                .filter(|(method, _)| {
+                    !matches!(
+                        method.as_str(),
+                        methods::CREATE_SIDE_CHAT
+                            | methods::READ_SIDE_CHAT
+                            | methods::LIST_SIDE_CHATS
+                            | methods::UNLOAD_SIDE_CHAT
+                            | methods::SAVE_COMPOSER_DRAFT
+                    ) && (method.starts_with("Send")
+                        || method.starts_with("Submit")
+                        || method.starts_with("Queue")
+                        || method.starts_with("Run")
+                        || method.starts_with("Execute")
+                        || method.starts_with("Enqueue")
+                        || method.contains("QueuedMessage")
+                        || method == methods::RELAY_COMMAND
+                        || method == methods::RETRY_DELIVERY
+                        || method == methods::MUTATE)
+                })
+                .collect::<Vec<_>>();
+            let passed = ownership_passed
+                && current_b_cleared
+                && draft == expected_draft
+                && persisted.as_deref() == Some(expected_draft.as_str())
+                && parent_unchanged
+                && forbidden.is_empty()
+                && service.gates.lock().unwrap().is_empty();
+            let evidence = json!({
+                "case": name, "passed": passed, "events": events,
+                "ownership_passed": ownership_passed, "current_b_cleared": current_b_cleared,
+                "draft": draft, "persisted_draft": persisted, "expected_draft": expected_draft,
+                "parent_transcript_unchanged": parent_unchanged,
+                "forbidden_mutations": forbidden, "rpc_calls": calls,
+                "real_provider_calls": 0, "native_theme_verification": "pending separate grant"
+            });
+            if let Some(path) = std::env::var_os("LUNA_SIDEBAR_NOTICE_EVIDENCE_DIR") {
+                let path = PathBuf::from(path);
+                std::fs::create_dir_all(&path).unwrap();
+                std::fs::write(
+                    path.join(format!("{name}.json")),
+                    serde_json::to_vec_pretty(&evidence).unwrap(),
+                )
+                .unwrap();
+            }
+            assert!(passed, "held-unload retained-Shell case: {evidence}");
+        }
+
+        macro_rules! notice_case {
+            ($name:ident, $newer:ident, $fail:expr) => {
+                #[gpui::test]
+                fn $name(cx: &mut TestAppContext) {
+                    run_case(stringify!($name), Newer::$newer, $fail, cx);
+                }
+            };
+        }
+
+        notice_case!(newer_handoff_survives_old_success, Handoff, false);
+        notice_case!(newer_handoff_survives_old_failure, Handoff, true);
+        notice_case!(newer_error_survives_old_success, Error, false);
+        notice_case!(newer_error_survives_old_failure, Error, true);
+        notice_case!(dismissal_survives_old_success, Dismiss, false);
+        notice_case!(dismissal_survives_old_failure, Dismiss, true);
+        notice_case!(
+            identical_new_progress_survives_old_success,
+            IdenticalProgress,
+            false
+        );
+        notice_case!(
+            identical_new_progress_survives_old_failure,
+            IdenticalProgress,
+            true
+        );
+        notice_case!(current_release_success_clears_own_progress, None, false);
+        notice_case!(current_release_failure_remains_visible, None, true);
+    }
+
     fn set_palette_query(window: &gpui::WindowHandle<Shell>, query: &str, cx: &mut TestAppContext) {
         let search = window
             .read_with(cx, |shell, _| {
