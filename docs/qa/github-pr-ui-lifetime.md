@@ -49,8 +49,10 @@ For retained-state assertions, the test records complete semantic PR state:
 preview identity/operation ID, details/checks, badge, notice, busy/reconcile state,
 and title/body/base/head text. It compares the B-context snapshot immediately
 before releasing A with the snapshot afterward, rather than asserting one field.
-Request/reply traces establish that A was already accepted and completed once;
-there must be no synthetic retry or cancellation request and no B create call.
+Request/reply/cancellation traces classify the admitted A request. An accepted
+CREATE must complete exactly once without cancellation, retry or any B create
+call. A retired Preview/Details read may complete or cancel once; either outcome
+must leave the retired/replacement UI context unchanged.
 
 ## Narrow repair design (not yet applied)
 
@@ -111,3 +113,36 @@ per-case JSON traces. Reproduction/runtime results are still unverified; only
 Rust formatting, shell syntax and source-diff checks ran during preparation.
 No production fences changed. Compiler or fixture setup errors, if any, must be
 reported separately from authentic callback/admission assertion failures.
+
+
+## Coordinator fixture corrections (test-only, before baseline execution)
+
+The original immutable reproduction `515550fe` is retained. Source review found
+that its settlement baseline was taken after the transition drained executors.
+A Close transition could already cancel the pending RPC, making a subsequent
+wait for a newer settlement time out rather than classify that cancellation.
+The corrected fixture captures settlement/reply/cancellation counters before
+admission and transition, then waits for that request's reply OR cancellation.
+It records counter deltas and requires exactly one settlement.
+
+Canceled Preview/Details reads are legitimate when their view/context retires.
+The fixture no longer treats them as product failures. It still requires no
+replay, no B create, and no stale UI state application. An identical Git refresh
+must retain its valid pending read and draft rather than cancel/reset it.
+CREATE remains stricter: an already-accepted A create must yield exactly one
+reply/completion and zero cancellations, regardless of whether that completion
+is success or error; B receives no replay and ignores the retired UI result.
+
+The backend cancellation contract makes this distinction necessary:
+`source_control/pull_requests.rs:202` documents that dropping create's future
+kills its gh subprocess and leaves a persisted attempt unresolved. The shared
+runner enforces `kill_on_drop(true)` (`source_control.rs:825`). A unary UI waiter
+is not itself a durable operation owner: `RpcClient::call` sends a request and
+awaits a oneshot (`rpc/src/client.rs:141`), while connection/server teardown can
+abort in-flight handlers (`rpc/src/server.rs`). Therefore the eventual UI fence
+must retire only the view's authority to apply the result; it must not cancel or
+reissue a previously accepted create to achieve that retirement.
+
+These corrections modify only the PR test module/report. The generic helper and
+all production request/response guards are unchanged. Rustfmt, shell syntax and
+source-diff checks ran; Cargo/native/baseline execution remain unrun and gated.

@@ -277,6 +277,18 @@ fn late_case(
         true,
     );
     let before_calls = f.a.calls(method);
+    // Capture before admission/transition: a close can already settle the held
+    // request by cancellation while transition() drains the real executors.
+    let before_settled = f.a.settled(method);
+    let before_trace = f.a.trace();
+    let before_replies = before_trace
+        .iter()
+        .filter(|event| event["method"] == method && event["phase"] == "reply")
+        .count();
+    let before_canceled = before_trace
+        .iter()
+        .filter(|event| event["method"] == method && event["phase"] == "canceled")
+        .count();
     f.pane.update(cx, |pane, cx| match operation {
         Operation::Preview => pane.load_pr_panel(None, cx),
         Operation::Details => pane.load_pr_panel(Some(42), cx),
@@ -285,7 +297,8 @@ fn late_case(
     rpc::pump_until(cx, &runtime, |_| f.a.calls(method) == before_calls + 1);
     transition(&f, cx, &runtime, change);
     let before = snapshot(&f, cx);
-    let before_settled = f.a.settled(method);
+    // settled counts both reply and cancellation. If transition already
+    // canceled a read, this barrier must classify it instead of timing out.
     f.a.release(method);
     rpc::pump_until(cx, &runtime, |_| f.a.settled(method) > before_settled);
     rpc::drain(cx, &runtime);
@@ -294,12 +307,23 @@ fn late_case(
     let canceled = trace_a
         .iter()
         .filter(|event| event["method"] == method && event["phase"] == "canceled")
-        .count();
+        .count()
+        - before_canceled;
+    let replies = trace_a
+        .iter()
+        .filter(|event| event["method"] == method && event["phase"] == "reply")
+        .count()
+        - before_replies;
+    let settled = f.a.settled(method) - before_settled;
+    let read_cancellation_allowed =
+        !matches!(operation, Operation::Create) && !matches!(change, Transition::Unchanged);
     rpc::write_trace(
         name,
         &json!({"case":name,"operation":format!("{operation:?}"),"transition":format!("{change:?}"),"failureReply":fail,
         "beforeRelease":before,"afterRelease":after,"stateMatchesBefore":before==after,
-        "aCalls":f.a.calls(method),"aSettled":f.a.settled(method),"aCanceled":canceled,
+        "aCalls":f.a.calls(method),"aSettledBefore":before_settled,"aSettled":f.a.settled(method),
+        "admittedRequestSettlements":settled,"admittedRequestReplies":replies,"admittedRequestCanceled":canceled,
+        "readCancellationAllowed":read_cancellation_allowed,
         "bCreates":f.b.calls(methods::CREATE_GITHUB_DRAFT_PR),"a":trace_a,"b":f.b.trace(),"hostedWrites":0}),
     );
     assert_eq!(
@@ -308,9 +332,30 @@ fn late_case(
         "A must not be replayed"
     );
     assert_eq!(
-        canceled, 0,
-        "An accepted A operation must complete, not be canceled"
+        settled, 1,
+        "The admitted A request must settle exactly once"
     );
+    if matches!(operation, Operation::Create) {
+        // Retiring a view must not cancel the accepted write's backend future:
+        // that would kill gh and leave its journal outcome uncertain.
+        assert_eq!(canceled, 0, "An accepted A CREATE must not be canceled");
+        assert_eq!(
+            replies, 1,
+            "An accepted A CREATE must complete exactly once"
+        );
+    } else if read_cancellation_allowed {
+        assert_eq!(
+            replies + canceled,
+            1,
+            "A retired read may reply or be canceled once"
+        );
+    } else {
+        assert_eq!(
+            canceled, 0,
+            "An unchanged Git refresh must not cancel its valid read"
+        );
+        assert_eq!(replies, 1);
+    }
     assert_eq!(
         f.b.calls(methods::CREATE_GITHUB_DRAFT_PR),
         0,
