@@ -631,3 +631,7 @@ impl Render for ProjectCommandPanel {
 #[cfg(test)]
 #[path = "project_commands_engine_epoch_tests.rs"]
 mod engine_epoch_tests;
+
+#[cfg(test)]
+#[path = "project_commands_accessibility_tests.rs"]
+mod accessibility_tests;
