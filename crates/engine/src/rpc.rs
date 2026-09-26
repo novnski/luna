@@ -1167,7 +1167,11 @@ impl EngineRpc {
         }
     }
 
-    async fn attach_codex_live_limits(&self, snapshot: &mut luna_proto::UsageSnapshot) {
+    async fn attach_codex_live_limits(
+        &self,
+        snapshot: &mut luna_proto::UsageSnapshot,
+        selected: Option<&(std::path::PathBuf, bool)>,
+    ) {
         if crate::usage::synthetic_mode_requested() {
             return;
         }
@@ -1178,7 +1182,7 @@ impl EngineRpc {
         else {
             return;
         };
-        let Ok((home, force_file_auth)) = self.agent_accounts.codex_usage_target() else {
+        let Some((home, force_file_auth)) = selected else {
             snapshot.limits[index].detail = Some("Selected Codex account is unavailable".into());
             return;
         };
@@ -1187,13 +1191,13 @@ impl EngineRpc {
                 Some("Selected Codex account home is unavailable".into());
             return;
         }
-        let client = luna_harness::codex::native::CodexNativeClient::new(&home)
-            .for_execution_home(&home, force_file_auth);
+        let client = luna_harness::codex::native::CodexNativeClient::new(home)
+            .for_execution_home(home, *force_file_auth);
         let outcome =
             tokio::time::timeout(Duration::from_secs(8), client.read_account_rate_limits()).await;
         // A user can switch named Codex accounts while the provider replies.
         // Never publish a different selected home under the old selection.
-        if self.agent_accounts.codex_usage_target().ok() != Some((home, force_file_auth)) {
+        if self.agent_accounts.codex_usage_target().ok().as_ref() != selected {
             snapshot.limits[index].availability = luna_proto::LimitAvailability::Unverified;
             snapshot.limits[index].detail =
                 Some("Codex account selection changed during refresh".into());
@@ -5232,6 +5236,16 @@ impl EngineRpc {
             }
             TaskCommandIntent::SetArchived { archived } => {
                 let native = self.task_identity.has_native_codex_binding(task_id);
+                let _archive_transition = if native {
+                    Some(
+                        self.sessions
+                            .prepare_native_archive(task_id)
+                            .await
+                            .map_err(TaskProjectionError::Mutation)?,
+                    )
+                } else {
+                    None
+                };
                 if native {
                     self.task_identity
                         .reconcile_task(task_id, self.sessions.has_live_run(task_id))
@@ -7562,7 +7576,10 @@ impl RpcService for EngineRpc {
                 let include_limits = request.include_limits;
                 let synthetic = crate::usage::synthetic_mode_requested();
                 let enabled = Self::usage_providers_for(&self.registry.enabled_set());
-                let homes = (!synthetic).then(|| self.agent_accounts.usage_history_paths());
+                let selection = (!synthetic).then(|| self.agent_accounts.usage_history_selection());
+                let codex_target = selection.as_ref().and_then(|(target, _, _)| target.clone());
+                let homes = selection
+                    .map(|(codex, claude, data)| (codex.map(|(home, _)| home), claude, data));
                 let opencode = (include_limits
                     && !synthetic
                     && enabled.contains(&luna_proto::UsageProvider::OpenCodeGo))
@@ -7589,8 +7606,25 @@ impl RpcService for EngineRpc {
                 })
                 .await
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let ensure_codex_selection = || {
+                    if !synthetic
+                        && enabled.contains(&luna_proto::UsageProvider::Codex)
+                        && self.agent_accounts.codex_usage_target().ok() != codex_target
+                    {
+                        Err(RpcError::Failed(
+                            "Codex account selection changed during usage refresh; refresh again"
+                                .into(),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                };
+                // Do not start a quota probe for a selection already retired
+                // during price refresh or the history scan.
+                ensure_codex_selection()?;
                 if include_limits && enabled.contains(&luna_proto::UsageProvider::Codex) {
-                    self.attach_codex_live_limits(&mut snapshot).await;
+                    self.attach_codex_live_limits(&mut snapshot, codex_target.as_ref())
+                        .await;
                 }
                 if let Some(opencode) = opencode
                     && let Ok(limit) = opencode.await
@@ -7612,8 +7646,10 @@ impl RpcService for EngineRpc {
                         "Claude refresh failed · last good values",
                     );
                 }
-                // A switch can change while a transcript or quota read is in
-                // flight. Re-read the device setting before publishing it.
+                // Fence the whole refresh, including history-only requests
+                // and waits for other providers after Codex quota completes.
+                ensure_codex_selection()?;
+                // Provider enablement can also change during the refresh.
                 let still_enabled = Self::usage_providers_for(&self.registry.enabled_set());
                 Self::retain_enabled_usage(&mut snapshot, &still_enabled);
                 for source in &mut snapshot.summary.sources {

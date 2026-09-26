@@ -852,7 +852,7 @@ async fn catalog_decodes_fragmented_http_without_retaining_unused_fields() {
     let expected: ProviderCatalog = serde_json::from_str(&body).unwrap();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
-        socket.read(&mut [0; 4096]).await.unwrap();
+        assert!(socket.read(&mut [0; 4096]).await.unwrap() > 0);
         socket
             .write_all(
                 format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes(),
@@ -881,7 +881,7 @@ async fn cancelled_catalog_decode_releases_a_stalled_http_body() {
     let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
-        socket.read(&mut [0; 4096]).await.unwrap();
+        assert!(socket.read(&mut [0; 4096]).await.unwrap() > 0);
         socket
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n{")
             .await
