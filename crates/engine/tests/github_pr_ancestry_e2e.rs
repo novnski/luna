@@ -3,7 +3,8 @@
 //! All GitHub calls go to the local fake gh; no create request is sent.
 #![cfg(unix)]
 
-use std::env::{self, OsString};
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
