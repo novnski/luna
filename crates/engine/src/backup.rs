@@ -1157,6 +1157,7 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
     // File hashes preserve its contents; validate table presence before export
     // and again when inspecting the staged database.
     for (introduced, table) in [
+        (12, "local_executable_authority"),
         (13, "project_command_configs"),
         (13, "project_command_runs"),
         (14, "side_chats"),

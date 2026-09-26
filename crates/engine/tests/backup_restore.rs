@@ -438,6 +438,9 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
          DROP TABLE side_chat_entries;
          DROP TABLE side_chat_sends;
          DROP TABLE side_chats;
+         DROP TABLE task_execution_lineage;
+         ALTER TABLE task_command_state DROP COLUMN workspace_repair_revision;
+         ALTER TABLE task_command_receipts DROP COLUMN workspace_repair_revision;
          DELETE FROM schema_migrations WHERE version > 9;",
     )
     .unwrap();
@@ -461,7 +464,7 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 14);
+    assert_eq!(schema, 15);
 }
 
 #[test]
@@ -712,7 +715,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 14);
+    assert_eq!(backup.manifest.databases[0].schema_version, 15);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)
@@ -1187,7 +1190,7 @@ fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
     let backup = service(&root)
         .export(&backups.join("side-chat.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 14);
+    assert_eq!(backup.manifest.databases[0].schema_version, 15);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();
