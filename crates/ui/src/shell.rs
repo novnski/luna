@@ -14967,7 +14967,7 @@ mod exit_regressions {
                     "id": id, "parentId": HANDOFF_SOURCE, "title": "Held unload fixture",
                     "createdAtMs": 1, "expiresAtMs": i64::MAX, "state": "active",
                     "detail": null, "messageCount": 0,
-                    "config": {"harness": "mock", "model": "synthetic-notice"},
+                    "config": {"harness": "mock", "model": "synthetic-notice", "sandbox": "read-only"},
                     "contextMode": "snapshot", "originMessageId": "handoff-assistant",
                     "anchorText": "Visible assistant context"
                 })
