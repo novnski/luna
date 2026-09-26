@@ -321,6 +321,92 @@ async fn a_foreign_edit_cannot_reuse_a_locally_authorized_queue_id() {
 }
 
 #[tokio::test]
+async fn stale_viewer_queue_mutations_cannot_rewrite_the_owners_claimed_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let host_runs = Arc::new(AtomicUsize::new(0));
+    let viewer_runs = Arc::new(AtomicUsize::new(0));
+    let host = core(&root.path().join("host"), host_runs.clone());
+    let viewer = core(&root.path().join("viewer"), viewer_runs.clone());
+    viewer
+        .workspace
+        .set_chat_host(CHAT, &host.device_id)
+        .unwrap();
+    let host_doc = host.doc_host.open(CHAT).unwrap();
+    host.doc_host.pause_all_queues();
+    let id = host
+        .doc_host
+        .queue_message(CHAT, "frozen provider prompt", vec![])
+        .unwrap();
+    host.doc_host
+        .queue_message(CHAT, "held sibling", vec![])
+        .unwrap();
+
+    // Both engines see Held. Disconnect their document bridge before the
+    // owner claims delivery, so the viewer must not trust its stale status.
+    let viewer_doc = viewer.doc_host.open(CHAT).unwrap();
+    let viewer_sink = EngineChatSink::new(&viewer_doc.doc_arc(), viewer.store.clone(), CHAT);
+    assert!(matches!(
+        viewer_sink.apply_row(&host_doc.doc().export_snapshot().unwrap(), 1),
+        luna_sync::chat_client::RowImportOutcome::Applied
+    ));
+    assert!(matches!(
+        host_doc
+            .doc()
+            .claim_queued(
+                &id,
+                1,
+                "owner-delivery",
+                luna_doc::QueueClaimMode::NextTurn,
+                1,
+            )
+            .unwrap(),
+        luna_doc::QueueClaimOutcome::Claimed(_)
+    ));
+    let original = host_doc.doc().read_queue().unwrap();
+    let client = luna_rpc::memory_client(viewer.rpc_service());
+    let edit = client
+        .call(
+            luna_rpc::methods::UPDATE_QUEUED_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT, "id": id, "text": "stale viewer replacement",
+            }),
+        )
+        .await;
+    let moved = client
+        .call(
+            luna_rpc::methods::MOVE_QUEUED_MESSAGE,
+            serde_json::json!({
+                "chatId": CHAT, "id": id, "toIndex": 1,
+            }),
+        )
+        .await;
+
+    // Reconnect through the actual host sink. Authority must be checked at
+    // the mutation boundary, before an unsafe update enters the CRDT stream.
+    // Include the viewer engine's own initialization operations too; a
+    // delta from after its first import would omit those causal dependencies.
+    let update = viewer_doc.doc().export_snapshot().unwrap();
+    let host_sink = EngineChatSink::new(&host_doc.doc_arc(), host.store.clone(), CHAT);
+    assert!(matches!(
+        host_sink.apply_row(&update, 1),
+        luna_sync::chat_client::RowImportOutcome::Applied
+    ));
+    assert_eq!(
+        host_doc.doc().read_queue().unwrap(),
+        original,
+        "stale viewer changed claimed evidence: edit={edit:?}, move={moved:?}"
+    );
+    assert!(
+        edit.is_err() && moved.is_err(),
+        "non-owner writes must fail closed"
+    );
+    assert_eq!(host_runs.load(Ordering::SeqCst), 0);
+    assert_eq!(viewer_runs.load(Ordering::SeqCst), 0);
+    host.shutdown().await;
+    viewer.shutdown().await;
+}
+
+#[tokio::test]
 async fn locally_accepted_command_and_queue_still_dispatch() {
     let root = tempfile::tempdir().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));

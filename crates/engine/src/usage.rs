@@ -182,6 +182,10 @@ struct Record {
     tokens: UsageTokens,
     cost_usd: Option<f64>,
     dedupe: Option<String>,
+    /// Compatible cached evidence whose original transcript has not yet been
+    /// reparsed after an upgrade. Retained totals must remain visibly partial.
+    #[serde(default)]
+    legacy_parser: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -203,6 +207,8 @@ struct CachedFile {
     tail_guard: String,
     records: Vec<Record>,
     codex: CodexState,
+    #[serde(default)]
+    legacy_parser: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -287,6 +293,7 @@ fn parse_claude(line: &str) -> Option<Record> {
         },
         cost_usd,
         dedupe,
+        legacy_parser: false,
     })
 }
 
@@ -375,6 +382,7 @@ fn parse_codex(line: &str, state: &mut CodexState) -> Option<Record> {
         // its old path is still cached. Its records remain the same work.
         dedupe: (!state.session.is_empty())
             .then(|| serde_json::to_string(&(&state.session, at_ms, &signature)).unwrap()),
+        legacy_parser: false,
     })
 }
 
@@ -423,7 +431,8 @@ fn scan_file(
     let size = metadata.len();
     let modified = modified_ns(&metadata);
     let old = previous.filter(|old| {
-        old.complete_offset <= size
+        !old.legacy_parser
+            && old.complete_offset <= size
             && guard(path, old.complete_offset)
                 .is_ok_and(|(head, tail)| head == old.head_guard && tail == old.tail_guard)
     });
@@ -451,6 +460,7 @@ fn scan_file(
             tail_guard: String::new(),
             records: Vec::new(),
             codex: CodexState::default(),
+            legacy_parser: false,
         });
     let mut reader = BufReader::new(File::open(path)?);
     reader.seek(SeekFrom::Start(result.complete_offset))?;
@@ -503,7 +513,8 @@ fn cached_file_is_unchanged(path: &Path, cached: &CachedFile) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;
     };
-    cached.complete_offset == metadata.len()
+    !cached.legacy_parser
+        && cached.complete_offset == metadata.len()
         && cached.size == metadata.len()
         && cached.modified_ns == modified_ns(&metadata)
         && guard(path, cached.complete_offset)
@@ -902,11 +913,54 @@ fn lookup_price<'a>(
 }
 
 fn load_cache(path: Option<&Path>) -> ScanCache {
-    path.filter(|path| safe_cache_file(path))
+    let mut cache = path
+        .filter(|path| safe_cache_file(path))
         .and_then(|path| fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice::<ScanCache>(&bytes).ok())
-        .filter(|cache| cache.version == CACHE_VERSION)
-        .unwrap_or_default()
+        .filter(|cache| cache.version == CACHE_VERSION || cache.version == 2)
+        .unwrap_or_default();
+    if cache.version == 2 {
+        // Version 2 has the same record schema, but older Codex correlation.
+        // Available files must replay from zero. Missing files are irreplaceable
+        // historical evidence, so keep them with explicit provenance instead
+        // of erasing their totals during a parser upgrade.
+        for file in cache.files.values_mut() {
+            file.legacy_parser = true;
+            for record in &mut file.records {
+                record.legacy_parser = true;
+            }
+        }
+    }
+    cache
+}
+
+fn legacy_record_identity(provider: UsageProvider, record: &Record) -> String {
+    serde_json::to_string(&(
+        provider,
+        &record.session,
+        record.at_ms,
+        &record.model,
+        record.tokens,
+    ))
+    .expect("usage record identity is serializable")
+}
+
+fn discard_superseded_legacy_records(records: &mut Vec<(UsageProvider, Record)>) {
+    if !records.iter().any(|(_, record)| record.legacy_parser) {
+        return;
+    }
+    let reparsed: HashSet<_> = records
+        .iter()
+        .filter(|(_, record)| !record.legacy_parser && !record.session.is_empty())
+        .map(|(provider, record)| legacy_record_identity(*provider, record))
+        .collect();
+    // A rollout may have moved to the archive since the legacy scan. Its new
+    // path was reparsed above, so the retained old path must not count again.
+    records.retain(|(provider, record)| {
+        !record.legacy_parser
+            || record.session.is_empty()
+            || !reparsed.contains(&legacy_record_identity(*provider, record))
+    });
 }
 
 fn save_cache(path: Option<&Path>, cache: &ScanCache) {
@@ -956,21 +1010,26 @@ fn add_source_configured(
             return source;
         }
     };
-    if !root.exists() {
-        source.status = UsageSourceStatus::Missing;
-        source.detail = Some("Configured synthetic home is missing".into());
-        return source;
-    }
+    let root_missing = !root.exists();
     source.fingerprint = fingerprint(provider, &root);
-    source.status = UsageSourceStatus::Ready;
-    source.detail = None;
+    source.status = if root_missing {
+        UsageSourceStatus::Missing
+    } else {
+        UsageSourceStatus::Ready
+    };
+    source.detail = root_missing.then(|| "Configured transcript directory is missing".into());
     // T3 keeps 36h of mtime slack before the first requested period. A file
     // modified around local midnight can still contain in-window records.
-    let (files, partial) = candidate_files(&root, cutoff_ms - 36 * 3_600_000, deadline);
+    let (files, partial) = if root_missing {
+        (Vec::new(), false)
+    } else {
+        candidate_files(&root, cutoff_ms - 36 * 3_600_000, deadline)
+    };
     if partial {
         source.status = UsageSourceStatus::Partial;
         source.detail = Some("Scan time or file bound reached".into());
     }
+    let record_start = all.len();
     let mut sessions = HashSet::new();
     let mut processed_keys = HashSet::new();
     for path in files {
@@ -1047,6 +1106,11 @@ fn add_source_configured(
             }
         }
     }
+    if root_missing && all.len() > record_start {
+        source.status = UsageSourceStatus::Partial;
+        source.detail =
+            Some("Cached history retained; provider transcript directory is unavailable".into());
+    }
     source.distinct_sessions = sessions.len() as u64;
     source
 }
@@ -1060,19 +1124,28 @@ fn add_live_source(
     cache: &mut ScanCache,
     all: &mut Vec<(UsageProvider, Record)>,
 ) -> UsageSource {
-    let root = home.map(|home| {
+    // Resolve the surviving parent first so a removed child keeps the same
+    // cache identity, including macOS /var -> /private/var aliases.
+    let home = home.map(|home| home.canonicalize().unwrap_or_else(|_| home.to_path_buf()));
+    let root = home.as_deref().map(|home| {
         let root = home.join(directory);
         root.canonicalize().unwrap_or(root)
     });
     let mut source = add_source_configured(provider, Ok(root), cutoff_ms, deadline, cache, all);
     if provider == UsageProvider::Codex
-        && let Some(home) = home
+        && let Some(home) = home.as_deref()
     {
         let archive = home.join("archived_sessions");
+        let archive = archive.canonicalize().unwrap_or(archive);
         // This directory is optional until the first native archive. A missing
-        // archive is not a scan failure, and archive-only homes are valid.
-        if archive.exists() {
-            let archive = archive.canonicalize().unwrap_or(archive);
+        // archive is not a scan failure unless retained history needs it.
+        let prefix = format!("{provider:?}:");
+        let cached_archive = cache.files.iter().any(|(key, file)| {
+            key.strip_prefix(&prefix)
+                .is_some_and(|path| Path::new(path).starts_with(&archive))
+                && file.records.iter().any(|record| record.at_ms >= cutoff_ms)
+        });
+        if archive.exists() || cached_archive {
             let archived =
                 add_source_configured(provider, Ok(Some(archive)), cutoff_ms, deadline, cache, all);
             source.files_scanned += archived.files_scanned;
@@ -1109,10 +1182,16 @@ fn live_cache_file(data_dir: &Path, name: &str) -> Option<PathBuf> {
     // The scan cache belongs to LUNA, never inside a provider's private home.
     let root = data_dir.canonicalize().ok()?;
     // Codex-managed checkouts live below ~/.codex/worktrees. Their own signed
-    // development app data is still LUNA-owned, not a provider transcript or
-    // credential directory. Keep this exception exact to that app bundle's
-    // data location; arbitrary children of a provider home remain forbidden.
-    let managed_dev_data = root.ends_with("target/luna-macos-dev/data")
+    // development/QA app data is still LUNA-owned, not a provider transcript
+    // or credential directory. Allow only the standard dev location or one
+    // identity directly below target/luna-qa-data, never arbitrary children
+    // of a provider home. Canonicalization above rejects escaping symlinks.
+    let managed_app_location = root.ends_with("target/luna-macos-dev/data")
+        || root
+            .parent()
+            .is_some_and(|parent| parent.ends_with("target/luna-qa-data"))
+            && registered_worktree_data(&root);
+    let managed_dev_data = managed_app_location
         && root.ancestors().any(|ancestor| {
             ancestor.file_name().is_some_and(|name| name == "worktrees")
                 && ancestor
@@ -1129,6 +1208,27 @@ fn live_cache_file(data_dir: &Path, name: &str) -> Option<PathBuf> {
     }
     let path = root.join(name);
     safe_cache_file(&path).then_some(path)
+}
+
+fn registered_worktree_data(root: &Path) -> bool {
+    let Some(checkout) = root.ancestors().nth(3) else {
+        return false;
+    };
+    let git_file = checkout.join(".git");
+    let Ok(pointer) = fs::read_to_string(&git_file) else {
+        return false;
+    };
+    let Some(git_dir) = pointer.trim().strip_prefix("gitdir: ") else {
+        return false;
+    };
+    let git_dir = checkout.join(git_dir);
+    let Ok(backlink) = fs::read_to_string(git_dir.join("gitdir")) else {
+        return false;
+    };
+    // Git's reciprocal registration must identify this exact checkout. A
+    // copied .git file or a directory merely named worktrees is insufficient.
+    let registered = git_dir.join(backlink.trim()).canonicalize();
+    matches!((registered, git_file.canonicalize()), (Ok(registered), Ok(actual)) if registered == actual)
 }
 
 fn live_cache_path(data_dir: &Path) -> Option<PathBuf> {
@@ -1519,7 +1619,13 @@ fn snapshot_impl(
             ),
         )
     };
-    let sources: Vec<_> = vec![
+    discard_superseded_legacy_records(&mut records);
+    let legacy_providers: HashSet<_> = records
+        .iter()
+        .filter(|(_, record)| record.legacy_parser)
+        .map(|(provider, _)| *provider as u8)
+        .collect();
+    let mut sources: Vec<_> = vec![
         codex,
         claude,
         UsageSource {
@@ -1541,6 +1647,13 @@ fn snapshot_impl(
             .is_none_or(|items| items.contains(&source.provider))
     })
     .collect();
+    for source in &mut sources {
+        if legacy_providers.contains(&(source.provider as u8)) {
+            source.status = UsageSourceStatus::Partial;
+            source.detail =
+                Some("Older cached history retained; original transcripts are unavailable".into());
+        }
+    }
     // Longest supported window plus one day of boundary slack.
     let retention = read_at - 91 * 86_400_000;
     cache.files.retain(|_, file| {
@@ -1572,7 +1685,7 @@ fn snapshot_impl(
         until_ms,
         &price_rates,
     );
-    let warnings = live
+    let mut warnings: Vec<String> = live
         .as_ref()
         .filter(|_| {
             sources.iter().any(|source| {
@@ -1585,6 +1698,9 @@ fn snapshot_impl(
         .and_then(|(_, _, data_dir)| live_pricing_warning(data_dir))
         .into_iter()
         .collect();
+    if !legacy_providers.is_empty() {
+        warnings.push("Some history uses older cached totals because its original transcripts are unavailable; totals may be incomplete".into());
+    }
     UsageSnapshot {
         summary: UsageSummary {
             contract_version: USAGE_CONTRACT_VERSION,
@@ -1755,6 +1871,7 @@ mod tests {
             },
             cost_usd: Some(99.0),
             dedupe: None,
+            legacy_parser: false,
         };
         let prices = HashMap::from([(
             "fake-model".into(),
@@ -1958,6 +2075,7 @@ mod tests {
             },
             cost_usd: None,
             dedupe: None,
+            legacy_parser: false,
         };
         let unpriced = Record {
             model: "unknown-model".into(),
@@ -2044,6 +2162,7 @@ mod tests {
             tokens,
             cost_usd: None,
             dedupe: None,
+            legacy_parser: false,
         };
         let source = UsageSource {
             provider: UsageProvider::Codex,
