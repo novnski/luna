@@ -137,12 +137,14 @@ fn focus_from_preview(
     trace_name: &str,
 ) -> gpui::FocusHandle {
     let bounds = visual.debug_bounds(selector);
-    let focused = visual.update(|window, app| {
+    let (focus_path, focused) = visual.update(|window, app| {
         window.focus(preview, app);
+        let mut path = vec![window.focused(app).map(|handle| format!("{handle:?}"))];
         for _ in 0..steps {
             window.focus_next(app);
+            path.push(window.focused(app).map(|handle| format!("{handle:?}")));
         }
-        window.focused(app)
+        (path, window.focused(app))
     });
     fixture::write_trace(
         trace_name,
@@ -152,6 +154,7 @@ fn focus_from_preview(
             "targetBounds":bounds.map(|bounds| format!("{bounds:?}")),
             "startingHandle":format!("{preview:?}"),
             "tabSteps":steps,
+            "focusPath":focus_path,
             "focusedHandle":focused.as_ref().map(|handle| format!("{handle:?}")),
             "rpcCount":{"get":rpc.calls(methods::GET_PROJECT_COMMANDS),"save":rpc.calls(methods::SAVE_PROJECT_COMMANDS)},
         }),
@@ -216,7 +219,45 @@ fn command_card_rendered_edit_toggles_and_cancel(cx: &mut TestAppContext) {
         &rpc,
         "project-command-ax-rendered-setup-focused",
     );
-    visual.update(|window, app| key(window, app, "space"));
+    let space = gpui::Keystroke::parse("space").unwrap();
+    let before_space = card.read_with(cx, |card, _| json!({"setup":card.setup,"wait":card.wait}));
+    let (after_down, focused_down) = visual.update(|window, app| {
+        window.dispatch_event(
+            gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                keystroke: space.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            }),
+            app,
+        );
+        (
+            card.read_with(app, |card, _| json!({"setup":card.setup,"wait":card.wait})),
+            window.focused(app).map(|handle| format!("{handle:?}")),
+        )
+    });
+    let (after_up, focused_up) = visual.update(|window, app| {
+        window.dispatch_event(
+            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: space }),
+            app,
+        );
+        (
+            card.read_with(app, |card, _| json!({"setup":card.setup,"wait":card.wait})),
+            window.focused(app).map(|handle| format!("{handle:?}")),
+        )
+    });
+    fixture::write_trace(
+        "project-command-ax-rendered-setup-space-phases",
+        &json!({
+            "source":file!(),
+            "targetSelector":"qa-command-setup",
+            "before":before_space,
+            "afterKeyDown":after_down,
+            "afterKeyUp":after_up,
+            "focusedAfterDown":focused_down,
+            "focusedAfterUp":focused_up,
+            "rpcCount":{"get":rpc.calls(methods::GET_PROJECT_COMMANDS),"save":rpc.calls(methods::SAVE_PROJECT_COMMANDS)},
+        }),
+    );
     assert!(!card.read_with(cx, |card, _| card.setup));
     visual.update(|window, app| click(window, app, wait.center()));
     assert!(!card.read_with(cx, |card, _| card.wait));

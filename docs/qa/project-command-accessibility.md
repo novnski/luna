@@ -44,6 +44,8 @@ missing-control assertion, so the failing baseline retains its evidence.
 Keyboard cases explicitly focus the Preview URL input and advance through
 the rendered tab order to Setup, Wait, Save or Cancel, recording the focused
 handle and intended selector before dispatching Enter/Space.
+The Setup case records state after Space key-down and key-up separately to
+distinguish a missed target from duplicate activation.
 The GPUI headless `TestWindow`
 does not initialize an accessibility adapter, so it cannot produce a genuine
 AccessKit tree. After the source patch is composed into a signed QA app, open
