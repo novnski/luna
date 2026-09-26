@@ -1,10 +1,10 @@
 # Project execution defaults — 26 September 2026
 
-Latest targeted verification: the Defaults engine-identity correction passes
-eight held-RPC cases on `86111689`, and the corrected Commands same-engine
-control passes 1/1. Combined verification after the Commands runtime correction
-and native app acceptance remain pending. Earlier failures and exact-source
-proofs are preserved below.
+Latest combined verification on `04da0cf3`: **17 affected UI cases passed**,
+with full format, focused engine/UI compile and Clippy all exiting 0. Both
+Defaults and Commands reject the evidenced stale-engine results. Native app
+acceptance remains pending its separately granted desktop handoff. Earlier
+failures and exact-source proofs are preserved below.
 
 Branch: `codex/project-execution-defaults`.
 Worktree: `/Users/iulian/.codex/worktrees/9f21/luna`.
@@ -280,3 +280,39 @@ Cargo was released at completion; the passing control evidence was sent directly
 to the Commands owner under the coordinator's conditional source-only approval.
 No native app or extra test targets ran. The repeatable Defaults runner now
 includes its eight held-RPC cases and retains their JSON in `engine-epoch`.
+
+
+### Both Projects fences verified together
+
+The Commands-owned production fence `40b0720c` was source-reviewed and merged
+with the verified Defaults guard into clean `04da0cf3b4c9b38f5bfb2d35b7830ef321da7481`.
+It pins load/execute results and automatic/manual Output events to engine
+scope, retires stale cached/busy/request state, and makes the parent terminal
+listener reject stale scope before selecting or looking up output. It retains
+the existing one-second poll cadence and does not cancel accepted backend jobs.
+No assertion or shared fixture was changed during this production correction.
+
+The explicitly granted combined batch passed:
+
+| Check | Result | Wall time |
+| --- | --- | --- |
+| Both engine-epoch suites | 14 passed, 0 failed | 51s |
+| Original picker defaults regressions | 3 passed, 0 failed | 8s |
+| Full workspace format | Exit 0 | 6s |
+| Focused engine/UI compile | Exit 0 | 21s |
+| Focused engine/UI Clippy | Exit 0 | 22s |
+
+All eight Defaults state/draft snapshots remain equal. Commands traces prove
+that stale Output produces no replacement-engine terminal lookup, B's status
+can load after retiring A, and normal same-engine execution/disposal remains
+usable. No warning was attributed to either new Projects settings/commands
+module in this Clippy run; existing repository warnings remain in the log.
+Previously passing backend suites were retained, not rerun unnecessarily.
+
+Evidence: `target/qa/project-defaults/combined-final-1`, including exact source,
+commands, exits, logs, 15 held-RPC JSON artifacts, compact `summary.json`, and
+actual before/after budget. Aggregate usage was 149.409 → 149.672 GiB under the
+coordinator-approved temporary 10 GiB reservation and unchanged 170 GiB ceiling.
+This target/debug measured 9.1 GiB; free disk was about 390 GiB. Cargo was released
+promptly and the Commands owner/coordinator received the results. No native
+app was packaged or launched in this grant.
