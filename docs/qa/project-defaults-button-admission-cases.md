@@ -40,9 +40,9 @@ required stale-frame input has been delivered in a test or native app.
 
 ## Mouse and keyboard have different dispatch rules
 
-The checked-in GPUI `window.rs:5181` mouse path hit-tests and invokes
+The checked-in GPUI `window.rs:5182` mouse path hit-tests and invokes
 `rendered_frame` listeners without first forcing a dirty redraw. Its
-`dispatch_key_event` at line 5233 explicitly draws when dirty before dispatch.
+`dispatch_key_event` at line 5240 explicitly draws when dirty before dispatch.
 Therefore a stale mouse result must not be generalized to keyboard input.
 Record actual paint, focus and dispatch behavior for a keyboard control; a
 framework redraw is expected there and is not evidence of a stale callback.
