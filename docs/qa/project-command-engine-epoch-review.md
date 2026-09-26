@@ -136,3 +136,28 @@ clock and retaining the original no-extra-poll assertion. A second JSON captures
 both release checks and before/after request counts. No runtime fence, helper
 change or stale-case assertion change is included. The corrected control still
 requires its own authentic rerun before declaring the baseline valid.
+
+## Control verified; minimal Commands correction prepared
+
+The corrected positive control passed1/1 on combined `86111689` in Defaults'
+`target/qa/project-defaults/epoch-fixed-2/commands-control.log`. Its drop trace
+records parentReleased=true, commandsReleased=true and status calls2→2. The
+normal same-engine load/execute/Output assertions also passed. These results were
+read back before preparing the runtime correction; the earlier five genuine
+stale-response failures remain preserved separately.
+
+The source correction captures engine generation, engine device and selected
+chat as a Commands scope. State observation invalidates old cache/error/busy
+state and cancels the UI waiter on scope change, then loads the new scope if the
+panel is expanded. Load/execute callbacks compare their captured scope against
+both the retained panel scope and current AppState before changing UI state.
+Output events carry origin scope; the parent checks it before selecting a chat
+or requesting terminal inventory. Manual Output also checks its captured scope.
+The one-second poll cadence and entity lifetime are unchanged.
+
+Cancellation here belongs to the UI waiter. No Stop RPC or backend command
+cancellation was added; accepted command execution remains owned by its original
+engine. No visual redesign, helper change or assertion change accompanies this
+fix. The unused AnyElement import was removed with the same source correction.
+The six Commands regression cases still need an authorized fixed verification
+run; source formatting and diff checks alone do not prove they pass.
