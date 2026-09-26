@@ -155,8 +155,11 @@ fn file_backed_provider_skill_lifecycle() {
         .is_err()
     );
     let missing_project = SkillRoots {
+        codex_home: roots.codex_home.clone(),
+        claude_home: roots.claude_home.clone(),
+        opencode_home: roots.opencode_home.clone(),
         project_root: Some(temp.path().join("missing-project")),
-        ..roots(temp.path())
+        machine_id: roots.machine_id.clone(),
     };
     assert!(
         save_skill_document(
