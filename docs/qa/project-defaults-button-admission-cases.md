@@ -126,3 +126,28 @@ Fresh and busy controls also inspect request targets/CAS fields and the draft.
 
 Direct rustfmt and diff checks passed. No Cargo, fixture execution, test pass or
 behavioral Defaults admission failure is claimed at this source checkpoint.
+
+## Authentic baseline and minimal source correction
+
+On exact clean `ff7f5620`, the granted six-case run compiled and produced
+**3 controls passed / 3 stale-choice failures**, exit 101. Every retained-bounds,
+render-count and scope-transition premise passed before the three wrong-save
+assertions. Each stale project/same-device-generation/different-device input
+sent one save through the new live context. Fresh target/CAS/draft, live-busy
+first-waiter preservation, and same-project metadata plus real keyboard controls
+passed. No fixture or compiler error was classified as a product failure.
+
+The full baseline packet is immutable under
+`target/qa/project-defaults/independent-baseline-1/defaults-admission`; sibling
+Move and Commands results are separate. `classification.json` and `sha256.json`
+at the packet root record group outcomes and raw evidence hashes. The UUID
+MoveProject control passed; no materialization engine companion ran.
+
+After coordinator acceptance, the Defaults-only source correction captures
+rendered project/owner/engine scope for each choice and checks it in both mouse
+and Enter/Space callbacks before invoking the live action method. Engine
+generation is retained even with no selected project, so a stale project-selector
+frame cannot cross a connection replacement. The existing live busy guard,
+CAS payload, draft behavior, keyboard event consumption and all six/fixed-22
+assertions remain unchanged. Direct rustfmt/diff checks passed; fixed execution
+and native acceptance are still awaiting their own grants.

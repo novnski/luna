@@ -368,6 +368,10 @@ impl ProjectsPage {
     ) -> AnyElement {
         let border = theme.border;
         let accent = theme.accent;
+        let origin = self.current_request_scope(cx);
+        // Keep the engine epoch even when no project is selected yet, so an
+        // old project-selector frame cannot cross a connection replacement.
+        let engine_generation = self.state.read(cx).engine_generation();
         widgets::ghost_action(theme)
             .id(id.into())
             .when(
@@ -394,11 +398,22 @@ impl ProjectsPage {
             .child(label.into())
             .on_click(cx.listener({
                 let action = action.clone();
-                move |page, _, _, cx| page.action(action.clone(), cx)
+                let origin = origin.clone();
+                move |page, _, _, cx| {
+                    if page.state.read(cx).engine_generation() == engine_generation
+                        && page.current_request_scope(cx) == origin
+                    {
+                        page.action(action.clone(), cx);
+                    }
+                }
             }))
             .on_key_down(cx.listener(move |page, event: &gpui::KeyDownEvent, _, cx| {
                 if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    page.action(action.clone(), cx);
+                    if page.state.read(cx).engine_generation() == engine_generation
+                        && page.current_request_scope(cx) == origin
+                    {
+                        page.action(action.clone(), cx);
+                    }
                     cx.stop_propagation();
                 }
             }))

@@ -369,3 +369,35 @@ budget. Default reservation was 25 GiB. Cargo was explicitly released; no new
 Defaults admission cases, backend repeats, native package or source edits ran
 during this batch. Defaults' separate six-case admission reproduction is now
 source-only and awaits its own grant; these 22 passes do not claim that coverage.
+
+### Independent 13-case baseline and Defaults admission correction
+
+On exact clean `ff7f5620593253124275c78b55ebd6dfe8e6fd9c`, the explicitly granted
+independent batch observed:
+
+| Group | Actual outcome | Exit | Wall time |
+| --- | --- | --- | --- |
+| Real UUID MoveProject product control | 1 passed | 0 | 12s |
+| Defaults rendered choices | 3 controls passed, 3 genuine stale-input failures | 101 | 54s |
+| Commands same-chat context | 2 controls passed, 4 genuine stale Run/status failures | 101 | 9s |
+
+No compiler, fixture, frame-premise or unexpected-control failures occurred.
+The reached expected regression assertions permitted the next separately
+classified group. The materialization engine companion was explicitly filtered
+out; its UI projection cases do not establish that missing product-path proof.
+Default 25 GiB admission was used, source remained frozen and Cargo was released
+before classification/report work. Separate raw logs, before-assert JSON,
+source/commands/exits and budget snapshots are in
+`target/qa/project-defaults/independent-baseline-1/{uuid-move,defaults-admission,commands-same-chat}`.
+The root `classification.json` summarizes raw deltas; `sha256.json` preserves
+hashes for the finalized baseline packet. Final aggregate was 141.875 GiB.
+
+Defaults' three stale inputs used valid retained frames but resolved the old
+choice against the newly selected project/engine, sending one save each. Its
+fresh, live-busy and metadata/keyboard controls passed, including CAS and draft
+checks. After this accepted proof, the minimal source correction captures
+rendered scope plus engine generation in `choice()` and checks both actual
+mouse and keyboard callbacks before `action()`. Busy handling, backend CAS,
+request-result guards, draft state and all tests/helpers are unchanged.
+No fixed-run pass is claimed before revalidation. Commands' independently owned
+same-chat scope fix is composed only from its reviewed immutable checkpoint.
