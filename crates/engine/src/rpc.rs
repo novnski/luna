@@ -4379,12 +4379,15 @@ impl EngineRpc {
                     .prepare_workspace_identity_repair(task_id, Some(command_id))
                     .await
                     .map_err(TaskProjectionError::Mutation)?;
-                let receipt = self.task_identity.apply_workspace_identity_repair(
-                    task_id,
-                    command_id,
-                    &preview_id,
-                    &evidence_digest,
-                )?;
+                let receipt = self
+                    .task_identity
+                    .apply_workspace_identity_repair(
+                        task_id,
+                        command_id,
+                        &preview_id,
+                        &evidence_digest,
+                    )
+                    .await?;
                 Ok(Some(receipt))
             }
             TaskCommandIntent::CreateChat {
@@ -7991,6 +7994,7 @@ impl RpcService for EngineRpc {
                         workspace_revision,
                         blocker,
                     )
+                    .await
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&preview)
             }

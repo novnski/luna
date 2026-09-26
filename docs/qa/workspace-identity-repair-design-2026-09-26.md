@@ -3,10 +3,11 @@
 Status: the original three allocation regressions reproduced the defect against
 unchanged runtime source. Reviewed runtime source now implements v2 allocation,
 local-only unbound repair and atomic first-run materialization; this composed
-runtime and the separate 15-case repair target are **not compiled or executed**.
-The final per-task registry witness requires Lifecycle's assigned WorkspaceHost
-wrapper follow-up before any atomicity claim or source checkpoint. Builds,
-native actions and provider reads remain gated.
+runtime and the separate 17-case repair target are **not compiled or executed**.
+The final per-task registry witness was composed from Lifecycle `09d24781` before
+the identity source checkpoint `9ff166e3`. Its source review found no further
+blocker in the requested boundaries. Builds, native actions and provider reads
+remain gated; no runtime success is claimed.
 Original baseline: `def1b8a8021f3373919d0e6580677ee9f7e686eb`. Current source composition
 includes committed main `3a173e84` and lifecycle source `7c783f89`.
 Branch: `codex/workspace-identity-repair`. The earlier audit branch remains at
@@ -22,6 +23,8 @@ Branch: `codex/workspace-identity-repair`. The earlier audit branch remains at
 | First managed Run materializes a new worktree | The UUID task must acquire that root-instance before/with first binding, preserving a sibling task at the project root. This is authorized first-run initialization, not permission to auto-repair legacy/bound mismatches. |
 | Same root, aliases and home shorthand | Canonical aliases and owner-local `~` resolve consistently; identity never depends on the RPC client's working directory. |
 | MoveProject changes UI grouping but not cwd | Preserve origin source-space, root instance, binding ID/generation and W. A supported move to a containing local project is not a relocation; legacy proof must preserve the current grouping. |
+| Same source-space ID is retargeted by an LWW project-path update | A task cwd outside the new unrelated folder cannot be locally repaired merely because the space ID still matches origin; no binding or W change is authorized. |
+| Existing linked Git worktree outside the project folder | A registered worktree of that same selected repository remains eligible when its cwd is outside the source folder; containment alone would be too strict. |
 | Historical import preview has a missing cwd | Return readable EnvironmentMissing/non-adoptable metadata with a display-only unresolved reference, never a canonical v2 claim or persisted identity. A valid-root control and existing stored history remain unchanged; permission, file and dangling-alias failures stay distinct. |
 | Genuine root/provider-store/native-ID change | Existing resume/fork fences reject mismatches before provider execution. |
 | Polluted v1 workspace row | Repair must use task-specific historical evidence, never the last shared row as proof for every task. |
@@ -81,10 +84,12 @@ establish isolation of the durable identity registry.
 ## Versioned legacy repair
 
 Use a version-2 envelope at the **existing identity snapshot key**, retaining the
-original event prefix unchanged and appending an explicit identity-association
+original event values/unknown fields in order and appending an explicit association
 repair event. A separate v2 key alone is unsafe: old code could reopen its familiar
 v1 key and resume writing stale state. Current old readers reject a different
-schema or unknown event; verify that refusal with a fixture before release.
+schema or unknown event; verify that refusal with a fixture before release. JSON
+re-encoding may normalize whitespace/key order; byte-for-byte textual preservation
+of the old serialized snapshot is not claimed.
 
 Migration first produces a read-only plan, with per-task/per-binding evidence and
 ambiguities. For a repairable binding, all of the following must agree:
@@ -143,7 +148,7 @@ authorized. The separately granted baseline executed only these three cases.
 Three allocation tests record RPC identities, expected paths, chat rows and
 creation receipts to JSON before their expected failing assertions. The restart
 case shuts down/reopens the same profile and verifies saved receipts as well.
-Additional migration contract tests are source-only and use proposed RPC strings;
+Additional migration contract tests are source-only and use the new RPC method names;
 they are distinguished from the allocation repros in the migration contract.
 
 After a separate build grant, run from this checkout with a unique report directory:

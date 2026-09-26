@@ -628,6 +628,186 @@ async fn legacy_unbound_repair_after_project_move_preserves_origin_and_current_g
     );
 }
 
+/// Construct the old v1 collision in a disposable source project, then reopen
+/// the actual EngineCore/RegistryDoc from its persisted snapshots. The folder
+/// variant changes the same space ID's path by a later LWW upsert; the Git
+/// variant keeps the source project and uses two registered linked worktrees.
+async fn legacy_project_collision(
+    linked_worktrees: bool,
+) -> (Fixture, EngineCore, RpcClient, String, String) {
+    let fixture = Fixture::new();
+    if linked_worktrees {
+        fixture.init_repo();
+        for (name, root) in [("qa-a", &fixture.root_a), ("qa-b", &fixture.root_b)] {
+            git(
+                &fixture.repo,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    name,
+                    root.to_str().unwrap(),
+                    "HEAD",
+                ],
+            );
+        }
+    }
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let space = uuid::Uuid::new_v4().to_string();
+    let project_root = if linked_worktrees {
+        &fixture.repo
+    } else {
+        &fixture.root_a
+    };
+    client
+        .call(
+            methods::MUTATE,
+            json!({"op":"createSpace","spaceId":space,
+        "deviceId":core.device_id,"path":project_root,"gitDetected":linked_worktrees}),
+        )
+        .await
+        .unwrap();
+    let task_a = uuid::Uuid::new_v4().to_string();
+    let task_b = uuid::Uuid::new_v4().to_string();
+    create(
+        &client,
+        &task_a,
+        &core.device_id,
+        Some(&space),
+        &fixture.root_a,
+    )
+    .await;
+    create(
+        &client,
+        &task_b,
+        &core.device_id,
+        Some(&space),
+        &fixture.root_b,
+    )
+    .await;
+    let store = core.store.clone();
+    let device = core.device_id.clone();
+    close(core, client).await;
+
+    let mut identity: Value = serde_json::from_slice(
+        &store
+            .load_snapshot("luna-task-identity-events-v1")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    identity["schemaVersion"] = json!(1);
+    for event in identity["events"].as_array_mut().unwrap() {
+        let field = match event["type"].as_str() {
+            Some("workspaceObserved") => "workspace",
+            Some("taskRegistered") => "task",
+            _ => continue,
+        };
+        event[field]["schemaVersion"] = json!(1);
+        event[field]["workspaceId"] = json!(space);
+    }
+    store
+        .save_snapshot(
+            "luna-task-identity-events-v1",
+            &serde_json::to_vec(&identity).unwrap(),
+        )
+        .unwrap();
+    if !linked_worktrees {
+        let raw = store
+            .load_snapshot(luna_doc::REGISTRY_DOC_ID)
+            .unwrap()
+            .unwrap();
+        let mut registry = luna_doc::RegistryDoc::from_bytes(&raw, &device).unwrap();
+        let mut selected = registry.space(&space).unwrap().unwrap();
+        selected.path = fixture.root_b.to_string_lossy().into_owned();
+        registry.upsert_space(&selected).unwrap();
+        store
+            .save_snapshot(luna_doc::REGISTRY_DOC_ID, &registry.to_bytes().unwrap())
+            .unwrap();
+    }
+    drop(store);
+    let core = fixture.open();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    (fixture, core, client, task_a, space)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lww_space_retarget_cannot_authorize_an_unrelated_legacy_root() {
+    let (fixture, core, client, task, space) = legacy_project_collision(false).await;
+    let before = identity(&client, &task).await;
+    let before_snapshot: luna_proto::TaskCommandRead = client
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":task}))
+        .await
+        .unwrap();
+    let before_w = core.store.workspace_repair_revision(&task).unwrap();
+    let before_log = core
+        .store
+        .load_snapshot("luna-task-identity-events-v1")
+        .unwrap();
+    let plan = client
+        .call(
+            "PreviewWorkspaceIdentityRepair",
+            json!({"taskId":task,"providerProof":"localOnly"}),
+        )
+        .await
+        .unwrap();
+    evidence(
+        "legacy-retargeted-project-refusal",
+        json!({"task":task,"space":space,
+        "originalRoot":fixture.root_a,"currentProjectRoot":fixture.root_b,
+        "before":before,"plan":plan,"revision":before_snapshot.snapshot.task_revision,"W":before_w}),
+    );
+    assert_eq!(
+        plan["status"], "blocked",
+        "unrelated project root cannot prove the original scope"
+    );
+    assert!(
+        plan["blockers"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+    assert!(plan["previewId"].is_null());
+    assert_eq!(identity(&client, &task).await, before);
+    assert_eq!(
+        core.store
+            .load_snapshot("luna-task-identity-events-v1")
+            .unwrap(),
+        before_log
+    );
+    assert_eq!(
+        core.store.workspace_repair_revision(&task).unwrap(),
+        before_w
+    );
+    close(core, client).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registered_linked_worktree_remains_a_valid_legacy_repair_root() {
+    let (fixture, core, client, task, space) = legacy_project_collision(true).await;
+    let before = identity(&client, &task).await;
+    let plan = client
+        .call(
+            "PreviewWorkspaceIdentityRepair",
+            json!({"taskId":task,"providerProof":"localOnly"}),
+        )
+        .await
+        .unwrap();
+    evidence(
+        "legacy-linked-worktree-proof",
+        json!({"task":task,"space":space,
+        "sourceRepo":fixture.repo,"linkedRoot":fixture.root_a,"before":before,"plan":plan,
+        "registrations":git(&fixture.repo,&["worktree","list","--porcelain"])}),
+    );
+    assert_eq!(
+        plan["status"], "ready",
+        "registered checkout of the selected repository must remain repairable"
+    );
+    assert!(plan["previewId"].is_string());
+    close(core, client).await;
+}
+
 // Scope HOME and the materialization root to a child test process; never mutate
 // process-global environment in parallel tests or create a worktree in user data.
 fn isolated_child(test: &str) -> bool {

@@ -753,7 +753,7 @@ impl TaskIdentityService {
         Ok(())
     }
 
-    fn repair_evidence(
+    async fn repair_evidence(
         &self,
         task_id: &str,
         revision: u64,
@@ -763,43 +763,41 @@ impl TaskIdentityService {
             code: code.into(),
             message,
         };
-        let state = lock(&self.inner.state);
-        let view = state.projection.view(task_id).ok_or_else(|| {
-            blocked(
-                "missingIdentity",
-                "Managed task/workspace history is unavailable".into(),
-            )
-        })?;
-        self.validate_repair_watermark(task_id, &state.projection, workspace_revision)
-            .map_err(|error| blocked("repairHistoryMismatch", error.to_string()))?;
-        if view.task.tombstoned
-            || view.task.origin != TaskOrigin::LunaCreated
-            || state
-                .projection
-                .pending_materializations
-                .contains_key(task_id)
-        {
-            return Err(blocked(
-                "ineligibleTask",
-                "Deleted/imported/pending-adoption tasks cannot use local-only association repair"
-                    .into(),
-            ));
-        }
-        let registered = state
-            .projection
-            .registration_workspaces
-            .get(task_id)
-            .cloned()
-            .ok_or_else(|| {
+        let (view, registered) = {
+            let state = lock(&self.inner.state);
+            let view = state.projection.view(task_id).ok_or_else(|| {
                 blocked(
-                    "missingHistory",
-                    "Original workspace registration is unavailable".into(),
+                    "missingIdentity",
+                    "Managed task/workspace history is unavailable".into(),
                 )
             })?;
-        if view.current_binding.is_some() || !view.bindings.is_empty() {
-            return Err(blocked("providerProofRequired", "Current or historical provider bindings require separately reviewed fresh provider-store/native-session proof; localOnly cannot repair them".into()));
-        }
-        drop(state);
+            self.validate_repair_watermark(task_id, &state.projection, workspace_revision)
+                .map_err(|error| blocked("repairHistoryMismatch", error.to_string()))?;
+            if view.task.tombstoned
+                || view.task.origin != TaskOrigin::LunaCreated
+                || state
+                    .projection
+                    .pending_materializations
+                    .contains_key(task_id)
+            {
+                return Err(blocked("ineligibleTask", "Deleted/imported/pending-adoption tasks cannot use local-only association repair".into()));
+            }
+            let registered = state
+                .projection
+                .registration_workspaces
+                .get(task_id)
+                .cloned()
+                .ok_or_else(|| {
+                    blocked(
+                        "missingHistory",
+                        "Original workspace registration is unavailable".into(),
+                    )
+                })?;
+            if view.current_binding.is_some() || !view.bindings.is_empty() {
+                return Err(blocked("providerProofRequired", "Current or historical provider bindings require separately reviewed fresh provider-store/native-session proof; localOnly cannot repair them".into()));
+            }
+            (view, registered)
+        };
         let chat = self
             .inner
             .workspace
@@ -853,10 +851,22 @@ impl TaskIdentityService {
                 })?;
             let root = checked_root(&space.path)
                 .map_err(|e| blocked("currentProjectUnavailable", e.to_string()))?;
-            if space.device_id != self.inner.device_id
-                || (chat.space_id != registered.source_space_id && !current_root.starts_with(&root))
-            {
+            if space.device_id != self.inner.device_id {
                 return Err(blocked("currentProjectConflict", "Current grouping must belong to the owning device and contain the unchanged cwd".into()));
+            }
+            if !current_root.starts_with(&root) {
+                // A linked worktree is normally outside the project folder.
+                // Matching space IDs alone cannot prove that a later LWW path
+                // update still names the repository that owns that worktree.
+                let common = git_common_dir(&root).await.map_err(|_| {
+                    blocked(
+                        "currentProjectConflict",
+                        "Current project no longer contains the task cwd or its linked repository"
+                            .into(),
+                    )
+                })?;
+                verify_linked_checkout(&root, &current_root, &common).await.map_err(|_| blocked(
+                    "currentProjectConflict", "Task cwd is not a registered worktree of the current project repository".into()))?;
             }
             Some(root.to_string_lossy().into_owned())
         } else {
@@ -879,7 +889,7 @@ impl TaskIdentityService {
         ))
     }
 
-    pub(crate) fn preview_workspace_identity_repair(
+    pub(crate) async fn preview_workspace_identity_repair(
         &self,
         task_id: &str,
         revision: u64,
@@ -924,7 +934,10 @@ impl TaskIdentityService {
                 return Ok(preview);
             }
         }
-        let (proof, target) = match self.repair_evidence(task_id, revision, workspace_revision) {
+        let (proof, target) = match self
+            .repair_evidence(task_id, revision, workspace_revision)
+            .await
+        {
             Ok(value) => value,
             Err(blocker) => {
                 preview.blockers.push(blocker);
@@ -971,7 +984,7 @@ impl TaskIdentityService {
         Ok(preview)
     }
 
-    pub(crate) fn apply_workspace_identity_repair(
+    pub(crate) async fn apply_workspace_identity_repair(
         &self,
         task_id: &str,
         command_id: &str,
@@ -979,12 +992,13 @@ impl TaskIdentityService {
         evidence_digest: &str,
     ) -> Result<CommandReceipt, TaskProjectionError> {
         let mutation = |message: &str| TaskProjectionError::Mutation(problem(message));
-        let pending = lock(&self.inner.workspace_repair_previews)
-            .get(preview_id)
-            .cloned()
-            .ok_or_else(|| {
-                mutation("Workspace repair preview is unavailable; review a fresh preview")
-            })?;
+        let pending = {
+            let previews = lock(&self.inner.workspace_repair_previews);
+            previews.get(preview_id).cloned()
+        }
+        .ok_or_else(|| {
+            mutation("Workspace repair preview is unavailable; review a fresh preview")
+        })?;
         if pending.task_id != task_id
             || pending.evidence_digest != evidence_digest
             || pending.expires_at_ms < now_ms()
@@ -1015,6 +1029,7 @@ impl TaskIdentityService {
         }
         let (proof, target) = self
             .repair_evidence(task_id, current.task_revision, current_w)
+            .await
             .map_err(|blocker| TaskProjectionError::Mutation(problem(blocker.message)))?;
         if digest(
             &serde_json::to_string(&proof)

@@ -155,6 +155,18 @@ global log-head token. The shared log transaction appends onto its latest state.
 Previously unresolved legacy task/binding assignments retain explicit fences;
 upgrading the envelope for a different task must not relabel them verified.
 
+The coordinator's same-ID LWW case exposed a further proof boundary before
+verification: `Chat.space_id == original source_space_id` alone does not prove
+the selected project still owns that physical root. A new failure-first case
+mutates the project path from A to unrelated B while A's chat cwd and historic
+registration remain A; localOnly must return blocked without touching W or
+identity. A paired control keeps a registered linked worktree A outside its
+unchanged Git project folder and must remain ready. At preview and apply, a
+current project that does not contain the unchanged cwd needs a local Git
+common-directory **and worktree-registration** match. A failure stays blocked;
+the existing registry-lock witness still catches a project change after that
+read and before commit. Both cases are in the separate target and unrun.
+
 ## Binding provenance and genuine changes
 
 Proof must agree on the exact provider ID, provider instance, profile/home/store
@@ -165,8 +177,10 @@ Changing the store/native ID or moving the genuine root is an explicit rebind or
 relocation operation, not an association repair. Missing, contradictory, ephemeral,
 foreign-active or unsupported provider metadata stays fenced. No startup auto-resume.
 
-The version-2 envelope stays at the existing snapshot key, and old events remain
-the unchanged prefix. A deterministic association event carries the evidence and
+The version-2 envelope stays at the existing snapshot key, retaining old event
+values, unknown fields and order. JSON re-encoding can normalize whitespace/key
+order, so raw serialized byte equality is not claimed. A deterministic association
+event carries the evidence and
 old/new mapping, R/W transition and repair command ID. Old code must refuse v2;
 there is no writable stale v1 shadow. Crash/replay acceptance requires a fault
 injection between transaction preparation/commit and projection publication, with
@@ -209,10 +223,10 @@ but are deliberately **not linked into the baseline Cargo target**:
 
 They seed a **disposable offline v1 fixture**, use EngineCore + memory RPC and
 disabled native metadata, and emit JSON before contract assertions. No credentials
-or provider calls are needed. The RPC strings intentionally describe a proposed
-interface; they do not add a runtime endpoint. If wired against the current
-baseline, they would fail at the absent API, which must be classified separately
-from the three original aliasing failures. They have not been compiled or run.
+or provider calls are needed. The tests were written before the new RPC methods:
+on the original baseline they would fail at the absent API, separately from the
+three aliasing failures. The composed source now implements the methods, but
+these contracts have not been compiled or run.
 The original three-case target's authentic baseline remains separate and contains
 no proposed migration API tests.
 
@@ -225,15 +239,14 @@ identity snapshot. Test source was written before runtime edits and is not yet
 compiled/run. Child tests use disposable HOME/worktree roots and an in-process
 Mock harness only; they never discover an installed provider or credentials.
 
-After API review, explicitly wire the contract module in a separate source change
-before any runtime implementation. Its prospective filtered command is
+The contract module is wired only into the separate target. Its focused command
+after a build grant is
 `CARGO_INCREMENTAL=0 scripts/cargo.sh test --locked -p luna-engine --test
-workspace_identity_roots repair_contract -- --nocapture`; this does not currently
-select runnable tests. Set
+workspace_identity_repair -- --nocapture`. Set
 `LUNA_WORKSPACE_IDENTITY_REPORT_DIR` to a retained unique target/qa directory and
 capture stdout/stderr plus the original exit code, as in the parent design.
 
-Required lifecycle-boundary fixtures before runtime implementation:
+Lifecycle boundary verification for the next gate:
 
 - Pause queue/Run/native-steer and scheduled recovery after their early checks but
   before the transition gate; race repair, then release dispatch and require the
@@ -251,18 +264,20 @@ Required lifecycle-boundary fixtures before runtime implementation:
   provider reads, old-reader refusal, and restoration of v2/W (or explicit restored
   legacy fencing). Never claim a full rollback of both stamp and grants is fenced.
 
-These require reviewed fault-injection seams; no new runtime seam is introduced
-by this source-only preparation. The five unlinked API contracts are not claimed
-to cover these lifecycle races.
+The Lifecycle owner prewrote its source regression and fault-injection seams before
+its runtime changes. Our six linked API contracts have not run and alone do not
+establish these lifecycle races; review the separate authority suite and any
+remaining bound-proof coverage under the future build slot.
 
-## Proposed ownership for implementation review
+## Implementation ownership
 
 Workspace owns root/environment/source-scope allocation, versioned association
-events/proof, per-task preview/apply and identity fixtures. The original lifecycle
-owner should own DocHost admission/drains, Sessions post-gate/steer/idle guards and
-RecoveryRecord stamping. One coordinated sync/store migration and atomic-CAS patch
-must serve both, with only the necessary RPC/WorkspaceHost plumbing. This is a
-proposed split for the coordinator, not a parallel implementation grant.
+events/proof, per-task preview/apply and identity fixtures at `9ff166e3`. The
+Lifecycle owner supplied DocHost admission/drains, Sessions post-gate/steer/idle
+guards, RecoveryRecord stamping, the single schema-15 store migration and atomic
+R/W CAS at `7c783f89`. Its `09d24781` witness validates our captured Chat/project
+proof under the registry lock before store commit. All three commits are composed
+on this branch; they remain uncompiled and untested together.
 
 Do not alter `project_command_*` execution policy, Sidebar behavior, provider
 adapters or backup internals. Their owners review explicit compatibility/restore
