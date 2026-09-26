@@ -72,6 +72,7 @@ pub struct HarnessesPage {
     inventory_task: Option<Task<()>>,
     instruction_saving: bool,
     skill_document: Loadable<SkillDocumentView>,
+    skill_editor_generation: u64,
     skill_identity: Option<String>,
     skill_creating: bool,
     skill_scope: IntegrationSkillScope,
@@ -142,6 +143,7 @@ impl HarnessesPage {
             inventory_task: None,
             instruction_saving: false,
             skill_document: Loadable::Idle,
+            skill_editor_generation: 0,
             skill_identity: None,
             skill_creating: false,
             skill_scope: IntegrationSkillScope::Global,
@@ -485,6 +487,7 @@ impl HarnessesPage {
     }
 
     fn clear_skill_editor(&mut self) {
+        self.skill_editor_generation = self.skill_editor_generation.wrapping_add(1);
         self.skill_document = Loadable::Idle;
         self.skill_identity = None;
         self.skill_creating = false;
@@ -586,6 +589,7 @@ impl HarnessesPage {
         };
         let provider = self.integration_provider;
         let project_id = self.selected_skill_project_id(cx);
+        let editor_generation = self.skill_editor_generation;
         let (scope, name, expected_revision) = if self.skill_creating {
             (
                 self.skill_scope,
@@ -630,6 +634,13 @@ impl HarnessesPage {
                     || page.integration_provider != provider
                     || page.selected_skill_project_id(cx) != project_id
                 {
+                    return;
+                }
+                if page.skill_editor_generation != editor_generation {
+                    if result.is_ok() {
+                        page.load_inventory(false, cx);
+                    }
+                    cx.notify();
                     return;
                 }
                 match result {
@@ -1044,8 +1055,10 @@ impl HarnessesPage {
             .child(widgets::page_subtitle(theme,
                 "LUNA edits the provider's SKILL.md in its selected global or project folder. Existing sessions may need a fresh turn to discover a change."))
             .child(widgets::ghost_action(theme).id("close-skill-editor")
-                .mt(px(8.0)).hover(|style| widgets::ghost_hover(theme, style))
-                .on_click(cx.listener(|page, _, _, cx| { page.clear_skill_editor(); cx.notify(); }))
+                .mt(px(8.0))
+                .when(!self.skill_busy, |el| el.hover(|style| widgets::ghost_hover(theme, style))
+                    .on_click(cx.listener(|page, _, _, cx| { page.clear_skill_editor(); cx.notify(); })))
+                .when(self.skill_busy, |el| el.opacity(0.5))
                 .child("Close"));
         if let Some(error) = &self.skill_error {
             card = card.child(widgets::error_strip(theme, error.clone()));
