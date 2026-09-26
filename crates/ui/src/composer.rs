@@ -6275,10 +6275,31 @@ impl Composer {
                         submission.state == DraftSubmissionState::Pending
                             && submission.snapshot.revision == record.revision
                     });
+                    let task_has_newer_content = !record.text.is_empty()
+                        || !record.attachments.is_empty()
+                        || !record.appshots.is_empty()
+                        || record.context != DraftContext::default();
                     let recoverable_separate = read.submissions.iter().any(|submission| {
-                        submission.state == DraftSubmissionState::Recoverable
-                            && (submission.snapshot.draft_id != record.draft_id
-                                || submission.snapshot.revision < record.revision)
+                        if submission.state != DraftSubmissionState::Recoverable {
+                            return false;
+                        }
+                        // The first send begins on the canvas, but its durable
+                        // submission belongs to the newly minted task. A blank
+                        // task draft with a different id is that ordinary
+                        // re-key, not newer user writing. Revisions from those
+                        // two draft ids are not comparable.
+                        let first_submit_rekey = task_id.as_deref().is_some_and(|task| {
+                            submission.task_id.as_deref() == Some(task)
+                                && submission.snapshot.task_id.is_none()
+                                && record.task_id.as_deref() == Some(task)
+                                && submission.snapshot.draft_id != record.draft_id
+                        });
+                        if first_submit_rekey {
+                            task_has_newer_content
+                        } else {
+                            submission.snapshot.draft_id != record.draft_id
+                                || submission.snapshot.revision < record.revision
+                        }
                     });
                     let appshot_attachment_ids = record
                         .appshots
