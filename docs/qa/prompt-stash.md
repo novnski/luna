@@ -45,3 +45,30 @@ record with the run time, git SHA, fixture profile path, RPC outcomes,
 attachment-owner transitions, and artifact paths. The native pass records
 screenshots of the saved-prompts list and restored composer, plus the exact
 bundle process, IPC listener, signature, and refresh duration.
+
+## Native recall and shortcut follow-up, 27 September 2026
+
+An isolated signed Mock task exposed a recall traversal failure on baseline
+`a6ac8781`: an empty composer recalled the newest sent prompt with Up, but
+another Up moved the caret instead of recalling the older prompt. The
+programmatic replacement emitted `Edited`, which cleared the active history
+browsing state. The composer now recognizes that one replacement event while
+still ending recall on a later user edit or caret move.
+
+With two completed Mock turns, native Up/Up produced BETA then ALPHA;
+Down/Down returned through BETA to an empty composer. A typed draft and a
+modified recalled prompt both resisted further history replacement. Focused
+file-editor Cmd+S saved an edited synthetic file to disk and created no stash
+entry. The armed project-skill Remove control exposed the accessibility label
+`Confirm remove skill and files` while the synthetic skill remained on disk
+after the first click. The previous skill pass had already checked the second
+click, so this follow-up stopped at the confirmation state.
+
+The repeatable Mock seeder, failure and fixed JSON records, build/check/Clippy
+logs, and SHA-256 manifest are in
+`target/qa/stash-followup-2026-09-27/`. CUA supplied native visual and
+accessibility readback in the coordinator chat; no local screenshot file was
+saved in this follow-up. The QA app used its own bundle, data and port 59795,
+passed strict codesigning and exact process/IPC checks, then quit gracefully.
+Its bundle was removed after evidence was preserved; the isolated profile and
+build cache were retained.

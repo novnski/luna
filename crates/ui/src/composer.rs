@@ -4499,6 +4499,7 @@ pub struct Composer {
     stash_menu_open: bool,
     stash_task: Option<Task<()>>,
     history_recall: Option<(String, String)>,
+    history_recall_edit_pending: Option<String>,
     appshot_entrances: HashMap<String, Instant>,
     /// The staged attachment being viewed full-size (click a thumbnail).
     preview: Option<attachments::PreviewImage>,
@@ -4803,8 +4804,17 @@ impl Composer {
             ComposerInputEvent::ModifierSubmitted => this.on_modifier_submit(cx),
             ComposerInputEvent::OppositeSubmitted => this.on_opposite_submit(cx),
             ComposerInputEvent::Edited => {
+                // set_text emits Edited after a history replacement. Keep the
+                // browsing state for that one programmatic edit; a later user
+                // edit must end recall as usual.
+                let history_edit = this.history_recall_edit_pending.take();
+                let from_history = history_edit
+                    .as_deref()
+                    .is_some_and(|expected| this.input.read(cx).text() == expected);
                 this.on_input_edited(cx);
-                this.clear_history_recall(cx);
+                if !from_history {
+                    this.clear_history_recall(cx);
+                }
                 if !std::mem::take(&mut this.suppress_next_draft_edit) {
                     this.mark_draft_dirty(cx);
                 }
@@ -4895,6 +4905,7 @@ impl Composer {
             stash_menu_open: false,
             stash_task: None,
             history_recall: None,
+            history_recall_edit_pending: None,
             appshot_entrances: HashMap::new(),
             preview: None,
             preview_focus: cx.focus_handle(),
@@ -5159,6 +5170,7 @@ impl Composer {
             .as_ref()
             .map(|(_, prompt)| prompt.clone())
             .unwrap_or_default();
+        self.history_recall_edit_pending = Some(text.clone());
         self.input.update(cx, |input, cx| input.set_text(text, cx));
         self.history_recall = next;
         let active = self.history_recall.is_some();
@@ -6637,6 +6649,7 @@ impl Composer {
         self.stash_entries.clear();
         self.stash_menu_open = false;
         self.history_recall = None;
+        self.history_recall_edit_pending = None;
         self.draft_load_tasks.clear();
         self.draft_blob_tasks.clear();
         self.draft_receipt_tasks.clear();
