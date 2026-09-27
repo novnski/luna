@@ -38,6 +38,32 @@ fn file_backed_provider_skill_lifecycle() {
         None,
     )
     .unwrap();
+    let original_revision = source.revision.clone();
+    let edited_content = format!(
+        "{}\nEdited in the synthetic library.\n",
+        content("shared-workflow")
+    );
+    let source = save_skill_document(
+        HarnessId::Codex,
+        &roots,
+        IntegrationSkillScope::Global,
+        "shared-workflow",
+        &edited_content,
+        Some(&original_revision),
+    )
+    .unwrap();
+    assert_eq!(source.content, edited_content);
+    assert!(
+        save_skill_document(
+            HarnessId::Codex,
+            &roots,
+            IntegrationSkillScope::Global,
+            "shared-workflow",
+            &content("shared-workflow"),
+            Some(&original_revision),
+        )
+        .is_err()
+    );
     let source_dir = roots
         .codex_home
         .as_ref()
