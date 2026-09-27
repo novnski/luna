@@ -7,9 +7,13 @@ provider read, or QA app build was performed for this checkpoint.
 ## Historical bound tasks
 
 The retained native readback at
-`/Users/iulian/.codex/worktrees/894c/luna/target/qa/sidebar/native/origin-handoff/workspace-fence-readback.json`
+`/Users/iulian/workspace/code/personal/luna/target/qa/parallel-audit-2026-09-26/retired-sidebar/qa/sidebar/native/origin-handoff/workspace-fence-readback.json`
 contains **two** bound projectless tasks sharing the v1
 `projectless:84c4c6b0-dd22-477e-95a1-0a7744b9d615` workspace row:
+
+The preserved readback and failed receipt are byte-identical to the earlier
+`894c` files (SHA-256 `d62ba2d5989215f305a5fd5fa4fdca191ac9396245480ce7a264368db0e53ea8`
+and `4d59d92dea39674337888abf5e54f40540eea955003e229b1661a9dc099362a1`).
 
 | Task | Native readback | Supported conclusion |
 | --- | --- | --- |
@@ -88,16 +92,17 @@ extend it rather than replacing it with an isolated helper test.
    dispatch to the repo root by fallback. Source path:
    `crates/engine/src/doc_host.rs:6955-7067`,
    `crates/engine/src/task_identity/workspace_repair.rs:451-629`.
-2. **Same-chat project grouping.** With that materialized A, create a project
-   for the exact worktree root and issue MoveProject. Expected identity contract:
-   chat `spaceId` changes, cwd stays at the worktree, original
-   `source_space_id`, workspace ID, binding ID/generation and W stay fixed; a
-   fresh valid continuation uses that same root. A nested-project control is
-   already exercised at `workspace_identity_repair.rs:452-570`. The external
-   linked-worktree variant is **not established**: current MoveProject validation
-   demands cwd containment in the source project (`crates/engine/src/rpc.rs:3484-3503`)
-   and compares checkout identities (`rpc.rs:3514-3571`). Record its terminal
-   receipt before deciding whether to extend this supported move contract.
+2. **Same-chat project grouping.** Keep the positive MoveProject control within
+   current containment rules: a nested source project moved to its containing
+   project while cwd stays fixed. Assert chat `spaceId` changes, original
+   `source_space_id`, workspace ID, binding ID/generation and W stay fixed, and
+   a valid continuation uses the same root. This path is already exercised at
+   `workspace_identity_repair.rs:452-570`. With materialized A in an **external**
+   linked worktree, create a project for that worktree and attempt MoveProject.
+   Require a terminal refusal and unchanged chat, identity, binding and earlier
+   receipts. This is a negative X03 control: current validation requires cwd
+   containment in the source project (`crates/engine/src/rpc.rs:3484-3503`)
+   and compatible checkout identities (`rpc.rs:3514-3571`).
 3. **Same-chat cwd change and negative controls.** On a bound A, issue SetCwd
    to a distinct existing root; record its receipt and the chat/identity readback.
    Require subsequent resume/fork/Run to refuse before provider start while the
@@ -132,7 +137,7 @@ any later native pass needs its own four-part QA app identity and separate grant
 
 ## Review requested
 
-Confirm the next scope: (a) the first-Run/restart/same-chat E2E contract and
-external linked-worktree MoveProject expectation, and (b) whether a bound
-`refreshReadOnly` design should follow only after those results. No build or
-runtime/schema change is requested yet.
+The coordinator confirmed the external linked-worktree MoveProject refusal as
+the current X03 boundary and granted one serialized build slot for the focused
+offline E2E after failure-first source is ready. Bound `refreshReadOnly`
+remains a later design decision. No runtime/schema change is requested.
