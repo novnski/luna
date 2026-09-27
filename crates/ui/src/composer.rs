@@ -10731,7 +10731,7 @@ impl Composer {
                 let label = entry.label.clone();
                 rows = rows.child(
                     div()
-                        .id(("composer-stash-row", id.clone()))
+                        .id(SharedString::from(format!("composer-stash-row-{id}")))
                         .w_full()
                         .flex()
                         .items_center()
@@ -10742,7 +10742,7 @@ impl Composer {
                         })
                         .child(
                             div()
-                                .id(("composer-stash-restore", id.clone()))
+                                .id(SharedString::from(format!("composer-stash-restore-{id}")))
                                 .role(gpui::Role::Button)
                                 .aria_label(format!("Restore saved prompt: {label}"))
                                 .flex_1()
@@ -10784,7 +10784,7 @@ impl Composer {
                         })
                         .child(
                             div()
-                                .id(("composer-stash-delete", id.clone()))
+                                .id(SharedString::from(format!("composer-stash-delete-{id}")))
                                 .role(gpui::Role::Button)
                                 .aria_label(format!("Delete saved prompt: {label}"))
                                 .px(px(8.0))

@@ -525,6 +525,8 @@ impl FilesSurface {
             ComposerInputEvent::MentionDismiss => this.clear_search(cx),
             ComposerInputEvent::PastedImages(_)
             | ComposerInputEvent::PastedPaths(_)
+            | ComposerInputEvent::StashPrompt
+            | ComposerInputEvent::HistoryNavigate(_)
             | ComposerInputEvent::CursorMoved
             | ComposerInputEvent::ViewportChanged => {}
         });
