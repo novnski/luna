@@ -38,12 +38,12 @@ fn v13_profile_migrates_once_and_preserves_existing_command_storage() {
     let root = v13_profile();
     drop(DocsStore::open(root.path()).unwrap());
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    assert_eq!(version(&db), 15);
+    assert_eq!(version(&db), 16);
     assert_eq!(
         db.query_row("SELECT count(*) FROM schema_migrations", [], |row| row
             .get::<_, i64>(0))
             .unwrap(),
-        15
+        16
     );
     assert_eq!(db.query_row("SELECT config FROM project_command_configs WHERE project_id='project' AND device_id='device'", [], |row| row.get::<_, Vec<u8>>(0)).unwrap(), b"[]");
     db.execute("INSERT INTO side_chats (id,parent_id,title,created_at_ms,expires_at_ms,state,config,cwd,context,context_mode,creation_hash) VALUES ('side','parent','Saved',1,7200001,'unloaded','{}','/fixture','','contextSnapshot','hash')", []).unwrap();
@@ -62,7 +62,7 @@ fn v13_profile_migrates_once_and_preserves_existing_command_storage() {
     assert!(reopened.is_side_chat("side").unwrap());
     drop(reopened);
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    assert_eq!(version(&db), 15);
+    assert_eq!(version(&db), 16);
     assert_eq!(
         db.query_row(
             "SELECT entry FROM side_chat_entries WHERE chat_id='side'",
@@ -112,7 +112,7 @@ fn failed_v14_migration_rolls_back_all_new_tables_and_version() {
     drop(db);
     drop(DocsStore::open(root.path()).unwrap());
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    assert_eq!(version(&db), 15);
+    assert_eq!(version(&db), 16);
     assert_eq!(
         db.query_row("SELECT count(*) FROM project_command_configs", [], |row| {
             row.get::<_, i64>(0)
@@ -128,7 +128,7 @@ fn next_schema_is_rejected_before_wal_or_migration_changes() {
     let path = root.path().join("docs.sqlite3");
     let db = Connection::open(&path).unwrap();
     db.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at INTEGER NOT NULL) STRICT;
-        INSERT INTO schema_migrations VALUES(16,1);
+        INSERT INTO schema_migrations VALUES(17,1);
         CREATE TABLE future_data(value TEXT); INSERT INTO future_data VALUES('keep');").unwrap();
     drop(db);
     let before = std::fs::read(&path).unwrap();
@@ -137,7 +137,7 @@ fn next_schema_is_rejected_before_wal_or_migration_changes() {
         Err(error) => error.to_string(),
     };
     assert!(
-        error.contains("16") && error.contains("supported 15"),
+        error.contains("17") && error.contains("supported 16"),
         "{error}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);

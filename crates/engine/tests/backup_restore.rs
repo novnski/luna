@@ -123,7 +123,7 @@ fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
     let backup = service(&root)
         .backup_now(&backups, 1_700_000_000_000)
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 15);
+    assert_eq!(backup.manifest.databases[0].schema_version, 16);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     service(&root).activate(staged).unwrap();
@@ -153,7 +153,7 @@ fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             PathBuf::from(dir).join("backup-restore-workspace-authority.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({"schema":15,"restoredW":7,
+            serde_json::to_vec_pretty(&serde_json::json!({"schema":16,"restoredW":7,
                 "grantW":0,"recoveryW":0,"messageW":0,"oldGrantExecutable":false,
                 "fullProfileRollbackProtectionClaimed":false}))
             .unwrap(),
@@ -350,14 +350,14 @@ fn managed_offline_backup_refuses_unreviewed_future_schema() {
     fs::remove_file(root.join(".luna-l17-isolated-root")).unwrap();
     let conn = Connection::open(root.join("profiles/local/docs.sqlite3")).unwrap();
     conn.execute(
-        "INSERT INTO schema_migrations(version,applied_at) VALUES (16,1)",
+        "INSERT INTO schema_migrations(version,applied_at) VALUES (17,1)",
         [],
     )
     .unwrap();
     drop(conn);
     let result = BackupService::run_managed_offline_now(&root, 1_700_000_000_000);
     assert!(
-        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 15"))
+        matches!(result, Err(BackupError::Unsupported(message)) if message.contains("newer than supported 16"))
     );
 }
 
@@ -464,7 +464,7 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(schema, 15);
+    assert_eq!(schema, 16);
 }
 
 #[test]
@@ -716,7 +716,7 @@ fn staged_restore_rebuilds_appshot_history_from_v9_source_facts_on_current_schem
     let backup = service(&root)
         .export(&backups.join("appshot-v9.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 15);
+    assert_eq!(backup.manifest.databases[0].schema_version, 16);
     assert_eq!(
         backup.manifest.databases[0].activity_events_expected,
         Some(2)
@@ -1211,7 +1211,7 @@ fn side_chat_metadata_and_lazy_transcript_survive_backup_restore() {
     let backup = service(&root)
         .export(&backups.join("side-chat.lunabk"))
         .unwrap();
-    assert_eq!(backup.manifest.databases[0].schema_version, 15);
+    assert_eq!(backup.manifest.databases[0].schema_version, 16);
     let staged = service(&root).stage_restore(&backup.archive).unwrap();
     service(&root).verify_staged_for_tests(&staged).unwrap();
     let restored = Connection::open(staged.path.join("profiles/local/docs.sqlite3")).unwrap();

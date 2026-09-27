@@ -31,8 +31,8 @@ use luna_engine::sessions::LunaApprovalOutcome;
 use luna_proto::{
     CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot,
     DraftBlob, DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState,
-    FileSearchMatch, HarnessId, ProjectCommandStatus, ProjectCommandsSnapshot, RunRequest,
-    SandboxLevel, SlashCommand, UserInputAnswer, UserInputQuestion, capabilities,
+    FileSearchMatch, HarnessId, ProjectCommandStatus, ProjectCommandsSnapshot, PromptStashEntry,
+    RunRequest, SandboxLevel, SlashCommand, UserInputAnswer, UserInputQuestion, capabilities,
 };
 use luna_rpc::{RpcError, methods};
 
@@ -1029,6 +1029,7 @@ actions!(
         Undo,
         Redo,
         MentionTab,
+        StashPrompt,
     ]
 );
 
@@ -1859,6 +1860,11 @@ pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
     ));
 
     let mut message_bindings = input_bindings(MESSAGE_COMPOSER_CONTEXT);
+    message_bindings.push(KeyBinding::new(
+        &platform_combo("mod-s"),
+        StashPrompt,
+        Some(MESSAGE_COMPOSER_CONTEXT),
+    ));
     for binding in message_enter_bindings(send_behavior, &platform_combo("mod-enter")) {
         match binding.action {
             MessageEnterBindingAction::Submit => message_bindings.push(KeyBinding::new(
@@ -1965,6 +1971,8 @@ pub enum ComposerInputEvent {
     MentionNavigate(isize),
     MentionAccept,
     MentionDismiss,
+    StashPrompt,
+    HistoryNavigate(isize),
     /// Images pasted from the clipboard (screenshots / copied image data) —
     /// the wrapper stages them as attachments (use-attachments.ts onPaste).
     PastedImages(Vec<gpui::Image>),
@@ -2063,6 +2071,9 @@ pub struct ComposerInput {
     /// mention token is active, keeping input focus and native text editing.
     mention_open: bool,
     mention_has_selection: bool,
+    /// Set only while Up/Down is walking sent prompts. Ordinary multiline
+    /// caret movement takes over as soon as the user moves or edits the text.
+    history_navigation_active: bool,
     /// Last prepainted chip bounds; the paint-phase pointer listener uses
     /// these instead of attempting to infer text geometry from the cursor.
     mention_hits: Vec<MentionHit>,
@@ -2128,6 +2139,7 @@ impl ComposerInput {
             projection: TextProjection::default(),
             ghost: None,
             mentions_enabled: false,
+            history_navigation_active: false,
             layout_epoch: 0,
             display_is_placeholder: true,
             blink_anchor: Instant::now(),
@@ -2749,6 +2761,12 @@ impl ComposerInput {
             cx.emit(ComposerInputEvent::MentionNavigate(-1));
             return;
         }
+        if self.key_context == MESSAGE_COMPOSER_CONTEXT
+            && (self.history_navigation_active || self.content.is_empty())
+        {
+            cx.emit(ComposerInputEvent::HistoryNavigate(-1));
+            return;
+        }
         if let Some(ix) = self.vertical_target(-1.0) {
             self.move_to(ix, cx);
         }
@@ -2757,6 +2775,10 @@ impl ComposerInput {
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
         if self.mention_has_selection {
             cx.emit(ComposerInputEvent::MentionNavigate(1));
+            return;
+        }
+        if self.key_context == MESSAGE_COMPOSER_CONTEXT && self.history_navigation_active {
+            cx.emit(ComposerInputEvent::HistoryNavigate(1));
             return;
         }
         if let Some(ix) = self.vertical_target(1.0) {
@@ -3015,6 +3037,10 @@ impl ComposerInput {
         } else {
             cx.propagate();
         }
+    }
+
+    fn stash_prompt(&mut self, _: &StashPrompt, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(ComposerInputEvent::StashPrompt);
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -4208,6 +4234,7 @@ impl Render for ComposerInput {
             .on_action(cx.listener(Self::modifier_submit))
             .on_action(cx.listener(Self::opposite_submit))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::stash_prompt))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_key_down(cx.listener(Self::on_key_down))
@@ -4468,6 +4495,10 @@ pub struct Composer {
     draft_merge_on_load: HashSet<String>,
     pending_draft_owner_stage: Option<PendingDraftOwnerStage>,
     draft_engine_generation: Option<u64>,
+    stash_entries: Vec<PromptStashEntry>,
+    stash_menu_open: bool,
+    stash_task: Option<Task<()>>,
+    history_recall: Option<(String, String)>,
     appshot_entrances: HashMap<String, Instant>,
     /// The staged attachment being viewed full-size (click a thumbnail).
     preview: Option<attachments::PreviewImage>,
@@ -4773,12 +4804,18 @@ impl Composer {
             ComposerInputEvent::OppositeSubmitted => this.on_opposite_submit(cx),
             ComposerInputEvent::Edited => {
                 this.on_input_edited(cx);
+                this.clear_history_recall(cx);
                 if !std::mem::take(&mut this.suppress_next_draft_edit) {
                     this.mark_draft_dirty(cx);
                 }
             }
-            ComposerInputEvent::CursorMoved => this.on_input_edited(cx),
+            ComposerInputEvent::CursorMoved => {
+                this.clear_history_recall(cx);
+                this.on_input_edited(cx);
+            }
             ComposerInputEvent::ViewportChanged => cx.notify(),
+            ComposerInputEvent::StashPrompt => this.stash_current_prompt(cx),
+            ComposerInputEvent::HistoryNavigate(delta) => this.navigate_sent_prompts(*delta, cx),
             // The slash popup and the mention popup share the input's
             // completion key routing; they are mutually exclusive by token
             // shape (`/` at offset 0 vs `@` at a token boundary).
@@ -4854,6 +4891,10 @@ impl Composer {
             draft_merge_on_load: HashSet::new(),
             pending_draft_owner_stage: None,
             draft_engine_generation: None,
+            stash_entries: Vec::new(),
+            stash_menu_open: false,
+            stash_task: None,
+            history_recall: None,
             appshot_entrances: HashMap::new(),
             preview: None,
             preview_focus: cx.focus_handle(),
@@ -5026,6 +5067,523 @@ impl Composer {
     ) {
         self.suppress_next_draft_edit = true;
         self.input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+
+    fn clear_history_recall(&mut self, cx: &mut Context<Self>) {
+        if self.history_recall.take().is_some() {
+            self.input
+                .update(cx, |input, _| input.history_navigation_active = false);
+        }
+    }
+
+    /// Up starts from an empty editor; while browsing, Up/Down move among
+    /// sent user prompts. An ordinary edit or caret move ends browsing, so
+    /// multiline navigation and an in-progress draft are left alone.
+    fn navigate_sent_prompts(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.current_key.is_empty()
+            || self.editing_queued.is_some()
+            || self.queue_edit_draft.is_some()
+        {
+            return;
+        }
+        let current = self.input.read(cx).text().to_string();
+        if self
+            .attachments
+            .get(&self.current_key)
+            .is_some_and(|a| !a.is_empty())
+            || self
+                .appshots
+                .get(&self.current_key)
+                .is_some_and(|a| !a.is_empty())
+            || self
+                .draft_unavailable
+                .get(&self.current_key)
+                .is_some_and(|a| !a.is_empty())
+            || !self
+                .state
+                .read(cx)
+                .review_comments(&self.current_key)
+                .is_empty()
+            || (self.history_recall.is_none() && !current.is_empty())
+        {
+            return;
+        }
+        let mut entries: Vec<(String, String)> = Vec::new();
+        for message in &self.state.read(cx).transcript {
+            if message.role != MessageRole::User {
+                continue;
+            }
+            let raw = message
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    MessagePart::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let visible = attachments::parse_user_message_images(&raw).text;
+            let visible = appshots::strip_context_for_display(&visible);
+            let (visible, _) = crate::badges::split(visible);
+            let prompt = visible.trim().to_string();
+            if prompt.is_empty() || prompt == attachments::ATTACHMENT_ONLY_TEXT {
+                continue;
+            }
+            if entries
+                .last()
+                .is_some_and(|(_, previous)| previous == &prompt)
+            {
+                entries.pop();
+            }
+            entries.push((message.id.clone(), prompt));
+        }
+        let active = self.history_recall.as_ref().and_then(|(id, recalled)| {
+            (recalled == &current)
+                .then(|| entries.iter().position(|(entry_id, _)| entry_id == id))
+                .flatten()
+        });
+        let next = if delta < 0 {
+            let index = active.unwrap_or(entries.len());
+            index
+                .checked_sub(1)
+                .and_then(|index| entries.get(index).cloned())
+        } else if let Some(index) = active {
+            entries.get(index + 1).cloned()
+        } else {
+            return;
+        };
+        if delta < 0 && next.is_none() {
+            return;
+        }
+        let text = next
+            .as_ref()
+            .map(|(_, prompt)| prompt.clone())
+            .unwrap_or_default();
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        self.history_recall = next;
+        let active = self.history_recall.is_some();
+        self.input.update(cx, |input, _| {
+            input.history_navigation_active = active;
+        });
+    }
+
+    fn stash_failure(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.failure = Some(message.into());
+        self.failure_key = Some(self.current_key.clone());
+        cx.notify();
+    }
+
+    fn current_prompt_is_empty(&self, cx: &App) -> bool {
+        self.input.read(cx).text().is_empty()
+            && self
+                .attachments
+                .get(&self.current_key)
+                .is_none_or(Vec::is_empty)
+            && self
+                .appshots
+                .get(&self.current_key)
+                .is_none_or(Vec::is_empty)
+            && self
+                .draft_unavailable
+                .get(&self.current_key)
+                .is_none_or(Vec::is_empty)
+            && self
+                .draft_unavailable_appshot_metadata
+                .get(&self.current_key)
+                .is_none_or(Vec::is_empty)
+            && self
+                .state
+                .read(cx)
+                .review_comments(&self.current_key)
+                .is_empty()
+    }
+
+    fn load_stash(&mut self, cx: &mut Context<Self>) {
+        if self.stash_task.is_some() {
+            return;
+        }
+        let (engine, generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
+            self.stash_failure("Saved prompts need the local engine.", cx);
+            return;
+        };
+        self.stash_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::drafts::list_stash(&engine).await;
+            this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != generation {
+                    return;
+                }
+                composer.stash_task = None;
+                match result {
+                    Ok(entries) => composer.stash_entries = entries,
+                    Err(error) => composer
+                        .stash_failure(format!("Saved prompts could not be loaded: {error}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn toggle_stash_menu(&mut self, cx: &mut Context<Self>) {
+        self.stash_menu_open = !self.stash_menu_open;
+        if self.stash_menu_open {
+            self.load_stash(cx);
+        }
+        cx.notify();
+    }
+
+    fn stash_current_prompt(&mut self, cx: &mut Context<Self>) {
+        let staged = self.attachments.get(&self.current_key).map_or(0, Vec::len)
+            + self.appshots.get(&self.current_key).map_or(0, Vec::len);
+        let comments = self.state.read(cx).review_comments(&self.current_key).len();
+        if !composer_has_content(self.input.read(cx).text(), staged, comments) {
+            self.toggle_stash_menu(cx);
+            return;
+        }
+        let key = self.current_key.clone();
+        if self.stash_task.is_some()
+            || !self.draft_loaded.contains(&key)
+            || self.editing_queued.is_some()
+            || self.queue_edit_draft.is_some()
+            || self.pending_draft_owner_stage.is_some()
+            || self.is_sending()
+        {
+            self.stash_failure(
+                "Wait for this draft to finish loading or sending before saving it.",
+                cx,
+            );
+            return;
+        }
+        let snapshot = self.build_draft_record(&key, self.input.read(cx).text().to_string(), cx);
+        if snapshot
+            .attachments
+            .iter()
+            .any(|blob| blob.state != DraftBlobState::Saved || blob.path.is_none())
+            || self
+                .draft_blobs_in_flight
+                .iter()
+                .any(|(owner, _)| owner == &key)
+        {
+            self.stash_failure(
+                "Wait for attachments to finish saving or reattach missing files.",
+                cx,
+            );
+            return;
+        }
+        let label = snapshot
+            .text
+            .split_whitespace()
+            .take(12)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let label = if label.is_empty() {
+            if snapshot.attachments.is_empty() {
+                "Review comment".to_string()
+            } else {
+                format!(
+                    "{} attachment{}",
+                    snapshot.attachments.len(),
+                    if snapshot.attachments.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                )
+            }
+        } else {
+            label
+        };
+        let label = label.chars().take(120).collect();
+        let entry = PromptStashEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            label,
+            text: snapshot.text,
+            attachments: snapshot.attachments,
+            appshots: snapshot.appshots,
+            context: snapshot.context,
+            created_at_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        let source_revision = snapshot.revision;
+        let (engine, generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
+            self.stash_failure("Saved prompts need the local engine.", cx);
+            return;
+        };
+        self.stash_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::drafts::save_stash(&engine, &entry).await;
+            let readback = if result.is_ok() {
+                crate::drafts::list_stash(&engine).await
+            } else {
+                result.map(|_| Vec::new())
+            };
+            this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != generation {
+                    return;
+                }
+                composer.stash_task = None;
+                match readback {
+                    Ok(entries) if entries.iter().any(|saved| saved == &entry) => {
+                        composer.stash_entries = entries;
+                        if composer.current_key == key
+                            && composer.draft_revisions.get(&key).copied().unwrap_or(0)
+                                == source_revision
+                        {
+                            composer.attachments.remove(&key);
+                            composer.appshots.remove(&key);
+                            composer.draft_blobs.remove(&key);
+                            composer.draft_unavailable.remove(&key);
+                            composer.draft_unavailable_appshots.remove(&key);
+                            composer.draft_unavailable_appshot_metadata.remove(&key);
+                            composer.draft_comment_fingerprints.remove(&key);
+                            composer.state.update(cx, |state, _| state.purge_review_comments(&key));
+                            composer.drafts.insert(key.clone(), String::new());
+                            composer.set_input_text_without_draft_edit(String::new(), cx);
+                            composer.mark_draft_dirty(cx);
+                        } else {
+                            composer.stash_failure(
+                                "Prompt saved. The draft changed while saving, so it was kept in the editor.",
+                                cx,
+                            );
+                        }
+                    }
+                    Ok(_) => composer.stash_failure(
+                        "Saved prompt was not confirmed; the draft was kept in the editor.",
+                        cx,
+                    ),
+                    Err(error) => composer.stash_failure(
+                        format!("Prompt could not be saved; the draft was kept: {error}"),
+                        cx,
+                    ),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn delete_stashed_prompt(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.stash_task.is_some() {
+            return;
+        }
+        let (engine, generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
+            self.stash_failure("Saved prompts need the local engine.", cx);
+            return;
+        };
+        self.stash_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::drafts::delete_stash(&engine, &id).await;
+            let entries = if result.is_ok() {
+                crate::drafts::list_stash(&engine).await
+            } else {
+                result.map(|_| Vec::new())
+            };
+            this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != generation {
+                    return;
+                }
+                composer.stash_task = None;
+                match entries {
+                    Ok(entries) => composer.stash_entries = entries,
+                    Err(error) => composer
+                        .stash_failure(format!("Saved prompt could not be deleted: {error}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn restore_stashed_prompt(&mut self, entry: PromptStashEntry, cx: &mut Context<Self>) {
+        let key = self.current_key.clone();
+        let revision = self.draft_revisions.get(&key).copied().unwrap_or(0);
+        if self.stash_task.is_some()
+            || !self.draft_loaded.contains(&key)
+            || !self.current_prompt_is_empty(cx)
+            || self.editing_queued.is_some()
+            || self.queue_edit_draft.is_some()
+            || self.pending_draft_owner_stage.is_some()
+            || self.is_sending()
+            || self.draft_saves_in_flight.contains_key(&key)
+            || self.draft_saved_revisions.get(&key).copied().unwrap_or(0) < revision
+        {
+            self.stash_failure("Restore needs an empty, fully saved composer. Save this prompt first or wait for draft saving.", cx);
+            return;
+        }
+        let (engine, generation) = {
+            let state = self.state.read(cx);
+            (state.engine().cloned(), state.engine_generation())
+        };
+        let Some(engine) = engine else {
+            self.stash_failure("Saved prompts need the local engine.", cx);
+            return;
+        };
+        self.stash_task = Some(cx.spawn(async move |this, cx| {
+            let mut loaded = HashMap::new();
+            let mut load_error = None;
+            for blob in &entry.attachments {
+                if blob.state != DraftBlobState::Saved {
+                    load_error = Some(format!("{} needs reattachment; the saved prompt was kept.", blob.name));
+                    break;
+                }
+                let Some(path) = blob.path.as_deref() else {
+                    load_error = Some(format!("{} has no saved path; the prompt was kept.", blob.name));
+                    break;
+                };
+                match attachments::read_attachment_image(
+                    &engine,
+                    cx.background_executor(),
+                    None,
+                    path,
+                    None,
+                )
+                .await
+                {
+                    Some(image) => {
+                        loaded.insert(blob.attachment_id.clone(), StagedAttachment {
+                            id: blob.attachment_id.clone(),
+                            name: blob.name.clone(),
+                            image: image.image,
+                        });
+                    }
+                    None => {
+                        load_error = Some(format!("{} could not be read; the saved prompt was kept.", blob.name));
+                        break;
+                    }
+                }
+            }
+            if let Some(error) = load_error {
+                this.update(cx, |composer, cx| {
+                    if composer.state.read(cx).engine_generation() == generation {
+                        composer.stash_task = None;
+                        composer.stash_failure(error, cx);
+                    }
+                }).ok();
+                return;
+            }
+            let appshot_attachment_ids: HashSet<&str> = entry.appshots.iter()
+                .map(|shot| shot.screenshot_attachment_id.as_str()).collect();
+            let ordinary = entry.attachments.iter()
+                .filter(|blob| !appshot_attachment_ids.contains(blob.attachment_id.as_str()))
+                .filter_map(|blob| loaded.get(&blob.attachment_id).cloned())
+                .collect::<Vec<_>>();
+            let shots = entry.appshots.iter().filter_map(|shot| {
+                Some(CapturedAppshot {
+                    id: shot.id.clone(),
+                    app_name: shot.app_name.clone(),
+                    bundle_identifier: shot.bundle_identifier.clone(),
+                    window_title: shot.window_title.clone(),
+                    accessibility: appshots::AccessibilitySnapshot {
+                        format_version: shot.accessibility_format_version,
+                        content: shot.accessibility_content.clone(),
+                        truncated: shot.accessibility_truncated,
+                    },
+                    screenshot: loaded.get(&shot.screenshot_attachment_id)?.clone(),
+                    screenshot_dimensions: shot.screenshot_dimensions,
+                    app_icon: None,
+                    captured_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(shot.captured_at_ms)
+                        .unwrap_or_else(chrono::Utc::now),
+                })
+            }).collect::<Vec<_>>();
+            if shots.len() != entry.appshots.len() {
+                this.update(cx, |composer, cx| {
+                    if composer.state.read(cx).engine_generation() == generation {
+                        composer.stash_task = None;
+                        composer.stash_failure("A saved window capture is incomplete; the prompt was kept.", cx);
+                    }
+                }).ok();
+                return;
+            }
+            let record = this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != generation {
+                    return None;
+                }
+                if composer.current_key != key
+                    || composer.draft_revisions.get(&key).copied().unwrap_or(0) != revision
+                    || !composer.current_prompt_is_empty(cx)
+                {
+                    composer.stash_task = None;
+                    return None;
+                }
+                composer.attachments.insert(key.clone(), ordinary);
+                composer.appshots.insert(key.clone(), shots);
+                composer.draft_blobs.insert(key.clone(), entry.attachments.iter()
+                    .cloned().map(|blob| (blob.attachment_id.clone(), blob)).collect());
+                composer.state.update(cx, |state, _| {
+                    for value in &entry.context.review_comments {
+                        if let Ok(comment) = serde_json::from_value::<crate::comments::ReviewComment>(value.clone()) {
+                            state.add_review_comment(&key, comment);
+                        }
+                    }
+                });
+                composer.draft_comment_fingerprints.remove(&key);
+                composer.drafts.insert(key.clone(), entry.text.clone());
+                composer.set_input_text_without_draft_edit(entry.text.clone(), cx);
+                let next_revision = composer.draft_revisions.entry(key.clone()).or_insert(0);
+                *next_revision = next_revision.saturating_add(1);
+                composer.stash_menu_open = false;
+                composer.focus_pending = true;
+                cx.notify();
+                Some(composer.build_draft_record(&key, entry.text.clone(), cx))
+            }).ok().flatten();
+            let Some(record) = record else {
+                return;
+            };
+            let save = crate::drafts::save(&engine, &record).await;
+            let verified = if matches!(save, Ok(ComposerDraftSaveOutcome::Saved | ComposerDraftSaveOutcome::Unchanged)) {
+                let task_id = (!key.is_empty()).then_some(key.as_str());
+                crate::drafts::read(&engine, task_id, Some(&record.draft_id)).await
+                    .ok()
+                    .and_then(|read| read.draft)
+                    .is_some_and(|saved| saved.draft_id == record.draft_id
+                        && saved.revision >= record.revision
+                        && saved.same_message_content(&record))
+            } else {
+                false
+            };
+            let can_delete = this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != generation {
+                    return false;
+                }
+                if verified {
+                    let saved = composer.draft_saved_revisions.entry(key.clone()).or_default();
+                    *saved = (*saved).max(record.revision);
+                } else {
+                    composer.schedule_draft_save(key.clone(), Duration::ZERO, cx);
+                    composer.stash_failure("Restored prompt is in the editor, but draft readback failed. The saved copy was kept.", cx);
+                }
+                verified && composer.current_key == key
+                    && composer.draft_revisions.get(&key) == Some(&record.revision)
+            }).unwrap_or(false);
+            let deleted = if can_delete {
+                crate::drafts::delete_stash(&engine, &entry.id).await
+            } else {
+                Ok(false)
+            };
+            let entries = crate::drafts::list_stash(&engine).await;
+            this.update(cx, |composer, cx| {
+                if composer.state.read(cx).engine_generation() != generation {
+                    return;
+                }
+                composer.stash_task = None;
+                if let Ok(entries) = entries {
+                    composer.stash_entries = entries;
+                }
+                if can_delete && !matches!(deleted, Ok(true)) {
+                    composer.stash_failure("Restored prompt is saved, but its stash entry could not be removed.", cx);
+                }
+                cx.notify();
+            }).ok();
+        }));
     }
 
     /// Stage an explicit context handoff for the blank-canvas draft without
@@ -6057,6 +6615,10 @@ impl Composer {
         }
 
         self.draft_save_tasks.clear();
+        self.stash_task = None;
+        self.stash_entries.clear();
+        self.stash_menu_open = false;
+        self.history_recall = None;
         self.draft_load_tasks.clear();
         self.draft_blob_tasks.clear();
         self.draft_receipt_tasks.clear();
@@ -10067,6 +10629,191 @@ impl Composer {
         crate::frost::frosted(surface_radius, 16.0, panel).into_any_element()
     }
 
+    fn render_stash_controls(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let busy = self.stash_task.is_some();
+        let count = self.stash_entries.len();
+        let focus_border = theme.border_strong;
+        let save = div()
+            .id("composer-save-prompt")
+            .role(gpui::Role::Button)
+            .aria_label(if busy {
+                "Saving prompt"
+            } else {
+                "Save current prompt"
+            })
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded(px(8.0))
+            .text_size(crate::typography::ui_rems(11.0))
+            .text_color(theme.text_muted)
+            .when(!busy, |button| {
+                button
+                    .tab_index(0)
+                    .focus_visible(move |style| style.border_2().border_color(focus_border))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.glass_hover()))
+                    .on_click(cx.listener(|this, _, _, cx| this.stash_current_prompt(cx)))
+            })
+            .when(busy, |button| button.opacity(0.5))
+            .child(
+                crate::icons::icon(crate::icons::FLOPPY_DISK)
+                    .size(px(13.0))
+                    .text_color(theme.text_muted),
+            )
+            .child(if busy { "Saving…" } else { "Save prompt" });
+        let list = div()
+            .id("composer-saved-prompts")
+            .role(gpui::Role::Button)
+            .aria_label("Show saved prompts")
+            .aria_expanded(self.stash_menu_open)
+            .tab_index(0)
+            .focus_visible(move |style| style.border_2().border_color(focus_border))
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded(px(8.0))
+            .text_size(crate::typography::ui_rems(11.0))
+            .text_color(theme.text_muted)
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.glass_hover()))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_stash_menu(cx)))
+            .child(if count == 0 {
+                "Saved prompts".to_string()
+            } else {
+                format!("Saved prompts {count}")
+            });
+        let mut controls = div().w_full().flex().flex_col().gap(px(4.0)).child(
+            div()
+                .w_full()
+                .flex()
+                .justify_end()
+                .gap(px(4.0))
+                .child(save)
+                .child(list),
+        );
+        if self.stash_menu_open {
+            let popup_theme = theme.for_popup();
+            let popup_focus = popup_theme.border_strong;
+            let mut rows = div()
+                .id("composer-stash-list")
+                .w_full()
+                .max_h(px(220.0))
+                .overflow_y_scroll()
+                .rounded(px(crate::popover::CARD_RADIUS))
+                .border_1()
+                .border_color(theme.border)
+                .bg(crate::popover::surface_bg(theme))
+                .when(!theme.is_frost(), |panel| panel.shadow_lg())
+                .p(px(crate::popover::CARD_INSET))
+                .flex()
+                .flex_col()
+                .gap(px(2.0));
+            if self.stash_entries.is_empty() {
+                rows = rows.child(
+                    div()
+                        .px(px(8.0))
+                        .py(px(10.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(popup_theme.text_muted)
+                        .child(if busy {
+                            "Loading saved prompts…"
+                        } else {
+                            "No saved prompts yet"
+                        }),
+                );
+            }
+            for entry in self.stash_entries.iter().cloned() {
+                let restore = entry.clone();
+                let id = entry.id.clone();
+                let attachment_count = entry.attachments.len();
+                let label = entry.label.clone();
+                rows = rows.child(
+                    div()
+                        .id(("composer-stash-row", id.clone()))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .rounded(px(8.0))
+                        .when(!busy, |row| {
+                            row.hover(|style| style.bg(theme.glass_hover()))
+                        })
+                        .child(
+                            div()
+                                .id(("composer-stash-restore", id.clone()))
+                                .role(gpui::Role::Button)
+                                .aria_label(format!("Restore saved prompt: {label}"))
+                                .flex_1()
+                                .min_w_0()
+                                .px(px(8.0))
+                                .py(px(8.0))
+                                .when(!busy, |button| {
+                                    button
+                                        .tab_index(0)
+                                        .focus_visible(move |style| {
+                                            style.border_2().border_color(popup_focus)
+                                        })
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.restore_stashed_prompt(restore.clone(), cx);
+                                        }))
+                                })
+                                .when(busy, |button| button.opacity(0.5))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_color(popup_theme.text)
+                                        .child(entry.label),
+                                ),
+                        )
+                        .when(attachment_count > 0, |row| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(popup_theme.text_muted)
+                                    .child(format!(
+                                        "{attachment_count} file{}",
+                                        if attachment_count == 1 { "" } else { "s" }
+                                    )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id(("composer-stash-delete", id.clone()))
+                                .role(gpui::Role::Button)
+                                .aria_label(format!("Delete saved prompt: {label}"))
+                                .px(px(8.0))
+                                .py(px(8.0))
+                                .rounded(px(6.0))
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(popup_theme.text_muted)
+                                .when(!busy, |button| {
+                                    button
+                                        .tab_index(0)
+                                        .focus_visible(move |style| {
+                                            style.border_2().border_color(popup_focus)
+                                        })
+                                        .cursor_pointer()
+                                        .hover(|style| style.text_color(theme.danger_muted))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.delete_stashed_prompt(id.clone(), cx);
+                                        }))
+                                })
+                                .when(busy, |button| button.opacity(0.5))
+                                .child("Delete"),
+                        ),
+                );
+            }
+            controls = controls.child(rows);
+        }
+        controls
+    }
+
     fn render_send_button(
         &mut self,
         mode: SendButtonMode,
@@ -10932,7 +11679,8 @@ impl Render for Composer {
         } else {
             container
         };
-        let container = container.child(pill_surface);
+        let stash_controls = self.render_stash_controls(&theme, cx);
+        let container = container.child(stash_controls).child(pill_surface);
 
         // The lower slot keeps a stable footprint for Git projects while its
         // old floating checkout/ref controls dissolve into the session footer.
