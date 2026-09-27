@@ -10636,9 +10636,11 @@ impl Composer {
         let save = div()
             .id("composer-save-prompt")
             .role(gpui::Role::Button)
-            .aria_label("Save current prompt")
-            .tab_index(0)
-            .focus_visible(move |style| style.border_2().border_color(focus_border))
+            .aria_label(if busy {
+                "Saving prompt"
+            } else {
+                "Save current prompt"
+            })
             .flex()
             .items_center()
             .gap(px(5.0))
@@ -10647,9 +10649,15 @@ impl Composer {
             .rounded(px(8.0))
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.glass_hover()))
-            .on_click(cx.listener(|this, _, _, cx| this.stash_current_prompt(cx)))
+            .when(!busy, |button| {
+                button
+                    .tab_index(0)
+                    .focus_visible(move |style| style.border_2().border_color(focus_border))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.glass_hover()))
+                    .on_click(cx.listener(|this, _, _, cx| this.stash_current_prompt(cx)))
+            })
+            .when(busy, |button| button.opacity(0.5))
             .child(
                 crate::icons::icon(crate::icons::FLOPPY_DISK)
                     .size(px(13.0))
@@ -10729,24 +10737,30 @@ impl Composer {
                         .items_center()
                         .gap(px(6.0))
                         .rounded(px(8.0))
-                        .hover(|style| style.bg(theme.glass_hover()))
+                        .when(!busy, |row| {
+                            row.hover(|style| style.bg(theme.glass_hover()))
+                        })
                         .child(
                             div()
                                 .id(("composer-stash-restore", id.clone()))
                                 .role(gpui::Role::Button)
                                 .aria_label(format!("Restore saved prompt: {label}"))
-                                .tab_index(0)
-                                .focus_visible(move |style| {
-                                    style.border_2().border_color(popup_focus)
-                                })
                                 .flex_1()
                                 .min_w_0()
                                 .px(px(8.0))
                                 .py(px(8.0))
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.restore_stashed_prompt(restore.clone(), cx);
-                                }))
+                                .when(!busy, |button| {
+                                    button
+                                        .tab_index(0)
+                                        .focus_visible(move |style| {
+                                            style.border_2().border_color(popup_focus)
+                                        })
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.restore_stashed_prompt(restore.clone(), cx);
+                                        }))
+                                })
+                                .when(busy, |button| button.opacity(0.5))
                                 .child(
                                     div()
                                         .min_w_0()
@@ -10773,20 +10787,24 @@ impl Composer {
                                 .id(("composer-stash-delete", id.clone()))
                                 .role(gpui::Role::Button)
                                 .aria_label(format!("Delete saved prompt: {label}"))
-                                .tab_index(0)
-                                .focus_visible(move |style| {
-                                    style.border_2().border_color(popup_focus)
-                                })
                                 .px(px(8.0))
                                 .py(px(8.0))
                                 .rounded(px(6.0))
                                 .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(popup_theme.text_muted)
-                                .cursor_pointer()
-                                .hover(|style| style.text_color(theme.danger_muted))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.delete_stashed_prompt(id.clone(), cx);
-                                }))
+                                .when(!busy, |button| {
+                                    button
+                                        .tab_index(0)
+                                        .focus_visible(move |style| {
+                                            style.border_2().border_color(popup_focus)
+                                        })
+                                        .cursor_pointer()
+                                        .hover(|style| style.text_color(theme.danger_muted))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.delete_stashed_prompt(id.clone(), cx);
+                                        }))
+                                })
+                                .when(busy, |button| button.opacity(0.5))
                                 .child("Delete"),
                         ),
                 );
