@@ -147,8 +147,8 @@ remains a later design decision. No runtime/schema change is requested.
 At test-source commit `119c35530b9a500295f88a417ac273058b8409cc` (SHA-256
 `470aeeb8a083bcf811f0fd258721ad7c6b2be5597705eda1b418971cd7c46950`),
 the exact focused command above exited 0 in 108 seconds: **17 passed, 0 failed**.
-The retained artifact is
-`/Users/iulian/.codex/worktrees/00a8/luna/target/qa/workspace-identity-boundary-20260927.T0hJqH/`.
+The retained artifact was copied and hash-verified in the primary checkout at
+`/Users/iulian/workspace/code/personal/luna/target/qa/parallel-audit-2026-09-26/workspace-boundary-retired-79357559/`.
 Its 72-file SHA-256 manifest includes the later format and Clippy checks and
 verified without mismatches (manifest SHA-256
 `daa8ed43d2ab5409ce4b1bb5834875cc0d11b333b7e235070647235872d2a9a8`).
