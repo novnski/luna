@@ -37,7 +37,7 @@ luna-ui = { path = "crates/ui" }
 luna-syntax = { path = "crates/syntax" }
 luna-theme = { path = "crates/theme" }
 
-# CRDT
+# CRDT dependencies.
 loro = "1.13"
 # Wire protocol for the SessionRoom DO rooms — official Rust twin of the npm
 # `loro-protocol` package the TS edge speaks (same monorepo, byte-identical
