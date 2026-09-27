@@ -10647,7 +10647,11 @@ impl Composer {
         crate::frost::frosted(surface_radius, 16.0, panel).into_any_element()
     }
 
-    fn render_stash_menu(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    fn render_stash_menu(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
         if !self.stash_menu_open {
             return None;
         }
