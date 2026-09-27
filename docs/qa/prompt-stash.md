@@ -12,7 +12,8 @@ uses a provider account or a user's files.
    eligible for removal while the stash owns it.
 2. A malformed, missing, changed, or out-of-root attachment must fail the
    stash write, or appear as needing reattachment on a later read. The source
-   draft must remain available after a failed write.
+   draft must remain available after a failed write. Quoted or terminal context
+   supplied through RPC must be rejected until restore can replay it.
 3. Reusing a stash ID with different content must fail; retrying the exact
    entry must be idempotent. More than 50 entries or more than 1 MiB of
    metadata in one entry must be rejected without clearing the composer.

@@ -125,6 +125,29 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
             .await
             .is_err()
     );
+    for context in [
+        DraftContext {
+            quoted: Some(serde_json::json!({"messageId":"quoted-context"})),
+            ..DraftContext::default()
+        },
+        DraftContext {
+            terminal: Some(serde_json::json!({"terminalId":"terminal-context"})),
+            ..DraftContext::default()
+        },
+    ] {
+        let mut unsupported = entry.clone();
+        unsupported.id = uuid::Uuid::new_v4().to_string();
+        unsupported.context = context;
+        assert!(
+            client
+                .call(
+                    methods::SAVE_PROMPT_STASH,
+                    serde_json::json!({"entry":unsupported})
+                )
+                .await
+                .is_err()
+        );
+    }
     let source: ComposerDraftRead = client
         .call_as(
             methods::GET_COMPOSER_DRAFT,

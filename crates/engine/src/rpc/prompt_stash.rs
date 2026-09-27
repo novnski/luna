@@ -50,6 +50,11 @@ pub(super) fn save(rpc: &EngineRpc, entry: &PromptStashEntry) -> Result<(), RpcE
     {
         return Err(RpcError::BadParams("invalid saved prompt".into()));
     }
+    if entry.context.quoted.is_some() || entry.context.terminal.is_some() {
+        return Err(RpcError::BadParams(
+            "saved prompts do not yet support quoted or terminal context".into(),
+        ));
+    }
     let encoded =
         serde_json::to_vec(entry).map_err(|error| RpcError::BadParams(error.to_string()))?;
     if encoded.len() > MAX_PROMPT_STASH_ENTRY_BYTES {
