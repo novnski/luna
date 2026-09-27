@@ -38,6 +38,26 @@ fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
     )
 }
 
+fn skill_button(
+    theme: &Theme,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    enabled: bool,
+) -> gpui::Stateful<gpui::Div> {
+    // GPUI synthesizes one keyboard click on key-up for a focused on_click
+    // control. Keep keyboard behavior there rather than adding key handlers.
+    let accent = theme.accent;
+    widgets::ghost_action(theme)
+        .id(id.into())
+        .role(gpui::Role::Button)
+        .aria_label(label.into())
+        .when(enabled, |el| {
+            el.tab_index(0)
+                .focus_visible(move |style| style.border_2().border_color(accent))
+        })
+        .when(!enabled, |el| el.cursor_default())
+}
+
 fn matches_selected_contract(
     view: &RuntimeContractView,
     selected_task: Option<&str>,
@@ -914,9 +934,10 @@ impl HarnessesPage {
             .child(widgets::row_title(theme, "Skill library and MCP"))
             .child(widgets::page_subtitle(theme,
                 "Browse provider-owned skills by global or project scope. Check provider reads Codex's native catalog; file presence and selected-session attachment are separate checks."))
-            .child(widgets::ghost_action(theme).id("refresh-integrations")
-                .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
-                .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(true, cx); cx.notify(); }))
+            .child(skill_button(theme, "refresh-integrations", "Check provider skill catalog", !self.skill_busy)
+                .mt(px(8.0))
+                .when(!self.skill_busy, |el| el.hover(|s| widgets::ghost_hover(theme, s))
+                    .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(true, cx); cx.notify(); })))
                 .child("Check provider"));
         if let Loadable::Ready(harnesses) = &self.harnesses {
             let mut picker = div()
@@ -935,17 +956,28 @@ impl HarnessesPage {
                 }
                 let selected = id == self.integration_provider;
                 picker = picker.child(
-                    widgets::ghost_action(theme)
-                        .id(SharedString::from(format!("integration-provider-{id:?}")))
-                        .when(selected, |el| el.bg(theme.accent_wash))
-                        .hover(|s| widgets::ghost_hover(theme, s))
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.integration_provider = id;
-                            page.clear_skill_editor();
-                            page.load_inventory(false, cx);
-                            cx.notify();
-                        }))
-                        .child(harness.name.clone()),
+                    skill_button(
+                        theme,
+                        SharedString::from(format!("integration-provider-{id:?}")),
+                        format!("Show {} skills", harness.name),
+                        !self.skill_busy,
+                    )
+                    .aria_toggled(if selected {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when(selected, |el| el.bg(theme.accent_wash))
+                    .when(!self.skill_busy, |el| {
+                        el.hover(|s| widgets::ghost_hover(theme, s))
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                page.integration_provider = id;
+                                page.clear_skill_editor();
+                                page.load_inventory(false, cx);
+                                cx.notify();
+                            }))
+                    })
+                    .child(harness.name.clone()),
                 );
             }
             card = card.child(picker);
@@ -959,23 +991,35 @@ impl HarnessesPage {
                 .flex_wrap()
                 .gap(px(6.0))
                 .child(
-                    widgets::ghost_action(theme)
-                        .id("create-global-skill")
-                        .hover(|style| widgets::ghost_hover(theme, style))
-                        .on_click(cx.listener(|page, _, _, cx| {
-                            page.create_skill(IntegrationSkillScope::Global, cx)
-                        }))
-                        .child("New global skill"),
+                    skill_button(
+                        theme,
+                        "create-global-skill",
+                        "New global skill",
+                        !self.skill_busy,
+                    )
+                    .when(!self.skill_busy, |el| {
+                        el.hover(|style| widgets::ghost_hover(theme, style))
+                            .on_click(cx.listener(|page, _, _, cx| {
+                                page.create_skill(IntegrationSkillScope::Global, cx)
+                            }))
+                    })
+                    .child("New global skill"),
                 )
                 .when(has_project, |row| {
                     row.child(
-                        widgets::ghost_action(theme)
-                            .id("create-project-skill")
-                            .hover(|style| widgets::ghost_hover(theme, style))
-                            .on_click(cx.listener(|page, _, _, cx| {
-                                page.create_skill(IntegrationSkillScope::Project, cx)
-                            }))
-                            .child("New project skill"),
+                        skill_button(
+                            theme,
+                            "create-project-skill",
+                            "New project skill",
+                            !self.skill_busy,
+                        )
+                        .when(!self.skill_busy, |el| {
+                            el.hover(|style| widgets::ghost_hover(theme, style))
+                                .on_click(cx.listener(|page, _, _, cx| {
+                                    page.create_skill(IntegrationSkillScope::Project, cx)
+                                }))
+                        })
+                        .child("New project skill"),
                     )
                 }),
         );
@@ -1026,16 +1070,21 @@ impl HarnessesPage {
                                 |el| {
                                     let identity = item.identity.clone().unwrap_or_default();
                                     el.child(
-                                        widgets::ghost_action(theme)
-                                            .id(SharedString::from(format!(
-                                                "inspect-skill-{identity}"
-                                            )))
-                                            .mt(px(6.0))
-                                            .hover(|style| widgets::ghost_hover(theme, style))
-                                            .on_click(cx.listener(move |page, _, _, cx| {
-                                                page.open_skill(identity.clone(), cx)
-                                            }))
-                                            .child("Inspect / edit"),
+                                        skill_button(
+                                            theme,
+                                            SharedString::from(format!("inspect-skill-{identity}")),
+                                            format!("Inspect {} {} skill", item.scope, item.name),
+                                            !self.skill_busy,
+                                        )
+                                        .mt(px(6.0))
+                                        .when(!self.skill_busy, |button| {
+                                            button
+                                                .hover(|style| widgets::ghost_hover(theme, style))
+                                                .on_click(cx.listener(move |page, _, _, cx| {
+                                                    page.open_skill(identity.clone(), cx)
+                                                }))
+                                        })
+                                        .child("Inspect / edit"),
                                     )
                                 },
                             ),
@@ -1054,7 +1103,7 @@ impl HarnessesPage {
             .child(widgets::row_title(theme, "Skill details"))
             .child(widgets::page_subtitle(theme,
                 "LUNA edits the provider's SKILL.md in its selected global or project folder. Existing sessions may need a fresh turn to discover a change."))
-            .child(widgets::ghost_action(theme).id("close-skill-editor")
+            .child(skill_button(theme, "close-skill-editor", "Close skill details", !self.skill_busy)
                 .mt(px(8.0))
                 .when(!self.skill_busy, |el| el.hover(|style| widgets::ghost_hover(theme, style))
                     .on_click(cx.listener(|page, _, _, cx| { page.clear_skill_editor(); cx.notify(); })))
@@ -1136,6 +1185,9 @@ impl HarnessesPage {
             Loadable::Idle if !self.skill_creating => return card.into_any_element(),
             Loadable::Idle => {}
         }
+        let save_enabled = !self.skill_busy
+            && (self.skill_creating
+                || matches!(&self.skill_document, Loadable::Ready(document) if document.read_only_reason.is_none()));
         card = card
             .child(
                 div()
@@ -1146,21 +1198,29 @@ impl HarnessesPage {
                 self.skill_content_input.clone().into_any_element(),
             )))
             .child(
-                widgets::ghost_action(theme)
-                    .id("save-skill-document")
-                    .mt(px(8.0))
-                    .when(!self.skill_busy, |el| {
-                        el.hover(|style| widgets::ghost_hover(theme, style))
-                            .on_click(cx.listener(|page, _, _, cx| page.save_skill(cx)))
-                    })
-                    .when(self.skill_busy, |el| el.opacity(0.5))
-                    .child(if self.skill_busy {
-                        "Saving or installing…"
-                    } else if self.skill_creating {
+                skill_button(
+                    theme,
+                    "save-skill-document",
+                    if self.skill_creating {
                         "Create skill"
                     } else {
                         "Save skill"
-                    }),
+                    },
+                    save_enabled,
+                )
+                .mt(px(8.0))
+                .when(save_enabled, |el| {
+                    el.hover(|style| widgets::ghost_hover(theme, style))
+                        .on_click(cx.listener(|page, _, _, cx| page.save_skill(cx)))
+                })
+                .when(!save_enabled, |el| el.opacity(0.5))
+                .child(if self.skill_busy {
+                    "Saving or installing…"
+                } else if self.skill_creating {
+                    "Create skill"
+                } else {
+                    "Save skill"
+                }),
             );
 
         if let Loadable::Ready(document) = &self.skill_document {
@@ -1174,19 +1234,28 @@ impl HarnessesPage {
                 (HarnessId::Opencode, "OpenCode"),
             ] {
                 providers = providers.child(
-                    widgets::ghost_action(theme)
-                        .id(SharedString::from(format!(
-                            "skill-install-provider-{provider:?}"
-                        )))
-                        .when(self.skill_install_provider == provider, |el| {
-                            el.bg(theme.accent_wash)
-                        })
-                        .hover(|style| widgets::ghost_hover(theme, style))
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.skill_install_provider = provider;
-                            cx.notify();
-                        }))
-                        .child(label),
+                    skill_button(
+                        theme,
+                        SharedString::from(format!("skill-install-provider-{provider:?}")),
+                        format!("Install to {label}"),
+                        !self.skill_busy,
+                    )
+                    .aria_toggled(if self.skill_install_provider == provider {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when(self.skill_install_provider == provider, |el| {
+                        el.bg(theme.accent_wash)
+                    })
+                    .when(!self.skill_busy, |el| {
+                        el.hover(|style| widgets::ghost_hover(theme, style))
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                page.skill_install_provider = provider;
+                                cx.notify();
+                            }))
+                    })
+                    .child(label),
                 );
             }
             card = card.child(providers);
@@ -1201,38 +1270,53 @@ impl HarnessesPage {
                     continue;
                 }
                 scopes = scopes.child(
-                    widgets::ghost_action(theme)
-                        .id(SharedString::from(format!("skill-install-scope-{scope:?}")))
-                        .when(self.skill_install_scope == scope, |el| {
-                            el.bg(theme.accent_wash)
-                        })
-                        .hover(|style| widgets::ghost_hover(theme, style))
-                        .on_click(cx.listener(move |page, _, _, cx| {
-                            page.skill_install_scope = scope;
-                            cx.notify();
-                        }))
-                        .child(label),
+                    skill_button(
+                        theme,
+                        SharedString::from(format!("skill-install-scope-{scope:?}")),
+                        format!("Install to {label}"),
+                        !self.skill_busy,
+                    )
+                    .aria_toggled(if self.skill_install_scope == scope {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when(self.skill_install_scope == scope, |el| {
+                        el.bg(theme.accent_wash)
+                    })
+                    .when(!self.skill_busy, |el| {
+                        el.hover(|style| widgets::ghost_hover(theme, style))
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                page.skill_install_scope = scope;
+                                cx.notify();
+                            }))
+                    })
+                    .child(label),
                 );
             }
             card = card.child(scopes);
             let install_valid = self.skill_install_provider != document.provider
                 || self.skill_install_scope != document.scope;
             card = card.child(
-                widgets::ghost_action(theme)
-                    .id("install-skill-copy")
-                    .mt(px(8.0))
-                    .when(
-                        install_valid && !self.skill_busy && document.read_only_reason.is_none(),
-                        |el| {
-                            el.hover(|style| widgets::ghost_hover(theme, style))
-                                .on_click(cx.listener(|page, _, _, cx| page.install_skill(cx)))
-                        },
-                    )
-                    .when(
-                        !install_valid || self.skill_busy || document.read_only_reason.is_some(),
-                        |el| el.opacity(0.5),
-                    )
-                    .child("Install copy"),
+                skill_button(
+                    theme,
+                    "install-skill-copy",
+                    format!("Install copy of {}", document.name),
+                    install_valid && !self.skill_busy && document.read_only_reason.is_none(),
+                )
+                .mt(px(8.0))
+                .when(
+                    install_valid && !self.skill_busy && document.read_only_reason.is_none(),
+                    |el| {
+                        el.hover(|style| widgets::ghost_hover(theme, style))
+                            .on_click(cx.listener(|page, _, _, cx| page.install_skill(cx)))
+                    },
+                )
+                .when(
+                    !install_valid || self.skill_busy || document.read_only_reason.is_some(),
+                    |el| el.opacity(0.5),
+                )
+                .child("Install copy"),
             );
             card = card
                 .child(
@@ -1253,25 +1337,33 @@ impl HarnessesPage {
                     ),
                 ))
                 .child(
-                    widgets::ghost_action(theme)
-                        .id("remove-skill")
-                        .mt(px(8.0))
-                        .when(
-                            !self.skill_busy && document.read_only_reason.is_none(),
-                            |el| {
-                                el.hover(|style| widgets::ghost_hover(theme, style))
-                                    .on_click(cx.listener(|page, _, _, cx| page.remove_skill(cx)))
-                            },
-                        )
-                        .when(
-                            self.skill_busy || document.read_only_reason.is_some(),
-                            |el| el.opacity(0.5),
-                        )
-                        .child(if self.skill_remove_armed {
+                    skill_button(
+                        theme,
+                        "remove-skill",
+                        if self.skill_remove_armed {
                             "Confirm remove skill and files"
                         } else {
-                            "Remove…"
-                        }),
+                            "Remove skill"
+                        },
+                        !self.skill_busy && document.read_only_reason.is_none(),
+                    )
+                    .mt(px(8.0))
+                    .when(
+                        !self.skill_busy && document.read_only_reason.is_none(),
+                        |el| {
+                            el.hover(|style| widgets::ghost_hover(theme, style))
+                                .on_click(cx.listener(|page, _, _, cx| page.remove_skill(cx)))
+                        },
+                    )
+                    .when(
+                        self.skill_busy || document.read_only_reason.is_some(),
+                        |el| el.opacity(0.5),
+                    )
+                    .child(if self.skill_remove_armed {
+                        "Confirm remove skill and files"
+                    } else {
+                        "Remove…"
+                    }),
                 );
         }
         card.into_any_element()
