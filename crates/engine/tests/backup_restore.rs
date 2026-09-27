@@ -429,7 +429,8 @@ fn managed_offline_v9_archive_remains_restorable_after_current_migrations() {
     let db = root.join("profiles/local/docs.sqlite3");
     let conn = Connection::open(&db).unwrap();
     conn.execute_batch(
-        "DROP TABLE local_executable_authority;
+        "DROP TABLE prompt_stash;
+         DROP TABLE local_executable_authority;
          DROP TABLE task_cleanup_paths;
          DROP TABLE task_cleanup;
          DROP TABLE project_cleanup;
