@@ -227,7 +227,7 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
     );
 
     // A projectless legacy task in a subdirectory cannot infer provenance
-    // from ancestry alone. Select the repo root first, then its subdirectory.
+    // from ancestry alone, and a later directory selection cannot rebind it.
     client
         .call(
             methods::MUTATE,
@@ -246,7 +246,7 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
             )
             .await
             .is_err(),
-        "unbound subdirectory must wait for explicit selection"
+        "unbound subdirectory must remain unbound"
     );
     let denied_subdir = client
         .call(
@@ -259,49 +259,16 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
         .await
         .expect("rejected mutation has a durable receipt");
     assert_eq!(
-        denied_subdir["receipt"]["status"], "failed",
+        denied_subdir["receipt"]["status"], "rejected",
         "same unbound subdirectory cannot bootstrap from ancestry"
     );
-    let bound_root = client
-        .call(
-            methods::MUTATE,
-            json!({
-                "op": "setChatCwd", "chatId": "projectless-subdir",
-                "cwd": outer,
-            }),
-        )
-        .await
-        .expect("explicitly bind projectless task at checkout root");
-    assert_eq!(bound_root["receipt"]["status"], "applied");
-    let bound_subdir = client
-        .call(
-            methods::MUTATE,
-            json!({
-                "op": "setChatCwd", "chatId": "projectless-subdir",
-                "cwd": outer_subdir,
-            }),
-        )
-        .await
-        .expect("move bound task into a subdirectory of the same checkout");
-    assert_eq!(bound_subdir["receipt"]["status"], "applied");
-    assert_eq!(
+    assert!(
         core.workspace
             .chat("projectless-subdir")
             .unwrap()
             .unwrap()
             .checkout_id
-            .as_deref(),
-        Some(outer_id.as_str())
-    );
-    assert_eq!(
-        client
-            .call(
-                methods::GET_GIT_ACTION_PREVIEW,
-                json!({ "cwd": outer_subdir, "chatId": "projectless-subdir" }),
-            )
-            .await
-            .expect("bound projectless subdirectory preview")["checkoutId"],
-        outer_id
+            .is_none()
     );
 
     // The inner task still points to its original checkout. Moving only its
@@ -434,8 +401,8 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
         unbound_checkout.is_none(),
         "diff-sync must not stamp the ancestor"
     );
-    assert_eq!(denied_same_cwd["receipt"]["status"], "failed");
-    assert_eq!(denied_unbound_cwd["receipt"]["status"], "failed");
+    assert_eq!(denied_same_cwd["receipt"]["status"], "rejected");
+    assert_eq!(denied_unbound_cwd["receipt"]["status"], "rejected");
     assert_eq!(
         inner_checkout_after_denied.as_deref(),
         Some(inner_id.as_str()),

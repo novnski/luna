@@ -2438,7 +2438,8 @@ impl EngineRpc {
         }
         let recorded = chat.checkout_id.ok_or_else(|| {
             RpcError::Failed(
-                "Task checkout identity is unavailable; select its working directory again".into(),
+                "Task checkout identity is unavailable; reopen the task after workspace discovery"
+                    .into(),
             )
         })?;
         if expected_checkout_id.is_some_and(|expected| expected != recorded.as_str()) {
@@ -2453,7 +2454,7 @@ impl EngineRpc {
             .map_err(|_| RpcError::Failed("Git checkout is unavailable".into()))?;
         if current.id != recorded {
             return Err(RpcError::Failed(
-                "Task checkout changed; restore the worktree or select its working directory again"
+                "Task checkout changed; restore its worktree or create a new task in the intended checkout"
                     .into(),
             ));
         }
@@ -3487,8 +3488,8 @@ impl EngineRpc {
         {
             return Err((
                 CommandReasonCode::IncompatibleEnvironment,
-                "moving to another machine or execution environment requires X03 handoff".into(),
-                "Choose a project on the task's owning machine, or wait for X03.".into(),
+                "an existing task cannot move to another machine or execution environment".into(),
+                "Create a new task in the destination environment.".into(),
             ));
         }
         let cwd = task.cwd.as_deref().unwrap_or("~");
@@ -3536,9 +3537,9 @@ impl EngineRpc {
         if !canonical_cwd.starts_with(&canonical_destination) {
             return Err((
                 CommandReasonCode::IncompatibleWorkspace,
-                "the destination project does not contain the task's current working directory; cross-workspace moves require X03"
+                "the destination project does not contain the task's current working directory"
                     .into(),
-                "Choose a project that owns the same canonical workspace, or wait for X03."
+                "Choose a project in the same workspace or create a new task in the destination."
                     .into(),
             ));
         }
@@ -3571,7 +3572,7 @@ impl EngineRpc {
                 if current_checkout.id != destination_checkout.id {
                     return Err((
                         CommandReasonCode::IncompatibleWorkspace,
-                        "the destination resolves to a different checkout or worktree; cross-workspace moves require X03"
+                        "the destination resolves to a different checkout or worktree"
                             .into(),
                         "Choose a project in the same canonical checkout; the original task is unchanged."
                             .into(),
@@ -3607,7 +3608,7 @@ impl EngineRpc {
                     CommandReasonCode::IncompatibleWorkspace,
                     "non-Git project reassignment requires the exact same canonical workspace root"
                         .into(),
-                    "Choose the same physical workspace root; different roots require X03.".into(),
+                    "Choose the same physical workspace root or create a new task.".into(),
                 ));
             }
             _ => {
@@ -5739,63 +5740,12 @@ impl EngineRpc {
                 )?;
                 Ok(Some(receipt))
             }
-            TaskCommandIntent::SetCwd { cwd } => {
-                let previous = self
-                    .workspace
-                    .chat(task_id)
-                    .map_err(TaskProjectionError::Mutation)?
-                    .ok_or_else(|| {
-                        TaskProjectionError::Mutation(crate::EngineError::Other(
-                            "Task is unavailable".into(),
-                        ))
-                    })?;
-                let identity = self
-                    .repos
-                    .checkout_identity(std::path::Path::new(&cwd))
-                    .await
-                    .ok();
-                let same_identity = identity.as_ref().is_some_and(|identity| {
-                    previous.checkout_id.as_deref() == Some(identity.id.as_str())
-                });
-                if previous.cwd.as_deref() == Some(cwd.as_str())
-                    && previous.checkout_id.is_some()
-                    && !same_identity
-                {
-                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "Task checkout changed; restore the worktree before selecting this directory"
-                            .into(),
-                    )));
-                }
-                if let Some(identity) = identity.as_ref()
-                    && !same_identity
-                {
-                    // A new binding must name a checkout root with its own
-                    // .git marker. An unbound nested path may otherwise
-                    // resolve a parent whose worktree metadata just vanished.
-                    let selected_root =
-                        std::fs::canonicalize(&cwd).is_ok_and(|selected| selected == identity.root);
-                    if !selected_root || !crate::diff_sync::has_checkout_marker(&identity.root) {
-                        return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                            "Select the checkout root before using a Git subdirectory".into(),
-                        )));
-                    }
-                }
-                let checkout_id = identity.map(|identity| identity.id);
-                let owned_task_id = task_id.to_string();
-                let (_, receipt) = self.commit_task_projection_superseding_recovery(
-                    command_id,
-                    task_id,
-                    "Recovery cancelled because the working directory changed.",
-                    move |doc| {
-                        doc.set_chat_cwd(&owned_task_id, &cwd)?;
-                        if let Some(checkout_id) = checkout_id.as_deref() {
-                            doc.set_chat_checkout(&owned_task_id, checkout_id)?;
-                        }
-                        Ok(())
-                    },
-                )?;
-                Ok(Some(receipt))
-            }
+            TaskCommandIntent::SetCwd { .. } => self.reject_context_command(
+                command_id,
+                CommandReasonCode::UnsupportedOperation,
+                "A task's working directory is fixed when it is created.",
+                "Create a new task in the intended workspace instead of moving this task.",
+            ),
             TaskCommandIntent::SetActivity {
                 last_message_at,
                 created_at,

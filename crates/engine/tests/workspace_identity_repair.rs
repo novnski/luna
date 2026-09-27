@@ -188,22 +188,29 @@ async fn missing_import_preview_is_display_only_and_preserves_stored_history() {
     let client = luna_rpc::memory_client(core.rpc_service());
     let task = uuid::Uuid::new_v4().to_string();
     create(&client, &task, &core.device_id, None, &fixture.root_a).await;
-    let doc = luna_doc::SessionDoc::init(&task).unwrap();
-    doc.push_message(&luna_doc::SessionMessageEntry {
-        id: "stored-user-message".into(),
-        role: luna_doc::MessageRole::User,
-        parts: vec![luna_doc::MessagePart::Text {
-            id: "stored-part".into(),
-            text: "Preserved synthetic history".into(),
-        }],
-        created_at: 1,
-        device_id: core.device_id.clone(),
-        status: Some(luna_doc::MessageStatus::Complete),
-        continuation_of: None,
-    })
-    .unwrap();
-    let history = doc.export_snapshot().unwrap();
-    core.store.save_snapshot(&task, &history).unwrap();
+    let doc = core.doc_host.open(&task).unwrap();
+    doc.doc()
+        .push_message(&luna_doc::SessionMessageEntry {
+            id: "stored-user-message".into(),
+            role: luna_doc::MessageRole::User,
+            parts: vec![luna_doc::MessagePart::Text {
+                id: "stored-part".into(),
+                text: "Preserved synthetic history".into(),
+            }],
+            created_at: 1,
+            device_id: core.device_id.clone(),
+            status: Some(luna_doc::MessageStatus::Complete),
+            continuation_of: None,
+        })
+        .unwrap();
+    // Seed the authoritative open document. Writing an unrelated snapshot
+    // directly into the store races DocHost's background flush of this task.
+    core.doc_host.flush_all();
+    let history = core.store.load_snapshot(&task).unwrap().unwrap();
+    let messages_before = luna_doc::SessionDoc::from_snapshot(&history)
+        .unwrap()
+        .read_entries()
+        .unwrap();
     let before_identity = identity(&client, &task).await;
     let before_log = core
         .store
@@ -239,12 +246,16 @@ async fn missing_import_preview_is_display_only_and_preserves_stored_history() {
         .load_snapshot("luna-task-identity-events-v1")
         .unwrap();
     let after_history = core.store.load_snapshot(&task).unwrap();
+    let messages_after = luna_doc::SessionDoc::from_snapshot(after_history.as_ref().unwrap())
+        .unwrap()
+        .read_entries()
+        .unwrap();
     evidence(
         "historical-import-preview",
         json!({"missing":preview,"valid":valid,
         "adoptionError":refused.err().map(|error|error.to_string()),
         "beforeIdentity":before_identity,"afterIdentity":after_identity,
-        "identityLogUnchanged":before_log==after_log,"historyUnchanged":after_history.as_ref()==Some(&history)}),
+        "identityLogUnchanged":before_log==after_log,"historyUnchanged":messages_after==messages_before}),
     );
     close(core, client).await;
     assert_eq!(
@@ -267,7 +278,7 @@ async fn missing_import_preview_is_display_only_and_preserves_stored_history() {
     assert!(valid.workspace.workspace_id.starts_with("workspace:v2:"));
     assert_eq!(after_identity, before_identity);
     assert_eq!(after_log, before_log);
-    assert_eq!(after_history, Some(history));
+    assert_eq!(messages_after, messages_before);
 }
 
 #[cfg(unix)]
@@ -1249,11 +1260,12 @@ async fn new_worktree_materialization_keeps_sibling_root_and_initial_binding() {
     );
     assert_eq!(
         set_receipt.status,
-        CommandReceiptStatus::Applied,
+        CommandReceiptStatus::Rejected,
         "{}",
         set_artifact.display()
     );
-    assert_eq!(changed_chat.cwd.as_deref(), fixture.root_b.to_str());
+    assert_eq!(changed_chat.cwd, after_move_chat.cwd);
+    assert_eq!(changed_chat.checkout_id, after_move_chat.checkout_id);
     assert_eq!(changed_identity, after_move_identity);
     assert!(resume.is_err(), "{}", set_artifact.display());
     assert_eq!(cwds.lock().unwrap().len(), 1);

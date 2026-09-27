@@ -2,7 +2,7 @@
 // Default: local fixture preparation only. Native modes need the coordinator's
 // desktop grant. They never build or send a PR-create RPC.
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, statSync, unlinkSync, rmdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -83,8 +83,14 @@ function fixtureLines(name) {
     ? readFileSync(join(root, name), 'utf8').trim().split('\n').filter(Boolean)
     : [];
 }
-function mainUnchanged(expected, phase) {
-  assert.equal(listener(59777), expected, `Main IPC changed ${phase}`);
+function singleQaApp(phase) {
+  assert.equal(listener(59777), null, `LUNA Dev must be closed before native QA (${phase})`);
+  const otherApps = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' })
+    .split('\n').flatMap(line => {
+      const match = line.trim().match(/^(\d+)\s+(\/.*\.app\/Contents\/MacOS\/luna)(?:\s|$)/);
+      return match && match[2] !== executable ? [`${match[1]} ${match[2]}`] : [];
+    });
+  assert.deepEqual(otherApps, [], `Another Luna GUI app is running ${phase}`);
 }
 function verifiedListener() {
   const pid = listener(port);
@@ -133,7 +139,24 @@ async function ownership(client, expectedPid) {
   assert.equal(verifiedListener(), expectedPid);
   return { deviceId: info.deviceId, rootClaim: expectedClaim };
 }
+// This older QA launcher opens an existing signed bundle directly. Share the
+// build wrapper's app slot so it cannot race another worktree's refresh.
+const commonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+  { cwd: project, encoding: 'utf8' }).trim();
+const appOperationLock = join(commonDir, 'luna-app-operation.lock');
+try { mkdirSync(appOperationLock); }
+catch {
+  console.error(`Another Luna app operation owns ${appOperationLock}; inspect its pid before retrying`);
+  process.exit(75);
+}
+process.once('exit', () => {
+  const pidFile = join(appOperationLock, 'pid');
+  if (existsSync(pidFile)) unlinkSync(pidFile);
+  rmdirSync(appOperationLock);
+});
+writeFileSync(join(appOperationLock, 'pid'), String(process.pid));
 const mainPid = listener(59777);
+singleQaApp('before QA');
 verifyBundle();
 const mode = args[0];
 const launch = mode === '--restart-and-seed' || mode === '--launch-and-seed';
@@ -153,14 +176,14 @@ if (mode === '--restart-and-seed') {
   assert.notEqual(command(previousPid), executable, 'QA app refused graceful quit; left intact, no forced termination');
   assert.deepEqual(qaProcesses(), [], 'An existing QA process would ignore the launch environment');
   assert.equal(listener(port), null, 'QA port is occupied after graceful quit');
-  mainUnchanged(mainPid, 'during QA restart');
+  singleQaApp('during QA restart');
 } else if (mode === '--launch-and-seed') {
   assert.equal(listener(port), null, 'QA port is already occupied; stopped launch refused');
   assert.deepEqual(qaProcesses(), [], 'QA executable is unexpectedly live without its listener; stopped launch refused');
   assert.equal(fixtureLines('writes.jsonl').length, 0, 'Fixture has a PR POST before initial Create; stopped launch refused');
 }
 if (launch) {
-  mainUnchanged(mainPid, 'before QA launch');
+  singleQaApp('before QA launch');
   const fakeGh = join(fixture, 'gh');
   assert.ok(existsSync(fakeGh) && statSync(fakeGh).isFile() && (statSync(fakeGh).mode & 0o111), 'Fake gh is missing or not executable');
   assert.equal(launchEnv.LUNA_PR_FIXTURE, root);
@@ -172,14 +195,14 @@ if (launch) {
   execFileSync('open', ['-g', '-n', ...envArgs, app], { stdio: 'pipe' });
   const launchDeadline = Date.now() + 45000;
   while (Date.now() < launchDeadline && !listener(port)) await pause(250);
-  mainUnchanged(mainPid, 'during QA launch');
+  singleQaApp('during QA launch');
 }
 const pid = verifiedListener();
 if (previousPid !== null) assert.notEqual(pid, previousPid, 'Fixture environment requires a fresh QA process');
 const client = await connect();
 try {
   const owner = await ownership(client, pid); // before any local seed mutation
-  mainUnchanged(mainPid, 'before QA seed');
+  singleQaApp('before QA seed');
   if (mode === '--launch-and-seed') {
     assert.equal(fixtureLines('writes.jsonl').length, 0, 'Fixture POST appeared before QA seed');
   }
@@ -196,11 +219,15 @@ try {
   const spaceId = 'github-pr-qa-space', chatId = 'github-pr-qa-chat';
   await mutate({ op: 'createSpace', spaceId, deviceId: owner.deviceId, path: checkout, name: 'Pull Request QA', gitDetected: true });
   await mutate({ op: 'createChat', chatId, spaceId, deviceId: owner.deviceId, cwd: checkout, branch: 'feature/pr', config: { harness: 'codex', model: 'gpt-6-luna', sandbox: 'workspace-write' } });
-  // A new task has no trusted checkout binding until the owner records one.
-  // The fixture root has its own .git marker, so this explicit selection is
-  // safe even before diff-sync's initial stamp.
-  await mutate({ op: 'setChatCwd', chatId, cwd: checkout });
-  const gitPreview = await client.call('GetGitActionPreview', { cwd: checkout, chatId });
+  // The task starts in its final checkout. Wait for diff-sync's root identity
+  // stamp; a later working-directory mutation is no longer supported.
+  let gitPreview, previewError;
+  const previewDeadline = Date.now() + 30000;
+  while (!gitPreview && Date.now() < previewDeadline) {
+    try { gitPreview = await client.call('GetGitActionPreview', { cwd: checkout, chatId }); }
+    catch (error) { previewError = error; await pause(100); }
+  }
+  assert.ok(gitPreview, `Initial checkout identity did not load: ${previewError}`);
   const gitDir = realpathSync(git('rev-parse', '--path-format=absolute', '--git-dir'));
   const expectedCheckoutId = createHash('sha256').update(owner.deviceId).update('\0').update(gitDir).digest('hex');
   assert.equal(gitPreview.checkoutId, expectedCheckoutId, 'Owner did not bind the exact fixture checkout');
@@ -227,7 +254,7 @@ try {
   assert.equal(fixtureLines('writes.jsonl').length, beforeWrites, 'A preflight must not create a PR');
   await ownership(client, pid);
   verifyBundle();
-  mainUnchanged(mainPid, 'during QA preflight');
+  singleQaApp('during QA preflight');
   const proof = { passed: true, at: new Date().toISOString(), pid, previousPid, executable, bundleId, dataRoot,
     ...owner, mainPid, spaceId, chatId, checkout, checkoutId: expectedCheckoutId, operationId: preview.operationId,
     callCountBefore: beforeCalls, callCountAfter: fixtureLines('calls.jsonl').length, freshCalls,

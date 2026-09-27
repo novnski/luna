@@ -307,7 +307,7 @@ async fn repair_contract_revision_fence_duplicate_and_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn repair_contract_stale_preview_cannot_cross_a_real_root_edit() {
+async fn repair_contract_stale_preview_cannot_cross_a_task_edit() {
     let legacy = seed_legacy(Seed::Unbound).await;
     let core = open_legacy(&legacy).await;
     let client = luna_rpc::memory_client(core.rpc_service());
@@ -319,7 +319,7 @@ async fn repair_contract_stale_preview_cannot_cross_a_real_root_edit() {
         envelope(
             &legacy.task_a,
             &before,
-            json!({"kind":"setCwd","cwd":legacy.fixture.root_b}),
+            json!({"kind":"setBranch","branch":"qa-task-edit"}),
         ),
     )
     .await;

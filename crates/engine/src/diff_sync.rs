@@ -404,7 +404,8 @@ async fn reconcile(inner: &Arc<DiffSyncInner>, chats: Vec<Chat>, fresh: bool) {
             None => {
                 // A missing nested .git makes git rev-parse walk to an ancestor.
                 // An unbound task can only bootstrap itself at a checkout root
-                // with its own marker; subdirectories need an explicit rebind.
+                // with its own marker. A subdirectory cannot be rebound later;
+                // create the task in the intended workspace instead.
                 let at_root =
                     std::fs::canonicalize(&cwd).is_ok_and(|canonical| canonical == identity.root);
                 if !at_root {

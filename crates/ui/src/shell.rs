@@ -9861,15 +9861,9 @@ impl Shell {
                         && destination.checkout_id.is_some()
                         && chat.checkout_id != destination.checkout_id;
                     let (available, validation) = if known_incompatible_machine {
-                        (
-                            false,
-                            "Unavailable: another machine/environment requires X03 handoff",
-                        )
+                        (false, "Unavailable: start a new task in that environment")
                     } else if known_incompatible_checkout {
-                        (
-                            false,
-                            "Unavailable: a different checkout/worktree requires X03",
-                        )
+                        (false, "Unavailable: start a new task in that checkout")
                     } else {
                         (
                             true,
