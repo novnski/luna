@@ -994,7 +994,9 @@ pub fn save_skill_document(
             "Symlinked skill roots are read only".into(),
         ));
     }
-    let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+    // Stage beside the skill directory, outside the tree being revisioned.
+    // The sibling stays on the same filesystem for the final atomic rename.
+    let mut temporary = tempfile::NamedTempFile::new_in(&location.root)?;
     use std::io::Write as _;
     temporary.write_all(content.as_bytes())?;
     temporary.as_file_mut().sync_all()?;
