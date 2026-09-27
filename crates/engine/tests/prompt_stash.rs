@@ -148,6 +148,23 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
                 .is_err()
         );
     }
+    let mut malformed_comment = entry.clone();
+    malformed_comment.id = uuid::Uuid::new_v4().to_string();
+    malformed_comment
+        .context
+        .review_comments
+        .push(serde_json::json!({
+            "id":"comment-without-anchor"
+        }));
+    assert!(
+        client
+            .call(
+                methods::SAVE_PROMPT_STASH,
+                serde_json::json!({"entry":malformed_comment}),
+            )
+            .await
+            .is_err()
+    );
     let source: ComposerDraftRead = client
         .call_as(
             methods::GET_COMPOSER_DRAFT,

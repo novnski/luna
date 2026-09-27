@@ -7,6 +7,41 @@ use luna_rpc::RpcError;
 
 use super::EngineRpc;
 
+fn restorable_review_comment(value: &serde_json::Value) -> bool {
+    let Some(comment) = value.as_object() else {
+        return false;
+    };
+    if !comment.get("id").is_some_and(serde_json::Value::is_string)
+        || !comment
+            .get("path")
+            .is_some_and(serde_json::Value::is_string)
+        || !comment
+            .get("body")
+            .is_some_and(serde_json::Value::is_string)
+        || !comment
+            .get("line")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|line| line <= u32::MAX as u64)
+    {
+        return false;
+    }
+    let Some(source) = comment.get("source").and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    match source.get("kind").and_then(serde_json::Value::as_str) {
+        Some("file") => true,
+        Some("diff") => {
+            matches!(
+                source.get("side").and_then(serde_json::Value::as_str),
+                Some("old" | "new")
+            ) && source
+                .get("oldPath")
+                .is_none_or(|path| path.is_null() || path.is_string())
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn list(rpc: &EngineRpc) -> Result<Vec<PromptStashEntry>, RpcError> {
     let mut entries = rpc
         .store
@@ -53,6 +88,16 @@ pub(super) fn save(rpc: &EngineRpc, entry: &PromptStashEntry) -> Result<(), RpcE
     if entry.context.quoted.is_some() || entry.context.terminal.is_some() {
         return Err(RpcError::BadParams(
             "saved prompts do not yet support quoted or terminal context".into(),
+        ));
+    }
+    if !entry
+        .context
+        .review_comments
+        .iter()
+        .all(restorable_review_comment)
+    {
+        return Err(RpcError::BadParams(
+            "saved prompt contains a review comment that cannot be restored".into(),
         ));
     }
     let encoded =
