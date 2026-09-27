@@ -5348,6 +5348,7 @@ impl Composer {
                 match readback {
                     Ok(entries) if entries.iter().any(|saved| saved == &entry) => {
                         composer.stash_entries = entries;
+                        composer.stash_menu_open = false;
                         if composer.current_key == key
                             && composer.draft_revisions.get(&key).copied().unwrap_or(0)
                                 == source_revision
@@ -10646,189 +10647,127 @@ impl Composer {
         crate::frost::frosted(surface_radius, 16.0, panel).into_any_element()
     }
 
-    fn render_stash_controls(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_stash_menu(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        if !self.stash_menu_open {
+            return None;
+        }
         let busy = self.stash_task.is_some();
-        let count = self.stash_entries.len();
-        let focus_border = theme.border_strong;
-        let save = div()
-            .id("composer-save-prompt")
-            .role(gpui::Role::Button)
-            .aria_label(if busy {
-                "Saving prompt"
-            } else {
-                "Save current prompt"
-            })
+        let popup_theme = theme.for_popup();
+        let popup_focus = popup_theme.border_strong;
+        let mut rows = div()
+            .id("composer-stash-list")
+            .w_full()
+            .max_h(px(220.0))
+            .overflow_y_scroll()
+            .rounded(px(crate::popover::CARD_RADIUS))
+            .border_1()
+            .border_color(theme.border)
+            .bg(crate::popover::surface_bg(theme))
+            .when(!theme.is_frost(), |panel| panel.shadow_lg())
+            .p(px(crate::popover::CARD_INSET))
             .flex()
-            .items_center()
-            .gap(px(5.0))
-            .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(11.0))
-            .text_color(theme.text_muted)
-            .when(!busy, |button| {
-                button
-                    .tab_index(0)
-                    .focus_visible(move |style| style.border_2().border_color(focus_border))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.glass_hover()))
-                    .on_click(cx.listener(|this, _, _, cx| this.stash_current_prompt(cx)))
-            })
-            .when(busy, |button| button.opacity(0.5))
-            .child(
-                crate::icons::icon(crate::icons::FLOPPY_DISK)
-                    .size(px(13.0))
-                    .text_color(theme.text_muted),
-            )
-            .child(if busy { "Saving…" } else { "Save prompt" });
-        let list = div()
-            .id("composer-saved-prompts")
-            .role(gpui::Role::Button)
-            .aria_label("Show saved prompts")
-            .aria_expanded(self.stash_menu_open)
-            .tab_index(0)
-            .focus_visible(move |style| style.border_2().border_color(focus_border))
-            .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(11.0))
-            .text_color(theme.text_muted)
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.glass_hover()))
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_stash_menu(cx)))
-            .child(if count == 0 {
-                "Saved prompts".to_string()
-            } else {
-                format!("Saved prompts {count}")
-            });
-        let mut controls = div().w_full().flex().flex_col().gap(px(4.0)).child(
-            div()
-                .w_full()
-                .flex()
-                .justify_end()
-                .gap(px(4.0))
-                .child(save)
-                .child(list),
-        );
-        if self.stash_menu_open {
-            let popup_theme = theme.for_popup();
-            let popup_focus = popup_theme.border_strong;
-            let mut rows = div()
-                .id("composer-stash-list")
-                .w_full()
-                .max_h(px(220.0))
-                .overflow_y_scroll()
-                .rounded(px(crate::popover::CARD_RADIUS))
-                .border_1()
-                .border_color(theme.border)
-                .bg(crate::popover::surface_bg(theme))
-                .when(!theme.is_frost(), |panel| panel.shadow_lg())
-                .p(px(crate::popover::CARD_INSET))
-                .flex()
-                .flex_col()
-                .gap(px(2.0));
-            if self.stash_entries.is_empty() {
-                rows = rows.child(
-                    div()
-                        .px(px(8.0))
-                        .py(px(10.0))
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(popup_theme.text_muted)
-                        .child(if busy {
-                            "Loading saved prompts…"
-                        } else {
-                            "No saved prompts yet"
-                        }),
-                );
-            }
-            for entry in self.stash_entries.iter().cloned() {
-                let restore = entry.clone();
-                let id = entry.id.clone();
-                let attachment_count = entry.attachments.len();
-                let label = entry.label.clone();
-                rows = rows.child(
-                    div()
-                        .id(SharedString::from(format!("composer-stash-row-{id}")))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .rounded(px(8.0))
-                        .when(!busy, |row| {
-                            row.hover(|style| style.bg(theme.glass_hover()))
-                        })
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("composer-stash-restore-{id}")))
-                                .role(gpui::Role::Button)
-                                .aria_label(format!("Restore saved prompt: {label}"))
-                                .flex_1()
-                                .min_w_0()
-                                .px(px(8.0))
-                                .py(px(8.0))
-                                .when(!busy, |button| {
-                                    button
-                                        .tab_index(0)
-                                        .focus_visible(move |style| {
-                                            style.border_2().border_color(popup_focus)
-                                        })
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.restore_stashed_prompt(restore.clone(), cx);
-                                        }))
-                                })
-                                .when(busy, |button| button.opacity(0.5))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(crate::typography::ui_rems(12.0))
-                                        .text_color(popup_theme.text)
-                                        .child(entry.label),
-                                ),
-                        )
-                        .when(attachment_count > 0, |row| {
-                            row.child(
+            .flex_col()
+            .gap(px(2.0));
+        if self.stash_entries.is_empty() {
+            rows = rows.child(
+                div()
+                    .px(px(8.0))
+                    .py(px(10.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(popup_theme.text_muted)
+                    .child(if busy {
+                        "Loading saved prompts…"
+                    } else {
+                        "No saved prompts yet"
+                    }),
+            );
+        }
+        for entry in self.stash_entries.iter().cloned() {
+            let restore = entry.clone();
+            let id = entry.id.clone();
+            let attachment_count = entry.attachments.len();
+            let label = entry.label.clone();
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(format!("composer-stash-row-{id}")))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded(px(8.0))
+                    .when(!busy, |row| {
+                        row.hover(|style| style.bg(theme.glass_hover()))
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("composer-stash-restore-{id}")))
+                            .role(gpui::Role::Button)
+                            .aria_label(format!("Restore saved prompt: {label}"))
+                            .flex_1()
+                            .min_w_0()
+                            .px(px(8.0))
+                            .py(px(8.0))
+                            .when(!busy, |button| {
+                                button
+                                    .tab_index(0)
+                                    .focus_visible(move |style| {
+                                        style.border_2().border_color(popup_focus)
+                                    })
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.restore_stashed_prompt(restore.clone(), cx);
+                                    }))
+                            })
+                            .when(busy, |button| button.opacity(0.5))
+                            .child(
                                 div()
-                                    .flex_none()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(popup_theme.text_muted)
-                                    .child(format!(
-                                        "{attachment_count} file{}",
-                                        if attachment_count == 1 { "" } else { "s" }
-                                    )),
-                            )
-                        })
-                        .child(
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .text_color(popup_theme.text)
+                                    .child(entry.label),
+                            ),
+                    )
+                    .when(attachment_count > 0, |row| {
+                        row.child(
                             div()
-                                .id(SharedString::from(format!("composer-stash-delete-{id}")))
-                                .role(gpui::Role::Button)
-                                .aria_label(format!("Delete saved prompt: {label}"))
-                                .px(px(8.0))
-                                .py(px(8.0))
-                                .rounded(px(6.0))
+                                .flex_none()
                                 .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(popup_theme.text_muted)
-                                .when(!busy, |button| {
-                                    button
-                                        .tab_index(0)
-                                        .focus_visible(move |style| {
-                                            style.border_2().border_color(popup_focus)
-                                        })
-                                        .cursor_pointer()
-                                        .hover(|style| style.text_color(theme.danger_muted))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.delete_stashed_prompt(id.clone(), cx);
-                                        }))
-                                })
-                                .when(busy, |button| button.opacity(0.5))
-                                .child("Delete"),
-                        ),
-                );
-            }
-            controls = controls.child(rows);
+                                .child(format!(
+                                    "{attachment_count} file{}",
+                                    if attachment_count == 1 { "" } else { "s" }
+                                )),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("composer-stash-delete-{id}")))
+                            .role(gpui::Role::Button)
+                            .aria_label(format!("Delete saved prompt: {label}"))
+                            .px(px(8.0))
+                            .py(px(8.0))
+                            .rounded(px(6.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(popup_theme.text_muted)
+                            .when(!busy, |button| {
+                                button
+                                    .tab_index(0)
+                                    .focus_visible(move |style| {
+                                        style.border_2().border_color(popup_focus)
+                                    })
+                                    .cursor_pointer()
+                                    .hover(|style| style.text_color(theme.danger_muted))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.delete_stashed_prompt(id.clone(), cx);
+                                    }))
+                            })
+                            .when(busy, |button| button.opacity(0.5))
+                            .child("Delete"),
+                    ),
+            );
         }
-        controls
+        Some(rows)
     }
 
     fn render_send_button(
@@ -11696,8 +11635,8 @@ impl Render for Composer {
         } else {
             container
         };
-        let stash_controls = self.render_stash_controls(&theme, cx);
-        let container = container.child(stash_controls).child(pill_surface);
+        let stash_menu = self.render_stash_menu(&theme, cx);
+        let container = container.children(stash_menu).child(pill_surface);
 
         // The lower slot keeps a stable footprint for Git projects while its
         // old floating checkout/ref controls dissolve into the session footer.

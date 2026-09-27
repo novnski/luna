@@ -34,6 +34,10 @@ uses a provider account or a user's files.
    RED: Alpha saved by the visible button (stash count 1); one Cmd+S on a
    focused Beta draft left Beta in the editor and the count at 1. Recheck the
    same path after the focus-routing fix without starting a real provider.
+8. The resting composer must show no Save prompt or Saved prompts controls and
+   keep its original spacing. Cmd+S with a nonempty message input saves one
+   entry; Cmd+S with an empty input opens the transient restore/delete list.
+   Closing that list restores the normal composer layout.
 
 Run the focused file-backed test with `scripts/cargo.sh test --locked -p
 luna-engine --test prompt_stash`. Retain its command log and a JSON acceptance
