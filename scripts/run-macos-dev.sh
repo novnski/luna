@@ -113,22 +113,35 @@ PY
 )" || exit 2
 fi
 
-# Two refreshes must never swap the same bundle concurrently. A stale directory
-# is deliberately not auto-removed; inspect its owner before manual recovery.
-mkdir -p "$DEV_ROOT"
+# Linked worktrees share one app-operation slot. Neither this lock nor the
+# checkout-local refresh lock is auto-recovered: inspect a stale owner's PID.
+git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
+app_operation_lock="$git_common_dir/luna-app-operation.lock"
+if ! mkdir "$app_operation_lock" 2>/dev/null; then
+  echo "Another Luna app operation owns $app_operation_lock; inspect its pid before retrying" >&2
+  exit 75
+fi
 refresh_lock="$DEV_ROOT/.refresh-lock"
+refresh_lock_owned=0
+stage_root=""
+cleanup() {
+  [[ -z "$stage_root" ]] || rm -rf -- "$stage_root"
+  if [[ "$refresh_lock_owned" == 1 ]]; then
+    rm -f "$refresh_lock/pid"
+    rmdir "$refresh_lock"
+  fi
+  rm -f "$app_operation_lock/pid"
+  rmdir "$app_operation_lock"
+}
+trap cleanup EXIT
+echo "$$" > "$app_operation_lock/pid"
+mkdir -p "$DEV_ROOT"
 if ! mkdir "$refresh_lock" 2>/dev/null; then
   echo "Another app operation owns $refresh_lock; inspect its pid before retrying" >&2
   exit 75
 fi
+refresh_lock_owned=1
 echo "$$" > "$refresh_lock/pid"
-stage_root=""
-cleanup() {
-  [[ -z "$stage_root" ]] || rm -rf -- "$stage_root"
-  rm -f "$refresh_lock/pid"
-  rmdir "$refresh_lock"
-}
-trap cleanup EXIT
 
 # pgrep matches command lines as regular expressions. Confirm each candidate's
 # exact executable path so the installed LUNA and another checkout are safe.
@@ -141,6 +154,30 @@ dev_pids() {
     fi
   done < <(pgrep -f '/Contents/MacOS/luna' 2>/dev/null || true)
 }
+
+# A separate QA, development, or installed Luna process may be visible in the
+# Dock even when its bundle is outside this checkout. Never terminate it here.
+other_luna_processes() {
+  local pid command_line
+  while IFS= read -r pid; do
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == /* && ( "$command_line" == *'.app/Contents/MacOS/luna' || "$command_line" == *'.app/Contents/MacOS/luna '* ) && "$command_line" != "$EXECUTABLE" && "$command_line" != "$EXECUTABLE "* ]]; then
+      printf '%s %s\n' "$pid" "$command_line"
+    fi
+  done < <(pgrep -f '/Contents/MacOS/luna' 2>/dev/null || true)
+}
+
+refuse_other_luna_app() {
+  local others
+  others="$(other_luna_processes)"
+  if [[ -n "$others" ]]; then
+    echo "Another Luna app is running; quit it gracefully before opening $APP_NAME:" >&2
+    echo "$others" >&2
+    exit 75
+  fi
+}
+
+refuse_other_luna_app
 
 if [[ "$MODE" != refresh && -n "$(dev_pids)" ]]; then
   echo "$APP_NAME is already running. Use --refresh to build and reopen it." >&2
@@ -198,6 +235,10 @@ else
 fi
 codesign --verify --deep --strict "$staged_app"
 
+# A different checkout might have opened its app during this build. Preserve
+# the current bundle and its running process if the single-app slot changed.
+refuse_other_luna_app
+
 if [[ "$MODE" == refresh && -n "$(dev_pids)" ]]; then
   echo "asking $APP_NAME to quit after the successful build" >&2
   # AppKit initially cancels the Apple Event while LUNA checks/saves open
@@ -226,6 +267,8 @@ if [[ "$MODE" != build-only ]] && lsof -nP -iTCP:"$IPC_PORT" -sTCP:LISTEN >/dev/
   echo "IPC port $IPC_PORT is in use; bundle was left intact" >&2
   exit 1
 fi
+
+refuse_other_luna_app
 
 # Keep one rollback copy only during the swap. Successful refreshes leave one
 # LUNA Dev.app and one overwritten build log, not a series of installed apps.

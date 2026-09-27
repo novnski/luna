@@ -18,21 +18,28 @@ It does not compile Luna or operate the main app.
 4. Count the primary target, linked targets and shared mbx store once per
    canonical path. Never delete artifacts, replace target directories, or
    modify global Cargo configuration.
-5. Real macOS acceptance: build and refresh `LUNA QA Infrastructure`, bundle
-   ID `com.novnski.luna.qa.infrastructure`, port `59785`, worktree-local data.
+5. Real macOS acceptance: after the current Luna app saves and quits, build
+   and refresh `LUNA QA Infrastructure`, bundle ID
+   `com.novnski.luna.qa.infrastructure`, port `59785`, worktree-local data.
    Record build duration, exact PID/executable, plist identity, signature,
-   IPC ownership, storage before/after and unchanged main PID/bundle hash.
+   IPC ownership, storage before/after and unchanged primary bundle hash.
+6. Refuse a second running LUNA app before building or replacing a bundle,
+   preserving the current app and its data. Serialize app operations across
+   linked worktrees; a busy app slot must leave the existing bundle intact.
 
 The harness uses disposable Git worktrees and command-boundary fault
 injection for destructive/failure paths. It is an integration check of the
 actual scripts, not a replacement for the final real signed-app acceptance.
-Keep the real QA app available until the coordinator reviews its native
-evidence. After acceptance, preserve and hash the evidence, verify no task or
-process still needs the exact bundle, quit it gracefully, unregister it from
-LaunchServices and remove only that disposable QA bundle. Retain its data and
-the Cargo cache unless a separate scoped cleanup has been reviewed. The
-primary `LUNA Dev` app remains available for the user's handoff. No unit tests
-are added after implementation.
+Run only one Luna GUI app at a time. The primary app can remain running during
+source review and ordinary Cargo checks; let it save and quit gracefully before
+starting a QA app. Never force-quit it to free the slot. Keep the real QA app
+available until the coordinator reviews its native evidence. After acceptance,
+preserve and hash the evidence, verify no task or process still needs the exact
+bundle, quit it gracefully, unregister it from LaunchServices and remove only
+that disposable QA bundle. Retain its data and the Cargo cache unless a
+separate scoped cleanup has been reviewed. Reopen the primary `LUNA Dev` app
+for the user's handoff after the QA app stops. No unit tests are added after
+implementation.
 
 ## Worker setup
 
@@ -88,8 +95,11 @@ collisions. A stopped packaged peer still reserves its identity, port and
 data path. Assign distinct settings before any parallel packaging begins;
 the linked-bundle collision scan is not a global atomic identity registry.
 
-`target/luna-macos-dev/.refresh-lock` prevents competing operations in the
-same checkout. After an uncatchable kill, inspect its PID and remove only
-that stale lock directory when no refresh remains. Never force-quit the app
-or remove data to release it. The default primary app invocation and bundle
-path remain unchanged.
+The Git common directory's `luna-app-operation.lock` serializes launch and
+refresh operations across linked worktrees; `target/luna-macos-dev/.refresh-lock`
+also prevents competing operations in one checkout. The script checks for a
+different running Luna app before building and again before replacing a bundle.
+Exit 75 means the app slot is busy. After an uncatchable kill, inspect the
+recorded PID and remove only a proven stale lock directory when no app
+operation remains. Never force-quit an app or remove data to release a lock.
+The default primary app invocation and bundle path remain unchanged.

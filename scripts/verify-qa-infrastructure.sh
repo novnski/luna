@@ -36,6 +36,7 @@ for repo in (root, peer):
         shutil.copy2(source / 'scripts' / name, repo / 'scripts' / name)
     (repo / 'target').mkdir()
 (root / 'Cargo.toml').write_text('version = "0.0.1"\n')
+(peer / 'Cargo.toml').write_text('version = "0.0.1"\n')
 shutil.copytree(source / 'dist' / 'macos', root / 'dist' / 'macos')
 binpath = scratch / 'bin'; binpath.mkdir()
 def script(path, content):
@@ -45,8 +46,8 @@ script(binpath / 'codesign', 'exit "${QA_SIGN_EXIT:-0}"')
 script(binpath / 'security', 'exit 0')
 script(binpath / 'iconutil', 'exit 0')
 script(binpath / 'open', 'printf "%s\\n" "$@" > "$QA_E2E_SCRATCH/open-args"; exit 1')
-script(binpath / 'pgrep', 'if [[ "${QA_RUNNING:-0}" == 1 ]]; then echo 98765; fi')
-script(binpath / 'ps', 'if [[ "${QA_RUNNING:-0}" == 1 && "$*" == "-p 98765 -o command=" ]]; then printf \'%s\\n\' "$QA_E2E_SCRATCH/repo/target/luna-macos-dev/LUNA QA Fixture.app/Contents/MacOS/luna"; else /bin/ps "$@"; fi')
+script(binpath / 'pgrep', 'if [[ "${QA_RUNNING:-0}" == 1 ]]; then echo 98765; fi; if [[ "${QA_OTHER_RUNNING:-0}" == 1 ]]; then echo 98766; fi')
+script(binpath / 'ps', 'if [[ "${QA_RUNNING:-0}" == 1 && "$*" == "-p 98765 -o command=" ]]; then printf \'%s\\n\' "$QA_E2E_SCRATCH/repo/target/luna-macos-dev/LUNA QA Fixture.app/Contents/MacOS/luna"; elif [[ "${QA_OTHER_RUNNING:-0}" == 1 && "$*" == "-p 98766 -o command=" ]]; then printf \'%s\\n\' "$QA_E2E_SCRATCH/peer/target/luna-macos-dev/LUNA QA Other.app/Contents/MacOS/luna"; else /bin/ps "$@"; fi')
 script(binpath / 'osascript', 'echo "$*" >> "$QA_E2E_SCRATCH/quit-request"; exit 1')
 script(binpath / 'sleep', 'if [[ "${QA_RUNNING:-0}" != 1 ]]; then /bin/sleep "$@"; fi')
 store = scratch / 'cache'; store.mkdir()
@@ -113,6 +114,22 @@ expect('main-worktrees-default-unchanged', ['bash', 'scripts/run-macos-dev.sh', 
 main_info = plistlib.loads((root / 'target/luna-macos-dev/LUNA Dev.app/Contents/Info.plist').read_bytes())
 assert 'LUNA_WORKTREES_DIR' not in main_info.get('LSEnvironment', {})
 sentinel = app / 'Contents/sentinel'; sentinel.write_text('preserve')
+build_count = (scratch / 'actions').read_text().count('build')
+expect('other-luna-running', appcmd, 75, overrides={'QA_OTHER_RUNNING': '1'})
+assert sentinel.read_text() == 'preserve'
+assert (scratch / 'actions').read_text().count('build') == build_count
+app_slot = root / '.git/luna-app-operation.lock'
+app_slot.mkdir()
+expect('app-operation-lock', appcmd, 75)
+expect('linked-worktree-app-operation-lock', appcmd, 75, cwd=peer, overrides={
+    'LUNA_DEV_APP_NAME': 'LUNA QA Other',
+    'LUNA_DEV_BUNDLE_ID': 'com.novnski.luna.qa.other',
+    'LUNA_DEV_IPC_PORT': '59886',
+    'LUNA_DEV_DATA_DIR': str(peer / 'target/qa-data'),
+})
+app_slot.rmdir()
+assert sentinel.read_text() == 'preserve'
+assert (scratch / 'actions').read_text().count('build') == build_count
 expect('failed-build', appcmd, 37, overrides={'QA_BUILD_EXIT': '37'})
 assert sentinel.read_text() == 'preserve'
 expect('failed-signing', appcmd, 38, overrides={'QA_SIGN_EXIT': '38'})
