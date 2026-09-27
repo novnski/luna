@@ -1178,6 +1178,28 @@ pub struct EngineRpc {
     activity_cancel: CancellationToken,
 }
 
+/// A disconnected RPC can abort a native metadata command after its durable
+/// receipt is accepted. Keep that receipt explicitly ambiguous instead of
+/// leaving an unexplained pending row that appears safe to replay.
+struct NativeMetadataCommandGuard<'a> {
+    doc_host: &'a DocHost,
+    command_id: &'a str,
+    armed: bool,
+}
+
+impl Drop for NativeMetadataCommandGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed
+            && let Err(error) = self.doc_host.mark_task_command_unknown(
+                self.command_id,
+                "native provider metadata command was interrupted before its final state was confirmed",
+            )
+        {
+            tracing::error!(command_id = %self.command_id, %error, "failed to mark canceled native metadata command unknown");
+        }
+    }
+}
+
 impl Drop for EngineRpc {
     fn drop(&mut self) {
         self.activity_cancel.cancel();
@@ -3279,13 +3301,14 @@ impl EngineRpc {
                 .ok_or_else(|| RpcError::Failed("task command receipt vanished".into()));
         }
 
-        let provider_effect = self
+        let native_metadata_effect = self
             .task_identity
             .has_native_codex_binding(&command.task_id)
             && matches!(
                 command.intent,
                 TaskCommandIntent::Rename { .. } | TaskCommandIntent::SetArchived { .. }
-            )
+            );
+        let provider_effect = native_metadata_effect
             || matches!(
                 command.intent,
                 TaskCommandIntent::SendQueuedNow { .. } | TaskCommandIntent::SteerQueuedNow { .. }
@@ -3300,6 +3323,11 @@ impl EngineRpc {
         // correlation here would recreate a crash window where a receipt
         // names provider work that was never durably claimed.
         let expected_turn_id = command.expected_turn_id.clone();
+        let mut cancellation_guard = native_metadata_effect.then_some(NativeMetadataCommandGuard {
+            doc_host: &self.doc_host,
+            command_id: &command.command_id,
+            armed: true,
+        });
         let outcome = self
             .apply_task_command_intent(
                 &command.command_id,
@@ -3310,6 +3338,9 @@ impl EngineRpc {
                 send_fence,
             )
             .await;
+        if let Some(guard) = &mut cancellation_guard {
+            guard.armed = false;
+        }
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {

@@ -601,3 +601,83 @@ async fn failed_or_unknown_archive_never_commits_or_replays_the_same_command() {
         reopened.shutdown().await;
     }
 }
+
+#[tokio::test]
+async fn disconnected_native_archive_does_not_leave_an_unexplained_pending_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let core = assemble(root.path());
+    start(&core, root.path(), IDLE_A).await;
+    std::fs::write(
+        root.path().join("native/archive-block"),
+        b"hold provider reply",
+    )
+    .unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let read: TaskCommandRead = client
+        .call_as(
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            serde_json::json!({"taskId":IDLE_A}),
+        )
+        .await
+        .unwrap();
+    let command = serde_json::json!({
+        "commandId":"archive-disconnected", "taskId":IDLE_A,
+        "actorId":"local-user", "clientId":"idle-archive-qa", "clientSessionId":"synthetic",
+        "expectedTaskRevision":read.snapshot.task_revision,
+        "expectedBindingGeneration":read.snapshot.binding_generation,
+        "intent":{"kind":"setArchived", "archived":true}
+    });
+    let dispatched = command.clone();
+    let archiving = tokio::spawn(async move {
+        client
+            .call_as::<CommandReceipt>(methods::EXECUTE_TASK_COMMAND, dispatched)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !root.path().join("native/archive-entered").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("native archive reached the provider before disconnect");
+    archiving.abort();
+    assert!(archiving.await.unwrap_err().is_cancelled());
+
+    let reader = luna_rpc::memory_client(core.rpc_service());
+    let receipt: CommandReceipt = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let receipt: Option<CommandReceipt> = reader
+                .call_as(
+                    methods::GET_TASK_COMMAND_RECEIPT,
+                    serde_json::json!({"commandId":"archive-disconnected"}),
+                )
+                .await
+                .unwrap();
+            if let Some(receipt) = receipt
+                && receipt.reason.is_some()
+            {
+                break receipt;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("canceled provider archive must explain its pending receipt");
+    assert_eq!(receipt.status, CommandReceiptStatus::Pending);
+    assert_eq!(
+        receipt.reason.unwrap().code,
+        luna_proto::CommandReasonCode::ProviderAcceptanceUnknown
+    );
+    assert!(!core.workspace.chat(IDLE_A).unwrap().unwrap().archived);
+    let replay: CommandReceipt = reader
+        .call_as(methods::EXECUTE_TASK_COMMAND, command)
+        .await
+        .unwrap();
+    assert_eq!(replay.status, CommandReceiptStatus::Pending);
+    assert_eq!(
+        calls(root.path()),
+        1,
+        "the canceled provider call must not replay"
+    );
+    core.shutdown().await;
+}
