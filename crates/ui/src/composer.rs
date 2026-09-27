@@ -10632,10 +10632,13 @@ impl Composer {
     fn render_stash_controls(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let busy = self.stash_task.is_some();
         let count = self.stash_entries.len();
+        let focus_border = theme.border_strong;
         let save = div()
             .id("composer-save-prompt")
             .role(gpui::Role::Button)
             .aria_label("Save current prompt")
+            .tab_index(0)
+            .focus_visible(move |style| style.border_2().border_color(focus_border))
             .flex()
             .items_center()
             .gap(px(5.0))
@@ -10657,6 +10660,9 @@ impl Composer {
             .id("composer-saved-prompts")
             .role(gpui::Role::Button)
             .aria_label("Show saved prompts")
+            .aria_expanded(self.stash_menu_open)
+            .tab_index(0)
+            .focus_visible(move |style| style.border_2().border_color(focus_border))
             .px(px(8.0))
             .py(px(5.0))
             .rounded(px(8.0))
@@ -10681,6 +10687,7 @@ impl Composer {
         );
         if self.stash_menu_open {
             let popup_theme = theme.for_popup();
+            let popup_focus = popup_theme.border_strong;
             let mut rows = div()
                 .id("composer-stash-list")
                 .w_full()
@@ -10728,6 +10735,10 @@ impl Composer {
                                 .id(("composer-stash-restore", id.clone()))
                                 .role(gpui::Role::Button)
                                 .aria_label(format!("Restore saved prompt: {label}"))
+                                .tab_index(0)
+                                .focus_visible(move |style| {
+                                    style.border_2().border_color(popup_focus)
+                                })
                                 .flex_1()
                                 .min_w_0()
                                 .px(px(8.0))
@@ -10762,6 +10773,10 @@ impl Composer {
                                 .id(("composer-stash-delete", id.clone()))
                                 .role(gpui::Role::Button)
                                 .aria_label(format!("Delete saved prompt: {label}"))
+                                .tab_index(0)
+                                .focus_visible(move |style| {
+                                    style.border_2().border_color(popup_focus)
+                                })
                                 .px(px(8.0))
                                 .py(px(8.0))
                                 .rounded(px(6.0))
