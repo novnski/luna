@@ -12660,7 +12660,14 @@ impl Render for Shell {
                     this.toggle_terminal(window, cx)
                 }
             }))
-            .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
+            .on_action(cx.listener(|this, _: &SaveFile, window, cx| {
+                if matches!(this.route, Route::Chat)
+                    && this.composer.update(cx, |composer, cx| {
+                        composer.stash_if_message_input_focused(window, cx)
+                    })
+                {
+                    return;
+                }
                 if matches!(this.route, Route::Chat) && this.right_pane_open(cx) {
                     let file = match this.resolved_right_active(cx) {
                         RightSurface::Files => this.files.get(&this.panel_key(cx)).cloned(),

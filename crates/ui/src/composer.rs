@@ -5236,7 +5236,25 @@ impl Composer {
         cx.notify();
     }
 
+    /// The app-wide Save File shortcut reaches the shell after keymap
+    /// registration. Route it here only when this message input owns focus;
+    /// file editors and picker searches retain their own Save behavior.
+    pub(crate) fn stash_if_message_input_focused(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.input.read(cx).focus_handle.is_focused(window) {
+            return false;
+        }
+        self.stash_current_prompt(cx);
+        true
+    }
+
     fn stash_current_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.stash_task.is_some() {
+            return;
+        }
         let staged = self.attachments.get(&self.current_key).map_or(0, Vec::len)
             + self.appshots.get(&self.current_key).map_or(0, Vec::len);
         let comments = self.state.read(cx).review_comments(&self.current_key).len();
@@ -5245,8 +5263,7 @@ impl Composer {
             return;
         }
         let key = self.current_key.clone();
-        if self.stash_task.is_some()
-            || !self.draft_loaded.contains(&key)
+        if !self.draft_loaded.contains(&key)
             || self.editing_queued.is_some()
             || self.queue_edit_draft.is_some()
             || self.pending_draft_owner_stage.is_some()
