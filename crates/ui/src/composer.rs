@@ -5341,6 +5341,7 @@ impl Composer {
                             composer.draft_unavailable.remove(&key);
                             composer.draft_unavailable_appshots.remove(&key);
                             composer.draft_unavailable_appshot_metadata.remove(&key);
+                            composer.draft_comment_fingerprints.remove(&key);
                             composer.state.update(cx, |state, _| state.purge_review_comments(&key));
                             composer.drafts.insert(key.clone(), String::new());
                             composer.set_input_text_without_draft_edit(String::new(), cx);
