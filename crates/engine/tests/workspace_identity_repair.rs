@@ -886,6 +886,32 @@ struct MaterializationRecorder {
     cwds: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
+async fn terminal_receipt(
+    client: &RpcClient,
+    command_id: &str,
+    first: CommandReceipt,
+) -> CommandReceipt {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        let mut receipt = first;
+        loop {
+            if receipt.status.is_terminal() {
+                break receipt;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            receipt = client
+                .call_as::<Option<CommandReceipt>>(
+                    methods::GET_TASK_COMMAND_RECEIPT,
+                    json!({"commandId":command_id}),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    })
+    .await
+    .unwrap()
+}
+
 #[async_trait::async_trait]
 impl luna_harness::Harness for MaterializationRecorder {
     fn id(&self) -> HarnessId {
@@ -952,7 +978,7 @@ async fn new_worktree_materialization_keeps_sibling_root_and_initial_binding() {
     let cwds = Arc::new(std::sync::Mutex::new(Vec::new()));
     let registry = Arc::new(HarnessRegistry::new());
     registry.register(Arc::new(MaterializationRecorder { cwds: cwds.clone() }));
-    let core = fixture.open_with_registry(registry);
+    let core = fixture.open_with_registry(registry.clone());
     let client = luna_rpc::memory_client(core.rpc_service());
     let space = uuid::Uuid::new_v4().to_string();
     client
@@ -965,8 +991,8 @@ async fn new_worktree_materialization_keeps_sibling_root_and_initial_binding() {
         .unwrap();
     let a = uuid::Uuid::new_v4().to_string();
     let b = uuid::Uuid::new_v4().to_string();
-    create(&client, &a, &core.device_id, Some(&space), &fixture.repo).await;
-    create(&client, &b, &core.device_id, Some(&space), &fixture.repo).await;
+    let created_a = create(&client, &a, &core.device_id, Some(&space), &fixture.repo).await;
+    let created_b = create(&client, &b, &core.device_id, Some(&space), &fixture.repo).await;
     client
         .call(
             methods::MUTATE,
@@ -978,51 +1004,323 @@ async fn new_worktree_materialization_keeps_sibling_root_and_initial_binding() {
         .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":a}))
         .await
         .unwrap();
+    let before_first = identity(&client, &a).await;
+    let before_sibling = identity(&client, &b).await;
+    let before_chat = core.workspace.chat(&a).unwrap().unwrap();
+    let before_worktrees = git(&fixture.repo, &["worktree", "list", "--porcelain"]);
     let command = uuid::Uuid::new_v4().to_string();
-    let receipt:CommandReceipt=client.call_as(methods::EXECUTE_TASK_COMMAND,json!({
+    let message = uuid::Uuid::new_v4().to_string();
+    let run_envelope = json!({
         "commandId":command,"taskId":a,"expectedTaskRevision":state.snapshot.task_revision,
-        "intent":{"kind":"session","command":{"kind":"run","messageId":uuid::Uuid::new_v4().to_string(),
+        "intent":{"kind":"session","command":{"kind":"run","messageId":message,
         "request":{"prompt":"fixture materialization","harness":"mock","model":"identity-fixture",
         "reasoning":null,"cwd":fixture.repo,"sandbox":"workspace-write","resume":null,"attachments":[],
-        "worktree":{"repoPath":fixture.repo,"base":"main"}}}}})).await.unwrap();
-    let final_receipt = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        let mut receipt = receipt;
-        loop {
-            if receipt.status.is_terminal() {
-                break receipt;
-            }
+        "worktree":{"repoPath":fixture.repo,"base":"main"}}}}});
+    let receipt: CommandReceipt = client
+        .call_as(methods::EXECUTE_TASK_COMMAND, run_envelope.clone())
+        .await
+        .unwrap();
+    let final_receipt = terminal_receipt(&client, &command, receipt).await;
+    let run_stopped = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while core.sessions.has_live_run(&a) {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            receipt = client
-                .call_as::<Option<CommandReceipt>>(
-                    methods::GET_TASK_COMMAND_RECEIPT,
-                    json!({"commandId":command}),
-                )
-                .await
-                .unwrap()
-                .unwrap();
         }
     })
     .await
-    .unwrap();
+    .is_ok();
     let first = identity(&client, &a).await;
     let sibling = identity(&client, &b).await;
+    let first_chat = core.workspace.chat(&a).unwrap().unwrap();
+    let sibling_chat = core.workspace.chat(&b).unwrap().unwrap();
+    let after_first: luna_proto::TaskCommandRead = client
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":a}))
+        .await
+        .unwrap();
     let observed = cwds.lock().unwrap().clone();
-    evidence(
+    let first_worktrees = git(&fixture.repo, &["worktree", "list", "--porcelain"]);
+    let first_artifact = evidence(
         "new-worktree-first-binding",
-        json!({"receipt":final_receipt,"first":first,"sibling":sibling,"observedCwds":observed}),
+        json!({"createdA":created_a,"createdB":created_b,"beforeSnapshot":state,
+        "beforeChat":before_chat,"beforeIdentity":before_first,"beforeSibling":before_sibling,
+        "beforeWorktrees":before_worktrees,"runEnvelope":run_envelope,"receipt":final_receipt,
+        "runStopped":run_stopped,"afterSnapshot":after_first,"chat":first_chat,
+        "siblingChat":sibling_chat,"first":first,"sibling":sibling,
+        "observedCwds":observed,"worktrees":first_worktrees}),
     );
-    close(core, client).await;
-    assert_eq!(final_receipt.status, CommandReceiptStatus::Applied);
-    assert_eq!(observed.len(), 1);
-    assert_ne!(observed[0], fixture.repo.to_string_lossy());
-    assert_eq!(first.workspace.current_path, observed[0]);
+    assert_eq!(
+        final_receipt.status,
+        CommandReceiptStatus::Applied,
+        "{}",
+        first_artifact.display()
+    );
+    assert!(run_stopped, "{}", first_artifact.display());
+    assert_eq!(observed.len(), 1, "{}", first_artifact.display());
+    assert_ne!(
+        observed[0],
+        fixture.repo.to_string_lossy(),
+        "{}",
+        first_artifact.display()
+    );
+    assert_eq!(
+        first.workspace.current_path,
+        observed[0],
+        "{}",
+        first_artifact.display()
+    );
+    assert_eq!(
+        first_chat.cwd.as_deref(),
+        Some(observed[0].as_str()),
+        "{}",
+        first_artifact.display()
+    );
+    assert_eq!(
+        first_chat.harness_session_cwd.as_deref(),
+        Some(observed[0].as_str()),
+        "{}",
+        first_artifact.display()
+    );
+    assert_eq!(
+        first.workspace.source_space_id.as_deref(),
+        Some(space.as_str())
+    );
     assert_eq!(
         sibling.workspace.current_path,
         fixture.repo.to_string_lossy()
     );
+    assert_eq!(sibling, before_sibling);
+    assert_eq!(sibling_chat.cwd.as_deref(), fixture.repo.to_str());
     assert_ne!(first.workspace.workspace_id, sibling.workspace.workspace_id);
     assert_eq!(
         first.current_binding.as_ref().unwrap().workspace_id,
         first.workspace.workspace_id
     );
+    assert_eq!(first.current_binding.as_ref().unwrap().generation, 1);
+    assert_eq!(
+        first_worktrees
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count(),
+        2
+    );
+    assert!(Path::new(&observed[0]).join(".git").is_file());
+    close(core, client).await;
+
+    let core = fixture.open_with_registry(registry);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let restored = identity(&client, &a).await;
+    let restored_sibling = identity(&client, &b).await;
+    let restored_chat = core.workspace.chat(&a).unwrap().unwrap();
+    let restored_receipt: CommandReceipt = client
+        .call_as::<Option<CommandReceipt>>(
+            methods::GET_TASK_COMMAND_RECEIPT,
+            json!({"commandId":command}),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let replay: CommandReceipt = client
+        .call_as(methods::EXECUTE_TASK_COMMAND, run_envelope)
+        .await
+        .unwrap();
+    let replay_worktrees = git(&fixture.repo, &["worktree", "list", "--porcelain"]);
+    let replay_observed = cwds.lock().unwrap().clone();
+    let replay_artifact = evidence(
+        "new-worktree-restart-replay",
+        json!({
+            "restored":restored,"restoredSibling":restored_sibling,"restoredChat":restored_chat,
+            "originalReceipt":final_receipt,"restoredReceipt":restored_receipt,"replay":replay,
+            "beforeWorktrees":first_worktrees,"afterWorktrees":replay_worktrees,"observedCwds":replay_observed,
+        }),
+    );
+    assert_eq!(
+        restored.workspace.workspace_id,
+        first.workspace.workspace_id,
+        "{}",
+        replay_artifact.display()
+    );
+    assert_eq!(
+        restored.workspace.current_path,
+        first.workspace.current_path
+    );
+    assert_eq!(
+        restored.current_binding.as_ref().unwrap().binding_id,
+        first.current_binding.as_ref().unwrap().binding_id
+    );
+    assert_eq!(restored_chat.cwd, first_chat.cwd);
+    assert_eq!(
+        restored_sibling.workspace.workspace_id,
+        sibling.workspace.workspace_id
+    );
+    assert_eq!(restored_receipt, final_receipt);
+    assert_eq!(replay, final_receipt);
+    assert_eq!(replay_worktrees, first_worktrees);
+    assert_eq!(replay_observed.len(), 1);
+
+    let external_space = uuid::Uuid::new_v4().to_string();
+    client
+        .call(
+            methods::MUTATE,
+            json!({"op":"createSpace","spaceId":external_space,
+        "deviceId":core.device_id,"path":observed[0],"gitDetected":true}),
+        )
+        .await
+        .unwrap();
+    let before_move_chat = core.workspace.chat(&a).unwrap().unwrap();
+    let before_move_identity = identity(&client, &a).await;
+    let move_state: luna_proto::TaskCommandRead = client
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":a}))
+        .await
+        .unwrap();
+    let move_receipt: CommandReceipt = client
+        .call_as(
+            methods::EXECUTE_TASK_COMMAND,
+            json!({
+                "commandId":uuid::Uuid::new_v4().to_string(),"taskId":a,
+                "expectedTaskRevision":move_state.snapshot.task_revision,
+                "expectedBindingGeneration":move_state.snapshot.binding_generation,
+                "intent":{"kind":"moveProject","destinationSpaceId":external_space}
+            }),
+        )
+        .await
+        .unwrap();
+    let after_move_chat = core.workspace.chat(&a).unwrap().unwrap();
+    let after_move_identity = identity(&client, &a).await;
+    let after_move_receipt: CommandReceipt = client
+        .call_as::<Option<CommandReceipt>>(
+            methods::GET_TASK_COMMAND_RECEIPT,
+            json!({"commandId":command}),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let move_artifact = evidence(
+        "external-worktree-move-refused",
+        json!({
+            "task":a,"sourceSpace":space,"externalSpace":external_space,
+            "beforeChat":before_move_chat,"afterChat":after_move_chat,
+            "beforeIdentity":before_move_identity,"afterIdentity":after_move_identity,
+            "beforeSnapshot":move_state,"moveReceipt":move_receipt,
+            "originalReceipt":final_receipt,"originalReceiptAfter":after_move_receipt,
+            "worktrees":git(&fixture.repo,&["worktree","list","--porcelain"]),
+            "observedCwds":cwds.lock().unwrap().clone(),
+        }),
+    );
+    assert!(
+        move_receipt.status.is_terminal() && move_receipt.status != CommandReceiptStatus::Applied,
+        "{}",
+        move_artifact.display()
+    );
+    assert_eq!(after_move_chat, before_move_chat);
+    assert_eq!(after_move_identity, before_move_identity);
+    assert_eq!(after_move_receipt, final_receipt);
+
+    let set_state: luna_proto::TaskCommandRead = client
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":a}))
+        .await
+        .unwrap();
+    let set_receipt: CommandReceipt = client
+        .call_as(
+            methods::EXECUTE_TASK_COMMAND,
+            json!({
+                "commandId":uuid::Uuid::new_v4().to_string(),"taskId":a,
+                "expectedTaskRevision":set_state.snapshot.task_revision,
+                "expectedBindingGeneration":set_state.snapshot.binding_generation,
+                "intent":{"kind":"setCwd","cwd":fixture.root_b}
+            }),
+        )
+        .await
+        .unwrap();
+    let changed_chat = core.workspace.chat(&a).unwrap().unwrap();
+    let changed_identity = identity(&client, &a).await;
+    let resume = core.task_identity.validate_explicit_resume(
+        &a,
+        HarnessId::Mock,
+        fixture.root_b.to_str().unwrap(),
+        "synthetic-materialized-session",
+    );
+    let set_artifact = evidence(
+        "same-chat-cwd-fenced",
+        json!({
+            "beforeChat":after_move_chat,"changedChat":changed_chat,
+            "beforeIdentity":after_move_identity,"changedIdentity":changed_identity,
+            "setReceipt":set_receipt,"resumeError":resume.as_ref().err().map(ToString::to_string),
+            "observedCwds":cwds.lock().unwrap().clone(),
+        }),
+    );
+    assert_eq!(
+        set_receipt.status,
+        CommandReceiptStatus::Applied,
+        "{}",
+        set_artifact.display()
+    );
+    assert_eq!(changed_chat.cwd.as_deref(), fixture.root_b.to_str());
+    assert_eq!(changed_identity, after_move_identity);
+    assert!(resume.is_err(), "{}", set_artifact.display());
+    assert_eq!(cwds.lock().unwrap().len(), 1);
+
+    let rerun_state: luna_proto::TaskCommandRead = client
+        .call_as(methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId":a}))
+        .await
+        .unwrap();
+    let rerun_id = uuid::Uuid::new_v4().to_string();
+    let rerun_submitted: CommandReceipt = client.call_as(methods::EXECUTE_TASK_COMMAND,json!({
+        "commandId":rerun_id,"taskId":a,
+        "expectedTaskRevision":rerun_state.snapshot.task_revision,
+        "expectedBindingGeneration":rerun_state.snapshot.binding_generation,
+        "intent":{"kind":"session","command":{"kind":"run","messageId":uuid::Uuid::new_v4().to_string(),
+        "request":{"prompt":"must remain fenced","harness":"mock","model":"identity-fixture",
+        "reasoning":null,"cwd":fixture.root_b,"sandbox":"workspace-write",
+        "resume":"synthetic-materialized-session","attachments":[]}}}
+    })).await.unwrap();
+    let rerun_receipt = terminal_receipt(&client, &rerun_id, rerun_submitted).await;
+    let rerun_row = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let row = core
+                .doc_host
+                .open(&a)
+                .unwrap()
+                .doc()
+                .read_commands()
+                .unwrap()
+                .into_iter()
+                .find(|row| row.id == rerun_id);
+            if row
+                .as_ref()
+                .is_some_and(|row| row.status != luna_doc::SessionCommandStatus::Pending)
+                || (rerun_receipt.status != CommandReceiptStatus::Applied
+                    && rerun_receipt.status.is_terminal())
+            {
+                break row;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+    let rerun_artifact = evidence(
+        "same-chat-cwd-run-refused",
+        json!({
+            "setReceipt":set_receipt,"rerunReceipt":rerun_receipt,"rerunRow":rerun_row,
+            "chat":core.workspace.chat(&a).unwrap(),"identity":identity(&client,&a).await,
+            "originalReceipt":client.call_as::<Option<CommandReceipt>>(
+                methods::GET_TASK_COMMAND_RECEIPT,json!({"commandId":command})).await.unwrap(),
+            "observedCwds":cwds.lock().unwrap().clone(),
+        }),
+    );
+    assert!(
+        rerun_receipt.status != CommandReceiptStatus::Applied
+            || rerun_row
+                .as_ref()
+                .is_some_and(|row| row.status == luna_doc::SessionCommandStatus::Rejected),
+        "{}",
+        rerun_artifact.display()
+    );
+    assert_eq!(
+        cwds.lock().unwrap().len(),
+        1,
+        "{}",
+        rerun_artifact.display()
+    );
+    close(core, client).await;
 }
