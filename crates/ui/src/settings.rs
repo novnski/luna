@@ -730,14 +730,15 @@ pub struct UiSettings {
     pub sound_input_enabled: bool,
     /// Chime when a run fails or the durable connection state degrades.
     pub sound_attention_enabled: bool,
-    /// Desktop banner notifications on the same transitions.
+    /// Desktop banners for events that need attention.
     /// `LUNA_DISABLE_NOTIFICATIONS` overrides.
     pub notifications_enabled: bool,
     /// Suppress the banner while a Luna window is focused (the chime covers
     /// the foreground case).
     pub notifications_background_only: bool,
-    /// Foreground notices for events in another task. The active task never
-    /// gets a completion notice over its own transcript.
+    /// Legacy setting kept for existing files; in-app Activity notices have
+    /// been removed. It has no effect.
+    #[serde(skip_serializing)]
     pub in_app_notices_enabled: bool,
     /// Device-local routing preference. An absent task inherits `All`.
     pub task_notification_policies: std::collections::HashMap<String, TaskNotificationPolicy>,
@@ -853,7 +854,7 @@ impl Default for UiSettings {
             sound_attention_enabled: true,
             notifications_enabled: true,
             notifications_background_only: true,
-            in_app_notices_enabled: true,
+            in_app_notices_enabled: false,
             task_notification_policies: std::collections::HashMap::new(),
             keep_awake_task_ids: std::collections::HashSet::new(),
             right_pane_width: RIGHT_PANE_DEFAULT,

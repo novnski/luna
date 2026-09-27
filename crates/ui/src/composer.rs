@@ -39,7 +39,7 @@ use luna_rpc::{RpcError, methods};
 use crate::appshots::{self, CapturedAppshot};
 use crate::attachments::{self, StagedAttachment};
 use crate::motion;
-use crate::notice::{NoticeChipIcon, notice_chip};
+use crate::notice::notice_chip;
 use crate::pickers::{DraftConfig, Pickers};
 use crate::settings::{ComposerSendBehavior, platform_combo};
 use crate::state::{AppState, Indicator};
@@ -4538,6 +4538,14 @@ pub struct Composer {
     /// under their own chat — a blanket clear-on-switch erased the one
     /// visible trace of a failed send (2026-08-19).
     failure_key: Option<String>,
+    /// The exact autosave warning; only a confirmed save of this draft clears it.
+    draft_save_failure: Option<(String, SharedString)>,
+    /// A concurrent draft merge is temporary while its merged copy is saving.
+    draft_merge_notice: Option<(String, SharedString)>,
+    /// Unconfirmed delivery is a warning until this command's receipt settles.
+    delivery_failure: Option<(String, SharedString)>,
+    /// The recovery control already explains this saved-copy state.
+    recovery_notice: Option<(String, SharedString)>,
     wizard: Option<Wizard>,
     wizard_focus: FocusHandle,
     /// Requests already answered locally (suppresses the panel until the doc
@@ -4654,6 +4662,7 @@ struct RestoredComposerDraft {
     recoverable_submission: bool,
     recoverable_separate: bool,
     recoverable_entries: Vec<DraftSubmission>,
+    pending_entries: Vec<DraftSubmission>,
 }
 
 enum ComposerSendOutcome {
@@ -4668,11 +4677,7 @@ enum ComposerSendFailure {
 }
 
 fn receipt_failure_message(receipt: &CommandReceipt, fallback: &str) -> String {
-    receipt
-        .recovery_action
-        .clone()
-        .or_else(|| receipt.reason.as_ref().map(|reason| reason.message.clone()))
-        .unwrap_or_else(|| fallback.to_string())
+    crate::task_commands::failure_message(receipt, fallback)
 }
 
 // A rejected first Run may have already created a checkout and a durable setup
@@ -4930,6 +4935,10 @@ impl Composer {
             async_attempts: HashMap::new(),
             async_failure: None,
             failure_key: None,
+            draft_save_failure: None,
+            draft_merge_notice: None,
+            delivery_failure: None,
+            recovery_notice: None,
             action_task: None,
             advance_task: None,
             send_task: None,
@@ -5843,6 +5852,49 @@ impl Composer {
         self.schedule_draft_save(key, crate::drafts::SAVE_DEBOUNCE, cx);
     }
 
+    fn show_draft_save_failure(&mut self, key: &str, message: SharedString) {
+        self.failure = Some(message.clone());
+        self.failure_key = Some(key.to_string());
+        self.draft_save_failure = Some((key.to_string(), message));
+    }
+
+    fn clear_saved_draft_notices(&mut self, key: &str) {
+        if !self.draft_is_saved(key) {
+            return;
+        }
+        for notice in [&mut self.draft_save_failure, &mut self.draft_merge_notice] {
+            if notice
+                .as_ref()
+                .is_some_and(|(notice_key, _)| notice_key == key)
+                && let Some((_, message)) = notice.take()
+                && self.failure_key.as_deref() == Some(key)
+                && self.failure.as_ref() == Some(&message)
+            {
+                self.failure = None;
+                self.failure_key = None;
+            }
+        }
+    }
+
+    fn activate_failure_notice(
+        &mut self,
+        key: &str,
+        message: &SharedString,
+        retry_draft: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.current_key != key || self.failure.as_ref() != Some(message) {
+            return;
+        }
+        if retry_draft {
+            self.schedule_draft_save(key.to_string(), Duration::ZERO, cx);
+        } else {
+            self.failure = None;
+            self.failure_key = None;
+        }
+        cx.notify();
+    }
+
     /// The accepted snapshot may be deleted by settlement. Advance the empty
     /// composer above it so a late save cannot recreate the sent text, while
     /// leaving any newer typing or attachments at their own revision.
@@ -5888,11 +5940,11 @@ impl Composer {
         };
         let Some(engine) = engine else {
             if key == self.current_key {
-                self.failure = Some(
-                    "Draft not saved — the local engine is unavailable; your text is still in this window."
+                self.show_draft_save_failure(
+                    &key,
+                    "Draft not saved. Your text is still here. Reconnect, then retry saving."
                         .into(),
                 );
-                self.failure_key = Some(key);
             }
             self.fail_close_flush(cx);
             return;
@@ -5957,6 +6009,7 @@ impl Composer {
                             .or_default();
                         *saved = (*saved).max(revision);
                         composer.draft_close_failed = false;
+                        composer.clear_saved_draft_notices(&task_key);
                     }
                     Ok(ComposerDraftSaveOutcome::Stale { current_revision }) => {
                         let saved = composer
@@ -5974,14 +6027,13 @@ impl Composer {
                         composer.load_draft(task_key.clone(), cx);
                     }
                     Err(error) => {
+                        tracing::warn!(draft = %task_key, revision, %error, "draft autosave failed");
                         if task_key == composer.current_key {
-                            composer.failure = Some(
-                                format!(
-                                    "Draft not saved — your text is still in this window: {error}"
-                                )
-                                .into(),
+                            composer.show_draft_save_failure(
+                                &task_key,
+                                "Draft not saved. Your text is still here. Retry saving."
+                                    .into(),
                             );
-                            composer.failure_key = Some(task_key.clone());
                         }
                         composer.fail_close_flush(cx);
                     }
@@ -6235,17 +6287,22 @@ impl Composer {
             if key == self.current_key {
                 self.set_input_text_without_draft_edit(merged_text, cx);
             }
-            self.failure = Some(
+            let message: SharedString =
                 "This draft changed while it was loading. Both versions were kept and are being saved."
-                    .into(),
-            );
+                    .into();
+            self.failure = Some(message.clone());
             self.failure_key = Some(key.to_string());
+            self.draft_merge_notice = Some((key.to_string(), message));
         } else {
-            self.failure = Some(
+            let warning: SharedString =
                 "A submitted message is still awaiting an authoritative delivery receipt; newer typing is being saved separately."
-                    .into(),
-            );
+                    .into();
+            self.failure = Some(warning.clone());
             self.failure_key = Some(key.to_string());
+            self.delivery_failure = restored
+                .pending_entries
+                .last()
+                .map(|submission| (submission.command_id.clone(), warning));
         }
         self.draft_saved_revisions
             .entry(key.to_string())
@@ -6412,6 +6469,8 @@ impl Composer {
 
         let command_id = submission.command_id.clone();
         let task_command_id = command_id.clone();
+        let prior_failure = self.failure.clone();
+        let prior_failure_key = self.failure_key.clone();
         let task = cx.spawn(async move |this, cx| {
             let appshot_attachment_ids = submission
                 .snapshot
@@ -6590,16 +6649,19 @@ impl Composer {
                             .entry(key.clone())
                             .and_modify(|value| *value = (*value).max(revision))
                             .or_insert(revision);
+                        composer.clear_saved_draft_notices(&key);
                         if let Some(entries) = composer.recoverable_submissions.get_mut(&key) {
                             entries.retain(|entry| entry.command_id != submission.command_id);
                             if entries.is_empty() {
                                 composer.recoverable_submissions.remove(&key);
                             }
                         }
-                        composer.failure = Some(
-                            "The previous unsent message was recovered into this draft.".into(),
-                        );
-                        composer.failure_key = Some(key.clone());
+                        if composer.failure == prior_failure
+                            && composer.failure_key == prior_failure_key
+                        {
+                            composer.failure = None;
+                            composer.failure_key = None;
+                        }
                     }
                     (Ok(ComposerDraftSaveOutcome::Stale { current_revision }), _) => {
                         composer
@@ -6690,6 +6752,10 @@ impl Composer {
         self.preview = None;
         self.failure = None;
         self.failure_key = None;
+        self.draft_save_failure = None;
+        self.draft_merge_notice = None;
+        self.delivery_failure = None;
+        self.recovery_notice = None;
         self.wizard = None;
         self.answered_requests.clear();
         self.async_submissions.clear();
@@ -6716,6 +6782,33 @@ impl Composer {
             cx.notify();
         });
         self.set_input_text_without_draft_edit(String::new(), cx);
+    }
+
+    fn watch_loaded_pending_submissions(
+        &mut self,
+        key: &str,
+        pending: &[DraftSubmission],
+        engine: &crate::state::EngineHandle,
+        cx: &mut Context<Self>,
+    ) {
+        for submission in pending {
+            let task_id = submission
+                .task_id
+                .clone()
+                .or_else(|| (!key.is_empty()).then(|| key.to_string()));
+            if let Some(task_id) = task_id {
+                self.watch_draft_receipt(
+                    submission.command_id.clone(),
+                    task_id,
+                    key.to_string(),
+                    submission.snapshot.revision,
+                    Vec::new(),
+                    key.is_empty(),
+                    engine.clone(),
+                    cx,
+                );
+            }
+        }
     }
 
     fn load_draft(&mut self, key: String, cx: &mut Context<Self>) {
@@ -6798,9 +6891,13 @@ impl Composer {
                     {
                         read = refreshed;
                     }
-                    let pending_submission = read.submissions.iter().any(|submission| {
-                        submission.state == DraftSubmissionState::Pending
-                    });
+                    let pending_entries: Vec<_> = read
+                        .submissions
+                        .iter()
+                        .filter(|submission| submission.state == DraftSubmissionState::Pending)
+                        .cloned()
+                        .collect();
+                    let pending_submission = !pending_entries.is_empty();
                     let recoverable_submission = read.submissions.iter().any(|submission| {
                         submission.state == DraftSubmissionState::Recoverable
                     });
@@ -7007,6 +7104,7 @@ impl Composer {
                         recoverable_submission,
                         recoverable_separate,
                         recoverable_entries,
+                        pending_entries,
                     })
                 }
                 Err(error) => {
@@ -7047,7 +7145,9 @@ impl Composer {
                     > starting_revision
                     || composer.draft_merge_on_load.contains(&load_key)
                 {
+                    let pending = restored.pending_entries.clone();
                     composer.merge_loaded_draft(&load_key, restored, cx);
+                    composer.watch_loaded_pending_submissions(&load_key, &pending, &engine, cx);
                     composer.finish_pending_draft_owner_stage(cx);
                     return;
                 }
@@ -7122,29 +7222,43 @@ impl Composer {
                     composer.failure = Some(warning.into());
                     composer.failure_key = Some(load_key.clone());
                 } else if restored.pending_submission {
-                    composer.failure = Some(
+                    let warning: SharedString =
                         "A submitted message is still awaiting an authoritative delivery receipt; it was preserved and will not be resent automatically."
-                            .into(),
-                    );
+                            .into();
+                    composer.failure = Some(warning.clone());
                     composer.failure_key = Some(load_key.clone());
+                    composer.delivery_failure = restored
+                        .pending_entries
+                        .last()
+                        .map(|submission| (submission.command_id.clone(), warning));
                 } else if restored.recoverable_separate {
-                    composer.failure = Some(
+                    let message: SharedString =
                         "A previous unsent message was preserved separately from this newer draft."
-                            .into(),
-                    );
+                            .into();
+                    composer.failure = Some(message.clone());
                     composer.failure_key = Some(load_key.clone());
+                    composer.recovery_notice = Some((load_key.clone(), message));
                 } else if restored.recoverable_submission {
-                    composer.failure = Some(
-                        restored
-                            .recovery_action
-                            .unwrap_or_else(|| {
-                                "A previously rejected message was restored as a recoverable draft."
-                                    .into()
-                            })
-                            .into(),
-                    );
+                    let generic = restored.recovery_action.is_none();
+                    let message: SharedString = restored
+                        .recovery_action
+                        .unwrap_or_else(|| {
+                            "A previously rejected message was restored as a recoverable draft."
+                                .into()
+                        })
+                        .into();
+                    composer.failure = Some(message.clone());
                     composer.failure_key = Some(load_key.clone());
+                    if generic {
+                        composer.recovery_notice = Some((load_key.clone(), message));
+                    }
                 }
+                composer.watch_loaded_pending_submissions(
+                    &load_key,
+                    &restored.pending_entries,
+                    &engine,
+                    cx,
+                );
                 composer.finish_pending_draft_owner_stage(cx);
                 cx.notify();
             })
@@ -7185,114 +7299,131 @@ impl Composer {
                 stream_params["targetDeviceId"] = target.into();
                 receipt_params["targetDeviceId"] = target.into();
             }
-            let Ok(mut stream) = engine
+            let mut stream = engine
                 .client()
                 .subscribe(methods::WATCH_TASK_COMMANDS, stream_params)
                 .await
-            else {
-                return;
-            };
-            let mut current = engine
-                .client()
-                .call_as::<Option<luna_proto::CommandReceipt>>(
-                    methods::GET_TASK_COMMAND_RECEIPT,
-                    receipt_params,
-                )
-                .await
-                .ok()
-                .flatten();
-            loop {
-                let receipt = match current.take() {
-                    Some(receipt) => receipt,
-                    None => loop {
-                        let Some(value) = stream.recv().await else {
-                            return;
-                        };
-                        let Some(value) = value.get("receipt") else {
-                            continue;
-                        };
-                        if let Ok(receipt) =
-                            serde_json::from_value::<luna_proto::CommandReceipt>(value.clone())
-                        {
-                            break receipt;
-                        }
-                    },
-                };
-                if receipt.command_id != command_id
-                    || receipt.status == CommandReceiptStatus::Pending
-                {
-                    continue;
-                }
-                let applied = receipt.status == CommandReceiptStatus::Applied;
-                let recovery_text = receipt_failure_message(
-                    &receipt,
-                    "The submitted message was rejected and its draft was preserved.",
-                );
-                let retain_setup_task = !applied
-                    && draft_key.is_empty()
-                    && may_have_setup
-                    && retain_failed_worktree_setup(&engine, &task_id).await;
-                let outcome = if applied { "applied" } else { "recoverable" };
-                let queue_id = (receipt.intent == "queueMessage").then_some(command_id.as_str());
-                if crate::drafts::settle_submission(&engine, &command_id, outcome, queue_id)
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                if !applied && draft_key.is_empty() && !retain_setup_task {
-                    let _ = crate::task_commands::execute(
-                        &engine,
-                        &task_id,
-                        serde_json::json!({ "kind": "delete" }),
-                    )
-                    .await;
-                }
-                this.update(cx, |composer, cx| {
-                    composer.draft_receipt_tasks.remove(&receipt_key);
-                    composer.draft_submitting.remove(&draft_key);
-                    if !applied {
-                        let restore_key = if retain_setup_task {
-                            task_id.clone()
-                        } else {
-                            draft_key.clone()
-                        };
-                        composer.draft_loaded.remove(&restore_key);
-                        if draft_key.is_empty()
-                            && !retain_setup_task
-                            && composer.state.read(cx).selected_chat.as_deref()
-                                == Some(task_id.as_str())
-                        {
-                            composer
-                                .state
-                                .update(cx, |state, cx| state.select_chat(None, cx));
-                        }
-                        if retain_setup_task {
-                            // The immutable rejected submission belongs to this
-                            // task; clear only the old canvas's submitted revision.
-                            composer.finish_applied_draft(&draft_key, submitted_revision, cx);
-                        }
-                        composer.failure = Some(recovery_text.into());
-                        composer.failure_key = Some(restore_key.clone());
-                        composer.load_draft(restore_key, cx);
-                    } else {
-                        composer.finish_applied_draft(&draft_key, submitted_revision, cx);
-                        if queue_id.is_none() {
-                            composer.forget_recoverable_submissions(
-                                &draft_key,
-                                &superseded_recoverable,
-                            );
-                        }
-                        if composer.failure_key.as_deref() == Some(task_id.as_str()) {
-                            composer.failure = None;
-                            composer.failure_key = None;
-                        }
-                    }
-                    cx.notify();
-                })
                 .ok();
-                break;
+            let mut current = None;
+            let receipt = loop {
+                let candidate = match current.take() {
+                    Some(receipt) => Some(receipt),
+                    None => engine
+                        .client()
+                        .call_as::<Option<luna_proto::CommandReceipt>>(
+                            methods::GET_TASK_COMMAND_RECEIPT,
+                            receipt_params.clone(),
+                        )
+                        .await
+                        .ok()
+                        .flatten(),
+                };
+                if let Some(receipt) = candidate
+                    && receipt.command_id == command_id
+                    && receipt.status != CommandReceiptStatus::Pending
+                {
+                    break receipt;
+                }
+                if let Some(events) = stream.as_mut() {
+                    match tokio::time::timeout(Duration::from_secs(3), events.recv()).await {
+                        Ok(Some(value)) => {
+                            current = value
+                                .get("receipt")
+                                .and_then(|value| serde_json::from_value(value.clone()).ok());
+                        }
+                        Ok(None) => stream = None,
+                        Err(_) => {}
+                    }
+                } else {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+            };
+            let applied = receipt.status == CommandReceiptStatus::Applied;
+            let recovery_text = receipt_failure_message(
+                &receipt,
+                "The submitted message was rejected and its draft was preserved.",
+            );
+            let retain_setup_task = !applied
+                && draft_key.is_empty()
+                && may_have_setup
+                && retain_failed_worktree_setup(&engine, &task_id).await;
+            let outcome = if applied { "applied" } else { "recoverable" };
+            let queue_id = (receipt.intent == "queueMessage").then_some(command_id.as_str());
+            let mut retry_secs = 2;
+            loop {
+                match crate::drafts::settle_submission(&engine, &command_id, outcome, queue_id)
+                    .await
+                {
+                    Ok(()) => break,
+                    Err(error) => {
+                        tracing::warn!(%command_id, %error, "draft receipt settlement will retry");
+                        tokio::time::sleep(Duration::from_secs(retry_secs)).await;
+                        retry_secs = (retry_secs * 2).min(30);
+                    }
+                }
             }
+            if !applied && draft_key.is_empty() && !retain_setup_task {
+                let _ = crate::task_commands::execute(
+                    &engine,
+                    &task_id,
+                    serde_json::json!({ "kind": "delete" }),
+                )
+                .await;
+            }
+            this.update(cx, |composer, cx| {
+                composer.draft_receipt_tasks.remove(&receipt_key);
+                composer.draft_submitting.remove(&draft_key);
+                if !applied {
+                    let restore_key = if retain_setup_task {
+                        task_id.clone()
+                    } else {
+                        draft_key.clone()
+                    };
+                    composer.draft_loaded.remove(&restore_key);
+                    if draft_key.is_empty()
+                        && !retain_setup_task
+                        && composer.state.read(cx).selected_chat.as_deref()
+                            == Some(task_id.as_str())
+                    {
+                        composer
+                            .state
+                            .update(cx, |state, cx| state.select_chat(None, cx));
+                    }
+                    if retain_setup_task {
+                        // The immutable rejected submission belongs to this
+                        // task; clear only the old canvas's submitted revision.
+                        composer.finish_applied_draft(&draft_key, submitted_revision, cx);
+                    }
+                    composer.failure = Some(recovery_text.into());
+                    composer.failure_key = Some(restore_key.clone());
+                    composer.delivery_failure = None;
+                    composer.load_draft(restore_key, cx);
+                } else {
+                    composer.finish_applied_draft(&draft_key, submitted_revision, cx);
+                    if queue_id.is_none() {
+                        composer
+                            .forget_recoverable_submissions(&draft_key, &superseded_recoverable);
+                    }
+                    if composer
+                        .delivery_failure
+                        .as_ref()
+                        .is_some_and(|(id, message)| {
+                                id == &command_id
+                                    && matches!(
+                                        composer.failure_key.as_deref(),
+                                        Some(key) if key == task_id.as_str() || key == draft_key.as_str()
+                                    )
+                                    && composer.failure.as_ref() == Some(message)
+                        })
+                    {
+                        composer.failure = None;
+                        composer.failure_key = None;
+                    }
+                    composer.delivery_failure = None;
+                }
+                cx.notify();
+            })
+            .ok();
         });
         self.draft_receipt_tasks.insert(map_key, task);
     }
@@ -9283,6 +9414,10 @@ impl Composer {
         self.set_input_text_without_draft_edit(String::new(), cx);
         self.drafts.remove(&self.current_key);
         self.failure = None;
+        self.draft_save_failure = None;
+        self.draft_merge_notice = None;
+        self.delivery_failure = None;
+        self.recovery_notice = None;
         self.sending = true;
         // A queued row is represented by the queue panel, not the transcript.
         // Claiming an own-turn anchor for it here would replace the live
@@ -9821,8 +9956,13 @@ impl Composer {
                         );
                     }
                     Err(ComposerSendFailure::Unknown(message)) => {
-                        composer.failure = Some(message.clone().into());
+                        tracing::warn!(task_id = %err_chat_id, detail = %message, "send delivery unconfirmed");
+                        let warning: SharedString =
+                            "Delivery is unconfirmed. LUNA is checking the receipt; do not resend yet."
+                                .into();
+                        composer.failure = Some(warning.clone());
                         composer.failure_key = Some(err_chat_id.clone());
+                        composer.delivery_failure = Some((err_message_id.clone(), warning));
                         composer.watch_draft_receipt(
                             err_message_id.clone(),
                             err_chat_id.clone(),
@@ -9837,6 +9977,7 @@ impl Composer {
                     _ => {}
                 }
                 if let Err(ComposerSendFailure::Rejected(message)) = result {
+                    composer.delivery_failure = None;
                     // Failure: red banner, echo removed, prompt back in the
                     // draft, staged files back in the stash. A failed setup
                     // keeps its materialized task and task-scoped recovery;
@@ -10999,17 +11140,44 @@ impl Render for Composer {
             };
         let expanded = self.expanded_mode;
 
-        // Chat-scoped failures render only under their own chat; a global
-        // failure (no key) renders everywhere.
-        let failure = self.failure.clone().filter(|_| {
-            self.failure_key
-                .as_ref()
-                .is_none_or(|key| *key == self.current_key)
-        });
         let recoverable_available = self
             .recoverable_submissions
             .get(&self.current_key)
             .is_some_and(|entries| !entries.is_empty());
+        // Chat-scoped failures render only under their own chat; a global
+        // failure (no key) renders everywhere. The dedicated saved-message
+        // control already explains its generic recovery state.
+        let failure =
+            self.failure
+                .clone()
+                .filter(|_| {
+                    self.failure_key
+                        .as_ref()
+                        .is_none_or(|key| *key == self.current_key)
+                })
+                .filter(|message| {
+                    !recoverable_available
+                        || !self.recovery_notice.as_ref().is_some_and(|(key, notice)| {
+                            key == &self.current_key && notice == message
+                        })
+                });
+        let draft_save_failed = self
+            .draft_save_failure
+            .as_ref()
+            .is_some_and(|(key, message)| {
+                key == &self.current_key && failure.as_ref() == Some(message)
+            });
+        let draft_merge_saving = self
+            .draft_merge_notice
+            .as_ref()
+            .is_some_and(|(key, message)| {
+                key == &self.current_key && failure.as_ref() == Some(message)
+            });
+        let delivery_unconfirmed = self
+            .delivery_failure
+            .as_ref()
+            .is_some_and(|(_, message)| failure.as_ref() == Some(message));
+        let retry_draft_key = self.current_key.clone();
         // Composer honesty: when the target's delivery path is degraded, say
         // UP FRONT that a send will queue (a durable local write delivered on
         // reconnect) instead of letting the button imply instant delivery.
@@ -11041,102 +11209,210 @@ impl Render for Composer {
             })
         };
         // Centered composer column (luna `mx-auto w-full max-w-3xl`).
-        let container = div()
-            .w_full()
-            .max_w(px(COMPOSER_MAX_WIDTH))
-            .mx_auto()
-            .flex()
-            .flex_col()
-            .gap(px(Theme::SPACE_SM))
-            .px(px(Theme::SPACE_LG))
-            .pb(px(Theme::SPACE_LG))
-            .when_some(failure, |el, message| {
-                // Amber with "Warning" for the offline-ish case (engine not
-                // connected), red with "Error" for send/run failures. Click
-                // dismisses.
-                let offline = message.as_ref() == "Engine not connected";
-                el.child(
-                    notice_chip(
-                        &theme,
-                        offline,
-                        if offline { "Warning" } else { "Error" },
-                        message,
-                        NoticeChipIcon::Plain,
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child("Dismiss"),
-                    )
-                    .id("composer-failure")
-                    .mx(px(4.0))
-                    .mt(px(6.0))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.failure = None;
-                        this.failure_key = None;
-                        cx.notify();
-                    })),
-                )
-            })
-            .when(recoverable_available, |el| {
-                el.child(
-                    notice_chip(
-                        &theme,
-                        true,
-                        "Recovery",
-                        "Recover previous unsent message",
-                        NoticeChipIcon::Plain,
-                    )
-                    .child(
-                        div().flex().justify_end().child(
+        let container =
+            div()
+                .w_full()
+                .max_w(px(COMPOSER_MAX_WIDTH))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .gap(px(Theme::SPACE_SM))
+                .px(px(Theme::SPACE_LG))
+                .pb(px(Theme::SPACE_LG))
+                .when_some(failure, |el, message| {
+                    let offline = message.as_ref() == "Engine not connected";
+                    let warning = offline || delivery_unconfirmed || draft_merge_saving;
+                    let action_message = message.clone();
+                    let action_message_key = message.clone();
+                    let key_for_click = retry_draft_key.clone();
+                    let key_for_key = retry_draft_key.clone();
+                    el.child(
+                        notice_chip(
+                            &theme,
+                            warning,
+                            if delivery_unconfirmed {
+                                "Checking delivery"
+                            } else if offline {
+                                "Connection"
+                            } else if draft_save_failed {
+                                "Draft not saved"
+                            } else if draft_merge_saving {
+                                "Saving draft"
+                            } else {
+                                "Action failed"
+                            },
+                            message,
+                        )
+                        .child(
                             div()
-                                .id("composer-discard-unsent")
-                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .id("composer-failure-action")
+                                .role(gpui::Role::Button)
+                                .aria_label(if draft_save_failed {
+                                    "Retry saving draft"
+                                } else {
+                                    "Dismiss message"
+                                })
+                                .tab_index(0)
                                 .cursor_pointer()
-                                .child("Discard saved copy")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.discard_latest_submission(cx);
-                                })),
-                        ),
+                                .flex()
+                                .justify_end()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(if draft_save_failed {
+                                    "Retry save"
+                                } else {
+                                    "Dismiss"
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.activate_failure_notice(
+                                        &key_for_click,
+                                        &action_message,
+                                        draft_save_failed,
+                                        cx,
+                                    );
+                                }))
+                                .on_key_down(cx.listener(
+                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                            && !event.is_held
+                                        {
+                                            cx.stop_propagation();
+                                            this.activate_failure_notice(
+                                                &key_for_key,
+                                                &action_message_key,
+                                                draft_save_failed,
+                                                cx,
+                                            );
+                                        }
+                                    },
+                                )),
+                        )
+                        .id("composer-failure")
+                        .mx(px(4.0))
+                        .mt(px(6.0)),
                     )
-                    .id("composer-recover-unsent")
-                    .mx(px(4.0))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.recover_latest_submission(cx);
-                    })),
-                )
-            })
-            .when_some(queue_notice, |el, (notice, offline)| {
-                // Not a warning box (v0.2.12 feedback: the amber Notice read
-                // as an error and flashed on every blip — pre-grace). One
-                // quiet caption line, amber dot only for hard offline; it
-                // clears itself the moment the path heals.
-                let dot = if offline {
-                    theme.warning
-                } else {
-                    theme.text_faint
-                };
-                el.child(crate::motion::fade_in(
-                    "composer-queue-notice",
-                    div()
-                        .id("composer-queue-notice")
-                        .mx(px(8.0))
-                        .mt(px(6.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .text_size(px(11.0))
-                        .line_height(px(14.0))
-                        .text_color(theme.text_faint)
-                        .child(div().size(px(5.0)).rounded_full().bg(dot))
-                        .child(div().min_w_0().truncate().child(notice)),
-                ))
-            });
+                })
+                .when(recoverable_available, |el| {
+                    let hover_bg = theme.glass_hover();
+                    el.child(
+                        div()
+                            .id("composer-recover-unsent")
+                            .mx(px(4.0))
+                            .mt(px(6.0))
+                            .px(px(12.0))
+                            .py(px(10.0))
+                            .rounded(px(10.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.surface_card)
+                            .flex()
+                            .flex_col()
+                            .gap(px(7.0))
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.text)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child(
+                                        crate::icons::icon(crate::icons::ARCHIVE_UP_MINIMALISTIC)
+                                            .size(px(14.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Unsent message saved"),
+                            )
+                            .child(div().text_color(theme.text_muted).child(
+                                "An earlier message was not sent. Its saved copy is available.",
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_end()
+                                    .gap(px(12.0))
+                                    .child(
+                                        div()
+                                            .id("composer-discard-unsent")
+                                            .role(gpui::Role::Button)
+                                            .aria_label("Discard saved message")
+                                            .tab_index(0)
+                                            .cursor_pointer()
+                                            .text_color(theme.text_muted)
+                                            .hover(move |style| style.bg(hover_bg))
+                                            .child("Discard saved copy")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.discard_latest_submission(cx);
+                                            }))
+                                            .on_key_down(cx.listener(
+                                                |this, event: &gpui::KeyDownEvent, _, cx| {
+                                                    if matches!(
+                                                        event.keystroke.key.as_str(),
+                                                        "enter" | "space"
+                                                    ) && !event.is_held
+                                                    {
+                                                        cx.stop_propagation();
+                                                        this.discard_latest_submission(cx);
+                                                    }
+                                                },
+                                            )),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("composer-restore-unsent")
+                                            .role(gpui::Role::Button)
+                                            .aria_label("Restore saved message into draft")
+                                            .tab_index(0)
+                                            .cursor_pointer()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(theme.accent)
+                                            .hover(move |style| style.bg(hover_bg))
+                                            .child("Restore message")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.recover_latest_submission(cx);
+                                            }))
+                                            .on_key_down(cx.listener(
+                                                |this, event: &gpui::KeyDownEvent, _, cx| {
+                                                    if matches!(
+                                                        event.keystroke.key.as_str(),
+                                                        "enter" | "space"
+                                                    ) && !event.is_held
+                                                    {
+                                                        cx.stop_propagation();
+                                                        this.recover_latest_submission(cx);
+                                                    }
+                                                },
+                                            )),
+                                    ),
+                            ),
+                    )
+                })
+                .when_some(queue_notice, |el, (notice, offline)| {
+                    // Not a warning box (v0.2.12 feedback: the amber Notice read
+                    // as an error and flashed on every blip — pre-grace). One
+                    // quiet caption line, amber dot only for hard offline; it
+                    // clears itself the moment the path heals.
+                    let dot = if offline {
+                        theme.warning
+                    } else {
+                        theme.text_faint
+                    };
+                    el.child(crate::motion::fade_in(
+                        "composer-queue-notice",
+                        div()
+                            .id("composer-queue-notice")
+                            .mx(px(8.0))
+                            .mt(px(6.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .text_size(px(11.0))
+                            .line_height(px(14.0))
+                            .text_color(theme.text_faint)
+                            .child(div().size(px(5.0)).rounded_full().bg(dot))
+                            .child(div().min_w_0().truncate().child(notice)),
+                    ))
+                });
 
         let container = if wizard_active {
             let wizard = self.render_wizard(cx);

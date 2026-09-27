@@ -1745,6 +1745,7 @@ struct SidebarNotice {
     id: uuid::Uuid,
     tone: SidebarNoticeTone,
     message: SharedString,
+    expires_at: Option<std::time::Instant>,
 }
 
 impl SidebarNotice {
@@ -1753,11 +1754,24 @@ impl SidebarNotice {
             id: uuid::Uuid::new_v4(),
             tone,
             message: message.into(),
+            expires_at: None,
         }
     }
 
     fn status(message: impl Into<SharedString>) -> Self {
         Self::new(SidebarNoticeTone::Status, message)
+    }
+
+    fn transient_status(message: impl Into<SharedString>) -> Self {
+        let mut notice = Self::status(message);
+        notice.expires_at = Some(std::time::Instant::now() + Duration::from_secs(4));
+        notice
+    }
+
+    fn transient_error(message: impl Into<SharedString>) -> Self {
+        let mut notice = Self::new(SidebarNoticeTone::Error, message);
+        notice.expires_at = Some(std::time::Instant::now() + Duration::from_secs(10));
+        notice
     }
 }
 
@@ -4362,7 +4376,7 @@ impl Shell {
         };
         if let Some(link) = link {
             cx.write_to_clipboard(ClipboardItem::new_string(link));
-            self.sidebar_notice = Some("LUNA task link copied".into());
+            self.sidebar_notice = Some(SidebarNotice::transient_status("LUNA task link copied"));
         } else {
             self.sidebar_notice = Some("Conversation link is not ready yet".into());
         }
@@ -4380,7 +4394,10 @@ impl Shell {
             .and_then(crate::links::harness_conversation_link);
         if let Some(link) = link {
             cx.write_to_clipboard(ClipboardItem::new_string(link.url));
-            self.sidebar_notice = Some(format!("{} copied", link.label).into());
+            self.sidebar_notice = Some(SidebarNotice::transient_status(format!(
+                "{} copied",
+                link.label
+            )));
         }
         self.close_chat_menu(cx);
         cx.notify();
@@ -4396,7 +4413,9 @@ impl Shell {
             .and_then(|chat| chat.harness_session_id.clone());
         if let Some(id) = id.filter(|id| !id.trim().is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(id));
-            self.sidebar_notice = Some("Provider session ID copied".into());
+            self.sidebar_notice = Some(SidebarNotice::transient_status(
+                "Provider session ID copied",
+            ));
         }
         self.close_chat_menu(cx);
         cx.notify();
@@ -4678,7 +4697,6 @@ impl Shell {
                                     attention_sound,
                                     desktop,
                                     background_only,
-                                    in_app,
                                 } => {
                                     this.settings.sound_enabled = *sound;
                                     this.settings.sound_completion_enabled = *completion_sound;
@@ -4686,7 +4704,6 @@ impl Shell {
                                     this.settings.sound_attention_enabled = *attention_sound;
                                     this.settings.notifications_enabled = *desktop;
                                     this.settings.notifications_background_only = *background_only;
-                                    this.settings.in_app_notices_enabled = *in_app;
                                 }
                                 NotificationsEvent::TaskPolicyChanged { task_id, policy } => {
                                     this.settings
@@ -4855,6 +4872,7 @@ impl Shell {
             return;
         };
         let deleting = intent.get("kind").and_then(|kind| kind.as_str()) == Some("delete");
+        let prior_notice = self.sidebar_notice.as_ref().map(|notice| notice.id);
         let target_device = self
             .state
             .read(cx)
@@ -4865,12 +4883,33 @@ impl Shell {
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
             let result = crate::task_commands::execute(&engine, &task_id, intent).await;
             if let Err(err) = &result {
+                let message = match err {
+                    luna_rpc::RpcError::Closed | luna_rpc::RpcError::Transport(_) => {
+                        "Could not reach this task's device. Try again when it reconnects."
+                            .to_string()
+                    }
+                    _ => err.to_string(),
+                };
+                tracing::warn!(task_id, %err, "task action failed");
                 this.update(cx, |shell, cx| {
-                    shell.sidebar_notice = Some(format!("{err}").into());
+                    shell.sidebar_notice = Some(SidebarNotice::transient_error(message));
                     cx.notify();
                 })
                 .ok();
-            } else if deleting
+            } else {
+                this.update(cx, |shell, cx| {
+                    if shell
+                        .sidebar_notice
+                        .as_ref()
+                        .is_some_and(|notice| Some(notice.id) == prior_notice)
+                    {
+                        shell.sidebar_notice = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+            if deleting
                 && result.as_ref().is_ok_and(|receipt| {
                     receipt.status == luna_proto::CommandReceiptStatus::Applied
                 })
@@ -5596,10 +5635,9 @@ impl Shell {
             return;
         }
         self.open_new_session(cx);
-        self.sidebar_notice = Some(
-            "Started a new task draft with the selected visible context. Review it before sending."
-                .into(),
-        );
+        self.sidebar_notice = Some(SidebarNotice::transient_status(
+            "Started a new task draft with the selected visible context. Review it before sending.",
+        ));
         cx.notify();
     }
 
@@ -8089,6 +8127,7 @@ impl Shell {
 
     fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let activity_view = self.activity.view_active;
+        let activity_unavailable = self.activity_is_unavailable();
 
         // Keyed rows: (stable key, estimated height, element) — the key + height
         // list drives the §1.6 resort FLIP diff below (attention-bucket
@@ -8181,6 +8220,7 @@ impl Shell {
         // shrink (row archived while scrolled) left a phantom fade stuck
         // over an unscrollable list (user report).
         let terminal_inventory = self.render_terminal_inventory(theme, cx);
+        let activity_load_state = self.render_activity_load_state(theme);
         let sidebar_lists = crate::edge_fade::edge_faded(
             SIDEBAR_GLASS_FADE_BAND,
             true,
@@ -8197,6 +8237,7 @@ impl Shell {
                     // No "Sessions" header (user request) — the list
                     // is the whole column; a little air stands in.
                     .pt(px(4.0))
+                    .when_some(activity_load_state, |el, state| el.child(state))
                     .child(if !list_items.is_empty() {
                         div()
                             .flex()
@@ -8210,7 +8251,9 @@ impl Shell {
                             .pb(px(Theme::SPACE_SM))
                             .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text_faint)
-                            .child(SharedString::from(if activity_view {
+                            .child(SharedString::from(if activity_unavailable {
+                                "Activity is temporarily unavailable"
+                            } else if activity_view {
                                 "No tasks need attention or are running"
                             } else {
                                 "No sessions yet"
@@ -8243,8 +8286,8 @@ impl Shell {
             .when_some(self.render_update_strip(theme, cx), |el, strip| {
                 el.child(strip)
             })
-            // Keep error styling for existing callers; side-chat progress and
-            // confirmation use the activity notice's non-error theme tokens.
+            // Sidebar feedback is brief and readable; the action text carries
+            // the error, while the tint distinguishes it from a status note.
             .when_some(self.sidebar_notice.clone(), |el, notice| {
                 let notice_id = notice.id;
                 let is_status = notice.tone == SidebarNoticeTone::Status;
@@ -8260,36 +8303,58 @@ impl Shell {
                         .border_color(if is_status {
                             theme.border
                         } else {
-                            theme.danger
+                            theme.danger.opacity(0.25)
                         })
-                        .when(is_status, |el| el.bg(theme.accent_wash))
+                        .bg(if is_status {
+                            theme.accent_wash
+                        } else {
+                            theme.danger.opacity(0.05)
+                        })
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(if is_status { theme.text } else { theme.danger })
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this
-                                .sidebar_notice
-                                .as_ref()
-                                .is_some_and(|current| current.id == notice_id)
-                            {
-                                this.sidebar_notice = None;
-                                cx.notify();
-                            }
-                        }))
+                        .text_color(theme.text)
                         .flex()
                         .items_center()
                         .gap(px(8.0))
                         .child(div().flex_1().min_w_0().child(notice.message))
                         .child(
                             div()
+                                .id("sidebar-notice-dismiss")
+                                .role(gpui::Role::Button)
+                                .aria_label("Dismiss notice")
+                                .tab_index(0)
+                                .cursor_pointer()
                                 .flex_none()
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .child("Dismiss"),
+                                .child("Dismiss")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this
+                                        .sidebar_notice
+                                        .as_ref()
+                                        .is_some_and(|current| current.id == notice_id)
+                                    {
+                                        this.sidebar_notice = None;
+                                        cx.notify();
+                                    }
+                                }))
+                                .on_key_down(cx.listener(
+                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                            && !event.is_held
+                                        {
+                                            cx.stop_propagation();
+                                            if this
+                                                .sidebar_notice
+                                                .as_ref()
+                                                .is_some_and(|current| current.id == notice_id)
+                                            {
+                                                this.sidebar_notice = None;
+                                                cx.notify();
+                                            }
+                                        }
+                                    },
+                                )),
                         ),
                 )
-            })
-            .when_some(self.render_activity_notice(theme, cx), |el, notice| {
-                el.child(notice)
             })
             .when(!self.settings.usage_sidebar_hidden, |el| {
                 el.child(self.render_usage_card(theme, cx))

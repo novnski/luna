@@ -50,7 +50,6 @@ use crate::markdown::parser::{
 use crate::markdown::render::{self, RenderCache, RenderOptions};
 use crate::markdown::veil::RowVeil;
 use crate::motion::{self, AnimationExt as _};
-use crate::notice::{NoticeChipIcon::Tile, notice_chip};
 use crate::state::AppState;
 use crate::syntax_cache::{DocumentHighlightKey, SyntaxHighlightCache};
 use crate::theme::Theme;
@@ -7430,21 +7429,61 @@ fn user_bubble_text(
         .into_any_element()
 }
 
-/// The transcript ErrorChip — the shared [`notice_chip`] in its tile
-/// treatment (a port of luna chat-view.tsx `ErrorChip`, restacked for long
-/// payloads: header row with the red-washed tile and the medium "Error"
-/// label, then the human message below). Unlike the web port, the message
-/// WRAPS instead of truncating: startup-crash errors carry the agent's exit
-/// status and stderr, and a one-line ellipsis was exactly what made
-/// historical issue #95 undiagnosable from the screenshot.
+/// A provider error is a durable transcript event, not a current app alert.
+/// Keep its full detail and copy affordance, but use the timeline's neutral
+/// palette so old failures do not look like unresolved errors on every visit.
 fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
+    let copy_message = message.clone();
+    let hover_color = theme.border;
     div()
         .py(px(4.0))
         .w_full()
         .child(
-            notice_chip(theme, false, "Error", message, Tile)
-                .overflow_hidden()
-                .w_full(),
+            div()
+                .w_full()
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface_raised)
+                .px(px(10.0))
+                .py(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .text_size(px(11.0))
+                        .text_color(theme.text_muted)
+                        .child(crate::icons::icon(crate::icons::DANGER_TRIANGLE).size(px(13.0)))
+                        .child("Run error")
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .id("transcript-error-copy")
+                                .size(px(20.0))
+                                .rounded(px(5.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(move |style| style.bg(hover_color))
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        copy_message.to_string(),
+                                    ));
+                                })
+                                .child(crate::icons::icon(crate::icons::COPY).size(px(12.0))),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(theme.text)
+                        .child(message),
+                ),
         )
         .into_any_element()
 }

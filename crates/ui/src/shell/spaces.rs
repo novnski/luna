@@ -156,9 +156,9 @@ fn active_page<'a>(
     (visible, hidden)
 }
 
-/// Activity is a view of the existing task rows, not a second inbox. Unseen
-/// completions and unresolved task-scoped attention need checking; live work
-/// follows them. A stale session has already fallen back to Idle upstream.
+/// Activity is a view of the existing task rows, not a second inbox. It shows
+/// unresolved attention, live work, and recent completions. A stale session
+/// has fallen back to Idle upstream.
 fn activity_sidebar_bucket(status: ChatIndicator, has_attention: bool) -> Option<u8> {
     if has_attention
         || matches!(
@@ -177,9 +177,18 @@ fn activity_sidebar_bucket(status: ChatIndicator, has_attention: bool) -> Option
     }
 }
 
+#[cfg(test)]
 fn activity_sidebar_chats<'a>(
     rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
     attention_task_keys: &std::collections::HashSet<(String, String)>,
+) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
+    activity_sidebar_chats_with_recent(rows, attention_task_keys, &Default::default())
+}
+
+fn activity_sidebar_chats_with_recent<'a>(
+    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    attention_task_keys: &std::collections::HashSet<(String, String)>,
+    recent_completion_keys: &std::collections::HashSet<(String, String)>,
 ) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
     let mut rows: Vec<_> = rows
         .into_iter()
@@ -191,6 +200,7 @@ fn activity_sidebar_chats<'a>(
                 status
             };
             activity_sidebar_bucket(review_status, attention_task_keys.contains(&key))
+                .or_else(|| recent_completion_keys.contains(&key).then_some(2))
                 .map(|bucket| (bucket, status, chat))
         })
         .collect();
@@ -1461,15 +1471,20 @@ impl Shell {
     pub(super) fn sidebar_visible_order(&self, cx: &Context<Self>) -> Vec<String> {
         let filter = self.settings.space_filter.clone();
         let attention_task_keys = self.activity_task_keys(cx);
+        let recent_completion_keys = self.activity_recent_completion_keys();
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let state = self.state.read(cx);
         let now = Utc::now();
         let mut chats: Vec<luna_proto::Chat> = if self.activity.view_active {
-            activity_sidebar_chats(state.sidebar_chats(now, None), &attention_task_keys)
-                .into_iter()
-                .map(|(_, chat)| chat.clone())
-                .collect()
+            activity_sidebar_chats_with_recent(
+                state.sidebar_chats(now, None),
+                &attention_task_keys,
+                &recent_completion_keys,
+            )
+            .into_iter()
+            .map(|(_, chat)| chat.clone())
+            .collect()
         } else {
             let mut chats = state.sidebar_chats(now, filter.as_deref());
             chats.sort_by(|left, right| {
@@ -1531,13 +1546,18 @@ impl Shell {
         let filter = self.settings.space_filter.clone();
         let activity_view = self.activity.view_active;
         let attention_task_keys = self.activity_task_keys(cx);
+        let recent_completion_keys = self.activity_recent_completion_keys();
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let mut rows: Vec<ActiveChatRow> = {
             let state = self.state.read(cx);
             let (chats, hidden_count): (Vec<_>, usize) = if activity_view {
                 (
-                    activity_sidebar_chats(state.sidebar_chats(now, None), &attention_task_keys),
+                    activity_sidebar_chats_with_recent(
+                        state.sidebar_chats(now, None),
+                        &attention_task_keys,
+                        &recent_completion_keys,
+                    ),
                     0,
                 )
             } else {

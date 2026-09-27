@@ -1843,9 +1843,14 @@ fn main() -> anyhow::Result<()> {
             state.update(cx, |_, cx| cx.notify());
             cx.activate(true);
             if let Some(path) = capture_path {
+                let exit_after_capture = std::env::var("LUNA_FIXTURE_EXIT_AFTER_CAPTURE")
+                    .is_ok_and(|value| value == "1");
                 cx.spawn(async move |cx| {
                     if let Err(error) = capture_after_load(window.into(), path, cx).await {
                         eprintln!("draft fixture capture failed: {error:#}");
+                    }
+                    if exit_after_capture {
+                        cx.update(|cx| cx.quit());
                     }
                 })
                 .detach();

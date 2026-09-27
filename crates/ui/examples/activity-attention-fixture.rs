@@ -3,8 +3,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
 use luna_doc::{
     MessagePart, MessageRole, MessageStatus, QueueDeliveryGate, QueuedMessage, SessionMessageEntry,
 };
@@ -238,9 +239,36 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn capture_activity(
+    window: gpui::WindowHandle<shell::Shell>,
+    output: PathBuf,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let screenshot_window: gpui::AnyWindowHandle = window.clone().into();
+    cx.background_executor().timer(Duration::from_secs(3)).await;
+    screenshot_window.update(cx, |_, window, cx| {
+        window.draw(cx).clear();
+        window.render_to_image()?.save(output.join("sidebar.png"))?;
+        Ok::<_, anyhow::Error>(())
+    })??;
+    window.update(cx, |shell, window, cx| {
+        shell.fixture_open_activity(window, cx)
+    })?;
+    cx.background_executor().timer(Duration::from_secs(1)).await;
+    screenshot_window.update(cx, |_, window, cx| {
+        window.draw(cx).clear();
+        window
+            .render_to_image()?
+            .save(output.join("activity.png"))?;
+        Ok::<_, anyhow::Error>(())
+    })??;
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated synthetic root"));
+    let capture_dir = std::env::args().nth(2).map(PathBuf::from);
     anyhow::ensure!(
         root.is_absolute() && !root.is_symlink(),
         "root must be absolute and not linked"
@@ -251,6 +279,10 @@ fn main() -> anyhow::Result<()> {
         "root must remain under a narrow /private/tmp/luna-l15-* path"
     );
     let engine_data = root.join("engine");
+    if let Some(output) = &capture_dir {
+        anyhow::ensure!(output.is_absolute(), "capture directory must be absolute");
+        std::fs::create_dir_all(output)?;
+    }
     let ui_data = root.join("ui");
     let temp_data = root.join("tmp");
     for path in [&engine_data, &ui_data, &temp_data] {
@@ -288,7 +320,7 @@ fn main() -> anyhow::Result<()> {
         &engine_data,
     ))?;
     let boot = EngineBootConfig {
-        data_dir: ui_data.clone(),
+        data_dir: engine_data.clone(),
         ipc_port,
         edge_url: String::new(),
         edge_token: None,
@@ -355,20 +387,30 @@ fn main() -> anyhow::Result<()> {
                 state.fixture_attach_engine(handle, cx);
                 state
             });
-            cx.open_window(
-                WindowOptions {
-                    window_background: theme::Theme::of(cx).window_background_appearance(),
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                        gpui::point(px(80.), px(80.)),
-                        size(px(1100.), px(850.)),
-                    ))),
-                    ..Default::default()
-                },
-                |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
-            )
-            .unwrap();
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_background: theme::Theme::of(cx).window_background_appearance(),
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            gpui::point(px(80.), px(80.)),
+                            size(px(1100.), px(850.)),
+                        ))),
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
+                )
+                .unwrap();
             state.update(cx, |_, cx| cx.notify());
             cx.activate(true);
+            if let Some(output) = capture_dir {
+                cx.spawn(async move |cx| {
+                    if let Err(error) = capture_activity(window, output, cx).await {
+                        eprintln!("Activity fixture capture failed: {error:#}");
+                    }
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            }
         });
     runtime.block_on(core.shutdown());
     Ok(())

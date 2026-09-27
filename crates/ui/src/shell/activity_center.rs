@@ -1,12 +1,12 @@
-//! Sidebar Activity filter, exact task navigation, and transition delivery.
+//! Sidebar Activity filter and transition delivery.
 //! The engine owns attention lifecycle; the Shell only presents task rows.
 
 use super::*;
 use crate::settings::TaskNotificationPolicy;
 use luna_proto::{
-    AttentionItem, AttentionKind, AttentionReadRequest, AttentionSnapshot, AttentionTarget,
-    AttentionTransition, AttentionTransitionBatch, AttentionTransitionClaim,
-    AttentionTransitionKind, TerminalInventoryEntry, TerminalProcessState,
+    AttentionKind, AttentionReadRequest, AttentionSnapshot, AttentionTransition,
+    AttentionTransitionBatch, AttentionTransitionClaim, AttentionTransitionKind,
+    TerminalInventoryEntry, TerminalProcessState,
 };
 
 #[derive(Default)]
@@ -24,7 +24,6 @@ pub(super) struct ActivityUi {
     last_request: Option<std::time::Instant>,
     poll_task: Option<Task<()>>,
     ticker: Option<Task<()>>,
-    pub(super) notice: Option<AttentionItem>,
 }
 
 impl ActivityUi {
@@ -49,7 +48,6 @@ fn review_clears_on_visit(kind: AttentionKind) -> bool {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Delivery {
-    in_app: bool,
     sound: Option<crate::sound::Sound>,
     banner: bool,
 }
@@ -58,8 +56,6 @@ struct Delivery {
 struct DeliveryContext<'a> {
     policy: TaskNotificationPolicy,
     app_focused: bool,
-    selected_task: Option<&'a str>,
-    in_app_enabled: bool,
     desktop_enabled: bool,
     background_only: bool,
     local_device: Option<&'a str>,
@@ -90,13 +86,11 @@ fn route_transition(transition: &AttentionTransition, context: DeliveryContext<'
     } else {
         crate::sound::Sound::Attention
     };
-    let selected = item.task_id.is_some() && item.task_id.as_deref() == context.selected_task;
     Delivery {
-        in_app: context.in_app_enabled && context.app_focused && !selected,
         sound: Some(sound),
-        banner: context.desktop_enabled
-            && (!context.background_only || !context.app_focused)
-            && !(context.app_focused && selected && completion),
+        banner: !completion
+            && context.desktop_enabled
+            && (!context.background_only || !context.app_focused),
     }
 }
 
@@ -132,6 +126,15 @@ impl Shell {
                     .update(cx, |shell, cx| {
                         shell.refresh_activity(cx);
                         shell.reconcile_keep_awake(cx);
+                        if shell
+                            .sidebar_notice
+                            .as_ref()
+                            .and_then(|notice| notice.expires_at)
+                            .is_some_and(|until| std::time::Instant::now() >= until)
+                        {
+                            shell.sidebar_notice = None;
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {
@@ -202,7 +205,6 @@ impl Shell {
             self.activity.error = None;
             self.activity.armed = false;
             self.activity.in_flight = false;
-            self.activity.notice = None;
             self.activity.last_request = None;
             let _ = self.keep_awake.reconcile(None);
         }
@@ -304,13 +306,9 @@ impl Shell {
         transition: AttentionTransition,
         cx: &mut Context<Self>,
     ) {
-        let (app_focused, selected, local_device) = {
+        let (app_focused, local_device) = {
             let state = self.state.read(cx);
-            (
-                cx.active_window().is_some(),
-                state.selected_chat.clone(),
-                state.local_device_id.clone(),
-            )
+            (cx.active_window().is_some(), state.local_device_id.clone())
         };
         let policy = transition
             .item
@@ -324,16 +322,11 @@ impl Shell {
             DeliveryContext {
                 policy,
                 app_focused,
-                selected_task: selected.as_deref(),
-                in_app_enabled: self.settings.in_app_notices_enabled,
                 desktop_enabled: self.settings.notifications_enabled,
                 background_only: self.settings.notifications_background_only,
                 local_device: local_device.as_deref(),
             },
         );
-        if delivery.in_app {
-            self.activity.notice = Some(transition.item.clone());
-        }
         if let Some(sound) = delivery.sound
             && self.settings.session_sound_enabled(sound)
         {
@@ -341,7 +334,6 @@ impl Shell {
         }
         if delivery.banner {
             let body = match transition.item.kind {
-                AttentionKind::TaskCompleted | AttentionKind::TaskRecovered => "A task finished.",
                 AttentionKind::ApprovalRequired | AttentionKind::UserInputRequired => {
                     "A task needs your response."
                 }
@@ -380,12 +372,45 @@ impl Shell {
         cx.notify();
     }
 
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_open_activity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.activity.view_active {
+            self.toggle_activity(window, cx);
+        }
+    }
+
     pub(super) fn close_activity(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.activity.view_active = false;
         self.sidebar_prev_order.clear();
         self.sidebar_resort.clear();
         self.sidebar_new_keys.clear();
         cx.notify();
+    }
+
+    pub(super) fn render_activity_load_state(&self, theme: &Theme) -> Option<AnyElement> {
+        if !self.activity.view_active {
+            return None;
+        }
+        let message = if self.activity.error.is_some() {
+            "Activity may be out of date. Retrying…"
+        } else if self.activity.loading && self.activity.snapshot.is_none() {
+            "Loading activity…"
+        } else {
+            return None;
+        };
+        Some(
+            div()
+                .px(px(Theme::SPACE_SM))
+                .pb(px(Theme::SPACE_SM))
+                .text_size(crate::typography::ui_rems(11.0))
+                .text_color(theme.text_muted)
+                .child(message)
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn activity_is_unavailable(&self) -> bool {
+        self.activity.view_active && self.activity.error.is_some()
     }
 
     pub(super) fn review_attention_updated_at(
@@ -443,6 +468,32 @@ impl Shell {
         keys
     }
 
+    /// Keep recent completions discoverable in the bell view after they have
+    /// been read. They do not count as unresolved attention or light its dot.
+    pub(super) fn activity_recent_completion_keys(
+        &self,
+    ) -> std::collections::HashSet<(String, String)> {
+        let cutoff = Utc::now().timestamp_millis() - chrono::Duration::days(7).num_milliseconds();
+        self.activity
+            .snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| &snapshot.recent)
+            .filter(|item| {
+                item.updated_at_ms >= cutoff
+                    && matches!(
+                        item.kind,
+                        AttentionKind::TaskCompleted | AttentionKind::TaskRecovered
+                    )
+            })
+            .filter_map(|item| {
+                item.task_id
+                    .as_ref()
+                    .map(|task_id| (item.device_id.clone(), task_id.clone()))
+            })
+            .collect()
+    }
+
     /// Reading clears review-only rows from Activity, but queued work and
     /// unanswered requests still block settlement until actually resolved.
     pub(super) fn settlement_blocking_task_keys(
@@ -467,138 +518,6 @@ impl Shell {
                     .map(|task_id| (item.device_id.clone(), task_id.clone()))
             })
             .collect()
-    }
-
-    fn open_attention_item(
-        &mut self,
-        item: AttentionItem,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let same_environment = self
-            .state
-            .read(cx)
-            .engine()
-            .is_some_and(|engine| engine.engine_info().device_id == item.environment_id);
-        if !same_environment {
-            self.activity.error = Some("This Activity item belongs to another environment.".into());
-            cx.notify();
-            return;
-        }
-        if item.task_id.as_deref() != item.source.task_id.as_deref() {
-            self.activity.error = Some("The Activity source no longer matches its task.".into());
-            cx.notify();
-            return;
-        }
-        match item.target {
-            AttentionTarget::Task { task_id }
-            | AttentionTarget::TaskQueue { task_id, .. }
-            | AttentionTarget::TaskRecovery { task_id, .. } => {
-                if !self.attention_task_available(&task_id, &item.device_id, cx) {
-                    return;
-                }
-                self.close_activity(window, cx);
-                self.open_chat(task_id, cx);
-            }
-            AttentionTarget::TaskRequest {
-                task_id,
-                request_id,
-                message_id,
-            } => {
-                if item.request_id.as_deref() != Some(request_id.as_str())
-                    || item.source.request_id.as_deref() != Some(request_id.as_str())
-                    || item.source.message_id.as_deref() != Some(message_id.as_str())
-                    || !self.attention_task_available(&task_id, &item.device_id, cx)
-                {
-                    self.activity.error =
-                        Some("The exact Activity request is unavailable here.".into());
-                    cx.notify();
-                    return;
-                }
-                self.transcript.update(cx, |transcript, cx| {
-                    transcript.navigate_to_message(task_id.clone(), message_id, cx)
-                });
-                self.close_activity(window, cx);
-                self.open_chat(task_id, cx);
-            }
-            AttentionTarget::SettingsAccounts => {
-                self.close_activity(window, cx);
-                self.open_settings(SettingsSection::Providers, cx);
-            }
-            AttentionTarget::SettingsDevices => {
-                self.close_activity(window, cx);
-                self.open_settings(SettingsSection::Devices, cx);
-            }
-            AttentionTarget::Unavailable { reason } => {
-                self.activity.error = Some(reason.into());
-                cx.notify();
-            }
-        }
-    }
-
-    fn attention_task_available(
-        &mut self,
-        task_id: &str,
-        device_id: &str,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let found = self
-            .state
-            .read(cx)
-            .chats
-            .iter()
-            .any(|chat| chat.id == task_id && chat.device_id == device_id);
-        if !found {
-            self.activity.error = Some("The exact owning task is unavailable here.".into());
-            cx.notify();
-        }
-        found
-    }
-
-    pub(super) fn render_activity_notice(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let item = self.activity.notice.clone()?;
-        let open_item = item.clone();
-        Some(
-            div()
-                .id("activity-in-app-notice")
-                .mx(px(Theme::SPACE_SM))
-                .mb(px(4.0))
-                .px(px(Theme::SPACE_SM))
-                .py(px(7.0))
-                .rounded(px(8.0))
-                .bg(theme.accent_wash)
-                .flex()
-                .items_center()
-                .gap(px(7.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .child(item.title),
-                )
-                .child(
-                    popover::btn_ghost(theme, "Open", "activity-notice-open")
-                        .id("activity-notice-open")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.activity.notice = None;
-                            this.open_attention_item(open_item.clone(), window, cx);
-                        })),
-                )
-                .child(
-                    popover::btn_ghost(theme, "×", "activity-notice-close")
-                        .id("activity-notice-close")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.activity.notice = None;
-                            cx.notify();
-                        })),
-                )
-                .into_any_element(),
-        )
     }
 
     /// Running LUNA-owned PTYs remain visible even when their task is archived.
@@ -742,13 +661,13 @@ impl Shell {
                         .text_color(theme.text_muted)
                         .child(format!("Running terminals ({})", running.len())),
                 )
-                .when_some(terminal_error, |el, error| {
+                .when_some(terminal_error, |el, _| {
                     el.child(
                         div()
                             .px(px(Theme::SPACE_SM))
                             .text_size(crate::typography::ui_rems(10.0))
-                            .text_color(theme.danger)
-                            .child(format!("Terminal inventory unavailable: {error}")),
+                            .text_color(theme.text_muted)
+                            .child("Running terminals unavailable. Retrying…"),
                     )
                 })
                 .children(rows)
@@ -773,8 +692,10 @@ impl Shell {
                     status,
                     luna_proto::ChatIndicator::AwaitingApproval
                         | luna_proto::ChatIndicator::AwaitingInput
-                        | luna_proto::ChatIndicator::Completed
-                ) || (status == &luna_proto::ChatIndicator::Errored && chat.unseen())
+                ) || (matches!(
+                    status,
+                    luna_proto::ChatIndicator::Completed | luna_proto::ChatIndicator::Errored
+                ) && chat.unseen())
                     || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
             });
         div()
@@ -851,7 +772,8 @@ impl Shell {
 mod tests {
     use super::*;
     use luna_proto::{
-        ATTENTION_CONTRACT_VERSION, AttentionLifecycle, AttentionSeverity, AttentionSourcePointer,
+        ATTENTION_CONTRACT_VERSION, AttentionItem, AttentionLifecycle, AttentionSeverity,
+        AttentionSourcePointer, AttentionTarget,
     };
 
     fn transition(kind: AttentionKind, task_id: &str) -> AttentionTransition {
@@ -899,24 +821,21 @@ mod tests {
     }
 
     #[test]
-    fn active_completion_has_no_notice_and_other_task_routes_once() {
+    fn completion_stays_in_activity_and_requests_can_notify_in_background() {
         let completed = transition(AttentionKind::TaskCompleted, "active");
         let focused = DeliveryContext {
             policy: TaskNotificationPolicy::All,
             app_focused: true,
-            selected_task: Some("active"),
-            in_app_enabled: true,
             desktop_enabled: true,
             background_only: true,
             local_device: Some("device"),
         };
         let active = route_transition(&completed, focused);
-        assert!(!active.in_app && !active.banner);
+        assert!(!active.banner);
         let other = route_transition(
             &transition(AttentionKind::ApprovalRequired, "other"),
             focused,
         );
-        assert!(other.in_app);
         assert!(!other.banner);
         assert_eq!(other.sound, Some(crate::sound::Sound::Request));
     }
@@ -927,14 +846,12 @@ mod tests {
         let background_context = DeliveryContext {
             policy: TaskNotificationPolicy::All,
             app_focused: false,
-            selected_task: Some("active"),
-            in_app_enabled: true,
             desktop_enabled: true,
             background_only: true,
             local_device: Some("device"),
         };
         let background = route_transition(&completed, background_context);
-        assert!(background.banner && !background.in_app);
+        assert!(!background.banner);
         for policy in [
             TaskNotificationPolicy::Muted,
             TaskNotificationPolicy::ImportantOnly,
@@ -992,14 +909,11 @@ mod tests {
             DeliveryContext {
                 policy: TaskNotificationPolicy::All,
                 app_focused: true,
-                selected_task: None,
-                in_app_enabled: true,
                 desktop_enabled: true,
                 background_only: true,
                 local_device: Some("device"),
             },
         );
-        assert!(routed.in_app);
         assert!(!routed.banner);
         assert_eq!(routed.sound, Some(crate::sound::Sound::Attention));
     }

@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use luna_proto::{CommandReceipt, CommandReceiptStatus, TaskCommandRead};
+use luna_proto::{CommandReasonCode, CommandReceipt, CommandReceiptStatus, TaskCommandRead};
 use luna_rpc::{RpcError, methods};
 
 use crate::state::EngineHandle;
@@ -78,6 +78,44 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
     )
 }
 
+/// These intents set a desired, reversible value. Re-reading the task before
+/// one retry is safe when an unrelated update (often markSeen) wins the race.
+/// Commands that depend on a reviewed history/turn or positional pin anchors
+/// must instead ask the person to review the changed state.
+fn retryable_revision_conflict(intent: &serde_json::Value) -> bool {
+    match intent.get("kind").and_then(serde_json::Value::as_str) {
+        Some("rename" | "setRead" | "setSettled" | "markSeen" | "setArchived" | "moveProject") => {
+            true
+        }
+        Some("setPinned") => {
+            intent.get("afterTaskId").is_none() && intent.get("beforeTaskId").is_none()
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn failure_message(receipt: &CommandReceipt, fallback: &str) -> String {
+    match receipt.reason.as_ref().map(|reason| reason.code) {
+        Some(CommandReasonCode::StaleTaskRevision) =>
+            "This task changed while the action was being applied. Review it and try again.".into(),
+        Some(CommandReasonCode::StaleBindingGeneration) =>
+            "This task's provider session changed. Reopen the task and try again.".into(),
+        Some(CommandReasonCode::StaleTurn) =>
+            "The active run changed. Review the task before trying again.".into(),
+        Some(CommandReasonCode::ActiveTurnConflict) =>
+            "This task is still running. Wait for it to finish, then try again.".into(),
+        Some(CommandReasonCode::QueueRevisionConflict | CommandReasonCode::QueueClaimed | CommandReasonCode::QueueMissing) =>
+            "The queued message changed. Review the queue before trying again.".into(),
+        Some(CommandReasonCode::ProviderAcceptanceUnknown) =>
+            "LUNA could not confirm whether the provider received this action. Check the task before retrying.".into(),
+        _ => receipt
+            .recovery_action
+            .clone()
+            .or_else(|| receipt.reason.as_ref().map(|reason| reason.message.clone()))
+            .unwrap_or_else(|| fallback.to_string()),
+    }
+}
+
 pub async fn execute(
     engine: &EngineHandle,
     task_id: &str,
@@ -103,13 +141,10 @@ pub async fn execute_reviewed(
     .await?;
     match receipt.status {
         CommandReceiptStatus::Pending | CommandReceiptStatus::Applied => Ok(receipt),
-        _ => Err(RpcError::Failed(
-            receipt
-                .reason
-                .as_ref()
-                .map(|reason| reason.message.clone())
-                .unwrap_or_else(|| format!("task command ended as {:?}", receipt.status)),
-        )),
+        _ => Err(RpcError::Failed(failure_message(
+            &receipt,
+            "Could not update this task.",
+        ))),
     }
 }
 
@@ -119,16 +154,26 @@ pub async fn execute_with_id(
     command_id: String,
     intent: serde_json::Value,
 ) -> Result<CommandReceipt, RpcError> {
-    let receipt = execute_receipt_with_id(engine, task_id, command_id, intent).await?;
+    let mut receipt = execute_receipt_with_id(engine, task_id, command_id, intent.clone()).await?;
+    if receipt.status == CommandReceiptStatus::Conflict
+        && receipt.reason.as_ref().map(|reason| reason.code)
+            == Some(CommandReasonCode::StaleTaskRevision)
+        && retryable_revision_conflict(&intent)
+    {
+        tracing::info!(
+            task_id,
+            "task changed during reversible metadata action; retrying once"
+        );
+        receipt =
+            execute_receipt_with_id(engine, task_id, uuid::Uuid::new_v4().to_string(), intent)
+                .await?;
+    }
     match receipt.status {
         CommandReceiptStatus::Pending | CommandReceiptStatus::Applied => Ok(receipt),
-        _ => Err(RpcError::Failed(
-            receipt
-                .reason
-                .as_ref()
-                .map(|reason| reason.message.clone())
-                .unwrap_or_else(|| format!("task command ended as {:?}", receipt.status)),
-        )),
+        _ => Err(RpcError::Failed(failure_message(
+            &receipt,
+            "Could not update this task.",
+        ))),
     }
 }
 

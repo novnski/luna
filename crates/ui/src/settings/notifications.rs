@@ -1,5 +1,5 @@
 //! Settings → Notifications: independently configurable session chimes plus
-//! desktop banners on the same status transitions (`shell::on_state_changed`).
+//! desktop banners for events that need attention (`shell::on_state_changed`).
 //!
 //! The ShortcutsPage arrangement: the page holds a working copy, every flip
 //! emits [`NotificationsEvent::Changed`], and the shell persists it. Nothing
@@ -23,7 +23,6 @@ pub enum NotificationsEvent {
         attention_sound: bool,
         desktop: bool,
         background_only: bool,
-        in_app: bool,
     },
     TaskPolicyChanged {
         task_id: String,
@@ -51,7 +50,6 @@ pub struct NotificationPreferences {
     attention_sound: bool,
     desktop: bool,
     background_only: bool,
-    in_app: bool,
 }
 
 impl From<&UiSettings> for NotificationPreferences {
@@ -63,7 +61,6 @@ impl From<&UiSettings> for NotificationPreferences {
             attention_sound: settings.sound_attention_enabled,
             desktop: settings.notifications_enabled,
             background_only: settings.notifications_background_only,
-            in_app: settings.in_app_notices_enabled,
         }
     }
 }
@@ -76,7 +73,6 @@ pub struct NotificationsPage {
     attention_sound: bool,
     desktop: bool,
     background_only: bool,
-    in_app: bool,
     tasks: Vec<NotificationTask>,
 }
 
@@ -90,7 +86,6 @@ enum NotificationPreference {
     AttentionSound,
     Desktop,
     BackgroundOnly,
-    InApp,
 }
 
 fn is_switch_activation(key: &str, is_held: bool) -> bool {
@@ -132,7 +127,6 @@ impl NotificationsPage {
             attention_sound: preferences.attention_sound,
             desktop: preferences.desktop,
             background_only: preferences.background_only,
-            in_app: preferences.in_app,
             tasks,
         }
     }
@@ -145,7 +139,6 @@ impl NotificationsPage {
             attention_sound: self.attention_sound,
             desktop: self.desktop,
             background_only: self.background_only,
-            in_app: self.in_app,
         });
     }
 
@@ -157,7 +150,6 @@ impl NotificationsPage {
             NotificationPreference::AttentionSound => &mut self.attention_sound,
             NotificationPreference::Desktop => &mut self.desktop,
             NotificationPreference::BackgroundOnly => &mut self.background_only,
-            NotificationPreference::InApp => &mut self.in_app,
         };
         *value = !*value;
         self.emit(cx);
@@ -220,7 +212,6 @@ impl Render for NotificationsPage {
         let attention_sound = self.attention_sound;
         let desktop = self.desktop;
         let background_only = self.background_only;
-        let in_app = self.in_app;
         let tasks = self.tasks.clone();
         let toggle = |id: &'static str, label: &'static str, enabled: bool, interactive: bool| {
             // Keep the familiar 32×18 visual inside a 40×40 activation target.
@@ -402,8 +393,8 @@ impl Render for NotificationsPage {
                                 vec![
                                     div()
                                         .child(SharedString::from(
-                                            "Show a system banner on the same events, so pings \
-                                             reach you while LUNA is in the background.",
+                                            "Show a system banner when a task needs your attention \
+                                             while LUNA is in the background. Completed tasks stay in Activity.",
                                         ))
                                         .into_any_element(),
                                 ],
@@ -464,31 +455,6 @@ impl Render for NotificationsPage {
                         }),
                     ),
             );
-
-        let card = card.child(
-            widgets::card_row(&theme, false)
-                .child(widgets::row_tile(&theme, icons::BELL))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(widgets::row_title(&theme, "In-app notices"))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![div()
-                                .child("Show a small notice when another task needs attention or finishes.")
-                                .into_any_element()],
-                        )),
-                )
-                .child(interactive_switch(
-                    toggle("notifications-in-app-toggle", "In-app notices", in_app, true),
-                    accent,
-                    NotificationPreference::InApp,
-                    cx,
-                )),
-        );
 
         let task_card = widgets::section_card(&theme).children(tasks.into_iter().enumerate().map(
             |(index, task)| {
