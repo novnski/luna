@@ -141,3 +141,38 @@ The coordinator confirmed the external linked-worktree MoveProject refusal as
 the current X03 boundary and granted one serialized build slot for the focused
 offline E2E after failure-first source is ready. Bound `refreshReadOnly`
 remains a later design decision. No runtime/schema change is requested.
+
+## Focused E2E baseline
+
+At test-source commit `119c35530b9a500295f88a417ac273058b8409cc` (SHA-256
+`470aeeb8a083bcf811f0fd258721ad7c6b2be5597705eda1b418971cd7c46950`),
+the exact focused command above exited 0 in 108 seconds: **17 passed, 0 failed**.
+The retained artifact is
+`/Users/iulian/.codex/worktrees/00a8/luna/target/qa/workspace-identity-boundary-20260927.T0hJqH/`.
+Its 72-file SHA-256 manifest includes the later format and Clippy checks and
+verified without mismatches (manifest SHA-256
+`daa8ed43d2ab5409ce4b1bb5834875cc0d11b333b7e235070647235872d2a9a8`).
+`summary.json`, `test.log` and per-case JSON record the following readback:
+
+- One actual linked Git worktree was created. A's chat cwd, identity root and
+  first binding agree; its sibling remains at the repository root. Restart and
+  duplicate command replay preserved the original receipt and worktree inventory,
+  with one Mock start total.
+- External linked-worktree MoveProject returned terminal `rejected` /
+  `invalidDestination` under the current X03 boundary. Chat, identity and the
+  original receipt remained unchanged. The containing-project positive control
+  also passed.
+- SetCwd on the bound chat **applied** a different cwd while retaining the
+  original execution identity. Explicit resume and the next Run were then
+  rejected, with no second Mock start. Command-time refusal or proof-based
+  relocation is a separate design decision; this baseline authorizes neither.
+
+The configured format check exited 0 in 5 seconds. Focused `luna-engine`
+Clippy for this test exited 0 in 51 seconds; it reported existing library
+warnings and no warning in the changed test. Both exact commands, results and
+logs are retained beside the E2E artifacts.
+
+The suite used disposable Git paths, EngineCore/memory RPC and an in-process
+Mock harness with native metadata disabled. It made no real provider call or
+native app build. Aggregate build accounting moved from 123.56 to 127.92 GiB,
+then 128.56 GiB after Clippy, below the 170 GiB operating ceiling.
