@@ -9,11 +9,12 @@ fn v13_profile() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     drop(DocsStore::open(root.path()).unwrap());
     let db = Connection::open(root.path().join("docs.sqlite3")).unwrap();
-    // Undo v14 and v15 physically before resetting the migration marker.
+    // Undo v14 through v16 physically before resetting the migration marker.
     db.execute_batch(
         "DROP TABLE IF EXISTS side_chat_sends;
         DROP TABLE IF EXISTS side_chat_entries;
         DROP TABLE IF EXISTS side_chats;
+        DROP TABLE prompt_stash;
         DROP TABLE task_execution_lineage;
         ALTER TABLE task_command_state DROP COLUMN workspace_repair_revision;
         ALTER TABLE task_command_receipts DROP COLUMN workspace_repair_revision;
