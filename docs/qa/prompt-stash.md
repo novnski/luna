@@ -28,6 +28,12 @@ uses a provider account or a user's files.
    sends, and return to an empty editor after the newest sent prompt. With a
    typed draft, attachment, selection, edit, or ordinary multiline caret
    movement, Up/Down must retain the editor's normal behavior.
+7. Cmd+S while the message composer owns focus must stash that prompt. When a
+   file editor or search control owns focus, the existing Save File behavior
+   must remain in charge. The signed QA app at source `6bf780fe` is the native
+   RED: Alpha saved by the visible button (stash count 1); one Cmd+S on a
+   focused Beta draft left Beta in the editor and the count at 1. Recheck the
+   same path after the focus-routing fix without starting a real provider.
 
 Run the focused file-backed test with `scripts/cargo.sh test --locked -p
 luna-engine --test prompt_stash`. Retain its command log and a JSON acceptance
