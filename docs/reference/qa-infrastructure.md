@@ -26,8 +26,13 @@ It does not compile Luna or operate the main app.
 The harness uses disposable Git worktrees and command-boundary fault
 injection for destructive/failure paths. It is an integration check of the
 actual scripts, not a replacement for the final real signed-app acceptance.
-The real app is kept available after acceptance; only disposable fixtures
-are removed. No unit tests are added after implementation.
+Keep the real QA app available until the coordinator reviews its native
+evidence. After acceptance, preserve and hash the evidence, verify no task or
+process still needs the exact bundle, quit it gracefully, unregister it from
+LaunchServices and remove only that disposable QA bundle. Retain its data and
+the Cargo cache unless a separate scoped cleanup has been reviewed. The
+primary `LUNA Dev` app remains available for the user's handoff. No unit tests
+are added after implementation.
 
 ## Worker setup
 
