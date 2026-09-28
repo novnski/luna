@@ -2,6 +2,8 @@
 
 Follow the parent workspace instructions. Work from this repository root, read `Cargo.toml` and the relevant crate before changing code, and preserve unrelated work. Use `--locked` for normal Cargo verification.
 
+After completing a feature and its required checks, follow [the commit-and-push skill](.codex/skills/commit-and-push/SKILL.md) to clean up task artifacts, commit all feature changes, merge into `main` if needed, and push and verify `origin/main`. Honor an explicit user request to stop earlier.
+
 ## macOS developer app handoff
 
 - After each meaningful LUNA code change and its relevant checks, run `scripts/run-macos-dev.sh --refresh` yourself so the user gets a new **LUNA Dev** app to try. Do not ask the user to build, reinstall, or run the command. This handles UI and engine changes with the same incremental Cargo cache.
