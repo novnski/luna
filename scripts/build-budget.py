@@ -12,6 +12,10 @@ import subprocess
 import sys
 import time
 
+# Keep the build entrypoint from creating source-tree __pycache__ artifacts.
+sys.dont_write_bytecode = True
+import prune_incremental
+
 GIB = 1024**3
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -122,6 +126,11 @@ def main():
         lock.truncate()
         lock.write(json.dumps({"pid": os.getpid(), "checkout": str(ROOT), "started": time.time()}))
         lock.flush()
+        # This is the only safe point for automatic cleanup: the shared build
+        # lock is held and no new Cargo subprocess has started. Scratch target
+        # directories used by QA are deliberately excluded.
+        if Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve() == ROOT / "target":
+            prune_incremental.prune(apply=True, quiet=True)
         before = snapshot(cache)
         report(before, ceiling, reserve)
         if before["total_bytes"] + reserve > ceiling or before["free_bytes"] < reserve + 10 * GIB:

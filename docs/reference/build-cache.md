@@ -83,6 +83,15 @@ scripts/cargo.sh check --locked -p luna-proto
 
 Admission requires current usage plus a **25 GiB growth reservation** to fit
 under the **170 GiB operating ceiling**, and that much free disk plus 10 GiB.
+Before admission, the guard prunes duplicate `target/debug/incremental/`
+directories when that cache exceeds **12 GiB** by conservative accounting.
+It keeps the two most recently used directories per crate and anything used
+within 24 hours. This may make an older build variant recompile later, but it
+does not remove dependency outputs, apps, data, release artifacts, or the
+current incremental cache. The guard holds the shared build lock during
+cleanup and skips it for QA scratch target directories. Preview the same
+selection with `python3 scripts/prune_incremental.py`; the printed sizes use
+the guard's accounting and are not a promise of physical disk space recovered.
 The guard measures all linked checkout `target/` directories (including apps,
 QA artifacts and data) and the entire mbx cache root. This intentionally
 includes more than the action store. It samples after each two-second wait
