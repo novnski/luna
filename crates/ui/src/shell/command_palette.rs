@@ -119,7 +119,7 @@ impl Entry {
 
     fn action(&self) -> Option<(&'static str, &'static str)> {
         match self {
-            Self::NewChat => Some(("New chat", icons::PEN_NEW_SQUARE)),
+            Self::NewChat => Some(("New task", icons::PEN_NEW_SQUARE)),
             Self::NewProject => Some(("New project", icons::FOLDER)),
             Self::Settings => Some(("Open settings", icons::SETTINGS_MINIMALISTIC)),
             Self::Activity => Some(("Toggle activity view", icons::BELL)),
@@ -184,7 +184,7 @@ impl Shell {
         }
         self.add_space = None;
         let search = cx.new(|cx| {
-            ComposerInput::with_context("Search commands, chats, and content…", "PaletteSearch", cx)
+            ComposerInput::with_context("Search commands, tasks, and content…", "PaletteSearch", cx)
         });
         let events = cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, ComposerInputEvent::Edited) {
@@ -253,7 +253,6 @@ impl Shell {
         let state = self.state.read(cx);
         let results_start = entries.len();
         let current_project = match self.settings.space_filter.as_deref() {
-            Some(crate::settings::PERSONAL_SPACE_FILTER) => None,
             Some(space_id) => Some(space_id.to_string()),
             None => state.selected_space.clone(),
         };
@@ -269,10 +268,15 @@ impl Shell {
             .chats
             .iter()
             .filter(|chat| {
+                chat.space_id
+                    .as_deref()
+                    .is_some_and(|id| state.space_row(id).is_some())
+            })
+            .filter(|chat| {
                 let project = state
                     .space_for_chat(chat)
                     .map(|s| s.display_name())
-                    .unwrap_or("~");
+                    .unwrap_or("Unknown project");
                 let device = state.device_name(&chat.device_id).unwrap_or("");
                 let branch =
                     crate::change_requests::conversation_branch(chat, &state.spaces).unwrap_or("");
@@ -339,6 +343,12 @@ impl Shell {
         let mut content_events: Vec<_> = self
             .history_search_results
             .iter()
+            .filter(|event| {
+                event
+                    .project_id
+                    .as_deref()
+                    .is_some_and(|id| state.space_row(id).is_some())
+            })
             .filter(|event| seen_tasks.insert(event.task_id.as_str()))
             .collect();
         let chat_activity: std::collections::HashMap<_, _> = state
@@ -377,6 +387,12 @@ impl Shell {
             let event_lookup: std::collections::HashMap<_, _> = self
                 .history_search_results
                 .iter()
+                .filter(|event| {
+                    event
+                        .project_id
+                        .as_deref()
+                        .is_some_and(|id| state.space_row(id).is_some())
+                })
                 .map(|event| {
                     (
                         event.event_id.as_str(),
@@ -594,22 +610,15 @@ impl Shell {
             project_id
                 .and_then(|id| state.spaces.iter().find(|space| space.id == id))
                 .map(|space| space.display_name().to_string())
-                .unwrap_or_else(|| {
-                    if project_id.is_none() {
-                        "Personal".into()
-                    } else {
-                        "Current project".into()
-                    }
-                })
+                .unwrap_or_else(|| "Current project".into())
         };
         let label = match group {
             ResultGroup::CurrentChats => {
                 let project_id = match self.settings.space_filter.as_deref() {
-                    Some(crate::settings::PERSONAL_SPACE_FILTER) => None,
                     Some(space_id) => Some(space_id),
                     None => state.selected_space.as_deref(),
                 };
-                format!("{} · Chats", label_for(project_id))
+                format!("{} · Tasks", label_for(project_id))
             }
             ResultGroup::CurrentContent => {
                 let project_id = self
@@ -618,7 +627,7 @@ impl Shell {
                 format!("{} · Recorded content", label_for(project_id.as_deref()))
             }
             ResultGroup::AllContent => "All projects · Recorded content".into(),
-            ResultGroup::OtherChats => "Other projects · Matching chats".into(),
+            ResultGroup::OtherChats => "Other projects · Matching tasks".into(),
         };
         label.into()
     }
@@ -643,7 +652,7 @@ impl Shell {
                 .as_ref()
                 .and_then(|id| state.spaces.iter().find(|space| &space.id == id))
                 .map(|space| space.display_name().to_string())
-                .unwrap_or_else(|| "Personal".into())
+                .unwrap_or_else(|| "Unknown project".into())
         };
         let outcome = match event.outcome {
             ActivityOutcome::Pending => "Pending",
@@ -968,7 +977,7 @@ impl Shell {
                 ))
             } else if !has_search_results {
                 Some((
-                    "No matching chats or recorded content in this scope".into(),
+                    "No matching tasks or recorded content in this scope".into(),
                     false,
                 ))
             } else {

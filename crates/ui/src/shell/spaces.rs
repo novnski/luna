@@ -381,7 +381,6 @@ fn sidebar_disclosure_header(theme: &Theme, label: SharedString, chevron: AnyEle
 #[derive(Clone, PartialEq)]
 pub(super) enum SpacesMenuRow {
     All,
-    Personal,
     Space(String),
     AddSpace,
 }
@@ -609,15 +608,9 @@ impl Shell {
     pub(super) fn set_space_filter(&mut self, filter: Option<String>, cx: &mut Context<Self>) {
         self.settings.space_filter = filter.clone();
         if self.state.read(cx).selected_chat.is_none() {
-            match filter.as_deref() {
-                Some(crate::settings::PERSONAL_SPACE_FILTER) => {
-                    self.state.update(cx, |s, cx| s.select_space(None, cx));
-                }
-                Some(space_id) => {
-                    self.state
-                        .update(cx, |s, cx| s.select_space(Some(space_id.into()), cx));
-                }
-                None => {}
+            if let Some(space_id) = filter.as_deref() {
+                self.state
+                    .update(cx, |s, cx| s.select_space(Some(space_id.into()), cx));
             }
         }
         self.reconcile_session_history_scope(false, cx);
@@ -687,7 +680,6 @@ impl Shell {
         let mut rows: Vec<SpacesMenuRow> = Vec::new();
         if query.trim().is_empty() {
             rows.push(SpacesMenuRow::All);
-            rows.push(SpacesMenuRow::Personal);
         }
         rows.extend(
             popover::filter_indices(&query, &names)
@@ -727,10 +719,6 @@ impl Shell {
         let rows = self.spaces_menu_rows(cx);
         let start = match &current {
             None => 0,
-            Some(id) if id == crate::settings::PERSONAL_SPACE_FILTER => rows
-                .iter()
-                .position(|row| matches!(row, SpacesMenuRow::Personal))
-                .unwrap_or(0),
             Some(id) => rows
                 .iter()
                 .position(|row| matches!(row, SpacesMenuRow::Space(s) if s == id))
@@ -747,9 +735,6 @@ impl Shell {
     fn activate_spaces_menu_row(&mut self, row: SpacesMenuRow, cx: &mut Context<Self>) {
         match row {
             SpacesMenuRow::All => self.set_space_filter(None, cx),
-            SpacesMenuRow::Personal => {
-                self.set_space_filter(Some(crate::settings::PERSONAL_SPACE_FILTER.into()), cx)
-            }
             SpacesMenuRow::Space(id) => self.set_space_filter(Some(id), cx),
             SpacesMenuRow::AddSpace => {
                 self.close_spaces_menu(cx);
@@ -1061,9 +1046,6 @@ impl Shell {
                         Some((tag.into(), offline)),
                     )
                 }
-                None if filter.as_deref() == Some(crate::settings::PERSONAL_SPACE_FILTER) => {
-                    (SharedString::from("Personal / no project"), None)
-                }
                 None => (SharedString::from("All projects"), None),
             }
         };
@@ -1296,13 +1278,6 @@ impl Shell {
                         None,
                         false,
                         filter.is_none(),
-                    ),
-                    SpacesMenuRow::Personal => (
-                        SpacesMenuRow::Personal,
-                        SharedString::from("Personal / no project"),
-                        None,
-                        false,
-                        filter.as_deref() == Some(crate::settings::PERSONAL_SPACE_FILTER),
                     ),
                     SpacesMenuRow::Space(id) => {
                         let selected = filter.as_deref() == Some(id.as_str());
@@ -1591,14 +1566,11 @@ impl Shell {
                             has_queued_message,
                         );
                     let chat = chat.clone();
-                    // Line 1 is "project @ device" (t3code's project row);
-                    // project-less sessions read as their home-dir cwd `~`.
-                    let space = state.space_for_chat(&chat);
-                    let project = match (space, chat.space_id.as_deref()) {
-                        (Some(space), _) => space.display_name().to_string(),
-                        (None, None) => "~".to_string(),
-                        (None, Some(_)) => "?".to_string(),
-                    };
+                    // Line 1 is the task's project and host device.
+                    let project = state
+                        .space_for_chat(&chat)
+                        .map(|space| space.display_name().to_string())
+                        .unwrap_or_else(|| "Unknown project".to_string());
                     let device = state
                         .device_name(&chat.device_id)
                         .unwrap_or("Unknown device")
@@ -1952,7 +1924,7 @@ impl Shell {
                     state
                         .space_for_chat(&chat)
                         .map(|space| space.display_name().to_string())
-                        .unwrap_or_else(|| "~".into())
+                        .unwrap_or_else(|| "Unknown project".into())
                         .into(),
                     state
                         .device_name(&chat.device_id)
@@ -2084,10 +2056,12 @@ impl Shell {
                 .chats
                 .iter()
                 .filter(|c| c.archived)
+                .filter(|chat| {
+                    chat.space_id
+                        .as_deref()
+                        .is_some_and(|id| state.space_row(id).is_some())
+                })
                 .filter(|chat| match &filter {
-                    Some(space_id) if space_id == crate::settings::PERSONAL_SPACE_FILTER => {
-                        chat.space_id.is_none()
-                    }
                     Some(space_id) => chat.space_id.as_deref() == Some(space_id.as_str()),
                     None => true,
                 })
@@ -2160,7 +2134,7 @@ impl Shell {
                         state
                             .space_for_chat(&chat)
                             .map(|space| space.display_name().to_string())
-                            .unwrap_or_else(|| "~".into())
+                            .unwrap_or_else(|| "Unknown project".into())
                             .into(),
                         state
                             .device_name(&chat.device_id)

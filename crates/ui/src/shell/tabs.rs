@@ -137,24 +137,25 @@ impl Shell {
         self.dismiss_command_palette(cx);
         self.route = Route::Chat;
         self.focus_composer(cx);
+        let defaults = crate::settings::composer::ComposerDefaults::load(&self.data_dir);
         let target = {
             let state = self.state.read(cx);
             self.settings
                 .space_filter
                 .clone()
                 .filter(|id| state.space_row(id).is_some())
+                .or_else(|| {
+                    state
+                        .selected_space
+                        .clone()
+                        .filter(|id| state.space_row(id).is_some())
+                })
+                .or_else(|| defaults.project.filter(|id| state.space_row(id).is_some()))
+                .or_else(|| state.spaces_sorted().first().map(|space| space.id.clone()))
         };
-        let defaults = crate::settings::composer::ComposerDefaults::load(&self.data_dir);
         self.state.update(cx, |s, cx| {
-            if target.is_some() {
-                s.select_space(target, cx);
-            } else if defaults.no_project {
-                // Opening an existing project session (including boot's last
-                // session) must not erase the saved new-session opt-out.
-                s.select_space(None, cx);
-                if let Some(device) = defaults.device {
-                    s.select_device(device, cx);
-                }
+            if let Some(target) = target {
+                s.select_space(Some(target), cx);
             }
             s.select_chat(None, cx);
         });
@@ -186,7 +187,7 @@ impl Shell {
                         .as_deref()
                         .and_then(|id| state.space_row(id))
                         .map(|s| s.display_name().to_string())
-                        .unwrap_or_else(|| "~".to_string());
+                        .unwrap_or_else(|| "Unknown project".to_string());
                     let device = state
                         .device_name(&chat.device_id)
                         .unwrap_or("Unknown device");

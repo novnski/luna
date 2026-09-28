@@ -603,6 +603,7 @@ async fn create_materialized_history_task(
     task_id: &str,
     provider: HarnessId,
 ) {
+    ensure_test_project(client, &core.device_id).await;
     assert_eq!(
         execute(
             client,
@@ -612,7 +613,7 @@ async fn create_materialized_history_task(
                 None,
                 serde_json::json!({
                     "kind": "createChat",
-                    "deviceId": core.device_id,
+                    "spaceId": "test-project",
                     "cwd": "/tmp",
                     "config": history_task_config(provider),
                 }),
@@ -692,6 +693,19 @@ async fn execute(client: &RpcClient, value: serde_json::Value) -> CommandReceipt
         .unwrap()
 }
 
+async fn ensure_test_project(client: &RpcClient, device_id: &str) {
+    client
+        .call(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "createSpace", "spaceId": "test-project",
+                "deviceId": device_id, "path": "/tmp"
+            }),
+        )
+        .await
+        .expect("create fixture project");
+}
+
 async fn wait_for_receipt(
     client: &RpcClient,
     command_id: &str,
@@ -747,13 +761,14 @@ async fn wait_for_receipt(
 }
 
 async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
+    ensure_test_project(client, device_id).await;
     let receipt = execute(
         client,
         envelope(
             &format!("create-command-{task_id}"),
             task_id,
             None,
-            serde_json::json!({ "kind": "createChat", "deviceId": device_id }),
+            serde_json::json!({ "kind": "createChat", "spaceId": "test-project" }),
         ),
     )
     .await;
@@ -761,13 +776,14 @@ async fn create_task(client: &RpcClient, task_id: &str, device_id: &str) {
 }
 
 async fn create_task_at_run_cwd(client: &RpcClient, task_id: &str, device_id: &str) {
+    ensure_test_project(client, device_id).await;
     let receipt = execute(
         client,
         envelope(
             &format!("create-command-{task_id}"),
             task_id,
             None,
-            serde_json::json!({ "kind": "createChat", "deviceId": device_id, "cwd": "/tmp" }),
+            serde_json::json!({ "kind": "createChat", "spaceId": "test-project", "cwd": "/tmp" }),
         ),
     )
     .await;
@@ -799,6 +815,7 @@ async fn create_task_in_space(
 }
 
 async fn create_configured_task(client: &RpcClient, task_id: &str, device_id: &str) {
+    ensure_test_project(client, device_id).await;
     let receipt = execute(
         client,
         envelope(
@@ -807,7 +824,7 @@ async fn create_configured_task(client: &RpcClient, task_id: &str, device_id: &s
             None,
             serde_json::json!({
                 "kind": "createChat",
-                "deviceId": device_id,
+                "spaceId": "test-project",
                 "cwd": "/tmp",
                 "config": task_config("synthetic")
             }),
@@ -818,6 +835,7 @@ async fn create_configured_task(client: &RpcClient, task_id: &str, device_id: &s
 }
 
 async fn create_codex_context_task(client: &RpcClient, task_id: &str, device_id: &str) {
+    ensure_test_project(client, device_id).await;
     let receipt = execute(
         client,
         envelope(
@@ -826,7 +844,7 @@ async fn create_codex_context_task(client: &RpcClient, task_id: &str, device_id:
             None,
             serde_json::json!({
                 "kind": "createChat",
-                "deviceId": device_id,
+                "spaceId": "test-project",
                 "cwd": "/tmp",
                 "config": codex_task_config()
             }),
@@ -1031,12 +1049,14 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     let db_path = root.path().join("data/orgs/l07-org/l07-user/docs.sqlite3");
     let core = assemble(root.path(), runs.clone(), false);
     let client = luna_rpc::memory_client(core.rpc_service());
+    ensure_test_project(&client, &core.device_id).await;
+    core.workspace.flush(); // preserve the fixture project across the simulated crash
     let initial = snapshot(&client, &task_id).await;
     let create = envelope(
         "atomic-create-lifecycle",
         &task_id,
         Some(&initial),
-        serde_json::json!({ "kind": "createChat", "deviceId": core.device_id }),
+        serde_json::json!({ "kind": "createChat", "spaceId": "test-project" }),
     );
     {
         let db = rusqlite::Connection::open(&db_path).unwrap();
@@ -1083,7 +1103,7 @@ async fn create_delete_identity_and_local_cleanup_share_the_receipt_transaction(
     assert!(core.workspace.chat(&task_id).unwrap().is_none());
     assert!(core.task_identity.view(&task_id).is_none());
     let created = execute(&client, create).await;
-    assert_eq!(created.status, CommandReceiptStatus::Applied);
+    assert_eq!(created.status, CommandReceiptStatus::Applied, "{created:?}");
     assert!(core.workspace.chat(&task_id).unwrap().is_some());
     assert!(!core.task_identity.view(&task_id).unwrap().task.tombstoned);
     let handle = core.doc_host.open(&task_id).unwrap();
@@ -1881,6 +1901,7 @@ async fn local_projection_rolls_back_with_terminal_receipt_failure_and_recovers_
     let core = assemble(root.path(), runs.clone(), false);
     let client = luna_rpc::memory_client(core.rpc_service());
     create_task(&client, &task_id, &core.device_id).await;
+    core.workspace.flush(); // preserve the fixture project across the simulated crash
     let before = snapshot(&client, &task_id).await;
     assert!(
         before.events.is_empty(),
@@ -3280,6 +3301,7 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
     let task_ids = ["org-a", "org-b", "org-c"];
     let core = assemble(root.path(), runs, false);
     let client = luna_rpc::memory_client(core.rpc_service());
+    ensure_test_project(&client, &core.device_id).await;
     for task_id in task_ids {
         let receipt = execute(
             &client,
@@ -3287,7 +3309,7 @@ async fn organization_commands_are_durable_ordered_and_revision_fenced() {
                 &format!("create-{task_id}"),
                 task_id,
                 None,
-                serde_json::json!({ "kind": "createChat", "deviceId": core.device_id }),
+                serde_json::json!({ "kind": "createChat", "spaceId": "test-project" }),
             ),
         )
         .await;
@@ -3795,7 +3817,7 @@ async fn exact_non_git_workspace_move_succeeds_and_different_root_is_rejected() 
             None,
             serde_json::json!({
                 "kind": "createChat",
-                "deviceId": core.device_id,
+                "spaceId": "notes-project",
                 "cwd": workspace,
                 "config": task_config("synthetic")
             }),
@@ -4993,6 +5015,7 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     let forks = Arc::new(Mutex::new(Vec::new()));
     let core = assemble_history(dir.path(), forks.clone(), HarnessId::Opencode);
     let client = luna_rpc::memory_client(core.rpc_service());
+    ensure_test_project(&client, &core.device_id).await;
     let source_task_id = uuid::Uuid::new_v4().to_string();
     let target_task_id = uuid::Uuid::new_v4().to_string();
 
@@ -5004,7 +5027,7 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
             None,
             serde_json::json!({
                 "kind": "createChat",
-                "deviceId": core.device_id,
+                "spaceId": "test-project",
                 "cwd": "/tmp",
                 "config": history_task_config(HarnessId::Opencode),
             }),
@@ -5229,6 +5252,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
     let forks = Arc::new(Mutex::new(Vec::new()));
     let core = assemble_history(dir.path(), forks.clone(), HarnessId::Codex);
     let client = luna_rpc::memory_client(core.rpc_service());
+    ensure_test_project(&client, &core.device_id).await;
     let task_id = uuid::Uuid::new_v4().to_string();
 
     assert_eq!(
@@ -5240,7 +5264,7 @@ async fn earlier_message_edit_rebinds_to_native_fork_and_keeps_recovery_snapshot
                 None,
                 serde_json::json!({
                     "kind": "createChat",
-                    "deviceId": core.device_id,
+                    "spaceId": "test-project",
                     "cwd": "/tmp",
                     "config": history_task_config(HarnessId::Codex),
                 }),

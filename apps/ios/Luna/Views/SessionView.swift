@@ -96,11 +96,9 @@ struct SessionView: View {
     /// worktree sessions), falling back to the cwd when the space row is gone.
     private var subtitle: String? {
         guard let chat else { return nil }
-        let space = chat.spaceId == nil ? "No project" : (
-            model.space(for: chat)?.displayName
-                ?? chat.cwd.map { ($0 as NSString).lastPathComponent }
-                ?? "?"
-        )
+        let space = model.space(for: chat)?.displayName
+            ?? chat.cwd.map { ($0 as NSString).lastPathComponent }
+            ?? "?"
         return "\(space) @ \(model.deviceName(chat.deviceId))"
     }
 

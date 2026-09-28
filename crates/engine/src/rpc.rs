@@ -1023,12 +1023,10 @@ enum MutateParams {
     #[serde(rename_all = "camelCase")]
     CreateChat {
         chat_id: String,
-        /// The project the chat is created in — fixes host device + base cwd.
-        /// `None` mints a project-less chat: `deviceId` picks the host and the
-        /// cwd defaults to `~` (expanded on the host at run time).
+        /// The project the session is created in; fixes host device + base cwd.
         #[serde(default)]
         space_id: Option<String>,
-        /// Host device for a project-less chat; ignored when `spaceId` is set.
+        /// Legacy host-device hint; the selected project is authoritative.
         #[serde(default)]
         device_id: Option<String>,
         #[serde(default)]
@@ -3324,7 +3322,7 @@ impl EngineRpc {
         // correlation here would recreate a crash window where a receipt
         // names provider work that was never durably claimed.
         let expected_turn_id = command.expected_turn_id.clone();
-        let mut cancellation_guard = native_metadata_effect.then_some(NativeMetadataCommandGuard {
+        let mut cancellation_guard = native_metadata_effect.then(|| NativeMetadataCommandGuard {
             doc_host: &self.doc_host,
             command_id: &command.command_id,
             armed: true,
@@ -4633,6 +4631,11 @@ impl EngineRpc {
                 cwd,
                 lineage,
             } => {
+                let space_id = space_id.ok_or_else(|| {
+                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "A project is required to create a session".into(),
+                    ))
+                })?;
                 if let Some(parent) = side_parent_id.as_deref() {
                     if !self
                         .side_chats
@@ -4655,7 +4658,7 @@ impl EngineRpc {
                     })?;
                 let (_, receipt) = self.task_identity.register_new_task_with_command(
                     task_id,
-                    identity_space_id.as_deref(),
+                    Some(&identity_space_id),
                     identity_device_id.as_deref(),
                     identity_cwd.as_deref(),
                     lineage,
@@ -4669,25 +4672,10 @@ impl EngineRpc {
                                 if doc.chat(&owned_task_id)?.is_some() {
                                     return Ok(());
                                 }
-                                let space = match space_id.as_deref() {
-                                    Some(space_id) => {
-                                        Some(doc.space(space_id)?.ok_or_else(|| {
-                                            crate::EngineError::Other(format!(
-                                                "no such space: {space_id}"
-                                            ))
-                                        })?)
-                                    }
-                                    None => None,
-                                };
-                                let host_device = match (&space, device_id.as_deref()) {
-                                    (Some(space), _) => space.device_id.clone(),
-                                    (None, Some(device_id)) => device_id.to_string(),
-                                    (None, None) => {
-                                        return Err(crate::EngineError::Other(
-                                            "createChat needs a spaceId or a deviceId".into(),
-                                        ));
-                                    }
-                                };
+                                let space = doc.space(&space_id)?.ok_or_else(|| {
+                                    crate::EngineError::Other(format!("no such space: {space_id}"))
+                                })?;
+                                let host_device = space.device_id.clone();
                                 let child = Chat {
                                     id: owned_task_id.clone(),
                                     device_id: host_device,
@@ -4695,12 +4683,7 @@ impl EngineRpc {
                                     archived: false,
                                     settlement_override: None,
                                     pinned_order: None,
-                                    cwd: Some(cwd.unwrap_or_else(|| {
-                                        space
-                                            .as_ref()
-                                            .map(|space| space.path.clone())
-                                            .unwrap_or_else(|| "~".into())
-                                    })),
+                                    cwd: Some(cwd.unwrap_or_else(|| space.path.clone())),
                                     branch: None,
                                     checkout_id: None,
                                     source_context: None,
@@ -4711,7 +4694,7 @@ impl EngineRpc {
                                     harness_session_id: None,
                                     room_gen: Some(2),
                                     harness_session_cwd: None,
-                                    space_id: space.as_ref().map(|space| space.id.clone()),
+                                    space_id: Some(space.id.clone()),
                                     last_seen_at: None,
                                     manually_unread: false,
                                 };
@@ -4777,6 +4760,11 @@ impl EngineRpc {
                 let (source, binding) = self
                     .ensure_history_operation_ready(task_id)
                     .map_err(TaskProjectionError::Mutation)?;
+                if source.space_id.is_none() {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "A project is required to fork a session".into(),
+                    )));
+                }
                 self.validate_history_review(task_id, &source, &binding, &review)
                     .map_err(TaskProjectionError::Mutation)?;
                 let handle = self
@@ -7306,7 +7294,6 @@ impl CrossTaskBackend for EngineRpc {
                 chat.space_id
                     .as_ref()
                     .is_some_and(|id| authority.visible_project_ids.contains(id))
-                    || chat.space_id.is_none() && authority.allow_projectless
             })
             .filter(|chat| {
                 request
@@ -7426,7 +7413,6 @@ impl CrossTaskBackend for EngineRpc {
                 .project_id
                 .as_ref()
                 .is_some_and(|id| authority.visible_project_ids.contains(id))
-                && !(task.project_id.is_none() && authority.allow_projectless)
         {
             return Err(CrossTaskError::TargetScope);
         }
@@ -8563,6 +8549,11 @@ impl RpcService for EngineRpc {
             }
             methods::PREVIEW_PROVIDER_TASK_IMPORT => {
                 let p: PreviewProviderTaskImportParams = parse_params(params)?;
+                if p.space_id.is_none() {
+                    return Err(RpcError::BadParams(
+                        "A project is required to import a session".into(),
+                    ));
+                }
                 let preview = self
                     .task_identity
                     .preview_import(
@@ -9357,12 +9348,15 @@ impl RpcService for EngineRpc {
                         .map(move |mut value| {
                             if let Some(items) = value.as_array_mut() {
                                 items.retain(|chat| {
-                                    !chat.get("id").and_then(|id| id.as_str()).is_some_and(|id| {
-                                        workspace.is_side_chat(id)
-                                            || side_chats
-                                                .as_ref()
-                                                .is_some_and(|service| service.contains(id))
-                                    })
+                                    chat.get("spaceId").and_then(|id| id.as_str()).is_some()
+                                        && !chat.get("id").and_then(|id| id.as_str()).is_some_and(
+                                            |id| {
+                                                workspace.is_side_chat(id)
+                                                    || side_chats
+                                                        .as_ref()
+                                                        .is_some_and(|service| service.contains(id))
+                                            },
+                                        )
                                 });
                             }
                             value

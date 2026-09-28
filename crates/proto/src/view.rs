@@ -291,13 +291,13 @@ pub struct ChatGroup<'a> {
     pub chats: Vec<&'a Chat>,
 }
 
-/// Project label for a chat: the basename of its cwd, or "No project".
+/// Project label for a chat: the basename of its cwd, or "Unknown project".
 pub fn project_label(cwd: Option<&str>) -> String {
     let Some(cwd) = cwd.map(str::trim).filter(|c| !c.is_empty()) else {
-        return "No project".to_string();
+        return "Unknown project".to_string();
     };
     if matches!(cwd, "~" | "~/") {
-        return "No project".to_string();
+        return "Unknown project".to_string();
     }
     std::path::Path::new(cwd.trim_end_matches(['/', '\\']))
         .file_name()

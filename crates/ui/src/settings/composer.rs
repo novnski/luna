@@ -69,11 +69,8 @@ pub struct ComposerDefaults {
     pub model_labels: HashMap<String, String>,
     /// Last device picked for new sessions (the composer's device selector).
     pub device: Option<String>,
-    /// Last project picked for new sessions; `None` + `no_project` = the
-    /// remembered "Don't work in a project" state.
+    /// Last project picked for new sessions.
     pub project: Option<String>,
-    /// Remembered "Don't work in a project" opt-out.
-    pub no_project: bool,
     /// Starred models (the picker's favorites rail), in starring order.
     pub favorites: Vec<FavoriteModel>,
 }
@@ -258,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_projectless_saves_leave_a_complete_preference() {
+    fn concurrent_target_saves_leave_a_complete_preference() {
         let dir = tempfile::tempdir().unwrap();
         std::thread::scope(|scope| {
             for i in 0..8 {
@@ -266,14 +263,13 @@ mod tests {
                 scope.spawn(move || {
                     let defaults = ComposerDefaults {
                         device: Some(format!("device-{i}")),
-                        no_project: true,
+                        project: Some("project".into()),
                         ..Default::default()
                     };
                     for _ in 0..10 {
                         defaults.save(path).unwrap();
                         let saved = ComposerDefaults::load(path);
-                        assert!(saved.no_project);
-                        assert!(saved.project.is_none());
+                        assert_eq!(saved.project.as_deref(), Some("project"));
                         assert!(saved.device.is_some());
                     }
                 });

@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use luna_doc::{CommandBasedOn, SessionCommandEntry, SessionCommandPayload, SessionCommandStatus};
+use luna_doc::{SessionCommandPayload, SessionCommandStatus};
 use luna_engine::{EngineCore, HarnessRegistry};
 use luna_harness::{Harness, HarnessError, RunControls};
 use luna_proto::{
@@ -22,8 +22,6 @@ use luna_proto::{
     SessionStatus, SteeringMode,
 };
 use luna_rpc::methods;
-
-const VIEWER: &str = "viewer-device";
 
 /// Scripted harness: emits SessionStarted + text + Done with a per-event delay (so
 /// `Working` is observable across the bridge).
@@ -102,8 +100,8 @@ fn registry() -> Arc<HarnessRegistry> {
         step_delay: Duration::from_millis(60),
     }));
     registry.register(Arc::new(ScriptedHarness {
-        id: HarnessId::Cursor,
-        text: "From cursor",
+        id: HarnessId::Opencode,
+        text: "From opencode",
         step_delay: Duration::from_millis(10),
     }));
     Arc::new(registry)
@@ -164,7 +162,7 @@ fn run_request(prompt: &str) -> RunRequest {
     }
 }
 
-/// Queue a run command into a chat doc the way a remote viewer would (ledger rule 1).
+/// Queue a locally authorized run command with a deterministic command id.
 fn queue_run(core: &EngineCore, chat_id: &str, command_id: &str, message_id: &str) {
     queue_run_with(
         core,
@@ -182,23 +180,16 @@ fn queue_run_with(
     message_id: &str,
     request: RunRequest,
 ) {
-    let handle = core.doc_host.open(chat_id).expect("open chat");
-    let now = chrono::Utc::now().timestamp_millis();
-    handle
-        .doc()
-        .queue_command(&SessionCommandEntry {
-            id: command_id.into(),
-            payload: SessionCommandPayload::Run {
+    core.doc_host
+        .queue_command_with_id_and_transfers(
+            chat_id,
+            command_id,
+            SessionCommandPayload::Run {
                 request,
                 message_id: message_id.into(),
             },
-            issued_by: VIEWER.into(),
-            issued_at: now,
-            based_on: None::<CommandBasedOn>,
-            expires_at: None,
-            status: SessionCommandStatus::Pending,
-            resolution: None,
-        })
+            Vec::new(),
+        )
         .expect("queue command");
 }
 
@@ -378,47 +369,46 @@ async fn claim_on_first_command_creates_the_chat_row() {
 }
 
 #[tokio::test]
-async fn projectless_claim_syncs_after_offline_creation_and_survives_viewer_restart() {
+async fn offline_project_claim_syncs_and_survives_viewer_restart() {
     let dir_a = tempfile::tempdir().unwrap();
     let dir_b = tempfile::tempdir().unwrap();
     let a = assemble(dir_a.path(), "dev-a");
     let b = assemble(dir_b.path(), "dev-b");
-    let mut request = run_request("projectless while offline");
-    request.cwd = "~".into();
+    let request = run_request("project task while offline");
     a.doc_host
         .queue_command(
-            "projectless-offline",
+            "project-offline",
             SessionCommandPayload::Run {
                 request,
-                message_id: "projectless-msg".into(),
+                message_id: "project-msg".into(),
             },
         )
         .unwrap();
     wait_for(
-        || a.workspace.chat("projectless-offline").unwrap().is_some(),
+        || a.workspace.chat("project-offline").unwrap().is_some(),
         "offline claim",
     )
     .await;
     let link = bridge(&a, &b).await;
     wait_for(
-        || b.workspace.chat("projectless-offline").unwrap().is_some(),
-        "projectless sync",
+        || b.workspace.chat("project-offline").unwrap().is_some(),
+        "project sync",
     )
     .await;
-    let row = b.workspace.chat("projectless-offline").unwrap().unwrap();
+    let row = b.workspace.chat("project-offline").unwrap().unwrap();
     assert_eq!(row.device_id, "dev-a");
-    assert_eq!(row.space_id, None);
-    assert_eq!(row.cwd.as_deref(), Some("~"));
-    assert!(a.workspace.read_spaces().unwrap().is_empty());
-    assert!(b.workspace.read_spaces().unwrap().is_empty());
+    assert!(row.space_id.is_some());
+    assert_eq!(row.cwd.as_deref(), Some("/tmp"));
+    assert_eq!(a.workspace.read_spaces().unwrap().len(), 1);
+    assert_eq!(b.workspace.read_spaces().unwrap().len(), 1);
     b.shutdown().await;
     drop(b);
     let b = assemble(dir_b.path(), "dev-b");
-    let row = b.workspace.chat("projectless-offline").unwrap().unwrap();
-    assert_eq!(row.space_id, None);
+    let row = b.workspace.chat("project-offline").unwrap().unwrap();
+    assert!(row.space_id.is_some());
     assert_eq!(row.device_id, "dev-a");
     assert_eq!(b.workspace.read_chats().unwrap().len(), 1);
-    assert!(b.workspace.read_spaces().unwrap().is_empty());
+    assert_eq!(b.workspace.read_spaces().unwrap().len(), 1);
     drop(link);
     a.shutdown().await;
     b.shutdown().await;
@@ -496,7 +486,7 @@ async fn claimed_chat_row_records_the_run_harness() {
     let core = assemble(dir.path(), "dev-a");
 
     let request = RunRequest {
-        harness: Some(HarnessId::Cursor),
+        harness: Some(HarnessId::Opencode),
         ..run_request("go do it")
     };
     queue_run_with(&core, "chat-glyph", "cmd-glyph-1", "m-1", request);
@@ -507,7 +497,7 @@ async fn claimed_chat_row_records_the_run_harness() {
                 .ok()
                 .flatten()
                 .and_then(|c| c.config)
-                .is_some_and(|c| c.harness == HarnessId::Cursor)
+                .is_some_and(|c| c.harness == HarnessId::Opencode)
         },
         "claimed row carries the dispatched harness",
     )
@@ -564,7 +554,7 @@ async fn chat_config_selects_the_run_harness() {
             Some("space-cfg"),
             None,
             Some(ChatConfig {
-                harness: HarnessId::Cursor,
+                harness: HarnessId::Opencode,
                 provider_account_id: None,
                 model: None,
                 reasoning: None,
@@ -581,19 +571,25 @@ async fn chat_config_selects_the_run_harness() {
         .expect("create configured chat");
     queue_run(&a, "chat-cfg", "cmd-cfg-1", "m-1");
 
-    // The configured harness (Cursor, "From cursor") ran — not the default Mock.
+    // The configured harness (OpenCode) ran instead of the default Mock.
     let handle = a.doc_host.open("chat-cfg").expect("open chat");
-    wait_for(
-        || {
-            handle.doc().read_entries().unwrap_or_default().iter().any(|e| {
-                e.parts.iter().any(
-                    |p| matches!(p, luna_doc::MessagePart::Text { text, .. } if text == "From cursor"),
-                )
-            })
-        },
-        "configured-harness output",
-    )
-    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let entries = handle.doc().read_entries().unwrap_or_default();
+        if entries.iter().any(|e| {
+            e.parts.iter().any(
+                |p| matches!(p, luna_doc::MessagePart::Text { text, .. } if text == "From opencode"),
+            )
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "configured harness did not run; commands={:?}, entries={entries:?}",
+            handle.doc().read_commands().unwrap_or_default()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
     a.shutdown().await;
 }
@@ -829,7 +825,10 @@ async fn side_chat_visibility_survives_registry_sync_without_loading_history() {
     let client_a = luna_rpc::memory_client(a.rpc_service());
     let client_b = luna_rpc::memory_client(b.rpc_service());
     let parent = uuid::Uuid::new_v4().to_string();
-    client_a.call(methods::MUTATE, serde_json::json!({"op":"createChat","chatId":parent,"deviceId":a.device_id,
+    a.workspace
+        .create_space("space-side-sync", &a.device_id, "/tmp", None, false)
+        .unwrap();
+    client_a.call(methods::MUTATE, serde_json::json!({"op":"createChat","chatId":parent,"spaceId":"space-side-sync",
         "config":{"harness":"mock","model":"fixture","reasoning":null,"sandbox":"workspace-write","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
     let created = client_a
         .call(

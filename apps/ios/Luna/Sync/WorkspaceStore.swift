@@ -380,11 +380,10 @@ final class WorkspaceStore {
 
     // MARK: Derived views
 
-    /// state.rs `overview_chats`: every non-archived projectless chat or chat of a live space,
-    /// attention-sorted.
+    /// Non-archived sessions belonging to a live project, attention-sorted.
     var overviewChats: [Chat] {
         let liveSpaceIds = Set(spaces.map(\.id))
-        let live = chats.filter { !$0.archived && ($0.spaceId.map(liveSpaceIds.contains) ?? true) }
+        let live = chats.filter { !$0.archived && $0.spaceId.map(liveSpaceIds.contains) == true }
         return sortActive(live)
     }
 
@@ -403,7 +402,7 @@ final class WorkspaceStore {
     /// `overviewChats`, a live space is not required: an archived session of a
     /// deleted space should still be reachable for unarchive.
     func archivedChats(in spaceId: String? = nil) -> [Chat] {
-        sortActive(chats.filter { $0.archived && (spaceId == nil || $0.spaceId == spaceId) })
+        sortActive(chats.filter { $0.archived && $0.spaceId != nil && (spaceId == nil || $0.spaceId == spaceId) })
     }
 
     func indicator(for chat: Chat) -> ChatIndicator {
@@ -651,30 +650,18 @@ final class WorkspaceStore {
     @discardableResult
     func createChat(space: Space, config chatConfig: ChatConfig,
                     branch: String? = nil, cwd: String? = nil) -> String {
-        createChat(deviceId: space.deviceId, spaceId: space.id, cwd: cwd ?? space.path,
-                   config: chatConfig, branch: branch)
-    }
-
-    /// Same local registry write and offline outbox as project sessions.
-    @discardableResult
-    func createProjectlessChat(deviceId: String, config: ChatConfig) -> String {
-        createChat(deviceId: deviceId, spaceId: nil, cwd: "~", config: config, branch: nil)
-    }
-
-    private func createChat(deviceId: String, spaceId: String?, cwd: String,
-                            config chatConfig: ChatConfig, branch: String?) -> String {
         let chatId = UUID().uuidString.lowercased()
         var set: [String: JSONValue] = [
             "id": .string(chatId),
-            "deviceId": .string(deviceId),
+            "deviceId": .string(space.deviceId),
             "archived": .bool(false),
-            "cwd": .string(cwd),
+            "cwd": .string(cwd ?? space.path),
+            "spaceId": .string(space.id),
             "createdAt": .int(nowMs()),
             // Born on chat2 (workspace_host.rs create_chat): a brand-new
             // chat has an empty doc — nothing to seed, no migration race.
             "roomGen": .int(2),
         ]
-        if let spaceId { set["spaceId"] = .string(spaceId) }
         if let branch {
             set["branch"] = .string(branch)
         }

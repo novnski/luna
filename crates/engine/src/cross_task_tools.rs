@@ -65,7 +65,7 @@ impl CrossTaskAuthority {
             caller_task_id: context.thread_id.clone(),
             local_environment_id: context.environment_id.clone(),
             visible_project_ids: context.project_id.iter().cloned().collect(),
-            allow_projectless: context.project_id.is_none(),
+            allow_projectless: false,
             granted_scopes: context.granted_scopes.iter().cloned().collect(),
             explicit_user_request,
             delivery,
@@ -887,7 +887,7 @@ fn visible(authority: &CrossTaskAuthority, task: &CrossTaskSummary) -> bool {
     task.environment_id == authority.local_environment_id
         && match &task.project_id {
             Some(id) => authority.visible_project_ids.contains(id),
-            None => authority.allow_projectless,
+            None => false,
         }
 }
 

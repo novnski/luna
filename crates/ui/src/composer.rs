@@ -7325,17 +7325,23 @@ impl Composer {
                     break receipt;
                 }
                 if let Some(events) = stream.as_mut() {
-                    match tokio::time::timeout(Duration::from_secs(3), events.recv()).await {
-                        Ok(Some(value)) => {
+                    let receive = Box::pin(events.recv());
+                    let deadline = Box::pin(cx.background_executor().timer(Duration::from_secs(3)));
+                    let received = match futures::future::select(receive, deadline).await {
+                        futures::future::Either::Left((value, _)) => Some(value),
+                        futures::future::Either::Right(_) => None,
+                    };
+                    match received {
+                        Some(Some(value)) => {
                             current = value
                                 .get("receipt")
                                 .and_then(|value| serde_json::from_value(value.clone()).ok());
                         }
-                        Ok(None) => stream = None,
-                        Err(_) => {}
+                        Some(None) => stream = None,
+                        None => {}
                     }
                 } else {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    cx.background_executor().timer(Duration::from_secs(3)).await;
                 }
             };
             let applied = receipt.status == CommandReceiptStatus::Applied;
@@ -7357,7 +7363,9 @@ impl Composer {
                     Ok(()) => break,
                     Err(error) => {
                         tracing::warn!(%command_id, %error, "draft receipt settlement will retry");
-                        tokio::time::sleep(Duration::from_secs(retry_secs)).await;
+                        cx.background_executor()
+                            .timer(Duration::from_secs(retry_secs))
+                            .await;
                         retry_secs = (retry_secs * 2).min(30);
                     }
                 }
@@ -8969,8 +8977,8 @@ impl Composer {
         )
     }
 
-    /// New chats need a runnable agent, but may target the device's home
-    /// directory without a project. Existing chats carry their own run config.
+    /// New sessions require a selected project and a runnable agent. Existing
+    /// sessions carry their own run config.
     fn send_blocked(&self, cx: &App) -> bool {
         if self.queue_edit_finishing {
             return true;
@@ -8982,11 +8990,25 @@ impl Composer {
         if state.selected_chat.is_some() {
             return false;
         }
-        // New-chat canvas: needs a runnable agent. The
+        if state.selected_space_row().is_none() {
+            return true;
+        }
+        // New-session canvas: needs a runnable agent. The
         // no-agents check only fires once the catalog is loaded — offline
         // and still-loading states must not block (the harness resolves from
         // the remembered default and the engine reports real failures).
         self.pickers.read(cx).no_agents_available()
+    }
+
+    fn require_project_for_new_session(&mut self, cx: &mut Context<Self>) -> bool {
+        let state = self.state.read(cx);
+        let missing_project = state.selected_chat.is_none() && state.selected_space_row().is_none();
+        if missing_project {
+            self.failure = Some("Select a project before starting a session.".into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+        }
+        !missing_project
     }
 
     fn context_send_block_reason(&self, cx: &App) -> Option<&'static str> {
@@ -9033,6 +9055,7 @@ impl Composer {
             // escape_stops_active_agent is enabled.
             SendButtonMode::Stop => {}
             _ if no_content => {}
+            _ if !self.require_project_for_new_session(cx) => {}
             _ if self.send_blocked(cx) => {}
             SendButtonMode::Send => self.send(text, None, cx),
             // Busy: keep the message queued until the current turn ends.
@@ -9072,7 +9095,7 @@ impl Composer {
             self.staged().len() + self.staged_appshots().len(),
             self.staged_comments(cx).len(),
         );
-        if !has_content || self.send_blocked(cx) {
+        if !has_content || !self.require_project_for_new_session(cx) || self.send_blocked(cx) {
             return;
         }
         if self.run_live(cx) {
@@ -9094,6 +9117,9 @@ impl Composer {
         follow_up_behavior: Option<luna_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
+        if !self.require_project_for_new_session(cx) {
+            return;
+        }
         if let Some(reason) = self.context_send_block_reason(cx) {
             self.failure = Some(reason.into());
             self.failure_key = Some(self.current_key.clone());
@@ -9131,10 +9157,7 @@ impl Composer {
             .read(cx)
             .selected_chat_row()
             .and_then(|c| c.cwd.clone());
-        // The PROJECT fixes the new chat's device + base folder — sessions are
-        // minted onto the project's device, not necessarily this one. With no
-        // project ("Don't work in a project") the composer's device pick is
-        // the host and the session runs from `~` there.
+        // The project fixes the new session's device and base folder.
         let space = self.state.read(cx).selected_space_row().cloned();
         let local_device_id = self.state.read(cx).local_device_id.clone();
         let target_device_id = self.state.read(cx).effective_device_id();
@@ -9625,13 +9648,12 @@ impl Composer {
                 // picked base ref (CreateWorktree on send, targeted at the
                 // space's device; the RPC relay-forwards).
                 let mut cwd = if is_new {
-                    // Project-less sessions run from the host's home dir —
-                    // "~" is expanded on the host when the run spawns.
-                    space_path.clone().or_else(|| Some("~".to_string()))
+                    space_path
+                        .clone()
+                        .expect("new sessions must have a selected project")
                 } else {
-                    existing_cwd
-                }
-                .unwrap_or_else(|| ".".to_string());
+                    existing_cwd.unwrap_or_else(|| ".".to_string())
+                };
                 let mut worktree_cwd: Option<String> = None;
                 // Fresh-worktree plans ride the QUEUED Run command (a
                 // WorktreeSpec the HOST materializes at drain time) instead of
@@ -9643,7 +9665,7 @@ impl Composer {
                 // it from the first frame (it read "Select ref" until the
                 // host's diff reconciler got around to stamping the branch).
                 let mut chat_branch: Option<String> = None;
-                if is_new && space_path.is_some() {
+                if is_new {
                     match &plan {
                         crate::pickers::CheckoutPlan::CurrentCheckout { branch } => {
                             chat_branch = branch.clone();
@@ -9660,51 +9682,43 @@ impl Composer {
                             // know the spec degrades to the main checkout
                             // instead of failing the run.
                             chat_branch = base.clone();
-                            if let Some(repo_path) = &space_path {
-                                // A remote repo's branch list loads over the
-                                // relay — on a bad link it may never arrive
-                                // and the picker has no base. That must NOT
-                                // silently drop the isolation the user picked
-                                // (2026-08-19: "New worktree" ran in the main
-                                // checkout): default to HEAD, which git — any
-                                // host version — resolves as the repo's
-                                // current checkout state.
-                                let base =
-                                    base.clone().unwrap_or_else(|| "HEAD".to_string());
-                                run_worktree = Some(luna_proto::WorktreeSpec {
-                                    repo_path: repo_path.clone(),
-                                    base: base.clone(),
-                                });
-                            }
+                            // A remote repo's branch list loads over the
+                            // relay — on a bad link it may never arrive
+                            // and the picker has no base. That must NOT
+                            // silently drop the isolation the user picked
+                            // (2026-08-19: "New worktree" ran in the main
+                            // checkout): default to HEAD, which git — any
+                            // host version — resolves as the repo's
+                            // current checkout state.
+                            let base = base.clone().unwrap_or_else(|| "HEAD".to_string());
+                            run_worktree = Some(luna_proto::WorktreeSpec {
+                                repo_path: space_path
+                                    .clone()
+                                    .expect("new sessions must have a selected project"),
+                                base: base.clone(),
+                            });
                         }
                     }
                 }
 
                 // Best-effort Mutate createChat with the picked config: the
-                // engine resolves device + cwd from the PROJECT row when one
-                // is picked; project-less chats name the host device outright
-                // (idempotent; the doc host would materialize the chat on
-                // first command anyway, so failures are non-fatal).
+                // engine resolves device and cwd from the project row.
+                // The doc host would materialize the session on the first
+                // command anyway, so failures are non-fatal.
                 if is_new {
                     let mut mutate = serde_json::json!({
                         "op": "createChat",
                         "chatId": chat_id,
                     });
                     if let Some(object) = mutate.as_object_mut() {
-                        match &space_id {
-                            Some(space_id) => {
-                                object.insert(
-                                    "spaceId".into(),
-                                    serde_json::Value::String(space_id.clone()),
-                                );
-                            }
-                            None => {
-                                object.insert(
-                                    "deviceId".into(),
-                                    serde_json::Value::String(device_id.clone()),
-                                );
-                            }
-                        }
+                        object.insert(
+                            "spaceId".into(),
+                            serde_json::Value::String(
+                                space_id
+                                    .clone()
+                                    .expect("new sessions must have a selected project"),
+                            ),
+                        );
                     }
                     if let Some(object) = mutate.as_object_mut() {
                         if let Some(worktree_cwd) = &worktree_cwd {
@@ -13467,34 +13481,6 @@ mod tests {
             assert!(window.focused(cx).is_none());
         })
         .unwrap();
-    }
-
-    #[gpui::test]
-    fn projectless_composer_allows_send_and_enter_submission(cx: &mut gpui::TestAppContext) {
-        let state = cx.new(|_| AppState::new());
-        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
-        // A device with no projects is a valid home-directory target too.
-        composer.update(cx, |composer, cx| assert!(!composer.send_blocked(cx)));
-        state.update(cx, |state, cx| state.select_space(None, cx));
-        composer.update(cx, |composer, cx| {
-            composer.input.update(cx, |input, cx| {
-                input.set_text("Hello without a project", cx);
-            });
-            assert_eq!(composer.button_mode(cx), SendButtonMode::Send);
-            assert!(
-                !composer.send_blocked(cx),
-                "The Send button must be enabled without a project"
-            );
-            composer.on_submit(cx);
-            // With no engine attached, reaching the normal send error proves
-            // Enter dispatched instead of silently stopping at the UI gate.
-            assert_eq!(composer.failure.as_deref(), Some("Engine not connected"));
-            composer.queue_edit_finishing = true;
-            assert!(
-                composer.send_blocked(cx),
-                "Pending edits must still block submission"
-            );
-        });
     }
 
     #[gpui::test]

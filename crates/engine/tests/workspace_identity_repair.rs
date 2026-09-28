@@ -1,5 +1,5 @@
 //! Failure-first v2 workspace identity and local-only repair integration coverage.
-//! The original three-case workspace_identity_roots target stays byte-for-byte frozen.
+//! The root-ownership cases use explicit fixture projects.
 //! All provider state is synthetic and native metadata discovery is disabled.
 
 use std::path::{Path, PathBuf};
@@ -110,11 +110,32 @@ async fn create(
     cwd: &Path,
 ) -> CommandReceipt {
     let mut intent = json!({ "kind": "createChat", "cwd": cwd });
-    if let Some(space) = space {
-        intent["spaceId"] = json!(space);
+    let space_id = if let Some(space) = space {
+        space.to_owned()
     } else {
-        intent["deviceId"] = json!(device);
-    }
+        let canonical = if cwd == Path::new("~") {
+            PathBuf::from(std::env::var_os("HOME").unwrap())
+                .canonicalize()
+                .unwrap()
+        } else {
+            cwd.canonicalize().unwrap()
+        };
+        let id = format!(
+            "fixture-project-{}",
+            canonical.to_string_lossy().replace('/', "_")
+        );
+        client
+            .call(
+                methods::MUTATE,
+                json!({
+                    "op":"createSpace", "spaceId":id, "deviceId":device, "path":canonical,
+                }),
+            )
+            .await
+            .expect("create fixture project");
+        id
+    };
+    intent["spaceId"] = json!(space_id);
     let receipt: CommandReceipt = client
         .call_as(
             methods::EXECUTE_TASK_COMMAND,
@@ -419,6 +440,15 @@ async fn ambiguous_relative_creation_is_refused_without_identity_side_effects() 
         .store
         .load_snapshot("luna-task-identity-events-v1")
         .unwrap();
+    core.workspace
+        .create_space(
+            "relative-fixture",
+            &core.device_id,
+            fixture.root_a.to_str().unwrap(),
+            None,
+            false,
+        )
+        .expect("create project");
     for cwd in ["", ".", "relative-folder"] {
         let task = uuid::Uuid::new_v4().to_string();
         let receipt: CommandReceipt = client
@@ -426,7 +456,7 @@ async fn ambiguous_relative_creation_is_refused_without_identity_side_effects() 
                 methods::EXECUTE_TASK_COMMAND,
                 json!({
                     "commandId":uuid::Uuid::new_v4().to_string(),"taskId":task,
-                    "intent":{"kind":"createChat","deviceId":core.device_id,"cwd":cwd}
+                    "intent":{"kind":"createChat","spaceId":"relative-fixture","cwd":cwd}
                 }),
             )
             .await
@@ -867,8 +897,8 @@ fn isolated_child(test: &str) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn owner_home_alias_uses_owner_home_not_engine_working_directory() {
-    if isolated_child("owner_home_alias_uses_owner_home_not_engine_working_directory") {
+async fn project_home_alias_uses_owner_home_not_engine_working_directory() {
+    if isolated_child("project_home_alias_uses_owner_home_not_engine_working_directory") {
         return;
     }
     let fixture = Fixture::new();

@@ -142,6 +142,9 @@ async fn sending_a_message_unarchives_the_chat() {
     )
     .expect("engine core assembles");
 
+    core.workspace
+        .create_space("space-unarchive", &core.device_id, "/tmp", None, false)
+        .expect("create project");
     let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
@@ -149,7 +152,7 @@ async fn sending_a_message_unarchives_the_chat() {
             serde_json::json!({
                 "op": "createChat",
                 "chatId": CHAT,
-                "deviceId": core.device_id,
+                "spaceId": "space-unarchive",
             }),
         )
         .await

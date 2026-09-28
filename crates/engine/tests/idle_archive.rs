@@ -206,11 +206,14 @@ async fn start(core: &EngineCore, root: &Path, id: &str) {
         permission_audit: vec![],
     };
     let cwd = root.canonicalize().unwrap().to_string_lossy().to_string();
+    core.workspace
+        .create_space("space-idle-archive", &core.device_id, &cwd, None, false)
+        .expect("create project");
     client
         .call(
             methods::MUTATE,
             serde_json::json!({"op":"createChat", "chatId":id,
-        "deviceId":core.device_id, "cwd":cwd, "config":config}),
+        "spaceId":"space-idle-archive", "cwd":cwd, "config":config}),
         )
         .await
         .unwrap();

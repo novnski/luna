@@ -227,11 +227,15 @@ async fn rows_dark_command_delivers_over_the_peer_relay_exactly_once() {
         version: Some("0.2.12".into()),
         capabilities: luna_proto::capabilities::current(),
     });
+    core_a
+        .workspace
+        .create_space("space-relay", "device-b", "/tmp", None, false)
+        .expect("create project");
     let client_a = luna_rpc::memory_client(core_a.rpc_service());
     client_a
         .call(
             methods::MUTATE,
-            serde_json::json!({ "op": "createChat", "chatId": CHAT, "deviceId": "device-b" }),
+            serde_json::json!({ "op": "createChat", "chatId": CHAT, "spaceId": "space-relay" }),
         )
         .await
         .expect("createChat on A");

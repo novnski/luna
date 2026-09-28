@@ -2744,47 +2744,18 @@ impl Shell {
                 });
             }
         }
-        // An explicit projectless canvas must be visible in the sidebar:
-        // retaining a project filter would hide the session on its first send.
-        if state.read(cx).no_project
-            && state.read(cx).selected_chat.is_none()
-            && self.settings.space_filter.as_deref() != Some(crate::settings::PERSONAL_SPACE_FILTER)
-            && self.settings.space_filter.take().is_some()
-        {
-            self.schedule_save(cx);
-        }
         // Boot: restore the last selected space once the first spaces frame
         // lands (a still-existing row wins over the auto-selected first one;
         // the boot-auto-selected chat's own space wins over both — selecting a
         // chat implies its space, which `select_chat` already applied).
-        if !self.space_boot_applied
-            && state.read(cx).spaces_synced
-            && (!state.read(cx).spaces.is_empty()
-                || self.settings.space_filter.as_deref()
-                    == Some(crate::settings::PERSONAL_SPACE_FILTER))
-        {
+        if !self.space_boot_applied && state.read(cx).spaces_synced {
             self.space_boot_applied = true;
             if state.read(cx).selected_chat.is_none() {
-                // A set sidebar filter is an explicit standing choice — the
-                // canvas defaults (project AND its device) follow it, even
-                // over a remembered "no project" opt-out. Otherwise the last
-                // selected project stands, unless opted out.
-                let exists = |id: &String| {
-                    id == crate::settings::PERSONAL_SPACE_FILTER
-                        || state.read(cx).space_row(id).is_some()
-                };
+                // A set sidebar filter is an explicit standing choice. The
+                // canvas defaults to that project, then the last selection.
+                let exists = |id: &String| state.read(cx).space_row(id).is_some();
                 let filter = self.settings.space_filter.clone().filter(&exists);
-                let target = match filter {
-                    Some(filter) if filter == crate::settings::PERSONAL_SPACE_FILTER => {
-                        state.update(cx, |s, cx| s.select_space(None, cx));
-                        None
-                    }
-                    Some(filter) => Some(filter),
-                    None if !state.read(cx).no_project => {
-                        self.settings.last_space_id.clone().filter(&exists)
-                    }
-                    None => None,
-                };
+                let target = filter.or_else(|| self.settings.last_space_id.clone().filter(&exists));
                 if target.is_some() {
                     state.update(cx, |s, cx| s.select_space(target, cx));
                 }
@@ -2805,7 +2776,6 @@ impl Shell {
         // fall back to "All" rather than filtering everything out.
         if state.read(cx).spaces_synced
             && let Some(filter) = self.settings.space_filter.clone()
-            && filter != crate::settings::PERSONAL_SPACE_FILTER
             && state.read(cx).space_row(&filter).is_none()
         {
             self.settings.space_filter = None;
@@ -7999,10 +7969,9 @@ impl Shell {
             let state = self.state.read(cx);
             // An explicit sidebar project is the user's search selection even
             // while an open task keeps its own project context. "All projects"
-            // falls back to that context; Personal maps to projectless. Global
+            // falls back to that context. Global
             // history remains a separate explicit toggle.
             let selected_project = match self.settings.space_filter.as_deref() {
-                Some(crate::settings::PERSONAL_SPACE_FILTER) => None,
                 Some(space_id) => Some(space_id.to_string()),
                 None => state.selected_space.clone(),
             };
@@ -10246,7 +10215,7 @@ impl Shell {
                     let source_name = source_space
                         .as_ref()
                         .map(|space| space.display_name())
-                        .unwrap_or("Personal / no project");
+                        .unwrap_or("Unknown project");
                     let source_root = source_space
                         .as_ref()
                         .map(|space| space.path.as_str())
@@ -10317,7 +10286,7 @@ impl Shell {
                         source_space
                             .as_ref()
                             .map(|space| space.display_name())
-                            .unwrap_or("Personal / no project")
+                            .unwrap_or("Unknown project")
                     ),
                 )))
                 .child(
@@ -10576,10 +10545,9 @@ impl Shell {
         let has_selection = self.state.read(cx).selected_chat.is_some();
         let has_spaces = !self.state.read(cx).spaces.is_empty();
         let has_appshots = !self.composer.read(cx).staged_appshots().is_empty();
-        let no_project = self.state.read(cx).no_project;
         let transcript_geometry_ready = bottom_stack_measurement_matches(
             self.bottom_stack_has_composer.get(),
-            (has_spaces || no_project || has_appshots) && has_selection,
+            (has_spaces || has_appshots) && has_selection,
         );
         let ui_settings = settings::current(cx);
         let new_thread_background_setting = ui_settings.new_thread_composer_background;
@@ -10666,7 +10634,7 @@ impl Shell {
                     el.child(div().absolute().inset_0().occlude())
                 })
                 .into_any_element()
-        } else if !has_spaces && !no_project {
+        } else if !has_spaces {
             // Onboarding (first boot / after the destructive wipe): no folders
             // to work in yet — one clear affordance.
             // NASA LRO Moon mosaic, converted on inkmeascii.com with the
@@ -10838,7 +10806,7 @@ impl Shell {
             .child({
                 let measured = self.bottom_stack.clone();
                 let measured_has_composer = self.bottom_stack_has_composer.clone();
-                let contains_composer = (has_spaces || no_project || has_appshots) && has_selection;
+                let contains_composer = (has_spaces || has_appshots) && has_selection;
                 let composer = self.composer.clone();
                 div()
                     .flex_none()
@@ -10865,7 +10833,7 @@ impl Shell {
                         .inset_0(),
                     )
                     .child(status)
-                    .when(has_spaces || no_project || has_appshots, |el| {
+                    .when(has_spaces || has_appshots, |el| {
                         let composer_opacity = self.composer_dock.borrow().opacity();
                         el.child(crate::composer_dock::docked_composer(
                             div()
@@ -13236,7 +13204,7 @@ impl Render for Shell {
                 let stack_h = (self.bottom_stack.get() - term_h).max(0.0);
                 let expected_has_composer = {
                     let state = self.state.read(cx);
-                    (!state.spaces.is_empty() || state.no_project) && state.selected_chat.is_some()
+                    !state.spaces.is_empty() && state.selected_chat.is_some()
                 };
                 let bottom_stack_ready = bottom_stack_measurement_matches(
                     self.bottom_stack_has_composer.get(),
@@ -16143,23 +16111,6 @@ mod exit_regressions {
                     } if id == "project-b-task"
                 )));
 
-                shell.settings.space_filter = Some(crate::settings::PERSONAL_SPACE_FILTER.into());
-                shell.history_search_results = vec![HistorySearchRpc::event("personal", 0)];
-                shell.history_search_results[0].task_id = "personal-task".into();
-                shell.history_search_results[0].source.task_id = "personal-task".into();
-                let projectless = shell.command_entries(cx);
-                assert!(!projectless.iter().any(|entry| matches!(
-                    entry,
-                    command_palette::Entry::Chat { id, .. } if id == "personal-task"
-                )));
-                assert!(projectless.iter().any(|entry| matches!(
-                    entry,
-                    command_palette::Entry::Chat {
-                        id,
-                        group: command_palette::ResultGroup::OtherChats,
-                    } if id == "project-a-task"
-                )));
-
                 shell.settings.space_filter = Some("project-a".into());
                 shell.history_search_results = vec![HistorySearchRpc::event("project-a", 0)];
                 shell.command_palette.as_mut().unwrap().active = 0;
@@ -17318,21 +17269,9 @@ mod exit_regressions {
             })
         });
 
-        set_palette_query(&window, "", cx);
-        window
-            .update(cx, |shell, _, cx| {
-                shell.set_space_filter(Some(crate::settings::PERSONAL_SPACE_FILTER.into()), cx);
-            })
-            .unwrap();
         set_palette_query(&window, "needle", cx);
         window
             .update(cx, |shell, _, cx| {
-                let request = shell.current_session_history_request(None, cx).unwrap();
-                assert_eq!(request.scope, HistorySearchScope::SelectedProject);
-                assert_eq!(
-                    request.project_id, None,
-                    "Personal/no project is a projectless scope, never an implicit global search"
-                );
                 shell.history_search_global = true;
             })
             .unwrap();
@@ -18215,85 +18154,6 @@ mod exit_regressions {
             })
             .unwrap();
         }
-    }
-
-    #[gpui::test]
-    fn projectless_new_session_restores_opt_out_and_clears_sidebar_filter(cx: &mut TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        crate::settings::composer::ComposerDefaults {
-            device: Some("remote".into()),
-            no_project: true,
-            ..Default::default()
-        }
-        .save(dir.path())
-        .unwrap();
-        cx.update(|cx| {
-            gpui_base::init(cx);
-            cx.set_global(Theme::default());
-            crate::app_menus::init(cx);
-            crate::history::init(
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                cx,
-            );
-            settings::init(settings::UiSettings::default(), dir.path(), cx);
-        });
-        let window = cx.add_window(|_, cx| {
-            let state = cx.new(|_| AppState::new());
-            Shell::new(
-                state,
-                EngineBootConfig {
-                    data_dir: dir.path().into(),
-                    ipc_port: 0,
-                    edge_url: "http://127.0.0.1:1".into(),
-                    edge_token: None,
-                    org_id: None,
-                    workos_client_id: None,
-                    default_harness: luna_proto::HarnessId::Mock,
-                },
-                cx,
-            )
-        });
-        window
-            .update(cx, |shell, _, cx| {
-                shell.state.update(cx, |state, _| {
-                    state.apply_spaces(vec![luna_proto::Space {
-                        execution_defaults: Default::default(),
-                        id: "repo".into(),
-                        device_id: "local".into(),
-                        path: "/repo".into(),
-                        name: None,
-                        git_detected: false,
-                        git_checked_at: None,
-                        checkout_id: None,
-                        created_at: Utc::now(),
-                    }]);
-                    // Boot opened an existing project session after loading defaults.
-                    state.selected_chat = Some("existing-project-chat".into());
-                    state.no_project = false;
-                });
-                shell.settings.space_filter = None;
-                shell.open_new_session(cx);
-                assert!(shell.state.read(cx).no_project);
-                assert!(shell.state.read(cx).selected_space.is_none());
-                assert_eq!(
-                    shell.state.read(cx).effective_device_id().as_deref(),
-                    Some("remote")
-                );
-
-                // An explicit filter may select its project, but opting out again
-                // must remove that filter before the first send can hide the chat.
-                shell.set_space_filter(Some("repo".into()), cx);
-                shell
-                    .state
-                    .update(cx, |state, cx| state.select_space(None, cx));
-                shell.on_state_changed(&shell.state.clone(), cx);
-                assert!(shell.settings.space_filter.is_none());
-                assert!(shell.state.read(cx).no_project);
-            })
-            .unwrap();
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

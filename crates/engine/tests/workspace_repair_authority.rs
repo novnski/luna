@@ -136,12 +136,22 @@ async fn create(core: &EngineCore, root: &Path, task: &str) {
         permission_degradation_reason: None,
         permission_audit: vec![],
     };
+    let cwd = root.canonicalize().unwrap();
+    core.workspace
+        .create_space(
+            "space-repair-authority",
+            &core.device_id,
+            cwd.to_str().unwrap(),
+            None,
+            false,
+        )
+        .expect("create project");
     let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
             methods::MUTATE,
             serde_json::json!({"op":"createChat", "chatId":task,
-        "deviceId":core.device_id, "cwd":root.canonicalize().unwrap(), "config":config}),
+        "spaceId":"space-repair-authority", "cwd":cwd, "config":config}),
         )
         .await
         .unwrap();

@@ -47,6 +47,9 @@ async fn blank_journaled_chat_recovers_entries_from_fat_rollback() {
     // the doc itself never gets a single entry, like a post-loss reopen.
     {
         let core = assemble(&dir);
+        core.workspace
+            .create_space("space-salvage", &core.device_id, "/tmp", None, false)
+            .expect("create project");
         let client = luna_rpc::memory_client(core.rpc_service());
         client
             .call(
@@ -54,7 +57,7 @@ async fn blank_journaled_chat_recovers_entries_from_fat_rollback() {
                 serde_json::json!({
                     "op": "createChat",
                     "chatId": CHAT,
-                    "deviceId": core.device_id,
+                    "spaceId": "space-salvage",
                 }),
             )
             .await

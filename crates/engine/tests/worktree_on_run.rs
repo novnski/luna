@@ -178,6 +178,9 @@ async fn run_with_worktree_spec_materializes_on_host_and_reuses() {
 
     // Mirror the composer: createChat lands first (cwd-less; the engine
     // resolves the project folder), then the queued Run carries the spec.
+    core.workspace
+        .create_space("space-worktree", &core.device_id, &repo_path, None, true)
+        .expect("create project");
     let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
@@ -185,7 +188,7 @@ async fn run_with_worktree_spec_materializes_on_host_and_reuses() {
             serde_json::json!({
                 "op": "createChat",
                 "chatId": CHAT,
-                "deviceId": core.device_id,
+                "spaceId": "space-worktree",
             }),
         )
         .await

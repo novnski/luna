@@ -228,16 +228,15 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
 
     // A projectless legacy task in a subdirectory cannot infer provenance
     // from ancestry alone, and a later directory selection cannot rebind it.
-    client
-        .call(
-            methods::MUTATE,
-            json!({
-                "op": "createChat", "chatId": "projectless-subdir",
-                "deviceId": core.device_id, "cwd": outer_subdir,
-            }),
+    core.workspace
+        .create_chat(
+            "projectless-subdir",
+            None,
+            Some(&core.device_id),
+            None,
+            Some(outer_subdir.to_string_lossy().into_owned()),
         )
-        .await
-        .expect("create projectless subdirectory task");
+        .expect("restore legacy projectless subdirectory task");
     assert!(
         client
             .call(
@@ -278,16 +277,15 @@ async fn vanished_nested_worktree_cannot_preview_or_stage_ancestor_checkout() {
         git(&inner, &["rev-parse", "--show-toplevel"]),
         outer.to_str().unwrap()
     );
-    client
-        .call(
-            methods::MUTATE,
-            json!({
-                "op": "createChat", "chatId": "unbound-inner-task",
-                "deviceId": core.device_id, "cwd": inner,
-            }),
+    core.workspace
+        .create_chat(
+            "unbound-inner-task",
+            None,
+            Some(&core.device_id),
+            None,
+            Some(inner.to_string_lossy().into_owned()),
         )
-        .await
-        .expect("create unbound projectless task after metadata loss");
+        .expect("restore legacy unbound task after metadata loss");
     let unbound_preview = client
         .call(
             methods::GET_GIT_ACTION_PREVIEW,

@@ -67,10 +67,13 @@ async fn setup(root: &std::path::Path, recorder: Arc<Recorder>) -> EngineCore {
     let core = EngineCore::assemble(root, registry, HarnessId::Mock, None).unwrap();
     let client = luna_rpc::memory_client(core.rpc_service());
     if core.workspace.chat("parent").unwrap().is_none() {
+        core.workspace
+            .create_space("space-side", &core.device_id, "/tmp", None, false)
+            .expect("create project");
         client
             .call(
                 "Mutate",
-                json!({"op":"createChat","chatId":"parent","deviceId":core.device_id}),
+                json!({"op":"createChat","chatId":"parent","spaceId":"space-side"}),
             )
             .await
             .unwrap();
@@ -570,7 +573,7 @@ async fn side_creation_cannot_claim_an_existing_regular_task_id() {
     client
         .call(
             "Mutate",
-            json!({"op":"createChat","chatId":other,"deviceId":core.device_id}),
+            json!({"op":"createChat","chatId":other,"spaceId":"space-side"}),
         )
         .await
         .unwrap();
@@ -644,8 +647,11 @@ async fn side_documents_and_tool_blobs_do_not_export_to_configured_edge() {
         )),
     )
     .unwrap();
+    core.workspace
+        .create_space("space-export", &core.device_id, "/tmp", None, false)
+        .expect("create project");
     let client = luna_rpc::memory_client(core.rpc_service());
-    client.call("Mutate", json!({"op":"createChat","chatId":"export-parent","deviceId":core.device_id,
+    client.call("Mutate", json!({"op":"createChat","chatId":"export-parent","spaceId":"space-export",
         "config":{"harness":"mock","model":"fixture","reasoning":null,"sandbox":"workspace-write","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
     core.workspace
         .rename_chat("export-parent", "Export fixture parent")

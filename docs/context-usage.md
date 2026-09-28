@@ -1,8 +1,8 @@
 # Context usage
 
-Every selected conversation has a context ring beneath its composer, including
-project-less and remote conversations. Hovering shows measured tokens and
-remaining capacity. The ring turns amber at 75% and red at 90%; its drawing clamps
+Every selected project task has a context ring beneath its composer, including
+remote tasks. Hovering shows measured tokens and remaining capacity. The ring
+turns amber at 75% and red at 90%; its drawing clamps
 at a full circle while the label preserves over-capacity measurements. A dash
 means the harness has not reported enough data to calculate a percentage. Measured
 zero is displayed as 0%.

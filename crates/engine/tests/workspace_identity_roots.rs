@@ -131,11 +131,26 @@ async fn create(
     cwd: &Path,
 ) -> CommandReceipt {
     let mut intent = json!({ "kind": "createChat", "cwd": cwd });
-    if let Some(space) = space {
-        intent["spaceId"] = json!(space);
+    let space_id = if let Some(space) = space {
+        space.to_owned()
     } else {
-        intent["deviceId"] = json!(device);
-    }
+        let canonical = cwd.canonicalize().unwrap();
+        let id = format!(
+            "fixture-project-{}",
+            canonical.to_string_lossy().replace('/', "_")
+        );
+        client
+            .call(
+                methods::MUTATE,
+                json!({
+                    "op":"createSpace", "spaceId":id, "deviceId":device, "path":canonical,
+                }),
+            )
+            .await
+            .expect("create fixture project");
+        id
+    };
+    intent["spaceId"] = json!(space_id);
     let receipt: CommandReceipt = client
         .call_as(
             methods::EXECUTE_TASK_COMMAND,
@@ -211,7 +226,7 @@ fn assert_roots(a: &TaskIdentityView, b: &TaskIdentityView, fixture: &Fixture, a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn projectless_uuid_registration_preserves_each_root() {
+async fn project_uuid_registration_preserves_each_root() {
     let fixture = Fixture::new();
     let core = fixture.open();
     let client = luna_rpc::memory_client(core.rpc_service());
@@ -227,7 +242,7 @@ async fn projectless_uuid_registration_preserves_each_root() {
     let after_a = identity(&client, &task_a).await;
     let after_b = identity(&client, &task_b).await;
     let artifact = evidence(
-        "projectless-registration",
+        "project-registration",
         json!({
             "expectedRootA": fixture.root_a, "expectedRootB": fixture.root_b,
             "beforeA": before_a, "afterA": after_a, "afterB": after_b,
@@ -244,7 +259,7 @@ async fn projectless_uuid_registration_preserves_each_root() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn projectless_uuid_roots_and_receipts_survive_restart() {
+async fn project_uuid_roots_and_receipts_survive_restart() {
     let fixture = Fixture::new();
     let core = fixture.open();
     let device = core.device_id.clone();
@@ -277,7 +292,7 @@ async fn projectless_uuid_roots_and_receipts_survive_restart() {
         .await
         .unwrap();
     let artifact = evidence(
-        "projectless-restart",
+        "project-restart",
         json!({
             "expectedRootA": fixture.root_a, "expectedRootB": fixture.root_b,
             "beforeA": before_a, "beforeB": before_b, "afterA": after_a, "afterB": after_b,

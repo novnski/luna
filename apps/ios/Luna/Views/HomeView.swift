@@ -20,7 +20,6 @@ struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var path: [Route] = []
     @State private var showNewSpace = false
-    @State private var showProjectlessDevices = false
     // "" = All. Sticky across launches; falls back to All if the space is gone.
     @AppStorage("homeSpaceFilter") private var spaceFilter: String = ""
 
@@ -48,7 +47,12 @@ struct HomeView: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .space(let id): SpaceView(spaceId: id, path: $path)
-                case .chat(let id): SessionView(chatId: id)
+                case .chat(let id):
+                    if let chat = model.chat(id: id), model.space(for: chat) != nil {
+                        SessionView(chatId: id)
+                    } else {
+                        ContentUnavailableView("Project unavailable", systemImage: "folder")
+                    }
                 case .newSession(let destination): NewSessionView(destination: destination, path: $path)
                 }
             }
@@ -115,12 +119,6 @@ struct HomeView: View {
             .sheet(isPresented: $showNewSpace) {
                 NewSpaceSheet { spaceId in
                     path.append(.space(spaceId))
-                }
-            }
-            .sheet(isPresented: $showProjectlessDevices) {
-                SessionHostPickerSheet { deviceId in
-                    spaceFilter = ""
-                    path.append(.newSession(.projectless(deviceId: deviceId)))
                 }
             }
             .task(id: model.overviewChats.map(\.id).joined()) {
@@ -217,8 +215,7 @@ struct HomeView: View {
         }
     }
 
-    /// Both destinations are available even when Home is scoped to a project
-    /// or the workspace has no projects yet.
+    /// Choose a project for the new session, or add one first.
     private var newButton: some View {
         Menu {
             if let space = selectedSpace {
@@ -237,12 +234,6 @@ struct HomeView: View {
                     }
                 }
             }
-            Button {
-                showProjectlessDevices = true
-            } label: {
-                Label("Session without a project…", systemImage: "xmark")
-            }
-            .accessibilityIdentifier("new-projectless-session")
             Button {
                 showNewSpace = true
             } label: {
@@ -421,11 +412,9 @@ struct ChatRow: View {
     /// space has been renamed, or when the session runs in a worktree off to
     /// the side. No offline marker: the dropdown carries device liveness.
     private var location: String {
-        let space = chat.spaceId == nil ? "No project" : (
-            model.space(for: chat)?.displayName
-                ?? chat.cwd.map { ($0 as NSString).lastPathComponent }
-                ?? "?"
-        )
+        let space = model.space(for: chat)?.displayName
+            ?? chat.cwd.map { ($0 as NSString).lastPathComponent }
+            ?? "?"
         return "\(space) @ \(model.deviceName(chat.deviceId))"
     }
 }

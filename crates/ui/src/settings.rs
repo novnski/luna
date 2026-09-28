@@ -542,10 +542,6 @@ pub enum SidebarSort {
 /// A view preference only. It never invokes provider or LUNA archive actions.
 pub const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: Option<u16> = Some(1);
 
-/// Persisted sentinel for the explicit projectless/personal sidebar scope.
-/// `None` remains All projects, so personal cannot be represented by absence.
-pub const PERSONAL_SPACE_FILTER: &str = "__luna_personal__";
-
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowGeometry {
@@ -2193,18 +2189,6 @@ mod tests {
         assert!(!activity_combo_is_reserved("mod-shift-y"));
         keymap.open_activity = keymap.toggle_sidebar.clone();
         assert!(conflicted_shortcuts(&keymap).contains(&ShortcutId::OpenActivity));
-    }
-
-    #[test]
-    fn personal_project_filter_round_trips_without_becoming_all_projects() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings = UiSettings {
-            space_filter: Some(PERSONAL_SPACE_FILTER.into()),
-            ..UiSettings::default()
-        };
-        settings.save(dir.path()).unwrap();
-        let loaded = UiSettings::load(dir.path());
-        assert_eq!(loaded.space_filter.as_deref(), Some(PERSONAL_SPACE_FILTER));
     }
 
     #[test]

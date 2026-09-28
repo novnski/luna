@@ -397,6 +397,9 @@ fn assemble_at(path: &std::path::Path, harness: Arc<HeldHarness>) -> EngineCore 
 }
 
 async fn create_chat(core: &EngineCore) {
+    core.workspace
+        .create_space("space-queue", &core.device_id, "/tmp", None, false)
+        .expect("create project");
     let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
@@ -404,7 +407,7 @@ async fn create_chat(core: &EngineCore) {
             serde_json::json!({
                 "op": "createChat",
                 "chatId": CHAT,
-                "deviceId": core.device_id,
+                "spaceId": "space-queue",
             }),
         )
         .await

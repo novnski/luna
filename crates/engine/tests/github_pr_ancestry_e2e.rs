@@ -180,17 +180,26 @@ async fn vanished_nested_worktree_cannot_preview_ancestor_pull_request() {
         None,
     )
     .expect("real EngineCore assembles");
+    core.workspace
+        .create_space(
+            "space-pr-inner",
+            &core.device_id,
+            inner.to_str().unwrap(),
+            None,
+            true,
+        )
+        .expect("create project");
     let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
             methods::MUTATE,
             json!({
                 "op": "createChat", "chatId": "pr-inner-task",
-                "deviceId": core.device_id, "cwd": inner,
+                "spaceId": "space-pr-inner", "cwd": inner,
             }),
         )
         .await
-        .expect("create projectless task through memory RPC");
+        .expect("create project task through memory RPC");
     let inner_identity = core.repos.checkout_identity(&inner).await.unwrap();
     core.workspace
         .set_chat_checkout("pr-inner-task", &inner_identity.id)

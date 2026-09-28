@@ -48,32 +48,20 @@ The workflow requires an App Store Connect app registered as
   explore the UI with no infrastructure. Launch args for screenshot rigs:
   `-demo [-route chat:<id>|space:<id>] [-stream]`.
 
-### Sessions without a project
+### Project sessions
 
-Home's **+ → Session without a project…** opens the execution-device picker,
-including when the account has no projects. Choose a desktop host (offline
-hosts are allowed); the draft shows **No project** and the host name. Tap the
-host above the composer to change it before sending. Catalogs and attachment
-delivery use that host, and Git/ref/worktree controls are hidden.
+Home's **+** menu creates sessions in an existing project or opens **New
+space…** when the account has no projects. The **All** list shows sessions from
+live projects; archived sessions retain their project association. A project
+filter scopes the list to that project.
 
-Creation uses the same local registry outbox and durable session command
-ledger as project sessions: `spaceId` is omitted, `deviceId` names the selected
-host, `cwd` is `"~"`, and `roomGen` is `2`. Home's **All** list includes these
-sessions, including ones synchronized from desktop. A project filter excludes
-them. Active sessions pointing to a deleted/missing project remain hidden;
-the archived shelf retains its existing behavior.
-
-Regression coverage lives in `ProjectlessSessionTests` (registry persistence,
-incoming desktop rows, destination selection, configuration and first command)
-and `ProjectlessSessionUITests` (create/send/reopen, empty accounts, host changes,
-project filters and the existing project flow). Run on an Xcode 26+ Mac:
+Run the project-session UI regression on an Xcode 26+ Mac:
 
 ```sh
 cd apps/ios
 xcodebuild -project Luna.xcodeproj -scheme Luna \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  -only-testing:LunaTests/ProjectlessSessionTests \
-  -only-testing:LunaUITests/ProjectlessSessionUITests test
+  -only-testing:LunaUITests/ProjectSessionUITests test
 ```
 
 Demo fixtures accept `-no-projects` (empty spaces/chats), `-ios-only` (no
@@ -142,8 +130,8 @@ see [mobile polish and simulator coverage](../../docs/mobile-polish.md).
 
 ### Writer discipline (what the phone writes)
 
-- Workspace registry: chat creates (host = the project's owning device or
-  the explicitly selected projectless host), `archived`/`title`/`lastSeenAt`
+- Workspace registry: chat creates (host = the project's owning device),
+  `archived`/`title`/`lastSeenAt`
   LWW sets, presence heartbeats. The phone owns no engine device row.
 - Session docs: append commands (`run`/`steer`/`interrupt`/`respondInput`)
   with client-minted message ids for optimistic echo; add and reorder shared

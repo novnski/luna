@@ -120,6 +120,9 @@ async fn transcript_survives_open_racing_create_chat() {
     let watch_holder;
     {
         let core = assemble(&dir);
+        core.workspace
+            .create_space("space-race", &core.device_id, "/tmp", None, false)
+            .expect("create project");
 
         // The racing transcript watch: the doc opens BEFORE any registry row
         // exists, and a live doc ref (the run, in production) pins the handle
@@ -137,7 +140,7 @@ async fn transcript_survives_open_racing_create_chat() {
                 serde_json::json!({
                     "op": "createChat",
                     "chatId": CHAT,
-                    "deviceId": core.device_id,
+                    "spaceId": "space-race",
                 }),
             )
             .await

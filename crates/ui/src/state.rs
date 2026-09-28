@@ -874,14 +874,8 @@ pub struct AppState {
     /// [`Self::apply_spaces`] when the row vanishes; selecting a chat implies
     /// its project.
     pub selected_space: Option<String>,
-    /// Deliberate "Don't work in a project" pick: while set, the canvas mints
-    /// project-less sessions (cwd `~` on the picked device) and
-    /// [`Self::selected_space_row`] reads as `None` — healing must NOT
-    /// re-select a project underneath it.
-    pub no_project: bool,
-    /// The composer's device pick — where project-less sessions run, and the
-    /// device whose projects the project picker lists. `None` falls back to
-    /// the local device.
+    /// The composer's device pick — whose projects the project picker lists.
+    /// `None` falls back to the local device.
     pub selected_device: Option<String>,
     pub selected_chat: Option<String>,
     /// Activity rows stay in the filter while their task is open. Leaving the
@@ -995,7 +989,6 @@ impl AppState {
             sessions: Vec::new(),
             session_presentation: None,
             selected_space: None,
-            no_project: false,
             selected_device: None,
             selected_chat: None,
             deferred_activity_seen: None,
@@ -1143,7 +1136,10 @@ impl AppState {
         self.chats = chats;
         self.chats_synced = true;
         if let Some(selected) = &self.selected_chat
-            && !self.chats.iter().any(|c| &c.id == selected)
+            && !self
+                .chats
+                .iter()
+                .any(|c| &c.id == selected && c.space_id.is_some())
         {
             // Selected chat vanished (deleted elsewhere): drop selection + transcript.
             self.transcript_baselines.remove(selected);
@@ -1190,10 +1186,6 @@ impl AppState {
         sort_spaces(&mut spaces);
         self.spaces = spaces;
         self.spaces_synced = true;
-        if self.no_project {
-            self.selected_space = None;
-            return;
-        }
         // Heal a vanished selection (project deleted elsewhere): fall back to
         // the first project; its chats died with it, so a matching chat
         // selection is healed by the accompanying chats frame (`apply_chats`).
@@ -1205,10 +1197,8 @@ impl AppState {
         {
             self.selected_space = self.first_space_on_picked_device();
         }
-        // First frame with no selection yet: pick the first project so the
-        // canvas never boots project-less by accident — unless the user
-        // deliberately opted out.
-        if self.selected_space.is_none() && !self.no_project {
+        // First frame with no selection yet: pick the first project.
+        if self.selected_space.is_none() {
             self.selected_space = self.first_space_on_picked_device();
         }
     }
@@ -1347,19 +1337,21 @@ impl AppState {
             .is_some_and(|chat| self.device_supports(&chat.device_id, capability))
     }
 
-    /// First project on the composer's picked device (falling back through
-    /// the local device, then any project at all — better a cross-device
-    /// project than a surprise project-less canvas). Display order.
+    /// First project on the composer's picked device. When no device has been
+    /// picked, try the local device, then any available project.
     fn first_space_on_picked_device(&self) -> Option<String> {
         let device = self
             .selected_device
             .as_deref()
             .or(self.local_device_id.as_deref());
         let sorted = self.spaces_sorted();
-        device
+        let on_device = device
             .and_then(|d| sorted.iter().find(|s| s.device_id == d).copied())
-            .or_else(|| sorted.first().copied())
-            .map(|s| s.id.clone())
+            .map(|s| s.id.clone());
+        if self.selected_device.is_some() {
+            return on_device;
+        }
+        on_device.or_else(|| sorted.first().map(|s| s.id.clone()))
     }
 
     pub fn apply_update(&mut self, status: luna_update::UpdateStatus) {
@@ -1687,35 +1679,29 @@ impl AppState {
 
     // ---- queries ----
 
-    /// Non-archived chats in sidebar order.
+    /// Non-archived project chats in sidebar order.
     pub fn visible_chats(&self) -> impl Iterator<Item = &Chat> {
-        self.chats.iter().filter(|c| !c.archived)
+        self.chats
+            .iter()
+            .filter(|c| !c.archived && c.space_id.is_some())
     }
 
     pub(crate) fn restore_composer_target(
         &mut self,
         defaults: &crate::settings::composer::ComposerDefaults,
     ) {
-        if self.selected_chat.is_some() || self.no_project {
+        if self.selected_chat.is_some() {
             return;
         }
         if self.selected_device.is_none() {
             self.selected_device = defaults.device.clone();
         }
         if self.selected_space.is_none() {
-            self.no_project = defaults.no_project;
-            self.selected_space = if defaults.no_project {
-                None
-            } else {
-                defaults.project.clone()
-            };
+            self.selected_space = defaults.project.clone();
         }
     }
 
     pub fn selected_space_row(&self) -> Option<&Space> {
-        if self.no_project {
-            return None;
-        }
         let id = self.selected_space.as_deref()?;
         self.spaces.iter().find(|s| s.id == id)
     }
@@ -1733,18 +1719,17 @@ impl AppState {
 
     /// Pick the composer's target device. Keeps the project pick consistent:
     /// a project on another device can't survive the switch — fall back to
-    /// the first project on the new device, else "no project".
+    /// the first project on the new device, if one exists.
     pub fn select_device(&mut self, device_id: String, cx: &mut Context<Self>) {
         let project_moves = self
             .selected_space_row()
             .is_some_and(|s| s.device_id != device_id);
-        if project_moves {
+        if project_moves || self.selected_space.is_none() {
             let first = self
                 .spaces_sorted()
                 .iter()
                 .find(|s| s.device_id == device_id)
                 .map(|s| s.id.clone());
-            self.no_project = first.is_none();
             self.selected_space = first;
         }
         self.selected_device = Some(device_id);
@@ -1834,10 +1819,10 @@ impl AppState {
     pub fn overview_chats(&self, now: DateTime<Utc>) -> Vec<(ChatIndicator, &Chat)> {
         let mut rows: Vec<(ChatIndicator, &Chat)> = self
             .visible_chats()
-            .filter(|c| match c.space_id.as_deref() {
-                // Project-less sessions are first-class rows.
-                None => true,
-                Some(id) => self.space_row(id).is_some(),
+            .filter(|c| {
+                c.space_id
+                    .as_deref()
+                    .is_some_and(|id| self.space_row(id).is_some())
             })
             .map(|c| (self.display_status_for(c, now), c))
             .collect();
@@ -1856,11 +1841,7 @@ impl AppState {
     ) -> Vec<(ChatIndicator, &Chat)> {
         self.overview_chats(now)
             .into_iter()
-            .filter(|(_, chat)| match space_filter {
-                Some(crate::settings::PERSONAL_SPACE_FILTER) => chat.space_id.is_none(),
-                Some(space_id) => chat.space_id.as_deref() == Some(space_id),
-                None => true,
-            })
+            .filter(|(_, chat)| space_filter.is_none_or(|id| chat.space_id.as_deref() == Some(id)))
             .collect()
     }
 
@@ -1947,7 +1928,6 @@ impl AppState {
         self.sessions.clear();
         self.session_presentation = None;
         self.selected_space = None;
-        self.no_project = false;
         self.selected_device = None;
         self.selected_chat = None;
         self.auto_selected = false;
@@ -2229,6 +2209,13 @@ impl AppState {
     }
 
     pub fn select_chat(&mut self, chat_id: Option<String>, cx: &mut Context<Self>) {
+        if chat_id.as_deref().is_some_and(|id| {
+            self.chats
+                .iter()
+                .any(|chat| chat.id == id && chat.space_id.is_none())
+        }) {
+            return;
+        }
         if self
             .deferred_activity_seen
             .as_ref()
@@ -2264,19 +2251,11 @@ impl AppState {
         self.queue.clear();
         self.queue_task = None;
         if let Some(id) = chat_id.as_deref() {
-            // A chat implies its project (or the lack of one); `select_chat(None)`
-            // (the new-session canvas) keeps the current project pick.
+            // A chat implies its project; `select_chat(None)` (the new-session
+            // canvas) keeps the current project pick.
             if let Some(chat) = self.chats.iter().find(|c| c.id == id) {
-                match chat.space_id.clone() {
-                    Some(space_id) => {
-                        self.selected_space = Some(space_id);
-                        self.no_project = false;
-                    }
-                    None => {
-                        self.selected_space = None;
-                        self.no_project = true;
-                        self.selected_device = Some(chat.device_id.clone());
-                    }
+                if let Some(space_id) = &chat.space_id {
+                    self.selected_space = Some(space_id.clone());
                 }
             }
             if !defer_seen {
@@ -2315,22 +2294,15 @@ impl AppState {
     }
 
     /// Select a project; the caller (shell) decides which chat to land on.
-    /// `Some` clears a "Don't work in a project" opt-out and re-aims the
-    /// device pick at the project's host; `None` IS that opt-out.
+    /// A selection also re-aims the device pick at the project's host.
+    /// `None` clears the target while waiting for a project on this device.
     pub fn select_space(&mut self, space_id: Option<String>, cx: &mut Context<Self>) {
-        match &space_id {
-            Some(id) => {
-                self.no_project = false;
-                if let Some(device) = self.space_row(id).map(|s| s.device_id.clone()) {
-                    self.selected_device = Some(device);
-                }
-            }
-            None => {
-                self.selected_device = self.effective_device_id();
-                self.no_project = true;
-            }
+        if let Some(id) = &space_id
+            && let Some(device) = self.space_row(id).map(|s| s.device_id.clone())
+        {
+            self.selected_device = Some(device);
         }
-        if self.selected_space == space_id && space_id.is_some() {
+        if self.selected_space == space_id {
             cx.notify();
             return;
         }
@@ -4061,65 +4033,6 @@ mod tests {
         assert_eq!(state.selected_space, None);
     }
 
-    #[test]
-    fn projectless_preference_survives_restart_and_space_refreshes() {
-        let dir = tempfile::tempdir().unwrap();
-        let defaults = crate::settings::composer::ComposerDefaults {
-            device: Some("remote".into()),
-            // Older versions kept a stale project alongside the opt-out.
-            project: Some("old-project".into()),
-            no_project: true,
-            ..Default::default()
-        };
-        defaults.save(dir.path()).unwrap();
-        let mut state = AppState::new();
-        state.restore_composer_target(&crate::settings::composer::ComposerDefaults::load(
-            dir.path(),
-        ));
-        for spaces in [
-            vec![],
-            vec![space("s1", "remote", "/a", 1)],
-            vec![],
-            vec![space("s2", "other", "/b", 2)],
-        ] {
-            state.apply_spaces(spaces);
-            assert!(state.no_project);
-            assert!(state.selected_space.is_none());
-            assert!(state.selected_space_row().is_none());
-            assert_eq!(state.effective_device_id().as_deref(), Some("remote"));
-        }
-    }
-
-    #[gpui::test]
-    fn projectless_selection_clears_project_and_survives_device_switch(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let state = cx.new(|_| AppState::new());
-        state.update(cx, |state, cx| {
-            state.apply_spaces(vec![
-                space("s1", "dev", "/a", 1),
-                space("s2", "remote", "/b", 2),
-            ]);
-            state.select_space(Some("s1".into()), cx);
-            state.select_space(None, cx);
-            assert!(state.selected_space.is_none());
-            state.select_device("remote".into(), cx);
-            assert!(state.no_project);
-            assert!(state.selected_space.is_none());
-            assert_eq!(state.effective_device_id().as_deref(), Some("remote"));
-            state.select_space(Some("s2".into()), cx);
-            assert!(!state.no_project);
-            assert_eq!(state.selected_space_row().unwrap().id, "s2");
-            state.selected_device = Some("dev".into());
-            state.select_space(None, cx);
-            assert_eq!(state.effective_device_id().as_deref(), Some("remote"));
-            state.select_space(Some("s2".into()), cx);
-            state.select_device("empty-device".into(), cx);
-            assert!(state.selected_space.is_none());
-            assert_eq!(state.effective_device_id().as_deref(), Some("empty-device"));
-        });
-    }
-
     #[gpui::test]
     fn selected_transcript_watch_applies_later_doc_changes_without_rearming(
         cx: &mut gpui::TestAppContext,
@@ -4154,7 +4067,16 @@ mod tests {
         auth_config.use_in_memory_credentials_for_tests();
         core.set_auth(Auth::new(auth_config));
         core.workspace
-            .create_chat(CHAT_ID, None, Some(&core.device_id), None, None)
+            .create_space(
+                "watch-project",
+                &core.device_id,
+                "/tmp/watch-project",
+                None,
+                false,
+            )
+            .unwrap();
+        core.workspace
+            .create_chat(CHAT_ID, Some("watch-project"), None, None, None)
             .unwrap();
         let handle = EngineHandle::from_test_client(memory_client(core.rpc_service()));
         let chats = core.workspace.read_chats().unwrap();
@@ -4234,52 +4156,48 @@ mod tests {
             .map(|c| c.id.as_str())
             .collect();
         assert_eq!(ids, ["old", "new"]);
-        // The overview shows every live-space chat (idle included) PLUS
-        // project-less chats (first-class since the project selectors);
-        // chats of unknown spaces stay hidden. Completed ("old") outranks
-        // idle ("new"/"dangling").
+        // The overview shows every live-space chat (idle included);
+        // chats with no project or an unknown project stay hidden.
         let now = Utc::now();
         let overview: Vec<&str> = state
             .overview_chats(now)
             .iter()
             .map(|(_, c)| c.id.as_str())
             .collect();
-        assert_eq!(overview, ["old", "new", "dangling"]);
+        assert_eq!(overview, ["old", "new"]);
     }
 
     #[test]
-    fn sidebar_personal_scope_is_explicit_and_all_projects_stays_flat() {
+    fn sidebar_all_projects_excludes_chats_without_project() {
         let mut state = AppState::new();
         state.apply_spaces(vec![space("s1", "dev", "/a", 1)]);
         let mut project = chat("project", 2, None);
         project.space_id = Some("s1".into());
-        let personal = chat("personal", 1, None);
-        state.apply_chats(vec![project, personal]);
+        let detached = chat("detached", 1, None);
+        state.apply_chats(vec![project, detached]);
         let all: Vec<_> = state
             .sidebar_chats(Utc::now(), None)
             .into_iter()
             .map(|(_, chat)| chat.id.as_str())
             .collect();
-        assert_eq!(all, ["project", "personal"]);
-        let personal: Vec<_> = state
-            .sidebar_chats(Utc::now(), Some(crate::settings::PERSONAL_SPACE_FILTER))
-            .into_iter()
-            .map(|(_, chat)| chat.id.as_str())
-            .collect();
-        assert_eq!(personal, ["personal"]);
+        assert_eq!(all, ["project"]);
     }
 
     #[test]
     fn apply_chats_drops_vanished_selection() {
         let mut state = AppState::new();
-        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        let mut a = chat("a", 0, None);
+        a.space_id = Some("project".into());
+        let mut b = chat("b", 1, None);
+        b.space_id = Some("project".into());
+        state.apply_chats(vec![a.clone(), b.clone()]);
         state.selected_chat = Some("a".into());
         state.transcript = vec![];
-        state.apply_chats(vec![chat("b", 1, None)]);
+        state.apply_chats(vec![b.clone()]);
         assert_eq!(state.selected_chat, None);
         // Still-present selection survives.
         state.selected_chat = Some("b".into());
-        state.apply_chats(vec![chat("b", 1, None), chat("c", 2, None)]);
+        state.apply_chats(vec![b, chat("c", 2, None)]);
         assert_eq!(state.selected_chat.as_deref(), Some("b"));
     }
 
@@ -4338,7 +4256,10 @@ mod tests {
         let mut state = AppState::new();
         let mut archived = chat("a", 0, Some(99));
         archived.archived = true;
-        state.apply_chats(vec![archived, chat("b", 1, None)]);
+        archived.space_id = Some("project".into());
+        let mut active = chat("b", 1, None);
+        active.space_id = Some("project".into());
+        state.apply_chats(vec![archived, active]);
         let visible: Vec<&str> = state.visible_chats().map(|c| c.id.as_str()).collect();
         assert_eq!(visible, ["b"]);
     }
@@ -4585,10 +4506,10 @@ mod tests {
     fn project_labels_from_cwd() {
         assert_eq!(project_label(Some("/home/w/dev/luna")), "luna");
         assert_eq!(project_label(Some("/home/w/dev/luna/")), "luna");
-        assert_eq!(project_label(None), "No project");
-        assert_eq!(project_label(Some("~")), "No project");
-        assert_eq!(project_label(Some("~/")), "No project");
-        assert_eq!(project_label(Some("   ")), "No project");
+        assert_eq!(project_label(None), "Unknown project");
+        assert_eq!(project_label(Some("~")), "Unknown project");
+        assert_eq!(project_label(Some("~/")), "Unknown project");
+        assert_eq!(project_label(Some("   ")), "Unknown project");
         assert_eq!(project_label(Some("/")), "/");
     }
 
@@ -4604,7 +4525,7 @@ mod tests {
         let groups = group_chats(chats.iter());
         let labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         // Groups ordered by their most recent chat; rows keep order.
-        assert_eq!(labels, ["luna", "zed", "No project"]);
+        assert_eq!(labels, ["luna", "zed", "Unknown project"]);
         let luna_ids: Vec<&str> = groups[0].chats.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(luna_ids, ["a", "c"]);
         assert!(group_chats(std::iter::empty()).is_empty());

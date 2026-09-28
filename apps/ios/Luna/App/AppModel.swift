@@ -306,7 +306,7 @@ final class AppModel {
     var overviewChats: [Chat] {
         if let demo {
             let liveIds = Set(demo.spaces.map(\.id))
-            let live = demo.chats.filter { !$0.archived && ($0.spaceId.map(liveIds.contains) ?? true) }
+            let live = demo.chats.filter { !$0.archived && $0.spaceId.map(liveIds.contains) == true }
             return sortActive(live)
         }
         return workspace?.overviewChats ?? []
@@ -457,32 +457,17 @@ final class AppModel {
     @discardableResult
     func createChat(space: Space, config chatConfig: ChatConfig,
                     branch: String? = nil, cwd: String? = nil) -> String? {
-        createChat(deviceId: space.deviceId, space: space, config: chatConfig,
-                   branch: branch, cwd: cwd)
-    }
-
-    @discardableResult
-    func createProjectlessChat(deviceId: String, config: ChatConfig) -> String? {
-        guard executionDevices.contains(where: { $0.id == deviceId }) else { return nil }
-        return createChat(deviceId: deviceId, space: nil, config: config)
-    }
-
-    private func createChat(deviceId: String, space: Space?, config chatConfig: ChatConfig,
-                            branch: String? = nil, cwd: String? = nil) -> String? {
         if let demo {
             let id = "chat-\(UUID().uuidString.lowercased().prefix(8))"
-            demo.chats.append(Chat(id: id, deviceId: deviceId, title: nil, archived: false,
-                                   cwd: space.map { cwd ?? $0.path } ?? "~",
+            demo.chats.append(Chat(id: id, deviceId: space.deviceId, title: nil, archived: false,
+                                   cwd: cwd ?? space.path,
                                    branch: branch, checkoutId: nil,
                                    config: chatConfig, lastMessagePreview: nil, lastMessageAt: nil,
-                                   createdAt: nowMs(), spaceId: space?.id, lastSeenAt: nowMs(),
+                                   createdAt: nowMs(), spaceId: space.id, lastSeenAt: nowMs(),
                                    roomGen: 2))
             return id
         }
-        if let space {
-            return workspace?.createChat(space: space, config: chatConfig, branch: branch, cwd: cwd)
-        }
-        return workspace?.createProjectlessChat(deviceId: deviceId, config: chatConfig)
+        return workspace?.createChat(space: space, config: chatConfig, branch: branch, cwd: cwd)
     }
 
     /// Browse folders on a remote device (the desktop add-space palette's data
@@ -516,7 +501,7 @@ final class AppModel {
     func archivedChats(in spaceId: String? = nil) -> [Chat] {
         if let demo {
             return sortActive(demo.chats.filter {
-                $0.archived && (spaceId == nil || $0.spaceId == spaceId)
+                $0.archived && $0.spaceId != nil && (spaceId == nil || $0.spaceId == spaceId)
             })
         }
         return workspace?.archivedChats(in: spaceId) ?? []

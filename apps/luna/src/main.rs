@@ -25,7 +25,7 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Open a LUNA conversation URL.
+    /// Open a LUNA task URL.
     #[arg(value_name = "URL")]
     open_url: Option<String>,
     #[cfg(windows)]
@@ -504,7 +504,7 @@ fn engine_config_from_env() -> luna_engine::EngineConfig {
     }
 }
 
-/// `LUNA_HARNESS` (kebab-case id) picks the default harness for chats without a
+/// `LUNA_HARNESS` (kebab-case id) picks the default harness for tasks without a
 /// config row — `mock` powers the e2e smoke; default `claude-code`.
 fn harness_from_env() -> luna_engine::HarnessId {
     match std::env::var("LUNA_HARNESS").as_deref().map(str::trim) {
@@ -590,17 +590,17 @@ async fn sync_cli(ipc_port: u16) -> anyhow::Result<()> {
         "Workspace: {}",
         room_line(status.get("workspace").filter(|v| !v.is_null()))
     );
-    let chats = status
+    let tasks = status
         .get("chats")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    if chats.is_empty() {
-        println!("Chats:     none open");
+    if tasks.is_empty() {
+        println!("Tasks:     none open");
     }
-    // Chat rooms speak chat2: cursor/head tell "am I caught up?", pending
+    // Task rooms speak chat2: cursor/head tell "am I caught up?", pending
     // tells "did my writes leave?", resets/rejected are the loud tells.
-    let chat_line = |room: Option<&serde_json::Value>| -> String {
+    let task_line = |room: Option<&serde_json::Value>| -> String {
         let Some(room) = room else {
             return "no room (dialing or edge-less)".into();
         };
@@ -633,14 +633,14 @@ async fn sync_cli(ipc_port: u16) -> anyhow::Result<()> {
             },
         )
     };
-    for chat in &chats {
+    for task in &tasks {
         println!(
-            "Chat {}: {}",
-            chat.get("chatId")
+            "Task {}: {}",
+            task.get("chatId")
                 .and_then(|v| v.as_str())
                 .map(|s| &s[..s.len().min(8)])
                 .unwrap_or("?"),
-            chat_line(chat.get("room").filter(|v| !v.is_null()))
+            task_line(task.get("room").filter(|v| !v.is_null()))
         );
     }
     Ok(())

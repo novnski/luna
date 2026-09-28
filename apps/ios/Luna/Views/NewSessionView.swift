@@ -1,7 +1,7 @@
 // New session — a real composer page, not a form. Mirrors the old mobile
 // app's canvas (faded mark + "What are we building?" + glass composer with
 // picker chips) and the desktop's new-session canvas (composer expanded with
-// in-pill pickers). The destination fixes a project or execution host; the composer
+// in-pill pickers). The destination fixes a project; the composer
 // carries the agent/model chip, and sending mints the chat, queues the first
 // run, and swaps straight into the live session.
 
@@ -19,8 +19,6 @@ struct NewSessionView: View {
     @AppStorage("newSessionReasoning") private var storedReasoning = ""
 
     @State private var draft = ""
-    @State private var selectedHostId: String?
-    @State private var showHostPicker = false
     @State private var showPicker = false
     @State private var showTraitPicker = false
     @State private var showOptionPicker: ModelOptionInfo?
@@ -45,24 +43,14 @@ struct NewSessionView: View {
     /// iOS 26 proposes leading toolbar items almost nothing).
     @State private var viewWidth: CGFloat = 0
 
-    private var effectiveDestination: NewSessionDestination {
-        if case .projectless = destination, let selectedHostId {
-            return .projectless(deviceId: selectedHostId)
-        }
-        return destination
-    }
-
-    private var space: Space? { effectiveDestination.space(in: model.spaces) }
+    private var space: Space? { destination.space(in: model.spaces) }
 
     private var deviceId: String? {
-        effectiveDestination.deviceId(spaces: model.spaces, devices: model.devices)
+        destination.deviceId(spaces: model.spaces)
     }
 
     private var contextLabel: String {
-        switch effectiveDestination {
-        case .project: return space?.displayName ?? "Project unavailable"
-        case .projectless: return "No project"
-        }
+        space?.displayName ?? "Project unavailable"
     }
 
     private var harnesses: [HarnessInfo] {
@@ -120,20 +108,6 @@ struct NewSessionView: View {
                 offlineNotice(deviceId: deviceId)
             }
 
-            if case .projectless = destination {
-                Button {
-                    focused = false
-                    showHostPicker = true
-                } label: {
-                    Label(deviceId.map(model.deviceName) ?? "Select a device",
-                          systemImage: "desktopcomputer")
-                        .font(Theme.sans(13, weight: .medium))
-                }
-                .accessibilityIdentifier("session-host")
-                .disabled(busy)
-                .padding(.bottom, 8)
-            }
-
             // Where-it-runs scope row (checkout + base ref), left-aligned
             // above the composer — the composer pill keeps only the agent chip.
             if space?.gitDetected == true {
@@ -186,9 +160,6 @@ struct NewSessionView: View {
             }
             // Bare text on the bar, not a glass capsule.
             .sharedBackgroundVisibility(.hidden)
-        }
-        .sheet(isPresented: $showHostPicker) {
-            SessionHostPickerSheet(selectedDeviceId: deviceId) { selectedHostId = $0 }
         }
         .sheet(isPresented: $showRefPicker) {
             RefPickerSheet(refs: refs, selected: selectedRef) { ref in
@@ -444,8 +415,7 @@ struct NewSessionView: View {
     /// CreateWorktree-before-send was the one new-chat path that could hang
     /// forever on a zombie link (the 2026-08-18 "Sending…" incident).
     private func send() {
-        guard let deviceId, canSend else { return }
-        let space = space
+        guard let space, let deviceId, canSend else { return }
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         busy = true
         let config = ChatConfig(harness: harness, model: selectedModel.id,
@@ -453,19 +423,17 @@ struct NewSessionView: View {
                                 sandbox: "workspace-write")
         Task { @MainActor in
             var cwd: String?
-            let branch = space == nil ? nil : selectedRef
+            let branch = selectedRef
             var worktree: WorktreeSpec?
-            if let space {
-                switch checkoutKind {
-                case .newWorktree:
-                    // The host materializes the worktree at drain time, so
-                    // an offline send never blocks on a relay RPC.
-                    worktree = WorktreeSpec(repoPath: space.path, base: selectedRef ?? "HEAD")
-                    cwd = space.path
-                case .local:
-                    if let reused = selectedRefRow?.worktreePath {
-                        cwd = reused
-                    }
+            switch checkoutKind {
+            case .newWorktree:
+                // The host materializes the worktree at drain time, so
+                // an offline send never blocks on a relay RPC.
+                worktree = WorktreeSpec(repoPath: space.path, base: selectedRef ?? "HEAD")
+                cwd = space.path
+            case .local:
+                if let reused = selectedRefRow?.worktreePath {
+                    cwd = reused
                 }
             }
 
@@ -498,12 +466,7 @@ struct NewSessionView: View {
                 }
             }
 
-            let createdId: String?
-            if let space {
-                createdId = model.createChat(space: space, config: config, branch: branch, cwd: cwd)
-            } else {
-                createdId = model.createProjectlessChat(deviceId: deviceId, config: config)
-            }
+            let createdId = model.createChat(space: space, config: config, branch: branch, cwd: cwd)
             guard let chatId = createdId,
                   let chat = model.chat(id: chatId),
                   let store = model.sessionStore(for: chat) else {

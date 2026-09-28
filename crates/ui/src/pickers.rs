@@ -647,8 +647,8 @@ pub enum PickerKind {
     /// re-keys everything project-derived (refs, harness/model catalogs) via
     /// the state observer.
     Space,
-    /// New-session canvas only: the device project-less sessions run on (a
-    /// project pick implies its own host and overrides this).
+    /// New-session canvas only: the device whose projects are available
+    /// (a project pick implies its own host and overrides this).
     Device,
 }
 
@@ -2853,12 +2853,9 @@ impl Pickers {
             .collect()
     }
 
-    /// Current project row on an unsearched open, or the final opt-out row.
-    /// An implicit empty selection has no highlight until the user navigates.
+    /// Current project row on an unsearched open. An implicit empty selection
+    /// has no highlight until the user navigates.
     fn selected_space_index(&self, cx: &App) -> usize {
-        if self.state.read(cx).no_project {
-            return self.scoped_space_rows(cx).len();
-        }
         let selected = self
             .state
             .read(cx)
@@ -2882,17 +2879,6 @@ impl Pickers {
         self.close(cx);
     }
 
-    fn pick_no_project(&mut self, cx: &mut Context<Self>) {
-        self.state.update(cx, |s, cx| {
-            // A late opening chats frame must not auto-open an old session
-            // after the user has explicitly chosen the new-session target.
-            s.auto_selected = true;
-            s.select_space(None, cx);
-        });
-        self.remember_target(cx);
-        self.close(cx);
-    }
-
     fn pick_device(&mut self, device_id: String, cx: &mut Context<Self>) {
         self.state
             .update(cx, |s, cx| s.select_device(device_id, cx));
@@ -2910,7 +2896,6 @@ impl Pickers {
                 .clone()
                 .or_else(|| state.local_device_id.clone());
             self.defaults.project = state.selected_space.clone();
-            self.defaults.no_project = state.no_project;
         }
         if let Some(dir) = &self.data_dir {
             if let Err(err) = self.defaults.save(dir) {
@@ -3040,7 +3025,7 @@ impl Pickers {
     }
 
     /// The project popover: search + one row per project on the picked device
-    /// (check on the current pick), then "New project…" and the opt-out rows. Rows
+    /// (check on the current pick), then "New project…". Rows
     /// are device-scoped, so no per-row `@ device` tag — the device chip next
     /// door names the host.
     fn render_space_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -3052,7 +3037,6 @@ impl Pickers {
             .selected_space_row()
             .map(|s| s.id.clone());
         let active = self.active;
-        let no_project_index = rows.len();
         let scrollbar = popover::rail(self, "space-scrollbar", &theme, cx);
         let body: AnyElement = if rows.is_empty() {
             // Distinguish "the filter ate everything" from "this device has
@@ -3097,27 +3081,6 @@ impl Pickers {
                 .children(scrollbar)
                 .into_any_element()
         };
-        let no_project = popover::menu_row_nav(
-            &theme,
-            self.state.read(cx).no_project,
-            active == no_project_index,
-            "project-none".to_string(),
-        )
-        .id("project-none")
-        .on_click(cx.listener(|this, _, _, cx| this.pick_no_project(cx)))
-        .child(
-            crate::icons::icon(crate::icons::CLOSE)
-                .size(px(12.0))
-                .flex_none()
-                .text_color(theme.text_muted),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child("Don't work in a project"),
-        );
         // Action row under a hairline: mint a project.
         let new_project = popover::menu_row_nav(&theme, false, false, "project-new".to_string())
             .id("project-new")
@@ -3157,7 +3120,6 @@ impl Pickers {
                     .bg(theme.border.opacity(0.6)),
             )
             .child(new_project)
-            .child(no_project)
             .into_any_element()
     }
 
@@ -3171,8 +3133,6 @@ impl Pickers {
             let rows = self.filtered_space_rows(cx);
             if let Some(space) = rows.get(self.active) {
                 self.pick_space(space.id.clone(), cx);
-            } else if self.active == rows.len() {
-                self.pick_no_project(cx);
             }
         }
         if self.open_kind() == Some(PickerKind::Device)
@@ -3262,7 +3222,7 @@ impl Pickers {
                         self.model_rows_len(cx) + self.setting_groups(cx).len()
                     }
                     Some(PickerKind::Permission) => PERMISSION_OPTIONS.len(),
-                    Some(PickerKind::Space) => self.filtered_space_rows(cx).len() + 1,
+                    Some(PickerKind::Space) => self.filtered_space_rows(cx).len(),
                     Some(PickerKind::Device) => self.filtered_device_rows(cx).len(),
                     None => 0,
                 };
@@ -3536,7 +3496,7 @@ impl Pickers {
             let project_label: SharedString = state
                 .selected_space_row()
                 .map(|s| s.display_name().to_string())
-                .unwrap_or_else(|| "No project".to_string())
+                .unwrap_or_else(|| "Select project".to_string())
                 .into();
             (device_label, project_label, offline)
         };
@@ -3984,7 +3944,7 @@ impl Pickers {
                 .p(px(Theme::SPACE_SM))
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
-                .child(SharedString::from("No project selected"))
+                .child(SharedString::from("Select a project first"))
                 .into_any_element();
         }
         let rows = self.filtered_ref_rows(cx);
@@ -6588,52 +6548,6 @@ mod tests {
             2,
             "closing via the trigger returns to the composer"
         );
-    }
-
-    #[gpui::test]
-    fn projectless_picker_clears_checkout_and_supports_keyboard_selection(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let state = cx.new(|_| {
-            let mut state = AppState::new();
-            state.local_device_id = Some("local".into());
-            state.apply_spaces(vec![Space {
-                execution_defaults: Default::default(),
-                id: "repo".into(),
-                device_id: "local".into(),
-                path: "/repo".into(),
-                name: None,
-                git_detected: true,
-                git_checked_at: None,
-                checkout_id: None,
-                created_at: chrono::Utc::now(),
-            }]);
-            state
-        });
-        let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
-        pickers.update(cx, |pickers, cx| {
-            pickers.config.branch = Some("old-branch".into());
-            pickers.config.checkout = CheckoutKind::NewWorktree;
-            pickers.open.open(PickerKind::Space);
-            pickers.active = 1; // project row followed by the projectless row
-            pickers.on_search_submit(cx);
-        });
-        cx.run_until_parked();
-        pickers.update(cx, |pickers, cx| {
-            assert!(pickers.config.branch.is_none());
-            assert_eq!(pickers.config.checkout, CheckoutKind::default());
-            assert!(pickers.defaults.no_project);
-            assert!(pickers.state.read(cx).auto_selected);
-            assert!(pickers.defaults.project.is_none());
-            assert_eq!(pickers.selected_space_index(cx), 1);
-        });
-        state.update(cx, |state, cx| state.select_device("remote".into(), cx));
-        cx.run_until_parked();
-        pickers.update(cx, |pickers, cx| {
-            assert_eq!(pickers.space_target(cx).as_deref(), Some("remote"));
-            assert_eq!(pickers.selected_space_index(cx), 0); // empty device
-            assert!(pickers.target_generation >= 2);
-        });
     }
 
     fn bare_model(id: &str, label: &str) -> Model {

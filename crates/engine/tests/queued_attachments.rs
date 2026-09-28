@@ -154,11 +154,14 @@ async fn run_defers_until_attachment_bytes_land_then_executes_rewritten() {
     )
     .expect("engine core assembles");
 
+    core.workspace
+        .create_space("space-attachments", &core.device_id, "/tmp", None, false)
+        .expect("create project");
     let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(
             luna_rpc::methods::MUTATE,
-            serde_json::json!({ "op": "createChat", "chatId": CHAT, "deviceId": core.device_id }),
+            serde_json::json!({ "op": "createChat", "chatId": CHAT, "spaceId": "space-attachments" }),
         )
         .await
         .expect("createChat");

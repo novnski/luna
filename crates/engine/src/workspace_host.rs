@@ -1439,20 +1439,20 @@ impl WorkspaceHost {
     /// older clocks — fields the claim never wrote (`config`, `title`) must
     /// still land then.
     ///
-    /// Resolve project cwd claims to a space. The portable home marker `~`
-    /// is the composer's projectless target; preserve it without minting a
-    /// project when the run outruns createChat on the registry channel.
+    /// Resolve project cwd claims to a space when a run outruns createChat on
+    /// the registry channel. A missing cwd or home marker is not a project.
     pub fn claim_chat(&self, chat_id: &str, cwd: Option<&str>) -> Result<(), EngineError> {
         if self.read(|doc| doc.chat(chat_id))?.is_some() {
             return Ok(());
         }
-        let space_id = match cwd {
-            Some("~" | "~/") => None,
-            Some(cwd) => Some(self.space_for_path(cwd)?),
-            None => None,
-        };
+        let cwd = cwd
+            .filter(|cwd| !cwd.is_empty() && !matches!(*cwd, "~" | "~/"))
+            .ok_or_else(|| {
+                EngineError::Other("A project is required to create a session".into())
+            })?;
+        let space_id = self.space_for_path(cwd)?;
         self.mutate(|doc| {
-            doc.claim_chat(chat_id, cwd, space_id.as_deref(), Utc::now());
+            doc.claim_chat(chat_id, Some(cwd), Some(&space_id), Utc::now());
             Ok(())
         })?;
         Ok(())
@@ -1565,10 +1565,9 @@ impl WorkspaceHost {
 
     // ── Mutate surface (LWW writes accepted from any device) ────────────────
 
-    /// Create a chat, usually *in a project*: the project fixes the host device
-    /// and base cwd (`cwd` override = an isolated-worktree path). With no
-    /// `space_id` the chat is project-less: `device_id` picks the host and the
-    /// cwd defaults to `~` (expanded host-side when the run spawns).
+    /// Low-level row creation. A project fixes the host device and base cwd;
+    /// the optional project form remains for legacy row import and fixtures.
+    /// Public session creation requires a project in the RPC command path.
     pub fn create_chat(
         &self,
         chat_id: &str,
