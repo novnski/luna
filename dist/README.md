@@ -24,9 +24,12 @@ scripts/package-macos.sh    # → target/package/luna-<version>-macos-<arch>.dmg
 ```
 
 Builds the release binary, assembles `LUNA.app` (Info.plist + icns), ad-hoc
-signs it (set `CODESIGN_IDENTITY` for a real Developer ID), and wraps it in a
-dmg. The tarball is LUNA-named, but application updates remain disabled until
-an owned signed feed exists. The manual steps it automates, for reference
+signs it (set `CODESIGN_IDENTITY` for a Developer ID signature), and wraps it in
+a dmg. It also produces an app tarball for in-app updates. The GitHub Release
+workflow signs the update manifest with the project's own Ed25519 key; Apple
+signing and notarization are optional and do not host or authorize updates.
+See [GitHub release updates](../docs/reference/github-release-updates.md) for
+release setup and operation. The manual packaging steps, for reference
 (run on a macOS host — gpui needs Metal; no cross-build from Linux):
 
 1. Build the universal (or per-arch) binary:
@@ -55,7 +58,7 @@ an owned signed feed exists. The manual steps it automates, for reference
    iconutil -c icns dist/macos/luna.iconset \
      -o LUNA.app/Contents/Resources/luna.icns
    ```
-4. Sign + notarize (required for distribution):
+4. Optionally sign + notarize to reduce macOS first-launch warnings:
    ```sh
    codesign --deep --force --options runtime --sign "Developer ID Application: …" LUNA.app
    xcrun notarytool submit LUNA.zip --keychain-profile … --wait

@@ -152,15 +152,12 @@ fn partial_or_luna_service_configuration_fails_closed() {
 }
 
 #[test]
-fn local_candidate_refuses_login_and_unowned_updates() {
+fn local_candidate_refuses_login_without_owned_sync() {
     let root = tempfile::tempdir().unwrap();
     let login = luna(root.path(), &["login"]).output().unwrap();
     assert!(!login.status.success(), "{}", text(&login));
     assert!(text(&login).contains("sync is unconfigured"));
 
-    let update = luna(root.path(), &["update", "--check"]).output().unwrap();
-    assert!(!update.status.success(), "{}", text(&update));
-    assert!(text(&update).contains("updates are disabled"));
     assert!(!root.path().join("profiles").exists());
 }
 

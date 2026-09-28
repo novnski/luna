@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # macOS packaging: build the release binary for the host arch and produce
 #   target/package/luna-<version>-macos-<arch>.dmg          (user download)
-#   target/package/luna-<version>-macos-<arch>-app.tar.gz   (future updater)
-# containing LUNA.app (unsigned unless CODESIGN_IDENTITY is set).
+#   target/package/luna-<version>-macos-<arch>-app.tar.gz   (in-app updater)
+# containing LUNA.app (ad-hoc signed unless CODESIGN_IDENTITY is set).
 #
 # Usage: scripts/package-macos.sh
 # Env:   CODESIGN_IDENTITY="Developer ID Application: …" to sign the bundle.
@@ -22,7 +22,13 @@ DMG="$OUT_DIR/luna-$VERSION-macos-$ARCH.dmg"
 APP_TARBALL="$OUT_DIR/luna-$VERSION-macos-$ARCH-app.tar.gz"
 
 cd "$ROOT"
-cargo build --release -p luna
+if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+  # The local wrapper reserves 25 GiB of headroom, more than a hosted runner
+  # offers. CI uses its own isolated build and disk lifecycle.
+  cargo build --locked --release -p luna
+else
+  "$ROOT/scripts/cargo.sh" build --locked --release -p luna
+fi
 
 rm -rf "$APP" "$DMG" "$APP_TARBALL"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -69,8 +75,9 @@ if $NOTARIZE; then
   xcrun stapler staple "$APP"
 fi
 
-# The auto-updater artifact.
-tar -czf "$APP_TARBALL" -C "$OUT_DIR" LUNA.app
+# The auto-updater accepts only entries rooted at LUNA.app. Avoid macOS tar's
+# AppleDouble sidecars (._*) for Finder metadata, which are not app files.
+COPYFILE_DISABLE=1 tar -czf "$APP_TARBALL" -C "$OUT_DIR" LUNA.app
 echo "packaged: $APP_TARBALL"
 
 # The dmg presents the classic drag-into-Applications layout over the

@@ -20,24 +20,9 @@ const BACKUP: &str = "luna.exe.old";
 /// crash between the two renames leaves at most this file behind.
 const INCOMING: &str = ".luna-update-incoming.exe";
 
-#[derive(serde::Deserialize)]
-struct Config {
-    releases_url: String,
-}
-
 pub(super) fn is_managed(exe: &Path) -> bool {
     exe.file_name().is_some_and(|name| name == "luna.exe")
         && exe.parent().is_some_and(|dir| dir.join(CONFIG).is_file())
-}
-
-pub(super) fn release_url() -> anyhow::Result<Option<String>> {
-    let exe = std::env::current_exe()?;
-    if !is_managed(&exe) {
-        return Ok(None);
-    }
-    let config: Config = serde_json::from_slice(&std::fs::read(exe.with_file_name(CONFIG))?)
-        .context("reading Windows update configuration")?;
-    super::validate_release_override(&config.releases_url).map(Some)
 }
 
 pub fn artifact(version: &str) -> String {
@@ -411,43 +396,5 @@ mod tests {
                 .contains("checksum")
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-    }
-
-    #[tokio::test]
-    async fn corrupt_download_preserves_install_and_removes_staging() {
-        use std::io::Write;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .unwrap();
-            let mut request = [0u8; 4096];
-            let _ = socket.read(&mut request).unwrap();
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncorrupt",
-                )
-                .unwrap();
-        });
-        let dir = tempfile::tempdir().unwrap();
-        let installed = dir.path().join("luna.exe");
-        std::fs::write(&installed, b"existing installation").unwrap();
-        let manifest = super::super::Manifest {
-            version: "1.2.3".into(),
-            files: [(
-                artifact("1.2.3"),
-                super::super::FileMeta {
-                    sha256: Some(format!("{:x}", Sha256::digest(b"expected"))),
-                },
-            )]
-            .into(),
-        };
-        let error = stage(&base, &manifest, dir.path()).await.unwrap_err();
-        server.join().unwrap();
-        assert!(error.to_string().contains("checksum mismatch"));
-        assert_eq!(std::fs::read(&installed).unwrap(), b"existing installation");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

@@ -52,6 +52,7 @@ use crate::settings::notifications::{
 };
 use crate::settings::project_defaults::ProjectsPage;
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
+use crate::settings::widgets;
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, JUMP_SLOTS, KeymapConfig, RIGHT_PANE_DEFAULT,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
@@ -441,10 +442,11 @@ pub enum SettingsSection {
     Appshots,
     Archived,
     Usage,
+    Updates,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 13] = [
         SettingsSection::General,
         SettingsSection::Projects,
         SettingsSection::Providers,
@@ -454,6 +456,7 @@ impl SettingsSection {
         SettingsSection::Files,
         SettingsSection::Appshots,
         SettingsSection::Usage,
+        SettingsSection::Updates,
         SettingsSection::Devices,
         SettingsSection::Backups,
         SettingsSection::Archived,
@@ -474,6 +477,7 @@ impl SettingsSection {
             "settings/appshots" => Self::Appshots,
             "settings/archived" => Self::Archived,
             "settings/usage" => Self::Usage,
+            "settings/updates" => Self::Updates,
             _ => return None,
         })
     }
@@ -494,6 +498,7 @@ impl SettingsSection {
             SettingsSection::Appshots => "Appshots",
             SettingsSection::Archived => "Archived sessions",
             SettingsSection::Usage => "Usage",
+            SettingsSection::Updates => "Updates",
         }
     }
 }
@@ -1368,7 +1373,7 @@ struct MoveProjectDialog {
     _events: Subscription,
 }
 
-/// In-app update lifecycle (macOS bundle installs; see `render_update_strip`).
+/// In-app update lifecycle (desktop installs; see `render_update_strip`).
 enum UpdateFlow {
     Idle,
     Downloading,
@@ -2006,6 +2011,14 @@ pub struct Shell {
     /// download/stage of it has come in this process.
     update_flow: UpdateFlow,
     update_task: Option<Task<()>>,
+    update_auto_apply: bool,
+    /// The manual result survives an older engine stream frame during attach.
+    update_checked: Option<luna_update::UpdateStatus>,
+    update_check_attempted: bool,
+    update_checking: bool,
+    /// Manual failure time lets a later successful engine check clear stale UI.
+    update_check_error: Option<(SharedString, i64)>,
+    update_check_task: Option<Task<()>>,
     /// Version whose update strip the user dismissed (advisory installs only —
     /// a newer release shows the strip again).
     update_dismissed: Option<String>,
@@ -2440,6 +2453,12 @@ impl Shell {
             cleanup_summary_last: None,
             update_flow: UpdateFlow::Idle,
             update_task: None,
+            update_auto_apply: false,
+            update_checked: None,
+            update_check_attempted: false,
+            update_checking: false,
+            update_check_error: None,
+            update_check_task: None,
             update_dismissed: None,
             install: luna_update::detect_install(),
             org: None,
@@ -4815,6 +4834,18 @@ impl Shell {
                 }
             }
             SettingsSection::Usage => self.render_usage_page(cx),
+            SettingsSection::Updates => {
+                if !self.update_check_attempted
+                    && self
+                        .update_status(cx)
+                        .as_ref()
+                        .and_then(|s| s.checked_at)
+                        .is_none()
+                {
+                    self.begin_update_check(cx);
+                }
+                self.render_updates_page(cx)
+            }
         }
     }
 
@@ -7188,6 +7219,7 @@ impl Shell {
             SettingsSection::Appshots => icons::MONITOR,
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
             SettingsSection::Usage => icons::CHART,
+            SettingsSection::Updates => icons::RESTART,
         };
         // Match the user's dragged sidebar width — the pane container clips to
         // it, so a hardcoded default here left hover washes stopping short of
@@ -8500,13 +8532,303 @@ impl Shell {
         )
     }
 
+    fn update_status(&self, cx: &Context<Self>) -> Option<luna_update::UpdateStatus> {
+        let engine = self.state.read(cx).update.clone();
+        match (&self.update_checked, engine) {
+            (Some(manual), Some(engine))
+                if engine.checked_at.unwrap_or_default()
+                    >= manual.checked_at.unwrap_or_default() =>
+            {
+                Some(engine)
+            }
+            (Some(manual), _) => Some(manual.clone()),
+            (None, engine) => engine,
+        }
+    }
+
+    /// Check the signed GitHub release feed on demand. Publishing the result
+    /// through AppState keeps the settings page and sidebar on the same fact.
+    fn begin_update_check(&mut self, cx: &mut Context<Self>) {
+        if self.update_checking {
+            return;
+        }
+        self.update_check_attempted = true;
+        self.update_checking = true;
+        self.update_check_error = None;
+        let check_started_at = Utc::now().timestamp_millis();
+        let edge_url = self.boot.edge_url.clone();
+        let check = Tokio::spawn(
+            cx,
+            async move { luna_update::fetch_latest(&edge_url).await },
+        );
+        self.update_check_task = Some(cx.spawn(async move |this, cx| {
+            let result = match check.await {
+                Ok(result) => result.map_err(|err| format!("{err:#}")),
+                Err(err) => Err(err.to_string()),
+            };
+            this.update(cx, |shell, cx| {
+                shell.update_checking = false;
+                match result {
+                    Ok(manifest) => {
+                        let current = luna_update::current_version();
+                        let status = luna_update::UpdateStatus {
+                            current_version: current.to_owned(),
+                            latest_version: Some(manifest.version.clone()),
+                            update_available: luna_update::version_newer(
+                                &manifest.version,
+                                current,
+                            ),
+                            checked_at: Some(Utc::now().timestamp_millis()),
+                            error: None,
+                        };
+                        let staged_for_other_version = shell
+                            .update_status(cx)
+                            .as_ref()
+                            .and_then(|old| old.latest_version.as_deref())
+                            .is_some_and(|old| old != manifest.version);
+                        if staged_for_other_version
+                            && matches!(shell.update_flow, UpdateFlow::Ready(_))
+                        {
+                            shell.update_flow = UpdateFlow::Idle;
+                        }
+                        shell.update_check_error = None;
+                        shell.update_checked = Some(status.clone());
+                        shell.state.update(cx, |state, cx| {
+                            state.apply_update(status);
+                            cx.notify();
+                        });
+                    }
+                    Err(message) => {
+                        tracing::warn!(%message, "manual update check failed");
+                        shell.update_check_error = Some((message.into(), check_started_at));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn render_updates_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).clone();
+        let focus_border = theme.border_strong;
+        let focus_accent = theme.accent;
+        let status = self.update_status(cx);
+        let current = status
+            .as_ref()
+            .map(|status| status.current_version.clone())
+            .unwrap_or_else(|| luna_update::current_version().to_owned());
+        let latest = status
+            .as_ref()
+            .and_then(|status| status.latest_version.as_deref());
+        let available = status
+            .as_ref()
+            .is_some_and(|status| status.update_available && latest.is_some());
+        let desktop_update = self.install.supports_desktop_update();
+        let check_error = self
+            .update_check_error
+            .as_ref()
+            .filter(|(_, failed_at)| {
+                status
+                    .as_ref()
+                    .and_then(|status| status.checked_at)
+                    .is_none_or(|checked_at| checked_at < *failed_at)
+            })
+            .map(|(error, _)| error.to_string())
+            .or_else(|| status.as_ref().and_then(|status| status.error.clone()));
+        let status_text = if self.update_checking {
+            "Checking GitHub Releases…".to_owned()
+        } else if check_error.is_some() && !available {
+            "Couldn't check GitHub Releases.".to_owned()
+        } else if available {
+            format!("Version v{} is available.", latest.unwrap())
+        } else if status
+            .as_ref()
+            .is_some_and(|status| status.checked_at.is_some())
+        {
+            "You're up to date.".to_owned()
+        } else {
+            "Check for the latest GitHub release.".to_owned()
+        };
+        let checked_at = status
+            .as_ref()
+            .and_then(|status| status.checked_at)
+            .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+            .map(|checked| format!("Last checked {} UTC", checked.format("%b %-d, %Y at %H:%M")));
+        let mut release_row = widgets::card_row(&theme, false)
+            .min_h(px(88.0))
+            .child(widgets::row_tile(&theme, icons::RESTART))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(widgets::row_title(&theme, "Release status"))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![div().child(status_text).into_any_element()],
+                    ))
+                    .when_some(checked_at, |row, checked_at| {
+                        row.child(
+                            div()
+                                .mt(px(4.0))
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(theme.text_muted)
+                                .child(checked_at),
+                        )
+                    }),
+            );
+        if available {
+            release_row = release_row.child(widgets::badge_active(&theme, "Available"));
+        }
+
+        let mut actions = div()
+            .mt(px(20.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(10.0));
+        if !self.update_checking && !matches!(self.update_flow, UpdateFlow::Downloading) {
+            actions = actions.child(
+                popover::btn_ghost(&theme, "Check for updates", "updates-check")
+                    .id("updates-check")
+                    .role(gpui::Role::Button)
+                    .aria_label("Check GitHub Releases for updates")
+                    .tab_index(0)
+                    .focus_visible(move |style| style.border_2().border_color(focus_border))
+                    .on_click(cx.listener(|this, _, _, cx| this.begin_update_check(cx)))
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
+                            cx.stop_propagation();
+                            this.begin_update_check(cx);
+                        }
+                    })),
+            );
+        }
+        if available && !self.update_checking {
+            if desktop_update {
+                let action = match &self.update_flow {
+                    UpdateFlow::Idle => Some("Update and restart"),
+                    UpdateFlow::Downloading => None,
+                    UpdateFlow::Ready(_) => Some("Restart to update"),
+                    UpdateFlow::Failed(_) => Some("Retry download"),
+                };
+                if let Some(label) = action {
+                    actions = actions.child(
+                        popover::btn_primary(&theme, label)
+                            .id("updates-apply")
+                            .role(gpui::Role::Button)
+                            .aria_label(label)
+                            .tab_index(0)
+                            .focus_visible(move |style| style.border_2().border_color(focus_accent))
+                            .on_click(cx.listener(|this, _, _, cx| this.on_update_page_action(cx)))
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
+                                    cx.stop_propagation();
+                                    this.on_update_page_action(cx);
+                                }
+                            })),
+                    );
+                }
+            } else {
+                actions = actions.child(
+                    popover::btn_primary(&theme, "View release on GitHub")
+                        .id("updates-open-github")
+                        .role(gpui::Role::Button)
+                        .aria_label("View latest LUNA release on GitHub")
+                        .tab_index(0)
+                        .focus_visible(move |style| style.border_2().border_color(focus_accent))
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.open_url("https://github.com/novnski/luna/releases/latest");
+                        })),
+                );
+            }
+        }
+
+        let flow_message = match &self.update_flow {
+            UpdateFlow::Downloading => Some("Downloading and verifying the release…".to_owned()),
+            UpdateFlow::Ready(_) if available => {
+                Some("The update is ready. Restart LUNA to finish installing it.".to_owned())
+            }
+            UpdateFlow::Failed(error) if available => Some(format!("Update failed: {error}")),
+            _ => None,
+        };
+        let install_note = if desktop_update {
+            "When an update is available, press Update once. LUNA downloads and verifies it, then restarts after open work is saved."
+        } else {
+            "This installation cannot be replaced automatically. Install the GitHub release to enable in-app updates."
+        };
+        div()
+            .id("settings-updates-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .child(
+                widgets::page_column()
+                    .child(widgets::page_header(&theme, "Updates", None))
+                    .child(widgets::page_subtitle(
+                        &theme,
+                        "Get new versions directly from this project's GitHub Releases.",
+                    ))
+                    .child(
+                        widgets::section_card(&theme)
+                            .child(
+                                widgets::card_row(&theme, true)
+                                    .min_h(px(76.0))
+                                    .child(widgets::row_tile(&theme, icons::MONITOR))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(widgets::row_title(&theme, "Installed version"))
+                                            .child(widgets::meta_line(
+                                                &theme,
+                                                vec![
+                                                    div()
+                                                        .child(format!("v{current}"))
+                                                        .into_any_element(),
+                                                ],
+                                            )),
+                                    ),
+                            )
+                            .child(release_row),
+                    )
+                    .child(actions)
+                    .when_some(flow_message, |page, message| {
+                        page.child(
+                            div()
+                                .mt(px(12.0))
+                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_color(theme.text_muted)
+                                .child(message),
+                        )
+                    })
+                    .when_some(check_error, |page, error| {
+                        page.child(widgets::error_strip(
+                            &theme,
+                            format!("Update check failed: {error}"),
+                        ))
+                    })
+                    .child(
+                        div()
+                            .mt(px(24.0))
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.text_muted)
+                            .child(install_note),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// Update strip: shown above the user menu whenever the engine's
     /// UpdateStatus stream reports a newer release. On a macOS bundle install
     /// it drives the whole flow — click to download, then click to restart into
     /// the staged bundle. Elsewhere (managed/source installs) it is advisory
     /// (`luna update`); click dismisses it for that version.
     fn render_update_strip(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let status = self.state.read(cx).update.clone()?;
+        let status = self.update_status(cx)?;
         if !status.update_available {
             return None;
         }
@@ -8569,27 +8891,43 @@ impl Shell {
     fn on_update_strip_click(&mut self, cx: &mut Context<Self>) {
         if !self.install.supports_desktop_update() {
             self.update_dismissed = self
-                .state
-                .read(cx)
-                .update
+                .update_status(cx)
                 .as_ref()
                 .and_then(|s| s.latest_version.clone());
             cx.notify();
             return;
         }
         match std::mem::replace(&mut self.update_flow, UpdateFlow::Idle) {
-            UpdateFlow::Idle | UpdateFlow::Failed(_) => self.begin_update_download(cx),
+            UpdateFlow::Idle | UpdateFlow::Failed(_) => self.begin_update_download(false, cx),
             UpdateFlow::Downloading => self.update_flow = UpdateFlow::Downloading,
-            UpdateFlow::Ready(staged) => self.apply_staged_update(staged, cx),
+            UpdateFlow::Ready(staged) => {
+                self.update_flow = UpdateFlow::Ready(staged.clone());
+                self.apply_staged_update(staged, cx);
+            }
         }
     }
 
-    /// Fetch the manifest and stage the new LUNA desktop bundle under the data dir
-    /// (tokio — reqwest); the strip flips to "restart to apply" when done.
-    fn begin_update_download(&mut self, cx: &mut Context<Self>) {
+    /// The Updates page has a one-action flow: stage, then gracefully apply
+    /// and restart. PendingExit waits for unsaved work when needed.
+    fn on_update_page_action(&mut self, cx: &mut Context<Self>) {
+        match std::mem::replace(&mut self.update_flow, UpdateFlow::Idle) {
+            UpdateFlow::Idle | UpdateFlow::Failed(_) => self.begin_update_download(true, cx),
+            UpdateFlow::Downloading => self.update_flow = UpdateFlow::Downloading,
+            UpdateFlow::Ready(staged) => {
+                self.update_flow = UpdateFlow::Ready(staged.clone());
+                self.apply_staged_update(staged, cx);
+            }
+        }
+    }
+
+    /// Fetch the manifest and stage the new desktop bundle under the data dir.
+    /// The Updates page applies it after staging; the sidebar waits for a
+    /// separate restart click.
+    fn begin_update_download(&mut self, auto_apply: bool, cx: &mut Context<Self>) {
         let edge_url = self.boot.edge_url.clone();
         let data_dir = self.data_dir.clone();
         let install = self.install.clone();
+        self.update_auto_apply = auto_apply;
         self.update_flow = UpdateFlow::Downloading;
         let download = Tokio::spawn(cx, async move {
             let manifest = luna_update::fetch_latest(&edge_url).await?;
@@ -8606,9 +8944,20 @@ impl Shell {
                     Ok(staged) => UpdateFlow::Ready(staged),
                     Err(message) => {
                         tracing::warn!(%message, "update download failed");
+                        shell.update_auto_apply = false;
                         UpdateFlow::Failed(message.into())
                     }
                 };
+                if shell.update_auto_apply {
+                    shell.update_auto_apply = false;
+                    let staged = match &shell.update_flow {
+                        UpdateFlow::Ready(staged) => Some(staged.clone()),
+                        _ => None,
+                    };
+                    if let Some(staged) = staged {
+                        shell.apply_staged_update(staged, cx);
+                    }
+                }
                 cx.notify();
             })
             .ok();

@@ -5245,11 +5245,15 @@ name = "luna-update"
 version = "0.2.73"
 dependencies = [
  "anyhow",
+ "flate2",
  "futures",
+ "plist",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "tracing",

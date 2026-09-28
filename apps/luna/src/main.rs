@@ -74,7 +74,7 @@ enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
-    /// LUNA updates are disabled until an owned release feed is configured.
+    /// Check or install an update from the signed GitHub Release feed.
     Update {
         #[arg(long)]
         check: bool,

@@ -4,7 +4,9 @@ name: release
 #   - Linux headless tarballs (x86_64 + aarch64) via scripts/package-linux.sh
 #   - macOS dmg (Apple silicon) via scripts/package-macos.sh
 #   - Windows portable zip (x86_64) via scripts/package-windows.ps1
-# then create a GitHub Release in this repository with artifacts and checksums.
+# then create a GitHub Release in this repository with artifacts and a signed
+# updater manifest. The in-app updater trusts the pinned Ed25519 public key,
+# independently of GitHub and the optional Apple code-signing identity.
 #
 # Trigger: push a tag `v<version>` matching the workspace version in
 # Cargo.toml (bump it in the same commit), or run manually via
@@ -16,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   linux:
@@ -140,34 +142,46 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [linux, macos, windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: release-assets
           merge-multiple: true
       - name: version guard (tag == artifact version)
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          ls dist/
+          ls release-assets/
           for platform in linux-x86_64.tar.gz linux-aarch64.tar.gz \
               macos-arm64.dmg macos-arm64-app.tar.gz \
               windows-x86_64.zip windows-x86_64.exe; do
-            test -f "dist/luna-$ver-$platform" \
+            test -f "release-assets/luna-$ver-$platform" \
               || { echo "missing artifact for tag v$ver: $platform — check builds and Cargo.toml version"; exit 1; }
           done
           echo "VERSION=$ver" >> "$GITHUB_ENV"
       - name: updater manifest
+        env:
+          LUNA_UPDATE_SIGNING_KEY: ${{ secrets.LUNA_UPDATE_SIGNING_KEY }}
         run: |
-          manifest=$(jq -n --arg version "$VERSION" '{version: $version, files: {}}')
-          for f in dist/*; do
-            sha=$(sha256sum "$f" | cut -d' ' -f1)
-            manifest=$(jq --arg name "$(basename "$f")" --arg sha "$sha" \
-              '.files[$name] = {sha256: $sha}' <<<"$manifest")
-          done
-          printf '%s' "$manifest" > manifest.json
+          set -euo pipefail
+          if [[ -z "$LUNA_UPDATE_SIGNING_KEY" ]]; then
+            echo "LUNA_UPDATE_SIGNING_KEY is required to publish signed updates" >&2
+            exit 1
+          fi
+          private_key="$RUNNER_TEMP/luna-update-signing.pem"
+          trap 'rm -f "$private_key"' EXIT
+          umask 077
+          printf '%s\n' "$LUNA_UPDATE_SIGNING_KEY" > "$private_key"
+          python3 -B scripts/create-release-manifest.py \
+            --version "$VERSION" --assets release-assets --output release-meta \
+            --private-key "$private_key"
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*
-            manifest.json
+            release-assets/*
+            release-meta/manifest.json
+            release-meta/manifest.sig
           generate_release_notes: true
+          fail_on_unmatched_files: true

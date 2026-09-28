@@ -1,10 +1,4 @@
-//! LUNA release checking and self-update, shared by the engine (the
-//! background checker + `ApplyUpdate`), the CLI (`luna update`), and the UI
-//! (the sidebar update strip + macOS bundle swap).
-//!
-//! The updater remains disabled until this project owns a signed release feed.
-//! The intended feed serves artifacts at `{edge}/releases/*` and a
-//! `manifest.json` with a version and sha256 per artifact.
+//! Signed GitHub Releases update checking and installation.
 //!
 //! Install kinds and their update paths:
 //! - **Managed** (`~/.luna/app/<ver>` + `current` symlink — a future installer):
@@ -21,6 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use futures::StreamExt as _;
+use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt as _;
@@ -43,25 +38,30 @@ const CHECK_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(
 /// While an auto-apply is deferred behind active sessions, re-probe idleness
 /// this often.
 const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const RELEASE_BASE: &str = "https://github.com/novnski/luna/releases/latest/download";
+const RELEASE_ASSET_BASE: &str = "https://github.com/novnski/luna/releases/download";
+const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAX_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Release metadata
 // ---------------------------------------------------------------------------
 
-/// `{edge}/releases/manifest.json` — written by the release workflow.
+/// Signed `manifest.json` from the latest public GitHub Release.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     pub version: String,
-    /// Artifact file name → metadata. Empty for pre-manifest releases resolved
-    /// via `latest.txt` — downloads then skip checksum verification (with a log).
-    #[serde(default)]
     pub files: BTreeMap<String, FileMeta>,
+    #[serde(skip)]
+    verified: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FileMeta {
-    #[serde(default)]
     pub sha256: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// Artifact-name platform pair matching the packaging scripts. Unsupported
@@ -111,69 +111,90 @@ pub fn mac_app_artifact(version: &str) -> String {
     format!("luna-{version}-macos-{arch}-app.tar.gz")
 }
 
-/// Strictly-newer dotted-numeric compare (`0.1.10` > `0.1.9` > `0.1`).
-/// Unparseable versions never count as newer — a garbage `latest.txt` must not
-/// trigger an update loop.
+fn version_parts(version: &str) -> Option<[u64; 3]> {
+    let mut parts = version.split('.');
+    let parse = |part: &str| {
+        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse().ok())
+            .flatten()
+    };
+    let parsed = [
+        parse(parts.next()?)?,
+        parse(parts.next()?)?,
+        parse(parts.next()?)?,
+    ];
+    parts.next().is_none().then_some(parsed)
+}
+
+/// Strictly-newer three-part release version comparison.
 pub fn version_newer(latest: &str, current: &str) -> bool {
-    fn parts(v: &str) -> Option<Vec<u64>> {
-        let nums: Vec<u64> = v
-            .trim()
-            .trim_start_matches('v')
-            .split('.')
-            .map(|p| p.parse().ok())
-            .collect::<Option<_>>()?;
-        (!nums.is_empty()).then_some(nums)
-    }
-    match (parts(latest), parts(current)) {
+    match (version_parts(latest), version_parts(current)) {
         (Some(l), Some(c)) => l > c,
         _ => false,
     }
 }
 
-/// Fetch the newest release metadata: `manifest.json`, falling back to
-/// `latest.txt` (version only, no checksums) for pre-manifest releases.
-pub async fn fetch_latest(edge_url: &str) -> anyhow::Result<Manifest> {
-    let base = release_base(edge_url)?;
+/// Fetch and authenticate the newest release. There is no unsigned fallback.
+pub async fn fetch_latest(_edge_url: &str) -> anyhow::Result<Manifest> {
+    let base = release_base()?;
     let client = http_client()?;
     let manifest_url = format!("{base}/manifest.json");
-    match client.get(&manifest_url).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let manifest: Manifest = resp.json().await.context("parsing manifest.json")?;
-            if manifest.version.trim().is_empty() {
-                bail!("manifest.json has an empty version");
-            }
-            return Ok(manifest);
-        }
-        Ok(resp) => {
-            tracing::debug!(status = %resp.status(), "manifest.json unavailable; trying latest.txt")
-        }
-        Err(err) => tracing::debug!(error = %err, "manifest.json fetch failed; trying latest.txt"),
-    }
-    let latest_url = format!("{base}/latest.txt");
-    let version = client
-        .get(&latest_url)
+    let response = client
+        .get(&manifest_url)
         .send()
         .await
-        .context("fetching latest.txt")?
+        .context("fetching update manifest")?
         .error_for_status()
-        .context("fetching latest.txt")?
-        .text()
+        .context("fetching update manifest")?;
+    let bytes = read_bounded(response, MAX_MANIFEST_BYTES)
         .await
-        .context("reading latest.txt")?
-        .trim()
-        .to_string();
-    if version.is_empty() {
-        bail!("latest.txt is empty");
+        .context("reading update manifest")?;
+    let response = client
+        .get(format!("{base}/manifest.sig"))
+        .send()
+        .await
+        .context("fetching update manifest signature")?
+        .error_for_status()
+        .context("fetching update manifest signature")?;
+    let signature = read_bounded(response, 64)
+        .await
+        .context("reading update manifest signature")?;
+    anyhow::ensure!(signature.len() == 64, "update signature must be 64 bytes");
+    let key = update_public_key()?;
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(&bytes, &signature)
+        .map_err(|_| anyhow::anyhow!("update manifest signature is invalid"))?;
+    let mut manifest: Manifest =
+        serde_json::from_slice(&bytes).context("parsing signed manifest")?;
+    validate_manifest(&manifest)?;
+    manifest.verified = true;
+    Ok(manifest)
+}
+
+async fn read_bounded(response: reqwest::Response, max: usize) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(
+        response
+            .content_length()
+            .is_none_or(|size| size <= max as u64),
+        "update response is too large"
+    );
+    let mut output = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("reading update response")?;
+        anyhow::ensure!(
+            output.len().saturating_add(chunk.len()) <= max,
+            "update response is too large"
+        );
+        output.extend_from_slice(&chunk);
     }
-    Ok(Manifest {
-        version,
-        files: BTreeMap::new(),
-    })
+    Ok(output)
 }
 
 fn http_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(concat!("luna/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 10 {
                 return attempt.error("too many update redirects");
@@ -192,8 +213,12 @@ fn http_client() -> anyhow::Result<reqwest::Client> {
 fn validate_release_override(value: &str) -> anyhow::Result<String> {
     let url = reqwest::Url::parse(value.trim()).context("invalid update feed URL")?;
     anyhow::ensure!(
-        url.scheme() == "https" && url.host_str().is_some(),
-        "update feed must use HTTPS"
+        (url.scheme() == "https"
+            || cfg!(debug_assertions)
+                && url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost")))
+            && url.host_str().is_some(),
+        "update feed must use HTTPS (or debug loopback HTTP)"
     );
     anyhow::ensure!(
         url.username().is_empty()
@@ -205,17 +230,102 @@ fn validate_release_override(value: &str) -> anyhow::Result<String> {
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
-fn release_base(edge_url: &str) -> anyhow::Result<String> {
+fn release_base() -> anyhow::Result<String> {
+    #[cfg(debug_assertions)]
     if let Ok(url) = std::env::var("LUNA_RELEASES_URL")
         && !url.trim().is_empty()
     {
         return validate_release_override(&url);
     }
-    #[cfg(windows)]
-    if let Some(url) = windows::release_url()? {
-        return Ok(url.trim_end_matches('/').to_owned());
+    Ok(RELEASE_BASE.to_owned())
+}
+
+fn decode_hex(value: &str) -> anyhow::Result<Vec<u8>> {
+    let bytes = value.trim().as_bytes();
+    anyhow::ensure!(bytes.len().is_multiple_of(2), "invalid hex length");
+    bytes
+        .chunks_exact(2)
+        .map(|pair| {
+            let text = std::str::from_utf8(pair)?;
+            u8::from_str_radix(text, 16).context("invalid hex digit")
+        })
+        .collect()
+}
+
+fn update_public_key() -> anyhow::Result<Vec<u8>> {
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("LUNA_UPDATE_TEST_PUBLIC_KEY_HEX") {
+        let key = decode_hex(&value)?;
+        anyhow::ensure!(key.len() == 32, "test update public key must be 32 bytes");
+        return Ok(key);
     }
-    Ok(format!("{}/releases", edge_url.trim_end_matches('/')))
+    let key = decode_hex(include_str!("../../../dist/update-signing-public.hex"))?;
+    anyhow::ensure!(key.len() == 32, "pinned update public key must be 32 bytes");
+    Ok(key)
+}
+
+fn asset_url(manifest: &Manifest, file: &str) -> anyhow::Result<String> {
+    let meta = manifest
+        .files
+        .get(file)
+        .context("artifact is missing from signed manifest")?;
+    let url = meta.url.as_deref().context("artifact URL is missing")?;
+    let parsed = reqwest::Url::parse(url).context("invalid artifact URL")?;
+    anyhow::ensure!(
+        parsed.username().is_empty()
+            && parsed.password().is_none()
+            && parsed.query().is_none()
+            && parsed.fragment().is_none(),
+        "artifact URL has unexpected components"
+    );
+    let expected = format!("{RELEASE_ASSET_BASE}/v{}/{file}", manifest.version);
+    #[cfg(debug_assertions)]
+    if release_base()? != RELEASE_BASE {
+        let base = reqwest::Url::parse(&release_base()?)?;
+        anyhow::ensure!(
+            parsed.scheme() == base.scheme()
+                && parsed.host() == base.host()
+                && parsed.port_or_known_default() == base.port_or_known_default()
+                && parsed.path().ends_with(&format!("/{file}")),
+            "artifact URL is outside the test feed"
+        );
+        return Ok(url.to_owned());
+    }
+    anyhow::ensure!(
+        url == expected,
+        "artifact URL is outside the pinned GitHub release"
+    );
+    Ok(url.to_owned())
+}
+
+fn validate_manifest(manifest: &Manifest) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        version_parts(&manifest.version).is_some(),
+        "invalid release version"
+    );
+    anyhow::ensure!(
+        !manifest.files.is_empty(),
+        "signed manifest has no artifacts"
+    );
+    for (file, meta) in &manifest.files {
+        anyhow::ensure!(
+            !file.contains('/')
+                && !file.contains('\\')
+                && file.starts_with("luna-")
+                && file.contains(&format!("luna-{}-", manifest.version)),
+            "invalid artifact name"
+        );
+        let sha = meta
+            .sha256
+            .as_deref()
+            .context("artifact SHA-256 is missing")?;
+        anyhow::ensure!(
+            sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid artifact SHA-256"
+        );
+        asset_url(manifest, file)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +339,7 @@ pub enum InstallKind {
     Managed { app_root: PathBuf },
     /// Running out of a macOS `.app` bundle.
     MacApp { bundle: PathBuf },
-    /// Portable Windows package with an explicit update-feed configuration.
+    /// Portable Windows package marked as update-managed by its package file.
     #[cfg(windows)]
     WindowsPortable { directory: PathBuf },
     /// Source build or hand-copied binary — updates are report-only.
@@ -265,11 +375,7 @@ impl InstallKind {
     /// Install and arrange a relaunch. The UI must quit after this succeeds.
     pub fn apply_desktop(&self, staged: &Path) -> anyhow::Result<()> {
         match self {
-            Self::MacApp { bundle } => {
-                apply_mac_app(staged, bundle)?;
-                relaunch_app_after_exit(bundle);
-                Ok(())
-            }
+            Self::MacApp { bundle } => apply_and_relaunch_mac_app(staged, bundle),
             #[cfg(windows)]
             Self::WindowsPortable { directory } => windows::apply(staged, directory, true),
             _ => bail!("this installation does not support desktop updates"),
@@ -312,6 +418,15 @@ fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> Inst
         if ancestor.extension().is_some_and(|ext| ext == "app")
             && exe.starts_with(ancestor.join("Contents").join("MacOS"))
         {
+            let production_bundle = ancestor.file_name().is_some_and(|name| name == "LUNA.app");
+            #[cfg(debug_assertions)]
+            let qa_bundle = std::env::var("LUNA_RELEASES_URL").is_ok()
+                && std::env::var("LUNA_UPDATE_TEST_PUBLIC_KEY_HEX").is_ok();
+            #[cfg(not(debug_assertions))]
+            let qa_bundle = false;
+            if !production_bundle && !qa_bundle {
+                return InstallKind::Unmanaged;
+            }
             return InstallKind::MacApp {
                 bundle: ancestor.to_path_buf(),
             };
@@ -324,24 +439,27 @@ fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> Inst
 // Download + verify
 // ---------------------------------------------------------------------------
 
-/// Stream `{edge}/releases/<file>` to `dest`, verifying the manifest sha256 when
-/// present. Writes through a `.partial` sidecar so an interrupted download never
-/// leaves a plausible-looking artifact behind.
+/// Stream a signed-manifest artifact to `dest`, requiring its SHA-256.
+/// A partial sidecar never becomes an installable artifact.
 pub async fn download_release_file(
-    edge_url: &str,
+    _edge_url: &str,
     manifest: &Manifest,
     file: &str,
     dest: &Path,
 ) -> anyhow::Result<()> {
-    let url = format!("{}/{file}", release_base(edge_url)?);
-    let expected = manifest.files.get(file).and_then(|m| m.sha256.as_deref());
-    if expected.is_none() {
-        tracing::warn!(
-            file,
-            "no checksum in release metadata; skipping verification"
-        );
-    }
+    anyhow::ensure!(
+        manifest.verified,
+        "update manifest has not been signature verified"
+    );
+    validate_manifest(manifest)?;
+    let url = asset_url(manifest, file)?;
+    let expected = manifest
+        .files
+        .get(file)
+        .and_then(|m| m.sha256.as_deref())
+        .context("artifact SHA-256 is missing")?;
     let partial = dest.with_extension("partial");
+    let _ = tokio::fs::remove_file(&partial).await;
     let resp = http_client()?
         .get(&url)
         .send()
@@ -349,24 +467,38 @@ pub async fn download_release_file(
         .with_context(|| format!("downloading {url}"))?
         .error_for_status()
         .with_context(|| format!("downloading {url}"))?;
-    let mut out = tokio::fs::File::create(&partial)
+    anyhow::ensure!(
+        resp.content_length()
+            .is_none_or(|size| size <= MAX_ARTIFACT_BYTES),
+        "update artifact is too large"
+    );
+    let mut out = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&partial)
         .await
         .with_context(|| format!("creating {}", partial.display()))?;
     let mut hasher = Sha256::new();
     let mut stream = resp.bytes_stream();
+    let mut total = 0u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("reading download stream")?;
+        total = total.saturating_add(chunk.len() as u64);
+        if total > MAX_ARTIFACT_BYTES {
+            drop(out);
+            let _ = tokio::fs::remove_file(&partial).await;
+            bail!("update artifact is too large");
+        }
         hasher.update(&chunk);
         out.write_all(&chunk).await.context("writing download")?;
     }
-    out.flush().await.ok();
+    out.flush().await.context("flushing update download")?;
+    out.sync_all().await.context("syncing update download")?;
     drop(out);
-    if let Some(expected) = expected {
-        let actual = format!("{:x}", hasher.finalize());
-        if !actual.eq_ignore_ascii_case(expected.trim()) {
-            tokio::fs::remove_file(&partial).await.ok();
-            bail!("checksum mismatch for {file}: expected {expected}, got {actual}");
-        }
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(expected.trim()) {
+        tokio::fs::remove_file(&partial).await.ok();
+        bail!("checksum mismatch for {file}: expected {expected}, got {actual}");
     }
     tokio::fs::rename(&partial, dest)
         .await
@@ -390,12 +522,80 @@ fn run(program: &str, args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Extract only regular files and directories below the expected archive root.
+/// In particular, tar links and absolute or parent paths never reach disk.
+fn unpack_release_archive(archive: &Path, dest: &Path, root: &str) -> anyhow::Result<()> {
+    let source = std::fs::File::open(archive).context("opening update archive")?;
+    let decoder = flate2::read::GzDecoder::new(source);
+    let mut tarball = tar::Archive::new(decoder);
+    let mut unpacked = 0u64;
+    let mut entries = 0u64;
+    for item in tarball.entries().context("reading update archive")? {
+        let mut entry = item.context("reading update archive entry")?;
+        let path = entry.path().context("reading update archive path")?;
+        let mut components = path.components();
+        let first = components.next();
+        anyhow::ensure!(
+            matches!(first, Some(std::path::Component::Normal(name)) if name == root),
+            "update archive contains an unexpected root: {}",
+            path.display()
+        );
+        let mut relative = PathBuf::new();
+        for component in components {
+            match component {
+                std::path::Component::Normal(part) => relative.push(part),
+                _ => bail!("update archive contains an unsafe path"),
+            }
+        }
+        let target = dest.join(&relative);
+        let kind = entry.header().entry_type();
+        entries += 1;
+        anyhow::ensure!(entries <= 100_000, "update archive has too many entries");
+        if kind.is_dir() {
+            std::fs::create_dir_all(&target)
+                .with_context(|| format!("creating {}", target.display()))?;
+        } else if kind.is_file() {
+            anyhow::ensure!(
+                !relative.as_os_str().is_empty(),
+                "invalid archive file root"
+            );
+            unpacked = unpacked.saturating_add(entry.header().size()?);
+            anyhow::ensure!(
+                unpacked <= MAX_UNPACKED_BYTES,
+                "update archive expands too large"
+            );
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .with_context(|| format!("creating {}", target.display()))?;
+            let copied = std::io::copy(&mut entry, &mut output)?;
+            anyhow::ensure!(
+                copied == entry.header().size()?,
+                "truncated update archive entry"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let mode = entry.header().mode()? & 0o755;
+                std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))?;
+            }
+        } else {
+            bail!("update archive contains a link or special file");
+        }
+    }
+    anyhow::ensure!(entries > 0, "update archive is empty");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Managed (symlink) installs — the daemon/VPS path
 // ---------------------------------------------------------------------------
 
-/// Download + unpack the headless tarball into `app_root/<ver>` (idempotent —
-/// an already-staged version is reused). Returns the versioned dir.
+/// Download + safely unpack the headless tarball into `app_root/<ver>`.
 pub async fn stage_headless(
     edge_url: &str,
     manifest: &Manifest,
@@ -403,32 +603,34 @@ pub async fn stage_headless(
 ) -> anyhow::Result<PathBuf> {
     // Reject unsupported targets before creating a stage or making a request.
     require_managed_update_platform()?;
+    anyhow::ensure!(
+        manifest.verified,
+        "update manifest has not been signature verified"
+    );
+    validate_manifest(manifest)?;
     let version = &manifest.version;
     let dest = app_root.join(version);
-    if dest.join("luna").exists() {
-        return Ok(dest);
+    if dest.exists() {
+        let current = std::fs::read_link(app_root.join("current")).ok();
+        anyhow::ensure!(
+            current.as_deref() != Some(dest.as_path()),
+            "the staged release is already the active install"
+        );
+        std::fs::remove_dir_all(&dest).context("removing stale staged release")?;
     }
     let file = headless_artifact(version);
     let stage = app_root.join(format!(".stage-{version}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&stage);
+    if stage.exists() {
+        std::fs::remove_dir_all(&stage).context("removing stale headless staging directory")?;
+    }
     std::fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
     let result = async {
         let tarball = stage.join(&file);
         download_release_file(edge_url, manifest, &file, &tarball).await?;
         let unpacked = stage.join("unpacked");
         std::fs::create_dir_all(&unpacked)?;
-        // Tarball root is the versioned stage dir (see scripts/package-linux.sh);
-        // strip it exactly as install.sh does.
-        run(
-            "tar",
-            &[
-                "-xzf",
-                &tarball.to_string_lossy(),
-                "-C",
-                &unpacked.to_string_lossy(),
-                "--strip-components=1",
-            ],
-        )?;
+        let root = format!("luna-{version}-{}-{}", platform_key().0, platform_key().1);
+        unpack_release_archive(&tarball, &unpacked, &root)?;
         if !unpacked.join("luna").is_file() {
             bail!("tarball {file} did not contain a luna binary");
         }
@@ -450,6 +652,7 @@ pub async fn stage_headless(
 /// Atomically repoint `app_root/current` at `app_root/<ver>` (symlink to a temp
 /// name, then rename over — never a window with no `current`).
 pub fn apply_headless(app_root: &Path, version: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(version_parts(version).is_some(), "invalid release version");
     #[cfg(unix)]
     {
         let target = app_root.join(version);
@@ -490,8 +693,7 @@ pub fn restart_service() -> anyhow::Result<()> {
 // macOS app-bundle installs — the desktop path
 // ---------------------------------------------------------------------------
 
-/// Download + unpack the app tarball into `{data_dir}/updates/<ver>/LUNA.app`
-/// (idempotent). Returns the staged bundle path.
+/// Download + safely unpack the app tarball into a private staging directory.
 pub async fn stage_mac_app(
     edge_url: &str,
     manifest: &Manifest,
@@ -499,38 +701,108 @@ pub async fn stage_mac_app(
 ) -> anyhow::Result<PathBuf> {
     // Reject unsupported targets before creating a stage or making a request.
     require_mac_app_update_platform()?;
+    anyhow::ensure!(
+        manifest.verified,
+        "update manifest has not been signature verified"
+    );
+    validate_manifest(manifest)?;
     let version = &manifest.version;
     let dir = data_dir.join("updates").join(version);
     let staged = dir.join("LUNA.app");
-    if staged.join("Contents/MacOS/luna").exists() {
-        return Ok(staged);
+    // Re-download on every attempt. A stale extracted bundle is not an
+    // authenticated cache, even when its executable still exists.
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).context("removing stale app staging directory")?;
     }
-    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
     let file = mac_app_artifact(version);
     let tarball = dir.join(&file);
     download_release_file(edge_url, manifest, &file, &tarball).await?;
-    run(
-        "tar",
-        &[
-            "-xzf",
-            &tarball.to_string_lossy(),
-            "-C",
-            &dir.to_string_lossy(),
-        ],
-    )?;
+    unpack_release_archive(&tarball, &staged, "LUNA.app")?;
     std::fs::remove_file(&tarball).ok();
-    if !staged.join("Contents/MacOS/luna").exists() {
-        bail!("app tarball {file} did not contain LUNA.app");
-    }
+    verify_mac_bundle(&staged, Some(version))
+        .with_context(|| format!("app tarball {file} contains an invalid app"))?;
     Ok(staged)
 }
 
-/// Swap the installed bundle for the staged one: `ditto` the staged copy next to
-/// the target (metadata-preserving, cross-volume safe), then two renames — the
-/// old bundle is restored if the second rename fails.
+fn bundle_info(bundle: &Path) -> anyhow::Result<(String, String)> {
+    let info = plist::Value::from_file(bundle.join("Contents/Info.plist"))
+        .context("reading app Info.plist")?;
+    let dict = info.as_dictionary().context("invalid app Info.plist")?;
+    let identifier = dict
+        .get("CFBundleIdentifier")
+        .and_then(plist::Value::as_string)
+        .context("app bundle has no identifier")?;
+    let version = dict
+        .get("CFBundleShortVersionString")
+        .and_then(plist::Value::as_string)
+        .context("app bundle has no version")?;
+    Ok((identifier.to_owned(), version.to_owned()))
+}
+
+fn verify_mac_bundle(bundle: &Path, expected_version: Option<&str>) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        bundle.join("Contents/MacOS/luna").is_file(),
+        "app executable is missing"
+    );
+    let (identifier, version) = bundle_info(bundle)?;
+    anyhow::ensure!(
+        !identifier.is_empty() && version_parts(&version).is_some(),
+        "app bundle identity or version is invalid"
+    );
+    if let Some(expected) = expected_version {
+        anyhow::ensure!(
+            version == expected,
+            "app bundle version does not match release"
+        );
+    }
+    run(
+        "codesign",
+        &["--verify", "--deep", "--strict", &bundle.to_string_lossy()],
+    )?;
+    Ok(())
+}
+
+fn mac_backup_path(bundle: &Path) -> anyhow::Result<PathBuf> {
+    let parent = bundle
+        .parent()
+        .context("app bundle has no parent directory")?;
+    let name = bundle
+        .file_name()
+        .context("app bundle has no name")?
+        .to_string_lossy();
+    Ok(parent.join(format!(".{name}.previous")))
+}
+
+/// Swap the installed bundle for a verified copy. The previous app remains
+/// available until a later update so a failed relaunch can restore it.
 pub fn apply_mac_app(staged: &Path, bundle: &Path) -> anyhow::Result<()> {
     require_mac_app_update_platform()?;
+    let expected_version = staged
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .context("staged app has no release version")?;
+    anyhow::ensure!(
+        version_parts(expected_version).is_some(),
+        "invalid staged release version"
+    );
+    verify_mac_bundle(staged, Some(expected_version))?;
+    let (installed_id, installed_version) = bundle_info(bundle)?;
+    let (incoming_id, incoming_version) = bundle_info(staged)?;
+    anyhow::ensure!(
+        installed_id == incoming_id,
+        "update app identifier does not match this installation"
+    );
+    anyhow::ensure!(
+        version_newer(&incoming_version, &installed_version),
+        "update app version is not newer than this installation"
+    );
     let parent = bundle
         .parent()
         .context("app bundle has no parent directory")?;
@@ -540,47 +812,99 @@ pub fn apply_mac_app(staged: &Path, bundle: &Path) -> anyhow::Result<()> {
         .to_string_lossy();
     let pid = std::process::id();
     let fresh = parent.join(format!(".{name}.new-{pid}"));
-    let old = parent.join(format!(".{name}.old-{pid}"));
+    let old = mac_backup_path(bundle)?;
     let _ = std::fs::remove_dir_all(&fresh);
     run(
         "ditto",
         &[&staged.to_string_lossy(), &fresh.to_string_lossy()],
     )?;
+    if let Err(err) = verify_mac_bundle(&fresh, Some(expected_version)) {
+        let _ = std::fs::remove_dir_all(&fresh);
+        return Err(err).context("copied update failed verification");
+    }
+    if old.exists() {
+        std::fs::remove_dir_all(&old).context("removing previous update backup")?;
+    }
     std::fs::rename(bundle, &old).context("moving the current app aside")?;
     if let Err(err) = std::fs::rename(&fresh, bundle) {
-        let _ = std::fs::rename(&old, bundle);
+        std::fs::rename(&old, bundle).context("restoring current app after install failure")?;
         let _ = std::fs::remove_dir_all(&fresh);
         return Err(err).context("installing the new app bundle");
     }
-    let _ = std::fs::remove_dir_all(&old);
     Ok(())
 }
 
-/// Detached relauncher: waits for THIS process to exit, then `open`s the bundle.
-/// (Opening before exit would race the single-instance engine lock and the IPC
-/// port.) The caller quits the app after this returns.
-pub fn relaunch_app_after_exit(bundle: &Path) {
+fn apply_and_relaunch_mac_app(staged: &Path, bundle: &Path) -> anyhow::Result<()> {
+    apply_mac_app(staged, bundle)?;
+    if let Err(err) = relaunch_app_after_exit(bundle) {
+        let backup = mac_backup_path(bundle)?;
+        let failed = bundle.with_extension(format!("failed-update-{}", std::process::id()));
+        std::fs::rename(bundle, &failed).context("moving failed update aside")?;
+        std::fs::rename(&backup, bundle).context("restoring app after relauncher failure")?;
+        let _ = std::fs::remove_dir_all(failed);
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Detached relauncher waits for this process to quit. If LaunchServices
+/// cannot open the replacement, it restores the previous bundle and opens it.
+pub fn relaunch_app_after_exit(bundle: &Path) -> anyhow::Result<()> {
+    require_mac_app_update_platform()?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
-        let pid = std::process::id();
-        let script = format!(
-            "while /bin/kill -0 {pid} 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"{}\"",
-            bundle.display()
-        );
-        let mut command = std::process::Command::new("/bin/sh");
-        command
-            .args(["-c", &script])
+        let backup = mac_backup_path(bundle)?;
+        let script = r#"
+old_pid="$1"; bundle="$2"; backup="$3"
+attempt=0
+while /bin/kill -0 "$old_pid" 2>/dev/null; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 600 ] || exit 1
+  /bin/sleep 0.2
+done
+if /usr/bin/open -n -a "$bundle"; then
+  attempt=0
+  stable=0
+  while [ "$attempt" -lt 100 ]; do
+    if /bin/ps -axo command= | /usr/bin/awk -v exe="$bundle/Contents/MacOS/luna" \
+      'index($0, exe) == 1 && (length($0) == length(exe) || substr($0, length(exe)+1, 1) == " ") { found=1 } END { exit !found }'; then
+      stable=$((stable + 1))
+      [ "$stable" -lt 25 ] || exit 0
+    else
+      stable=0
+    fi
+    attempt=$((attempt + 1))
+    /bin/sleep 0.2
+  done
+fi
+failed="${bundle}.failed-update-$$"
+/bin/mv "$bundle" "$failed" || exit 1
+/bin/mv "$backup" "$bundle" || { /bin/mv "$failed" "$bundle"; exit 1; }
+/usr/bin/open -n -a "$bundle"
+"#;
+        std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                script,
+                "luna-update-relaunch",
+                &std::process::id().to_string(),
+                &bundle.to_string_lossy(),
+                &backup.to_string_lossy(),
+            ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .process_group(0);
-        if let Err(err) = command.spawn() {
-            tracing::error!(error = %err, "failed to spawn the relauncher");
-        }
+            .process_group(0)
+            .spawn()
+            .context("spawning app relauncher")?;
+        Ok(())
     }
     #[cfg(not(unix))]
-    let _ = bundle;
+    {
+        let _ = bundle;
+        unreachable!()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -785,8 +1109,11 @@ impl Updater {
             }
             Err(err) => {
                 tracing::debug!(error = %err, "update check failed");
-                self.status_tx
-                    .send_modify(|s| s.error = Some(format!("{err:#}")));
+                self.status_tx.send_modify(|status| {
+                    status.update_available = false;
+                    status.latest_version = None;
+                    status.error = Some(format!("{err:#}"));
+                });
                 false
             }
         }
@@ -851,8 +1178,8 @@ mod tests {
         assert!(version_newer("0.1.1", "0.1.0"));
         assert!(version_newer("0.2.0", "0.1.9"));
         assert!(version_newer("0.1.10", "0.1.9"));
-        assert!(version_newer("v0.1.1", "0.1.0"));
-        assert!(version_newer("0.1.0.1", "0.1.0"));
+        assert!(!version_newer("v0.1.1", "0.1.0"));
+        assert!(!version_newer("0.1.0.1", "0.1.0"));
         assert!(!version_newer("0.1.0", "0.1.0"));
         assert!(!version_newer("0.1.0", "0.1.1"));
         // Garbage never counts as newer.
@@ -933,6 +1260,7 @@ mod tests {
         let manifest = Manifest {
             version: "9.9.9".into(),
             files: BTreeMap::new(),
+            ..Default::default()
         };
         let app_root = tmp.path().join("app");
         let data_dir = tmp.path().join("data");

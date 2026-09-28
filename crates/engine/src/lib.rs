@@ -1295,12 +1295,14 @@ impl Engine {
             tokens: Arc::new(auth.clone()),
         });
         core.previews.start(projects, preview_signaling).await;
-        // LUNA has no owned, signed release feed yet. Never infer an update
-        // channel from Luna's edge or a packaging layout: that could download
-        // and apply a different product over this fork.
-        let check_updates = false;
+        // Installed builds check the signed GitHub Releases feed even when the
+        // engine is local-only and has no sync edge configured.
+        let check_updates = !matches!(
+            luna_update::detect_install(),
+            luna_update::InstallKind::Unmanaged
+        );
         if check_updates {
-            // Release checker: polls {edge}/releases on a 6h cadence; headless
+            // Release checker: polls GitHub Releases on a 6h cadence; headless
             // installs with LUNA_AUTO_UPDATE=1 apply + restart themselves — gated
             // on quiescence so a restart never lands under a live run or open PTY.
             let quiescent: luna_update::QuiescentCheck = {

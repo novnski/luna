@@ -20,10 +20,10 @@ TARBALL="$STAGE.tar.gz"
 
 cd "$ROOT"
 if [[ "$PROFILE" == "release" ]]; then
-  cargo build --release -p luna
+  cargo build --locked --release -p luna
   BIN="$ROOT/target/release/luna"
 else
-  cargo build -p luna
+  cargo build --locked -p luna
   BIN="$ROOT/target/debug/luna"
 fi
 
