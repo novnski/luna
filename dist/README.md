@@ -48,7 +48,7 @@ release setup and operation. The manual packaging steps, for reference
      dist/macos/Info.plist > LUNA.app/Contents/Info.plist
    ```
 3. Icon: generate `luna.icns` from `dist/macos/luna.iconset`. Each frame uses
-   the supplied size-specific Default artwork, centered on an 824/1024
+   size-specific Porcelain light artwork, centered on an 824/1024
    (80.47%) legacy-ICNS tile within its transparent canvas. This keeps the
    flattened icon's apparent size aligned with native macOS icons on systems
    that don't apply the newer Icon Composer mask and scale automatically.
@@ -58,6 +58,10 @@ release setup and operation. The manual packaging steps, for reference
    iconutil -c icns dist/macos/luna.iconset \
      -o LUNA.app/Contents/Resources/luna.icns
    ```
+   The running app switches to Monolith for dark appearance, including the
+   resolved System setting. Both multi-resolution variants are embedded in
+   the binary. See [app icons](../docs/reference/app-icons.md) for editable
+   Icon Composer sources, regeneration, and native readback QA.
 4. Optionally sign + notarize to reduce macOS first-launch warnings:
    ```sh
    codesign --deep --force --options runtime --sign "Developer ID Application: …" LUNA.app

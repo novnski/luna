@@ -12,6 +12,7 @@
 //! - [`shell`] — sidebar + main panel + right-pane scaffold + gate;
 //! - [`loaders`] — luna pulse loader, gradient spinner, boot splash.
 
+mod app_icon;
 pub mod app_menus;
 pub mod appearance;
 pub mod appshots;

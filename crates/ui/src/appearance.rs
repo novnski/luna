@@ -127,6 +127,7 @@ pub fn init(
     });
     sync_ns_appearance(mode);
     let appearance = resolve(mode, system);
+    crate::app_icon::sync(appearance);
     Theme::install_selection(
         appearance,
         resolved_themes.variant_id(model_appearance(appearance)),
@@ -283,6 +284,7 @@ pub fn apply(cx: &mut App) {
     };
     sync_ns_appearance(state.mode);
     let wanted = resolve(state.mode, state.system);
+    crate::app_icon::sync(wanted);
     let accent = state.accent;
     let surface = state.surface;
     let variant_id = state.themes.variant_id(model_appearance(wanted)).to_owned();

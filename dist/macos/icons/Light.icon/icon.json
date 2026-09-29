@@ -1,0 +1,48 @@
+{
+  "fill": {
+    "automatic-gradient": "extended-srgb:0.05000,0.05000,0.07000,1.00000"
+  },
+  "groups": [
+    {
+      "name": "Lunar mark",
+      "layers": [
+        {
+          "image-name": "0_Moon.svg",
+          "name": "Moon",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.2
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "name": "Background",
+      "layers": [
+        {
+          "image-name": "background.svg",
+          "name": "background",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

@@ -38,6 +38,10 @@ name = "appearance-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "app-icon-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "usage-fixture"
 required-features = ["appshots-fixture"]
 
