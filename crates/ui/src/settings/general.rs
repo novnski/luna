@@ -4,7 +4,7 @@ use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*, px};
 use luna_proto::FollowUpBehavior;
 
 use crate::popover::{self, ScrollRailHost};
-use crate::settings::{ComposerSendBehavior, UiSettings, widgets};
+use crate::settings::{ComposerSendBehavior, TaskConfirmation, UiSettings, widgets};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy)]
@@ -15,6 +15,7 @@ pub enum GeneralEvent {
     ShowContextUsageChanged(bool),
     OpenWebLinksInLunaChanged(bool),
     KeepAwakeWhileRunningChanged(bool),
+    TaskConfirmationChanged(TaskConfirmation, bool),
 }
 
 #[derive(Clone, Copy)]
@@ -23,6 +24,7 @@ enum GeneralToggle {
     OpenLinks,
     KeepAwake,
     AutomaticRetries,
+    TaskConfirmation(TaskConfirmation),
 }
 
 pub struct GeneralPage {
@@ -33,6 +35,9 @@ pub struct GeneralPage {
     show_context_usage: bool,
     open_web_links_in_luna: bool,
     keep_awake_while_running: bool,
+    confirm_archive: bool,
+    confirm_settle: bool,
+    confirm_delete: bool,
 }
 
 impl EventEmitter<GeneralEvent> for GeneralPage {}
@@ -47,6 +52,9 @@ impl GeneralPage {
             show_context_usage: settings.show_context_usage,
             open_web_links_in_luna: settings.open_web_links_in_luna,
             keep_awake_while_running: settings.keep_awake_while_running,
+            confirm_archive: settings.confirm_archive,
+            confirm_settle: settings.confirm_settle,
+            confirm_delete: settings.confirm_delete,
         }
     }
 
@@ -54,9 +62,15 @@ impl GeneralPage {
     pub fn sync(&mut self, settings: &UiSettings, cx: &mut Context<Self>) {
         if self.composer_send_behavior != settings.composer_send_behavior
             || self.open_web_links_in_luna != settings.open_web_links_in_luna
+            || self.confirm_archive != settings.confirm_archive
+            || self.confirm_settle != settings.confirm_settle
+            || self.confirm_delete != settings.confirm_delete
         {
             self.composer_send_behavior = settings.composer_send_behavior;
             self.open_web_links_in_luna = settings.open_web_links_in_luna;
+            self.confirm_archive = settings.confirm_archive;
+            self.confirm_settle = settings.confirm_settle;
+            self.confirm_delete = settings.confirm_delete;
             cx.notify();
         }
     }
@@ -113,6 +127,15 @@ impl GeneralPage {
                 self.set_automatic_retries(!self.automatic_retries_enabled, cx);
                 return;
             }
+            GeneralToggle::TaskConfirmation(action) => {
+                let enabled = match action {
+                    TaskConfirmation::Archive => &mut self.confirm_archive,
+                    TaskConfirmation::Settle => &mut self.confirm_settle,
+                    TaskConfirmation::Delete => &mut self.confirm_delete,
+                };
+                *enabled = !*enabled;
+                cx.emit(GeneralEvent::TaskConfirmationChanged(action, *enabled));
+            }
         }
         cx.notify();
     }
@@ -148,6 +171,24 @@ impl GeneralPage {
                 "Retry temporary overloads and known subscription resets within four attempts and six hours. Other failures still require review.",
                 self.automatic_retries_enabled,
                 "general-automatic-retries-toggle",
+            ),
+            GeneralToggle::TaskConfirmation(TaskConfirmation::Archive) => (
+                "Confirm archive",
+                "Ask before moving a task to Archived.",
+                self.confirm_archive,
+                "general-confirm-archive-toggle",
+            ),
+            GeneralToggle::TaskConfirmation(TaskConfirmation::Settle) => (
+                "Confirm settle",
+                "Ask before moving a task to Settled.",
+                self.confirm_settle,
+                "general-confirm-settle-toggle",
+            ),
+            GeneralToggle::TaskConfirmation(TaskConfirmation::Delete) => (
+                "Confirm delete",
+                "Ask before permanently deleting a task and its LUNA-owned records.",
+                self.confirm_delete,
+                "general-confirm-delete-toggle",
             ),
         };
         let accent = theme.accent;
@@ -448,6 +489,23 @@ impl Render for GeneralPage {
                                                 ))
                                             }),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(26.0))
+                                    .child(widgets::field_label(&theme, "Task confirmations"))
+                                    .child(widgets::section_card(&theme).children(
+                                        TaskConfirmation::ALL.into_iter().enumerate().map(
+                                            |(index, action)| {
+                                                self.switch_row(
+                                                    &theme,
+                                                    GeneralToggle::TaskConfirmation(action),
+                                                    index == 0,
+                                                    cx,
+                                                )
+                                            },
+                                        ),
+                                    )),
                             ),
                     ),
             )

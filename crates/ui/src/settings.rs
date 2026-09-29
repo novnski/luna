@@ -628,6 +628,17 @@ pub enum TaskNotificationPolicy {
     Muted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskConfirmation {
+    Archive,
+    Settle,
+    Delete,
+}
+
+impl TaskConfirmation {
+    pub const ALL: [Self; 3] = [Self::Archive, Self::Settle, Self::Delete];
+}
+
 impl TaskNotificationPolicy {
     pub fn next(self) -> Self {
         match self {
@@ -684,6 +695,10 @@ pub struct UiSettings {
     pub sidebar_sort: SidebarSort,
     /// Move idle, seen, unpinned tasks into Settled after this many days.
     pub sidebar_auto_settle_after_days: Option<u16>,
+    /// Ask before applying these task actions. Each dialog can disable its own prompt.
+    pub confirm_archive: bool,
+    pub confirm_settle: bool,
+    pub confirm_delete: bool,
     /// Optional harness branding and repository metadata shown below each
     /// session title.
     pub sidebar_show_harness: bool,
@@ -832,6 +847,9 @@ impl Default for UiSettings {
             sidebar_organization: SidebarOrganization::InOneList,
             sidebar_sort: SidebarSort::LastUpdated,
             sidebar_auto_settle_after_days: DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+            confirm_archive: true,
+            confirm_settle: true,
+            confirm_delete: true,
             sidebar_show_harness: true,
             sidebar_show_branch: true,
             sidebar_show_pull_request: true,
@@ -894,6 +912,24 @@ impl Default for UiSettings {
             new_thread_composer_background: None,
             new_thread_background_effect: NewThreadBackgroundEffect::None,
             legacy_accent_color: None,
+        }
+    }
+}
+
+impl UiSettings {
+    pub fn confirms(&self, action: TaskConfirmation) -> bool {
+        match action {
+            TaskConfirmation::Archive => self.confirm_archive,
+            TaskConfirmation::Settle => self.confirm_settle,
+            TaskConfirmation::Delete => self.confirm_delete,
+        }
+    }
+
+    pub fn set_confirmation(&mut self, action: TaskConfirmation, enabled: bool) {
+        match action {
+            TaskConfirmation::Archive => self.confirm_archive = enabled,
+            TaskConfirmation::Settle => self.confirm_settle = enabled,
+            TaskConfirmation::Delete => self.confirm_delete = enabled,
         }
     }
 }

@@ -57,7 +57,8 @@ use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, JUMP_SLOTS, KeymapConfig, RIGHT_PANE_DEFAULT,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
     SidebarOrganization, SidebarSort, TERMINAL_DEFAULT_HEIGHT, TERMINAL_MAX_VH,
-    TERMINAL_MIN_HEIGHT, UiSettings, badge_combo, jump_hints_visible, platform_combo,
+    TERMINAL_MIN_HEIGHT, TaskConfirmation, UiSettings, badge_combo, jump_hints_visible,
+    platform_combo,
 };
 use crate::state::{
     AppState, ConnectionStatus, EngineBootConfig, EngineMode, GatePhase, Indicator, OrgRow,
@@ -1957,8 +1958,11 @@ pub struct Shell {
     /// invalidates profile-owned history reviews and delayed open responses.
     history_engine_generation: u64,
     move_project_dialog: Option<MoveProjectDialog>,
-    /// Chat id awaiting delete confirmation.
-    delete_confirm: Option<String>,
+    /// Task action waiting for the person to confirm it.
+    task_action_confirm: Option<(String, TaskConfirmation)>,
+    task_action_dont_show_again: bool,
+    /// Local sidebar projection while the durable command catches up.
+    pending_task_actions: std::collections::HashMap<String, TaskConfirmation>,
     /// Space-row context menu (dropdown rows): (space id, window position).
     space_menu: popover::Popup<(String, Point<Pixels>)>,
     rename_space_dialog: Option<RenameSpaceDialog>,
@@ -2422,7 +2426,9 @@ impl Shell {
             history_flow_generation: 0,
             history_engine_generation,
             move_project_dialog: None,
-            delete_confirm: None,
+            task_action_confirm: None,
+            task_action_dont_show_again: false,
+            pending_task_actions: std::collections::HashMap::new(),
             space_menu: popover::Popup::default(),
             rename_space_dialog: None,
             delete_space_confirm: None,
@@ -2608,6 +2614,23 @@ impl Shell {
     }
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        self.pending_task_actions.retain(|task_id, action| {
+            let chat = state.read(cx).chats.iter().find(|chat| chat.id == *task_id);
+            match action {
+                TaskConfirmation::Archive => chat.is_some_and(|chat| !chat.archived),
+                TaskConfirmation::Settle => chat.is_some_and(|chat| {
+                    !chat
+                        .settlement_override
+                        .as_ref()
+                        .is_some_and(|override_state| {
+                            override_state.disposition == luna_proto::SettlementDisposition::Settled
+                                && override_state.at
+                                    >= chat.last_message_at.unwrap_or(chat.created_at)
+                        })
+                }),
+                TaskConfirmation::Delete => chat.is_some(),
+            }
+        });
         let engine_generation = state.read(cx).engine_generation();
         let engine_changed = history_engine_generation_changed(
             &mut self.history_engine_generation,
@@ -2682,7 +2705,7 @@ impl Shell {
             match which.as_str() {
                 "rename" => self.open_rename_chat(first, cx),
                 "delete" => {
-                    self.delete_confirm = Some(first);
+                    self.request_task_action(first, TaskConfirmation::Delete, cx);
                 }
                 _ => {}
             }
@@ -4520,6 +4543,9 @@ impl Shell {
                                     this.settings.keep_awake_while_running = *enabled;
                                     this.reconcile_keep_awake(cx);
                                 }
+                                GeneralEvent::TaskConfirmationChanged(action, enabled) => {
+                                    this.settings.set_confirmation(*action, *enabled);
+                                }
                             }
                             this.schedule_save(cx);
                             if matches!(event, GeneralEvent::AutomaticRetriesChanged(_)) {
@@ -4873,6 +4899,24 @@ impl Shell {
             return;
         };
         let deleting = intent.get("kind").and_then(|kind| kind.as_str()) == Some("delete");
+        let pending_action = match intent.get("kind").and_then(|kind| kind.as_str()) {
+            Some("setArchived")
+                if intent.get("archived").and_then(|value| value.as_bool()) == Some(true) =>
+            {
+                Some(TaskConfirmation::Archive)
+            }
+            Some("setSettled")
+                if intent.get("settled").and_then(|value| value.as_bool()) == Some(true) =>
+            {
+                Some(TaskConfirmation::Settle)
+            }
+            Some("delete") => Some(TaskConfirmation::Delete),
+            _ => None,
+        };
+        if let Some(action) = pending_action {
+            self.pending_task_actions.insert(task_id.clone(), action);
+            cx.notify();
+        }
         let prior_notice = self.sidebar_notice.as_ref().map(|notice| notice.id);
         let target_device = self
             .state
@@ -4882,7 +4926,55 @@ impl Shell {
             .find(|chat| chat.id == task_id)
             .map(|chat| chat.device_id.clone());
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
-            let result = crate::task_commands::execute(&engine, &task_id, intent).await;
+            let mut result = crate::task_commands::execute(&engine, &task_id, intent).await;
+            if pending_action.is_some()
+                && let Ok(initial) = &result
+                && initial.status == luna_proto::CommandReceiptStatus::Pending
+            {
+                let command_id = initial.command_id.clone();
+                for _ in 0..40 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    let mut params = serde_json::json!({ "commandId": command_id });
+                    if let Some(device) = target_device.as_deref() {
+                        params["targetDeviceId"] = device.into();
+                    }
+                    match engine
+                        .client()
+                        .call_as::<Option<luna_proto::CommandReceipt>>(
+                            methods::GET_TASK_COMMAND_RECEIPT,
+                            params,
+                        )
+                        .await
+                    {
+                        Ok(Some(receipt)) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
+                            result = Ok(receipt);
+                            break;
+                        }
+                        Ok(Some(receipt)) if receipt.status.is_terminal() => {
+                            result = Err(luna_rpc::RpcError::Failed(
+                                crate::task_commands::failure_message(
+                                    &receipt,
+                                    "Could not update this task.",
+                                ),
+                            ));
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            result = Err(error);
+                            break;
+                        }
+                    }
+                }
+                if result.as_ref().is_ok_and(|receipt| {
+                    receipt.status == luna_proto::CommandReceiptStatus::Pending
+                }) {
+                    result = Err(luna_rpc::RpcError::Failed(
+                        "LUNA could not confirm this action yet. Check the task before trying again."
+                            .into(),
+                    ));
+                }
+            }
             if let Err(err) = &result {
                 let message = match err {
                     luna_rpc::RpcError::Closed | luna_rpc::RpcError::Transport(_) => {
@@ -4893,6 +4985,9 @@ impl Shell {
                 };
                 tracing::warn!(task_id, %err, "task action failed");
                 this.update(cx, |shell, cx| {
+                    if pending_action.is_some() {
+                        shell.pending_task_actions.remove(&task_id);
+                    }
                     shell.sidebar_notice = Some(SidebarNotice::transient_error(message));
                     cx.notify();
                 })
@@ -5775,13 +5870,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_chat_menu(cx);
-        let task_id = chat_id;
-        self.mutate_task(
-            task_id,
-            serde_json::json!({ "kind": "setArchived", "archived": archived }),
-            cx,
-        );
-        cx.notify();
+        if archived {
+            self.request_task_action(chat_id, TaskConfirmation::Archive, cx);
+        } else {
+            self.mutate_task(
+                chat_id,
+                serde_json::json!({ "kind": "setArchived", "archived": false }),
+                cx,
+            );
+        }
     }
 
     pub(super) fn set_chat_settled(
@@ -5791,12 +5888,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_chat_menu(cx);
-        self.mutate_task(
-            chat_id,
-            serde_json::json!({ "kind": "setSettled", "settled": settled }),
-            cx,
-        );
-        cx.notify();
+        if settled {
+            self.request_task_action(chat_id, TaskConfirmation::Settle, cx);
+        } else {
+            self.mutate_task(
+                chat_id,
+                serde_json::json!({ "kind": "setSettled", "settled": false }),
+                cx,
+            );
+        }
     }
 
     /// A jump shortcut: open the sidebar row at `slot`. A slot past the end of
@@ -5850,10 +5950,55 @@ impl Shell {
         }
     }
 
-    fn delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
-        self.delete_confirm = None;
-        self.mutate_task(chat_id, serde_json::json!({ "kind": "delete" }), cx);
+    fn request_task_action(
+        &mut self,
+        chat_id: String,
+        action: TaskConfirmation,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.confirms(action) {
+            self.task_action_confirm = Some((chat_id, action));
+            self.task_action_dont_show_again = false;
+        } else {
+            self.execute_task_action(chat_id, action, cx);
+        }
         cx.notify();
+    }
+
+    fn execute_task_action(
+        &mut self,
+        chat_id: String,
+        action: TaskConfirmation,
+        cx: &mut Context<Self>,
+    ) {
+        self.task_action_confirm = None;
+        let intent = match action {
+            TaskConfirmation::Archive => {
+                serde_json::json!({ "kind": "setArchived", "archived": true })
+            }
+            TaskConfirmation::Settle => {
+                serde_json::json!({ "kind": "setSettled", "settled": true })
+            }
+            TaskConfirmation::Delete => serde_json::json!({ "kind": "delete" }),
+        };
+        self.mutate_task(chat_id, intent, cx);
+        cx.notify();
+    }
+
+    fn confirm_task_action(&mut self, cx: &mut Context<Self>) {
+        let Some((chat_id, action)) = self.task_action_confirm.take() else {
+            return;
+        };
+        if self.task_action_dont_show_again {
+            self.settings.set_confirmation(action, false);
+            settings::update(SavePolicy::Immediate, cx, |settings| {
+                settings.set_confirmation(action, false);
+            });
+            if let Some(page) = &self.general_page {
+                page.update(cx, |page, cx| page.sync(&self.settings, cx));
+            }
+        }
+        self.execute_task_action(chat_id, action, cx);
     }
 
     fn request_sign_out(&mut self, cx: &mut Context<Self>) {
@@ -9348,7 +9493,7 @@ impl Shell {
         // their existing behavior: only surfaces that already have a Cancel
         // path close here; the others remain explicit blockers.
         if self.sync_flow.has_visible_overlay()
-            || self.delete_confirm.is_some()
+            || self.task_action_confirm.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
@@ -9763,8 +9908,11 @@ impl Shell {
                             .text_color(theme.danger)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.close_chat_menu(cx);
-                                this.delete_confirm = Some(delete_id.clone());
-                                cx.notify();
+                                this.request_task_action(
+                                    delete_id.clone(),
+                                    TaskConfirmation::Delete,
+                                    cx,
+                                );
                             }))
                             .child(
                                 icon(icons::TRASH_BIN_MINIMALISTIC)
@@ -10361,7 +10509,7 @@ impl Shell {
             overlays.push(overlay);
         }
 
-        if let Some(chat_id) = self.delete_confirm.clone() {
+        if let Some((chat_id, action)) = self.task_action_confirm.clone() {
             let title = transcript::single_line(
                 &self
                     .state
@@ -10372,16 +10520,88 @@ impl Shell {
                     .and_then(|c| c.title.clone())
                     .unwrap_or_else(|| "New session".into()),
             );
+            let (heading, body, button_label) = match action {
+                TaskConfirmation::Archive => (
+                    "Archive task?",
+                    format!(
+                        "Move \u{201C}{title}\u{201D} to Archived? You can unarchive it later."
+                    ),
+                    "Archive",
+                ),
+                TaskConfirmation::Settle => (
+                    "Settle task?",
+                    format!(
+                        "Move \u{201C}{title}\u{201D} to Settled? You can return it to Active later."
+                    ),
+                    "Settle",
+                ),
+                TaskConfirmation::Delete => (
+                    "Delete session?",
+                    format!(
+                        "\u{201C}{title}\u{201D} and its LUNA-owned local records will be permanently deleted. This can\u{2019}t be undone."
+                    ),
+                    "Delete",
+                ),
+            };
+            let checked = self.task_action_dont_show_again;
+            let confirm_button = if action == TaskConfirmation::Delete {
+                popover::btn_danger(&theme, button_label)
+            } else {
+                popover::btn_primary(&theme, button_label)
+            };
             let card = popover::dialog_card(&theme)
-                .child(popover::dialog_title(&theme, "Delete session?"))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(
-                    &theme,
-                    format!("\u{201C}{title}\u{201D} and its LUNA-owned local records will be permanently deleted. This can\u{2019}t be undone."),
-                )))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(
-                    &theme,
-                    "LUNA-managed execution will stop. LUNA removes its local transcript snapshot, unsent draft, terminal history and verified unshared draft uploads. Independent forks, project files, shared attachments, synced copies and provider-private data remain. Provider cleanup is unsupported.",
-                )))
+                .id("task-action-card")
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.task_action_confirm = None;
+                        cx.notify();
+                    }
+                }))
+                .child(popover::dialog_title(&theme, heading))
+                .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, body)))
+                .when(action == TaskConfirmation::Delete, |card| {
+                    card.child(div().mt(px(6.0)).child(popover::dialog_body(
+                        &theme,
+                        "LUNA-managed execution will stop. LUNA removes its local transcript snapshot, unsent draft, terminal history and verified unshared draft uploads. Independent forks, project files, shared attachments, synced copies and provider-private data remain. Provider cleanup is unsupported.",
+                    )))
+                })
+                .child(
+                    div()
+                        .id("task-action-dont-show-again")
+                        .mt(px(16.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .role(gpui::Role::CheckBox)
+                        .aria_label("Don't show this confirmation again")
+                        .aria_toggled(if checked { gpui::Toggled::True } else { gpui::Toggled::False })
+                        .tab_index(0)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.task_action_dont_show_again = !this.task_action_dont_show_again;
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                            if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.stop_propagation();
+                                this.task_action_dont_show_again = !this.task_action_dont_show_again;
+                                cx.notify();
+                            }
+                        }))
+                        .child(
+                            div()
+                                .size(px(16.0))
+                                .rounded(px(4.0))
+                                .border_1()
+                                .border_color(if checked { theme.accent } else { theme.border })
+                                .bg(if checked { theme.accent } else { theme.glass_hover() })
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(checked, |box_| box_.child(icon(icons::CHECK).size(px(12.0)).text_color(theme.on_solid))),
+                        )
+                        .child(popover::dialog_body(&theme, "Don't show this again")),
+                )
                 .child(
                     div()
                         .mt(px(16.0))
@@ -10390,23 +10610,21 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "delete-chat-cancel")
-                                .id("delete-chat-cancel")
+                            popover::btn_ghost(&theme, "Cancel", "task-action-cancel")
+                                .id("task-action-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.delete_confirm = None;
+                                    this.task_action_confirm = None;
                                     cx.notify();
                                 })),
                         )
                         .child(
-                            popover::btn_danger(&theme, "Delete")
-                                .id("delete-chat-confirm")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.delete_chat(chat_id.clone(), cx)
-                                })),
+                            confirm_button
+                                .id("task-action-confirm")
+                                .on_click(cx.listener(|this, _, _, cx| this.confirm_task_action(cx))),
                         ),
                 )
                 .into_any_element();
-            overlays.push(popover::modal("delete-chat-dialog", viewport, card));
+            overlays.push(popover::modal("task-action-dialog", viewport, card));
         }
 
         if let Some(sync) = self.render_sync_overlay(viewport, cx) {

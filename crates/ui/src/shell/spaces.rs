@@ -104,7 +104,7 @@ pub(super) fn is_settled_chat(
     if chat.archived
         || chat.pinned_order.is_some()
         || has_attention
-        || status != ChatIndicator::Idle
+        || !matches!(status, ChatIndicator::Idle | ChatIndicator::Completed)
     {
         return false;
     }
@@ -113,6 +113,11 @@ pub(super) fn is_settled_chat(
         && override_state.at >= last_activity
     {
         return override_state.disposition == luna_proto::SettlementDisposition::Settled;
+    }
+    // A completed turn can be settled deliberately, but only an idle task
+    // qualifies for age-based automatic settling.
+    if status != ChatIndicator::Idle {
+        return false;
     }
     let Some(days) = auto_settle_after_days else {
         return false;
@@ -128,18 +133,22 @@ fn active_page<'a>(
     now: chrono::DateTime<Utc>,
     auto_settle_after_days: Option<u16>,
     attention_task_keys: &std::collections::HashSet<(String, String)>,
+    pending_actions: &std::collections::HashMap<String, TaskConfirmation>,
     shown: usize,
 ) -> (Vec<(ChatIndicator, &'a luna_proto::Chat)>, usize) {
     let active: Vec<_> = chats
         .into_iter()
-        .filter(|(status, chat)| {
-            !is_settled_chat(
+        .filter(|(status, chat)| match pending_actions.get(&chat.id) {
+            Some(
+                TaskConfirmation::Archive | TaskConfirmation::Settle | TaskConfirmation::Delete,
+            ) => false,
+            None => !is_settled_chat(
                 chat,
                 *status,
                 now,
                 auto_settle_after_days,
                 attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
-            )
+            ),
         })
         .collect();
     let limit = shown.max(ACTIVE_PAGE);
@@ -1458,6 +1467,7 @@ impl Shell {
                 &recent_completion_keys,
             )
             .into_iter()
+            .filter(|(_, chat)| !self.pending_task_actions.contains_key(&chat.id))
             .map(|(_, chat)| chat.clone())
             .collect()
         } else {
@@ -1471,6 +1481,7 @@ impl Shell {
                 now,
                 self.settings.sidebar_auto_settle_after_days,
                 &settlement_task_keys,
+                &self.pending_task_actions,
                 self.active_shown,
             )
             .0
@@ -1546,12 +1557,16 @@ impl Shell {
                     now,
                     self.settings.sidebar_auto_settle_after_days,
                     &settlement_task_keys,
+                    &self.pending_task_actions,
                     self.active_shown,
                 )
             };
             self.sidebar_hidden_active_count = hidden_count;
             chats
                 .into_iter()
+                .filter(|(_, chat)| {
+                    !activity_view || !self.pending_task_actions.contains_key(&chat.id)
+                })
                 .map(|(status, chat)| {
                     let has_attention =
                         settlement_task_keys.contains(&(chat.device_id.clone(), chat.id.clone()));
@@ -1852,15 +1867,20 @@ impl Shell {
             state
                 .sidebar_chats(now, self.settings.space_filter.as_deref())
                 .into_iter()
-                .filter(|(status, chat)| {
-                    is_settled_chat(
-                        chat,
-                        *status,
-                        now,
-                        self.settings.sidebar_auto_settle_after_days,
-                        attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
-                    )
-                })
+                .filter(
+                    |(status, chat)| match self.pending_task_actions.get(&chat.id) {
+                        Some(TaskConfirmation::Settle) => true,
+                        Some(TaskConfirmation::Archive | TaskConfirmation::Delete) => false,
+                        None => is_settled_chat(
+                            chat,
+                            *status,
+                            now,
+                            self.settings.sidebar_auto_settle_after_days,
+                            attention_task_keys
+                                .contains(&(chat.device_id.clone(), chat.id.clone())),
+                        ),
+                    },
+                )
                 .map(|(_, chat)| chat.clone())
                 .collect()
         };
@@ -2056,6 +2076,9 @@ impl Shell {
                 .chats
                 .iter()
                 .filter(|c| c.archived)
+                .filter(|chat| {
+                    self.pending_task_actions.get(&chat.id) != Some(&TaskConfirmation::Delete)
+                })
                 .filter(|chat| {
                     chat.space_id
                         .as_deref()
