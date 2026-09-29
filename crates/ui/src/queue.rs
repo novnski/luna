@@ -79,7 +79,7 @@ impl Render for QueueActionTooltip {
             .border_1()
             .border_color(theme.border)
             .bg(crate::popover::surface_bg(theme))
-            .text_size(px(10.5))
+            .text_size(crate::typography::ui_rems(10.5))
             .text_color(theme.text_muted)
             .child(self.label.clone());
         crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
@@ -774,8 +774,8 @@ impl Composer {
                     .child(
                         div()
                             .truncate()
-                            .text_size(px(QUEUE_TEXT_SIZE))
-                            .line_height(px(16.0))
+                            .text_size(crate::typography::ui_rems(QUEUE_TEXT_SIZE))
+                            .line_height(crate::typography::ui_rems(16.0))
                             .text_color(theme.text.opacity(0.9))
                             .child(title),
                     );
@@ -783,8 +783,8 @@ impl Composer {
                     content = content.child(
                         div()
                             .truncate()
-                            .text_size(px(11.0))
-                            .line_height(px(13.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .line_height(crate::typography::ui_rems(13.0))
                             .text_color(theme.text_muted)
                             .child(summary),
                     );
@@ -809,7 +809,7 @@ impl Composer {
                             .justify_center()
                             .rounded(px(5.0))
                             .bg(crate::theme::ink(0.06))
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_muted)
                             .aria_label(format!(
                                 "{remaining} more attachments; edit message to view all"
@@ -824,7 +824,7 @@ impl Composer {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_size(px(QUEUE_TEXT_SIZE))
+                        .text_size(crate::typography::ui_rems(QUEUE_TEXT_SIZE))
                         .text_color(theme.text_muted)
                         .child(if self.queue_edit_finishing {
                             "Saving…"
@@ -1203,7 +1203,7 @@ impl Composer {
             .items_center()
             .justify_center()
             .rounded(px(5.0))
-            .text_size(px(11.5))
+            .text_size(crate::typography::ui_rems(11.5))
             .text_color(theme.text_muted)
             .when(enabled, |el| {
                 el.cursor_pointer()

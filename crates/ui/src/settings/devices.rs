@@ -362,7 +362,7 @@ impl Render for DevicesPage {
                         el.child(
                             div()
                                 .flex_none()
-                                .text_size(px(10.5))
+                                .text_size(crate::typography::ui_rems(10.5))
                                 .text_color(theme.text_muted)
                                 .child(if workspace_scope == Some(WorkspaceScope::Local) {
                                     "Local only"

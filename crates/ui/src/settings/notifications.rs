@@ -546,7 +546,7 @@ impl Render for NotificationsPage {
                                      notifications appear.",
                                 )
                                 .max_w(px(512.0))
-                                .line_height(px(20.0)),
+                                .line_height(crate::typography::ui_rems(20.0)),
                             )
                             .child(card)
                             .child(widgets::page_header(&theme, "Per-task preferences", None))

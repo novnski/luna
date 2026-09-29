@@ -3,9 +3,11 @@
 
 use gpui::{
     App, AppContext as _, Bounds, Context, Render, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, rgb, size,
+    WindowOptions, div, prelude::*, px, size,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,18 +82,23 @@ impl RemoteReadWindow {
         command: RemoteReadCommand,
         cx: &mut Context<Self>,
     ) -> impl gpui::IntoElement {
+        let theme = Theme::of(cx);
         div()
             .id(label)
             .role(gpui::Role::Button)
             .aria_label(label)
             .px_4()
             .py_2()
-            .rounded_md()
-            .bg(rgb(0x26303b))
-            .text_color(rgb(0xf4f6f8))
+            .rounded(px(Theme::CONTROL_RADIUS))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.surface_raised)
+            .text_color(theme.text)
+            .text_size(crate::typography::ui_rems(13.0))
             .cursor_pointer()
+            .hover(|style| style.bg(theme.surface_raised_hover))
             .tab_index(0)
-            .focus_visible(|style| style.border_2().border_color(rgb(0x8ab4ef)))
+            .focus_visible(|style| style.border_color(theme.accent))
             .child(label)
             .on_click(cx.listener(move |this, _, _, _| {
                 let _ = this.commands.send(command);
@@ -106,7 +113,9 @@ impl RemoteReadWindow {
 }
 
 impl Render for RemoteReadWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        window.set_rem_size(px(crate::typography::font_size(cx).pixels()));
+        let theme = Theme::of(cx);
         if !self.first_render_reported {
             self.first_render_reported = true;
             qa_startup_event("L30_VIEW_FIRST_RENDER");
@@ -138,14 +147,16 @@ impl Render for RemoteReadWindow {
             .flex()
             .flex_col()
             .gap_4()
-            .bg(rgb(0x11151b))
-            .text_color(rgb(0xf4f6f8))
+            .bg(theme.glass())
+            .font_family(theme.font_sans.clone())
+            .text_size(crate::typography::ui_rems(13.0))
+            .text_color(theme.text)
             .child(
                 div()
                     .id("remote-read-title")
                     .role(gpui::Role::Heading)
                     .aria_label("LUNA Remote task read")
-                    .text_size(px(20.))
+                    .text_size(crate::typography::ui_rems(20.0))
                     .child("LUNA · Remote task read"),
             )
             .child(
@@ -153,7 +164,7 @@ impl Render for RemoteReadWindow {
                     .id("remote-read-description")
                     .role(gpui::Role::Label)
                     .aria_label("Read-only identity and bounded receipt page")
-                    .text_color(rgb(0x9fb3c8))
+                    .text_color(theme.text_muted)
                     .child("Read-only identity and bounded receipt page"),
             )
             .child(
@@ -161,7 +172,7 @@ impl Render for RemoteReadWindow {
                     .id("remote-read-status")
                     .role(gpui::Role::Label)
                     .aria_label(status)
-                    .text_color(rgb(0x9fb3c8))
+                    .text_color(theme.text_muted)
                     .child(status),
             )
             .child(
@@ -187,11 +198,14 @@ impl Render for RemoteReadWindow {
 pub fn run_remote_read_view(
     state: tokio::sync::watch::Receiver<RemoteReadState>,
     commands: tokio::sync::mpsc::UnboundedSender<RemoteReadCommand>,
+    data_dir: std::path::PathBuf,
 ) {
     let app = gpui_platform::application().with_assets(crate::icons::Assets);
     app.run(move |cx: &mut App| {
         qa_startup_event("L30_VIEW_APP_RUN_ENTERED");
         gpui_tokio::init(cx);
+        gpui_base::init(cx);
+        crate::init_appearance(&data_dir, cx);
         let exit_on_quit = commands.clone();
         cx.on_app_quit(move |_| {
             let _ = exit_on_quit.send(RemoteReadCommand::Exit);
@@ -200,6 +214,7 @@ pub fn run_remote_read_view(
         .detach();
         cx.open_window(
             WindowOptions {
+                window_background: Theme::of(cx).window_background_appearance(),
                 titlebar: Some(TitlebarOptions {
                     title: Some("LUNA Remote Task Read".into()),
                     ..Default::default()
@@ -214,6 +229,7 @@ pub fn run_remote_read_view(
                 ..Default::default()
             },
             |window, cx| {
+                crate::appearance::observe_window(window, cx).detach();
                 let exit_on_close = commands.clone();
                 window.on_window_should_close(cx, move |_, cx| {
                     let _ = exit_on_close.send(RemoteReadCommand::Exit);

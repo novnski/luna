@@ -105,14 +105,14 @@ pub fn luna_loader(
 pub use luna_proto::motion::{GSPIN_DIM, GSPIN_ROW_TINTS};
 
 /// The gradient matrix spinner (WorkingIndicator), ported from luna's
-/// gradient-spin.tsx: a 3×3 grid of round cells tinted per row from the
-/// sunrise gradient. Each cell pulses opacity once per 750ms period; the
+/// gradient-spin.tsx: a 3×3 grid of round cells tinted from the active accent
+/// glyph palette. Each cell pulses opacity once per 750ms period; the
 /// per-cell phase follows the "arrow-up" pattern (the pulse enters at the
 /// bottom edge and converges toward the top-center cell), so the wave reads
 /// as travelling upward.
 pub fn gradient_spinner(
     _id: &'static str,
-    _theme: &Theme,
+    theme: &Theme,
     cell_px: f32,
     view: EntityId,
     cx: &mut App,
@@ -120,12 +120,13 @@ pub fn gradient_spinner(
     let center = (MATRIX_SIDE as f32 - 1.0) / 2.0;
     let max = MATRIX_SIDE as f32 - 1.0 + center;
     let delta = motion::pulse_delta_slow(&GRADIENT_SPIN, view, cx);
+    let tints = theme.glyph.rows();
     div()
         .flex()
         .flex_col()
         .gap(px(cell_px / 2.0))
         .children((0..MATRIX_SIDE).map(move |row| {
-            let tint: gpui::Hsla = gpui::rgb(GSPIN_ROW_TINTS[row]).into();
+            let tint = tints[row];
             div()
                 .flex()
                 .flex_row()

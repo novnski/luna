@@ -63,59 +63,30 @@ struct CompactUsagePalette {
 
 impl CompactUsagePalette {
     fn for_theme(theme: &Theme) -> Self {
-        if theme.appearance.is_light() {
-            Self {
-                card: theme.surface_overlay,
-                border: theme.border_strong,
-                divider: theme.border,
-                selected_rule: theme.accent,
-                idle_rule: theme.surface_overlay,
-                hover: theme.element_hover,
-                heading: theme.text,
-                secondary: theme.text_muted,
-                quiet: theme.text_muted,
-                selected_icon: theme.text,
-                idle_icon: theme.text_muted,
-                control_icon: theme.text_muted,
-                refresh_active: theme.text,
-                opencode_icon: gpui::rgb(0x1d4ed8).into(),
-                environment: theme.surface_raised,
-                environment_text: theme.text,
-                badge: theme.surface_raised,
-                badge_text: theme.text_muted,
-                track: theme.surface_raised,
-                codex_fill: theme.danger,
-                other_fill: theme.text_muted,
-                status: theme.warning,
-                dot: theme.danger,
-            }
-        } else {
-            // Preserve the compact dark card's established appearance.
-            Self {
-                card: gpui::rgb(0x242424).into(),
-                border: gpui::rgb(0x3a3a3a).into(),
-                divider: gpui::rgb(0x363636).into(),
-                selected_rule: gpui::rgb(0xcacacc).into(),
-                idle_rule: gpui::rgb(0x242424).into(),
-                hover: gpui::rgb(0x303030).into(),
-                heading: gpui::rgb(0xd1d1d3).into(),
-                secondary: gpui::rgb(0xb5b5b8).into(),
-                quiet: gpui::rgb(0xa7a7aa).into(),
-                selected_icon: gpui::rgb(0xd1d1d3).into(),
-                idle_icon: gpui::rgb(0xa5a5a8).into(),
-                control_icon: gpui::rgb(0xbdbdc0).into(),
-                refresh_active: gpui::rgb(0xe0e0e2).into(),
-                opencode_icon: gpui::rgb(0x3976f6).into(),
-                environment: gpui::rgb(0x292929).into(),
-                environment_text: gpui::rgb(0xc7c7ca).into(),
-                badge: gpui::rgb(0x303030).into(),
-                badge_text: gpui::rgb(0xa8a8ab).into(),
-                track: gpui::rgb(0x393939).into(),
-                codex_fill: gpui::rgb(0xd34351).into(),
-                other_fill: gpui::rgb(0xc9c9ca).into(),
-                status: gpui::rgb(0xffce46).into(),
-                dot: gpui::rgb(0xd34351).into(),
-            }
+        Self {
+            card: theme.card_glass_bg(),
+            border: theme.border_strong,
+            divider: theme.border,
+            selected_rule: theme.accent,
+            idle_rule: theme.surface.opacity(0.0),
+            hover: theme.element_hover,
+            heading: theme.text,
+            secondary: theme.text_muted,
+            quiet: theme.text_muted,
+            selected_icon: theme.text,
+            idle_icon: theme.text_muted,
+            control_icon: theme.text_muted,
+            refresh_active: theme.text,
+            opencode_icon: theme.accent,
+            environment: theme.surface_raised,
+            environment_text: theme.text,
+            badge: theme.surface_raised,
+            badge_text: theme.text_muted,
+            track: theme.surface_raised,
+            codex_fill: theme.danger,
+            other_fill: theme.text_muted,
+            status: theme.warning,
+            dot: theme.danger,
         }
     }
 }
@@ -1199,7 +1170,7 @@ fn compact_limit_row(
                         .min_w_0()
                         .truncate()
                         .text_size(crate::typography::ui_rems(12.0))
-                        .line_height(px(15.0))
+                        .line_height(crate::typography::ui_rems(15.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(palette.heading)
                         .child(match limit.provider {
@@ -1216,7 +1187,7 @@ fn compact_limit_row(
                             .rounded(px(5.0))
                             .bg(palette.badge)
                             .text_size(crate::typography::ui_rems(10.0))
-                            .line_height(px(12.0))
+                            .line_height(crate::typography::ui_rems(12.0))
                             .text_color(palette.badge_text)
                             .child(compact_plan_label(limit, &plan)),
                     )
@@ -1228,7 +1199,7 @@ fn compact_limit_row(
                 .min_w_0()
                 .truncate()
                 .text_size(crate::typography::ui_rems(10.0))
-                .line_height(px(14.0))
+                .line_height(crate::typography::ui_rems(14.0))
                 .text_color(palette.quiet)
                 .child(account.to_owned()),
         );
@@ -1260,11 +1231,11 @@ fn compact_limit_row(
                 .items_center()
                 .gap(px(6.0))
                 .text_size(crate::typography::ui_rems(10.0))
-                .line_height(px(14.0))
+                .line_height(crate::typography::ui_rems(14.0))
                 .text_color(palette.secondary)
                 .child(
                     div()
-                        .w(px(label_width))
+                        .w(crate::typography::ui_rems(label_width))
                         .flex_none()
                         .truncate()
                         .child(compact_window_label(limit, window)),
@@ -1286,15 +1257,17 @@ fn compact_limit_row(
                 )
                 .child(
                     div()
-                        .w(px(26.0))
+                        .w(crate::typography::ui_rems(30.0))
                         .flex_none()
+                        .whitespace_nowrap()
                         .text_align(gpui::TextAlign::Right)
                         .child(format!("{used:.0}%")),
                 )
                 .child(
                     div()
-                        .w(px(reset_width))
+                        .w(crate::typography::ui_rems(reset_width))
                         .flex_none()
+                        .whitespace_nowrap()
                         .text_align(gpui::TextAlign::Right)
                         .child(if limit.is_fresh(now_ms) {
                             compact_reset_time(window, now_ms)
@@ -2953,7 +2926,7 @@ impl Shell {
             .mx(px(Theme::SPACE_SM))
             .mb(px(0.0))
             .min_w_0()
-            .rounded(px(9.0))
+            .rounded(px(Theme::PANEL_RADIUS))
             .border_1()
             .border_color(palette.border)
             .bg(palette.card)

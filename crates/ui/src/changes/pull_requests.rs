@@ -415,20 +415,23 @@ impl Changes {
             .p(px(Theme::SPACE_SM))
             .border_1()
             .border_color(theme.border)
-            .rounded(px(6.0))
-            .bg(theme.surface);
+            .rounded(px(Theme::CONTROL_RADIUS))
+            .bg(theme.card_glass_bg());
         panel = panel.child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(div().text_size(px(12.0)).text_color(theme.text).child(
-                    if self.pr_panel.details.is_some() {
-                        "Pull request"
-                    } else {
-                        "New draft pull request"
-                    },
-                ))
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text)
+                        .child(if self.pr_panel.details.is_some() {
+                            "Pull request"
+                        } else {
+                            "New draft pull request"
+                        }),
+                )
                 .child(
                     Self::pr_button("pr-panel-close", "Close", theme)
                         .on_click(cx.listener(|this, _, _, cx| this.close_pr_panel(cx))),
@@ -439,7 +442,7 @@ impl Changes {
             panel = panel
                 .child(
                     div()
-                        .text_size(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text)
                         .child(format!(
                             "#{} · {}{}",
@@ -450,7 +453,7 @@ impl Changes {
                 )
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_dim)
                         .child(format!(
                             "{} → {} · {:?}",
@@ -464,7 +467,7 @@ impl Changes {
                         .id("pr-description")
                         .max_h(px(120.0))
                         .overflow_y_scroll()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text)
                         .child(if details.body.is_empty() {
                             "No description".into()
@@ -472,13 +475,16 @@ impl Changes {
                             details.body
                         }),
                 )
-                .child(div().text_size(px(11.0)).text_color(theme.text_dim).child(
-                    if details.checks.is_empty() {
-                        "No checks reported".into()
-                    } else {
-                        format!("Checks · {} reported", details.checks.len())
-                    },
-                ));
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_dim)
+                        .child(if details.checks.is_empty() {
+                            "No checks reported".into()
+                        } else {
+                            format!("Checks · {} reported", details.checks.len())
+                        }),
+                );
             for (index, check) in details.checks.into_iter().enumerate() {
                 let tone = match check.status.as_str() {
                     "SUCCESS" | "NEUTRAL" | "SKIPPED" => theme.success,
@@ -495,7 +501,7 @@ impl Changes {
                     .items_center()
                     .justify_between()
                     .gap(px(8.0))
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text)
                     .child(div().min_w_0().truncate().child(check.name))
                     .child(div().text_color(tone).child(status));
@@ -525,13 +531,13 @@ impl Changes {
             panel = panel
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_dim)
                         .child(preview.repository),
                 )
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_dim)
                         .child(format!(
                             "{} · {}",
@@ -552,7 +558,7 @@ impl Changes {
                 panel = panel
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_dim)
                             .child(label),
                     )
@@ -574,9 +580,12 @@ impl Changes {
             };
             panel = panel
                 .child(
-                    div().text_size(px(11.0)).text_color(theme.text_dim).child(
-                        "Creates a draft in this repository from the published head branch.",
-                    ),
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_dim)
+                        .child(
+                            "Creates a draft in this repository from the published head branch.",
+                        ),
                 )
                 .child(
                     div()
@@ -603,7 +612,7 @@ impl Changes {
         if busy {
             panel = panel.child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child("Checking GitHub…"),
             );
@@ -611,7 +620,7 @@ impl Changes {
         if let Some(notice) = self.pr_panel.notice.clone() {
             panel = panel.child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(notice),
             );

@@ -71,7 +71,7 @@ pub fn render(
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
-        .h(px(BADGE_HEIGHT))
+        .min_h(crate::typography::ui_rems(BADGE_HEIGHT))
         .flex()
         .flex_row()
         .items_center()
@@ -79,7 +79,7 @@ pub fn render(
         .px(px(8.0))
         .rounded(px(PILL_RADIUS))
         .bg(crate::theme::ink(0.06))
-        .text_size(px(TEXT_SIZE))
+        .text_size(crate::typography::ui_rems(TEXT_SIZE))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text_muted)
         .child(
@@ -134,7 +134,7 @@ impl BadgeCard {
                             .items_center()
                             .gap(px(6.0))
                             .font_family(theme.font_mono.clone())
-                            .text_size(px(10.0))
+                            .text_size(crate::typography::ui_rems(10.0))
                             .text_color(theme.text_faint)
                             .child(
                                 div()
@@ -155,8 +155,8 @@ impl BadgeCard {
                     .child(
                         div()
                             .min_w_0()
-                            .text_size(px(TEXT_SIZE))
-                            .line_height(px(16.0))
+                            .text_size(crate::typography::ui_rems(TEXT_SIZE))
+                            .line_height(crate::typography::ui_rems(16.0))
                             .text_color(theme.text)
                             .child(detail.body.clone()),
                     ),

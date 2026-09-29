@@ -59,6 +59,7 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or("300")
         .parse()?;
     let local_settings = std::env::args().nth(3).as_deref() == Some("local-settings");
+    let appearance_audit = std::env::args().nth(3).as_deref() == Some("appearance-audit");
     std::fs::create_dir_all(&output)?;
     let temp = tempfile::tempdir()?;
     let data = temp.path().join("ui");
@@ -86,8 +87,22 @@ fn main() -> anyhow::Result<()> {
     auth_config.use_in_memory_credentials_for_tests();
     auth_config.dev_user_id = "fixture-user".into();
     core.set_auth(luna_engine::Auth::new(auth_config));
-    core.workspace
-        .create_chat("usage-fixture", None, Some(&core.device_id), None, None)?;
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project)?;
+    core.workspace.create_space(
+        "usage-project",
+        &core.device_id,
+        project.to_str().unwrap(),
+        Some("Usage fixture project".into()),
+        false,
+    )?;
+    core.workspace.create_chat(
+        "usage-fixture",
+        Some("usage-project"),
+        Some(&core.device_id),
+        None,
+        None,
+    )?;
     let ipc_port = unused_port();
     let _ipc = runtime.block_on(luna_engine::serve_ipc(
         ipc_port,
@@ -105,6 +120,7 @@ fn main() -> anyhow::Result<()> {
     };
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
     let chats = core.workspace.read_chats()?;
+    let spaces = core.workspace.read_spaces()?;
     let device = core.device_id.clone();
     let failure = Arc::new(std::sync::Mutex::new(None::<String>));
     let failure_for_ui = failure.clone();
@@ -166,6 +182,7 @@ fn main() -> anyhow::Result<()> {
                     .unwrap(),
                 ];
                 state.chats = chats;
+                state.spaces = spaces;
                 state.selected_chat = Some("usage-fixture".into());
                 state.auto_selected = true;
                 state.chats_synced = true;
@@ -241,6 +258,70 @@ fn main() -> anyhow::Result<()> {
                         cx,
                         &capture_output.join("usage-light-codex.png"),
                     )?;
+                    if appearance_audit {
+                        let mut results = Vec::new();
+                        for (variant, mode) in [
+                            ("luna-dark", appearance::AppearanceMode::Dark),
+                            ("catppuccin-mocha", appearance::AppearanceMode::Dark),
+                            ("nord", appearance::AppearanceMode::Dark),
+                            ("luna-light", appearance::AppearanceMode::Light),
+                            ("catppuccin-latte", appearance::AppearanceMode::Light),
+                        ] {
+                            for surface in [
+                                luna_theme::SurfacePreference::Opaque,
+                                luna_theme::SurfacePreference::Frosted,
+                            ] {
+                                window.update(cx, |_, window, cx| {
+                                    appearance::set_mode(mode, cx);
+                                    let resolved = theme::Theme::of(cx).appearance;
+                                    appearance::set_theme(resolved, variant, cx);
+                                    appearance::set_surface(surface, cx);
+                                    appearance::set_accent(
+                                        luna_theme::AccentSelection::Preset(luna_theme::AccentPreset::Pink),
+                                        cx,
+                                    );
+                                    typography::set_family(typography::UiFontFamily::System, cx);
+                                    typography::set_font_size(typography::UiFontSize::ALL[6], window, cx);
+                                    typography::set_code_font_size(18.0, cx);
+                                    typography::set_terminal_font_size(16.0, cx);
+                                    settings::flush(cx);
+                                    assert_eq!(settings::UiSettings::load(&data), settings::current(cx));
+                                })?;
+                                let name = format!("appearance-{variant}-{surface:?}-20px.png");
+                                let file = capture_output.join(&name);
+                                capture(window.into(), cx, &file)?;
+                                let expected = window.update(cx, |shell, _, cx| {
+                                    assert!(shell.fixture_usage_card_is_open());
+                                    assert_eq!(theme::Theme::of(cx).font_sans, ".SystemUIFont");
+                                    assert_eq!(theme::Theme::of(cx).code_font_size, 18.0);
+                                    assert_eq!(theme::Theme::of(cx).terminal_font_size, 16.0);
+                                    gpui::Rgba::from(theme::Theme::of(cx).surface)
+                                })?;
+                                if surface == luna_theme::SurfacePreference::Opaque {
+                                    let pixels = image::open(&file)?.to_rgb8();
+                                    let scale = pixels.width() as f32 / 600.0;
+                                    let actual = pixels.get_pixel(
+                                        ((sidebar_width - 14.0) * scale) as u32,
+                                        (400.0 * scale) as u32,
+                                    ).0;
+                                    let expected = [expected.r, expected.g, expected.b]
+                                        .map(|v| (v * 255.0).round() as u8);
+                                    anyhow::ensure!(actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 3),
+                                        "Usage card ignores {variant}: actual {actual:?}, expected {expected:?}");
+                                }
+                                results.push(name);
+                            }
+                        }
+                        window.update(cx, |_, window, cx| {
+                            typography::set_font_size(typography::UiFontSize::default(), window, cx);
+                            typography::set_family(typography::UiFontFamily::Geist, cx);
+                            appearance::set_theme(theme::Appearance::Dark, "luna-dark", cx);
+                            appearance::set_theme(theme::Appearance::Light, "luna-light", cx);
+                            appearance::set_surface(luna_theme::SurfacePreference::ThemeDefault, cx);
+                        })?;
+                        std::fs::write(capture_output.join("appearance-matrix.json"),
+                            serde_json::to_vec_pretty(&results)?)?;
+                    }
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
                     click(window.into(), cx, 101.0, 474.0)?;
                     window.update(cx, |shell, _, _| {
@@ -311,10 +392,15 @@ fn main() -> anyhow::Result<()> {
                             &capture_output.join("settings-local.png"),
                         )?;
                     }
+                    std::fs::write(capture_output.join("result.txt"), "PASS: rendered Usage actions, quota alert/dismissal, appearance matrix (when requested), saved preference readback.\n")?;
                     Ok(())
                 })();
                 if let Err(error) = result {
-                    *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                    let message = error.to_string();
+                    std::fs::write(capture_output.join("failure.txt"), &message).ok();
+                    eprintln!("usage fixture failed: {message}");
+                    *failure_for_ui.lock().unwrap() = Some(message);
+                    std::process::exit(1);
                 }
                 let _ = window.update(cx, |_, window, _| window.remove_window());
                 cx.update(|cx| cx.quit());

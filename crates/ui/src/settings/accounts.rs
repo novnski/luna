@@ -2263,7 +2263,7 @@ impl Render for AccountsPage {
                                 div()
                                     .mt(px(24.0))
                                     .text_size(crate::typography::ui_rems(12.0))
-                                    .line_height(px(19.0))
+                                    .line_height(crate::typography::ui_rems(19.0))
                                     .text_color(theme.readable_muted(0.6))
                                     .child(SharedString::from(
                                         "Provider sign-in updates the CLI's native login on this \

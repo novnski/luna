@@ -674,7 +674,7 @@ impl Render for FileEditorTooltip {
             .border_color(theme.border)
             .bg(crate::popover::surface_bg(theme))
             .font_family(theme.font_sans.clone())
-            .text_size(px(10.5))
+            .text_size(crate::typography::ui_rems(10.5))
             .text_color(theme.text_muted)
             .child(self.text.clone());
         crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
@@ -2143,7 +2143,7 @@ impl FilesSurface {
                         .border_b_1()
                         .border_color(theme.warning.opacity(0.25))
                         .bg(theme.warning.opacity(0.055))
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.warning_muted)
                         .child(div().min_w_0().max_w_full().whitespace_normal().child(
                             if self.target_change_pending {
@@ -2209,7 +2209,7 @@ impl FilesSurface {
                             .border_b_1()
                             .border_color(theme.warning.opacity(0.25))
                             .bg(theme.warning.opacity(0.055))
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.warning_muted)
                             .child(div().min_w_0().max_w_full().whitespace_normal().child(
                                 if confirming_reload {
@@ -2387,7 +2387,7 @@ impl FilesSurface {
                 crumbs = crumbs.child(
                     div()
                         .mx(px(4.0))
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_faint(0.65))
                         .child("›"),
                 );
@@ -2397,7 +2397,7 @@ impl FilesSurface {
                     .min_w_0()
                     .truncate()
                     .font_family(theme.font_sans.clone())
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(if index + 1 == parts.len() {
                         theme.text_muted
                     } else {
@@ -2480,7 +2480,7 @@ impl FilesSurface {
                         .items_center()
                         .flex_none()
                         .font_family(theme.font_sans.clone())
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(color)
                         .when(retry, |element| {
                             element
@@ -2811,7 +2811,7 @@ impl FilesSurface {
                         .bg(theme.warning.opacity(0.045))
                         .flex()
                         .items_center()
-                        .text_size(px(10.0))
+                        .text_size(crate::typography::ui_rems(10.0))
                         .text_color(theme.warning_muted)
                         .child("Large file preview is truncated and read-only."),
                 )
@@ -2906,7 +2906,7 @@ impl FilesSurface {
             && let Some(top) = editor_comment_overlay_top(
                 &layout,
                 comment.line,
-                comments::card_height(&comment.body),
+                comments::card_height_for(&comment.body, theme.ui_font_size),
             )
         {
             overlays.push(
@@ -2950,7 +2950,10 @@ impl FilesSurface {
             .left(px(left))
             .top(px(top))
             .w(px(width))
-            .h(px(comments::card_height(&comment.body)))
+            .h(px(comments::card_height_for(
+                &comment.body,
+                theme.ui_font_size,
+            )))
             .flex()
             .flex_col()
             .font_family(theme.font_sans.clone())
@@ -2958,7 +2961,7 @@ impl FilesSurface {
             .py(px(comments::CARD_PAD_V / 2.0))
             .child(
                 div()
-                    .h(px(comments::CARD_HEADER_HEIGHT))
+                    .h(crate::typography::ui_rems(comments::CARD_HEADER_HEIGHT))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -2974,7 +2977,7 @@ impl FilesSurface {
                             .min_w_0()
                             .truncate()
                             .font_family(theme.font_mono.clone())
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_faint)
                             .child(SharedString::from(comment.location())),
                     )
@@ -3015,8 +3018,8 @@ impl FilesSurface {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .text_size(px(12.0))
-                    .line_height(px(comments::CARD_LINE_HEIGHT))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .line_height(crate::typography::ui_rems(comments::CARD_LINE_HEIGHT))
                     .text_color(theme.text_dim)
                     .child(SharedString::from(comment.body)),
             );
@@ -3062,7 +3065,7 @@ impl FilesSurface {
                     .bg(theme.input_glass_bg())
                     .px(px(8.0))
                     .py(px(5.0))
-                    .text_size(px(12.0))
+                    .text_size(crate::typography::ui_rems(12.0))
                     .child(input.into_any_element()),
             )
             .child(
@@ -3205,7 +3208,9 @@ impl FilesSurface {
                     .items_center()
                     .justify_end()
                     .font_family(theme.font_mono.clone())
-                    .text_size(px(10.0))
+                    .text_size(px(
+                        theme.code_font_size * (10.0 / crate::typography::CODE_FONT_SIZE_DEFAULT)
+                    ))
                     .text_color(theme.readable_faint(0.7))
                     .child((index + 1).to_string()),
             )
@@ -3379,7 +3384,7 @@ fn editor_comment_action(
         .flex()
         .items_center()
         .rounded(px(6.0))
-        .text_size(px(11.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .cursor_pointer()
         .when(primary, |element| {
@@ -3406,7 +3411,7 @@ fn centered_state(message: impl Into<SharedString>, color: gpui::Hsla) -> AnyEle
         .justify_center()
         .px(px(24.0))
         .text_center()
-        .text_size(px(11.5))
+        .text_size(crate::typography::ui_rems(11.5))
         .text_color(color)
         .child(message.into())
         .into_any_element()

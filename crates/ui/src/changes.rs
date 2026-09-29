@@ -104,7 +104,7 @@ fn diff_text_size(theme: &Theme) -> f32 {
 
 /// The row box and the painted line box must agree, or code clips once the
 /// user moves the code font size off [`DIFF_TEXT_SIZE`].
-fn diff_line_height(theme: &Theme) -> f32 {
+pub(crate) fn diff_line_height(theme: &Theme) -> f32 {
     diff_text_size(theme) * (DIFF_LINE_HEIGHT / DIFF_TEXT_SIZE)
 }
 
@@ -662,6 +662,19 @@ pub fn body_height_with(
     body_rows(0, file, comments, draft, mode)
         .iter()
         .map(|row| row.height(comments, line_h))
+        .sum()
+}
+
+pub(crate) fn body_height_for_theme(
+    file: &FileDiff,
+    comments: &[ReviewComment],
+    draft: Option<(CommentSide, u32)>,
+    mode: DiffMode,
+    theme: &Theme,
+) -> f32 {
+    body_rows(0, file, comments, draft, mode)
+        .iter()
+        .map(|row| row.height_for(comments, diff_line_height(theme), theme.ui_font_size))
         .sum()
 }
 
@@ -1327,6 +1340,10 @@ impl DiffRow {
     /// `FoldingBody` is height-animated, so it reports 0 and never lands in a
     /// height sum.
     fn height(self, comments: &[ReviewComment], line_h: f32) -> f32 {
+        self.height_for(comments, line_h, 16.0)
+    }
+
+    fn height_for(self, comments: &[ReviewComment], line_h: f32, ui_font_size: f32) -> f32 {
         match self {
             DiffRow::FileHeader { .. } => FILE_HEADER_HEIGHT,
             DiffRow::Notice { .. } => NOTICE_HEIGHT,
@@ -1334,9 +1351,9 @@ impl DiffRow {
             DiffRow::Line { .. } | DiffRow::SplitLine { .. } => line_h,
             DiffRow::CommentCard { card, .. } => comments
                 .get(card as usize)
-                .map(|comment| comments::card_height(&comment.body))
+                .map(|comment| comments::card_height_for(&comment.body, ui_font_size))
                 .unwrap_or(0.0),
-            DiffRow::CommentDraft { .. } => comments::DRAFT_CARD_HEIGHT,
+            DiffRow::CommentDraft { .. } => comments::DRAFT_CARD_HEIGHT * (ui_font_size / 16.0),
             DiffRow::BodyPad { .. } => BODY_BOTTOM_PAD,
             DiffRow::FoldingBody { .. } => 0.0,
         }
@@ -1747,7 +1764,7 @@ impl Render for DiffHeaderTooltip {
             .border_color(theme.border_strong)
             .bg(theme.surface_raised)
             .shadow_md()
-            .text_size(px(11.0))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
             .child(self.0)
     }
@@ -2504,12 +2521,12 @@ impl Changes {
             cx.notify();
             return;
         }
-        let expanded_height = body_height_with(
+        let expanded_height = body_height_for_theme(
             file,
             &self.comments_for(&file.path, cx),
             self.draft_anchor_in(&file.path),
             self.mode,
-            diff_line_height(Theme::of(cx)),
+            Theme::of(cx),
         );
         let fold = self.folds.entry(file.path.clone()).or_default();
         let currently_collapsed = fold.collapsed;
@@ -3635,7 +3652,7 @@ impl Changes {
                     .min_w_0()
                     .truncate()
                     .font_family(theme.font_mono.clone())
-                    .text_size(px(12.0))
+                    .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_dim)
                     .child(SharedString::from(file.path.clone())),
             )
@@ -3643,7 +3660,7 @@ impl Changes {
                 el.child(
                     div()
                         .flex_none()
-                        .text_size(px(10.0))
+                        .text_size(crate::typography::ui_rems(10.0))
                         .text_color(theme.text_faint)
                         .child(SharedString::from("BIN")),
                 )
@@ -3653,7 +3670,7 @@ impl Changes {
                     div()
                         .flex_none()
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(add_color(theme))
                         .child(SharedString::from(format!("+{adds}"))),
                 )
@@ -3663,7 +3680,7 @@ impl Changes {
                     div()
                         .flex_none()
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(del_color(theme))
                         .child(SharedString::from(format!("−{dels}"))),
                 )
@@ -3847,7 +3864,7 @@ impl Changes {
                         .items_center()
                         .bg(crate::theme::ink(0.05))
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(10.5))
+                        .text_size(crate::typography::ui_rems(10.5))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(short)),
                 )
@@ -3856,7 +3873,7 @@ impl Changes {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text)
                         .child(SharedString::from(commit.subject.clone())),
                 )
@@ -3922,8 +3939,8 @@ impl Changes {
             }))
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .line_height(px(14.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .line_height(crate::typography::ui_rems(14.0))
                     .text_color(theme.text)
                     .child(SharedString::from(scope.label())),
             )
@@ -3946,8 +3963,8 @@ impl Changes {
                 .flex()
                 .items_center()
                 .font_family(theme.font_mono.clone())
-                .text_size(px(11.5))
-                .line_height(px(14.0))
+                .text_size(crate::typography::ui_rems(11.5))
+                .line_height(crate::typography::ui_rems(14.0))
                 .text_color(theme.text_dim)
                 .child(SharedString::from(history_branch.unwrap_or_default()))
                 .into_any_element()
@@ -4004,7 +4021,7 @@ impl Changes {
                             .items_center()
                             .cursor_pointer()
                             .bg(crate::theme::wash(0.05))
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text)
                             .child("Git")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -4150,7 +4167,7 @@ impl Changes {
                     .min_w_0()
                     .truncate()
                     .font_family(theme.font_mono.clone())
-                    .text_size(px(11.5))
+                    .text_size(crate::typography::ui_rems(11.5))
                     .text_color(theme.text)
                     .child(SharedString::from(base)),
             )
@@ -4188,7 +4205,7 @@ impl Changes {
                         .flex_shrink(branch_weight)
                         .truncate()
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(11.5))
+                        .text_size(crate::typography::ui_rems(11.5))
                         .text_color(theme.text_dim)
                         .child(SharedString::from(branch)),
                 )
@@ -4224,7 +4241,7 @@ impl Changes {
             div()
                 .px(px(8.0))
                 .py(px(6.0))
-                .text_size(px(12.0))
+                .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
                 .child(SharedString::from(if branches.is_empty() {
                     "No branches"
@@ -4262,7 +4279,7 @@ impl Changes {
                             .min_w_0()
                             .truncate()
                             .font_family(theme.font_mono.clone())
-                            .text_size(px(12.0))
+                            .text_size(crate::typography::ui_rems(12.0))
                             .child(SharedString::from(label)),
                     )
                 }))
@@ -4303,7 +4320,7 @@ impl Changes {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(scope_label(
                             self.scope,
@@ -4314,14 +4331,14 @@ impl Changes {
                 .child(
                     div()
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(add_color(theme))
                         .child(SharedString::from(format!("+{}", parsed.additions))),
                 )
                 .child(
                     div()
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(del_color(theme))
                         .child(SharedString::from(format!("−{}", parsed.deletions))),
                 )
@@ -4330,7 +4347,7 @@ impl Changes {
                     el.child(
                         div()
                             .flex_none()
-                            .text_size(px(10.0))
+                            .text_size(crate::typography::ui_rems(10.0))
                             .px(px(6.0))
                             .py(px(2.0))
                             .rounded(px(4.0))
@@ -4363,7 +4380,7 @@ fn notice_row(notice: String, theme: &Theme) -> AnyElement {
         .flex()
         .items_center()
         .px(px(Theme::SPACE_LG))
-        .text_size(px(11.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(theme.text_faint)
         .child(SharedString::from(notice))
         .into_any_element()
@@ -4380,7 +4397,7 @@ fn hunk_header_row(header: &str, theme: &Theme) -> AnyElement {
         .px(px(Theme::SPACE_LG))
         .bg(theme.diff_hunk_bg)
         .font_family(theme.font_mono.clone())
-        .text_size(px(11.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(theme.text_faint)
         .child(SharedString::from(header.to_string()))
         .into_any_element()
@@ -4495,7 +4512,7 @@ fn diff_line_row(
             .w(px(gutter_px))
             .flex_none()
             .font_family(theme.font_mono.clone())
-            .text_size(px(11.0))
+            .text_size(px(diff_text_size(theme) * (11.0 / DIFF_TEXT_SIZE)))
             .line_height(px(diff_line_height(theme)))
             .text_color(color)
             .flex()
@@ -4593,7 +4610,7 @@ fn meta_line_row(text: &str, theme: &Theme, pad_left: f32) -> AnyElement {
         .flex()
         .items_center()
         .pl(px(pad_left))
-        .text_size(px(10.5))
+        .text_size(px(diff_text_size(theme) * (10.5 / DIFF_TEXT_SIZE)))
         .text_color(theme.text_faint)
         .italic()
         .child(SharedString::from(text.to_string()))
@@ -4687,7 +4704,7 @@ fn split_line_cell(
                 .w(px(gutter_px))
                 .flex_none()
                 .font_family(theme.font_mono.clone())
-                .text_size(px(11.0))
+                .text_size(px(diff_text_size(theme) * (11.0 / DIFF_TEXT_SIZE)))
                 .line_height(px(diff_line_height(theme)))
                 .text_color(number_color)
                 .flex()
@@ -5030,7 +5047,7 @@ impl Render for Changes {
                 .items_center()
                 .justify_center()
                 .px(px(Theme::SPACE_LG))
-                .text_size(px(12.0))
+                .text_size(crate::typography::ui_rems(12.0))
                 .text_color(if warn {
                     theme.warning.opacity(0.85)
                 } else {
@@ -5056,7 +5073,7 @@ impl Render for Changes {
                     ))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text_faint)
                             .child(SharedString::from("Preparing diff…")),
                     )
@@ -5066,7 +5083,7 @@ impl Render for Changes {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(12.0))
+                    .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_faint)
                     .child(SharedString::from(clean_message(scope, base.as_deref())))
                     .into_any_element(),
@@ -5117,9 +5134,8 @@ impl Render for Changes {
             .size_full()
             .flex()
             .flex_col()
-            // Changes is a code-adjacent surface: chrome stays Geist while
-            // paths, hunks, gutters, and source runs keep their mono overrides.
-            .font_family(theme.font_sans_fixed.clone())
+            // Chrome follows the interface family; source runs use the code family.
+            .font_family(theme.font_sans.clone())
             .when(
                 self.git_open && self.scope == DiffScope::WorkingTree,
                 |el| el.child(self.render_git_card(&theme, cx)),
@@ -5132,7 +5148,7 @@ impl Render for Changes {
                         .py(px(4.0))
                         .border_b_1()
                         .border_color(theme.border)
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.warning)
                         .child(message),
                 )

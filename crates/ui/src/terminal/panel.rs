@@ -327,7 +327,7 @@ impl Render for TabGhost {
             .bg(theme.surface_raised)
             .border_1()
             .border_color(theme.border_strong)
-            .text_size(px(12.0))
+            .text_size(crate::typography::ui_rems(12.0))
             .text_color(theme.text)
             .opacity(0.85)
             .child(div().truncate().child(self.title.clone()))
@@ -1744,7 +1744,7 @@ impl TerminalPanel {
                                 theme.element_hover,
                             ))
                             .on_hover(motion::hover_listener(format!("term-tab-{key}")))
-                            .text_size(px(12.0))
+                            .text_size(crate::typography::ui_rems(12.0))
                             .text_color(text_color)
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1940,11 +1940,11 @@ impl Render for TerminalPanel {
                 .when_some(panel_bg, |el, bg| el.bg(bg))
                 .when(corner_bl, |el| el.rounded_bl(corner))
                 .when(corner_br, |el| el.rounded_br(corner))
-                .font_family(theme.font_sans_fixed.clone())
+                .font_family(theme.font_sans.clone())
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(12.0))
+                .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
                 .child(SharedString::from("Select a chat to open a terminal"))
                 .into_any_element();
@@ -1963,9 +1963,9 @@ impl Render for TerminalPanel {
             .size_full()
             .flex()
             .flex_col()
-            // Terminal chrome is fixed Geist; TerminalElement measures and
+            // Terminal chrome follows the interface font; TerminalElement measures and
             // paints its viewport independently with the technical mono role.
-            .font_family(theme.font_sans_fixed.clone())
+            .font_family(theme.font_sans.clone())
             .when_some(panel_bg, |el, bg| el.bg(bg))
             .when(corner_bl, |el| el.rounded_bl(corner))
             .when(corner_br, |el| el.rounded_br(corner))

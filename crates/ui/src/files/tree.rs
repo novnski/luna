@@ -275,7 +275,7 @@ impl FilesSurface {
                             .min_w_0()
                             .truncate()
                             .font_family(theme.font_sans.clone())
-                            .text_size(px(11.5))
+                            .text_size(crate::typography::ui_rems(11.5))
                             .text_color(text_color)
                             .child(node.entry.name),
                     )
@@ -321,7 +321,7 @@ impl FilesSurface {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(10.5))
+                        .text_size(crate::typography::ui_rems(10.5))
                         .text_color(theme.readable_tone(theme.danger, 0.82))
                         .child(format!("{message} — Retry")),
                 )
@@ -342,7 +342,7 @@ impl FilesSurface {
                 }))
                 .child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(crate::typography::ui_rems(10.5))
                         .text_color(theme.text_muted)
                         .child("Load more…"),
                 )
@@ -473,7 +473,7 @@ fn status_row(
         .flex()
         .items_center()
         .font_family(theme.font_sans.clone())
-        .text_size(px(10.5))
+        .text_size(crate::typography::ui_rems(10.5))
         .text_color(color)
         .child(label)
         .into_any_element()

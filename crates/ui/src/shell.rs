@@ -967,7 +967,7 @@ impl Render for SurfaceTabTooltip {
             .border_1()
             .border_color(theme.border)
             .bg(crate::popover::surface_bg(theme))
-            .text_size(px(10.5))
+            .text_size(crate::typography::ui_rems(10.5))
             .text_color(theme.text_muted)
             .child(self.text.clone());
         crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
@@ -7931,7 +7931,7 @@ impl Shell {
                         true,
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .line_height(px(14.0))
+                            .line_height(crate::typography::ui_rems(14.0))
                             .text_color(subline)
                             .child(popover::search_highlight(space_name, search_query, theme)),
                     ))
@@ -7966,7 +7966,7 @@ impl Shell {
                         true,
                         div()
                             .text_size(crate::typography::ui_rems(13.0))
-                            .line_height(px(17.0))
+                            .line_height(crate::typography::ui_rems(17.0))
                             .child(popover::search_highlight(title, search_query, theme)),
                     )),
             )
@@ -7992,7 +7992,7 @@ impl Shell {
                                 false,
                                 div()
                                     .text_size(crate::typography::ui_rems(11.0))
-                                    .line_height(px(14.0))
+                                    .line_height(crate::typography::ui_rems(14.0))
                                     .text_color(subline)
                                     .child(popover::search_highlight(branch, search_query, theme)),
                             ))
@@ -8615,16 +8615,8 @@ impl Shell {
                 .h(px(24.0))
                 .rounded(px(12.0))
                 .border_1()
-                .border_color(if theme.appearance.is_light() {
-                    theme.border_strong
-                } else {
-                    gpui::rgb(0x3a3a3a).into()
-                })
-                .bg(if theme.appearance.is_light() {
-                    theme.surface_raised
-                } else {
-                    gpui::rgb(0x242424).into()
-                })
+                .border_color(theme.border_strong)
+                .bg(theme.card_glass_bg())
                 .cursor_pointer()
                 .hover(|el| el.bg(theme.glass_hover()))
                 .flex()
@@ -9277,7 +9269,7 @@ impl Shell {
                         div()
                             .mt(px(4.0))
                             .text_size(crate::typography::ui_rems(12.0))
-                            .line_height(px(17.0))
+                            .line_height(crate::typography::ui_rems(17.0))
                             .text_color(theme.text_muted)
                             .overflow_hidden()
                             .child(current),
@@ -9346,7 +9338,7 @@ impl Shell {
                         div()
                             .mt(px(10.0))
                             .text_size(crate::typography::ui_rems(12.0))
-                            .line_height(px(17.0))
+                            .line_height(crate::typography::ui_rems(17.0))
                             .text_color(theme.danger)
                             .child(error),
                     )
@@ -9394,7 +9386,7 @@ impl Shell {
                         div()
                             .mt(px(10.0))
                             .text_size(crate::typography::ui_rems(12.0))
-                            .line_height(px(17.0))
+                            .line_height(crate::typography::ui_rems(17.0))
                             .text_color(theme.danger)
                             .child(error),
                     )
@@ -11742,7 +11734,7 @@ impl Shell {
                     .mt(px(6.0))
                     .mb(px(24.0))
                     .text_size(crate::typography::ui_rems(13.0))
-                    .line_height(px(19.0))
+                    .line_height(crate::typography::ui_rems(19.0))
                     .text_color(theme.text_muted)
                     .child(SharedString::from(
                         "LUNA removed your credentials but could not finish closing the previous synced workspace. Retry before continuing in local mode.",
@@ -11753,7 +11745,7 @@ impl Shell {
                     div()
                         .mb(px(16.0))
                         .text_size(crate::typography::ui_rems(12.0))
-                        .line_height(px(17.0))
+                        .line_height(crate::typography::ui_rems(17.0))
                         .text_color(theme.danger)
                         .child(error),
                 )
@@ -12460,7 +12452,7 @@ impl Shell {
                         .mt(px(6.0))
                         .mb(px(24.0))
                         .text_size(crate::typography::ui_rems(13.0))
-                        .line_height(px(19.0))
+                        .line_height(crate::typography::ui_rems(19.0))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(
                             "This opens your browser to finish logging in — you'll come right back.",
@@ -12646,7 +12638,7 @@ impl Shell {
                     .mt(px(6.0))
                     .mb(px(24.0))
                     .text_size(crate::typography::ui_rems(13.0))
-                    .line_height(px(19.0))
+                    .line_height(crate::typography::ui_rems(19.0))
                     .text_color(theme.text_muted)
                     .child(blurb),
             )
@@ -12699,7 +12691,7 @@ impl Shell {
                     div()
                         .mt(px(16.0))
                         .text_size(crate::typography::ui_rems(12.0))
-                        .line_height(px(17.0))
+                        .line_height(crate::typography::ui_rems(17.0))
                         .text_color(theme.readable_tone(theme.danger_muted, 0.9))
                         .child(message),
                 )

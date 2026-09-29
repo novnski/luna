@@ -2068,6 +2068,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = UiSettings {
             window_geometry: None,
+            confirm_archive: false,
+            confirm_settle: false,
+            confirm_delete: false,
             sidebar_width: 300.0,
             sidebar_collapsed: true,
             sidebar_grouped: true,

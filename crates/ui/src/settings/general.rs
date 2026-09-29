@@ -205,8 +205,8 @@ impl GeneralPage {
                         div()
                             .mt(px(4.0))
                             .max_w(px(430.0))
-                            .text_size(px(11.5))
-                            .line_height(px(17.0))
+                            .text_size(crate::typography::ui_rems(11.5))
+                            .line_height(crate::typography::ui_rems(17.0))
                             .text_color(theme.readable_muted(0.65))
                             .child(SharedString::from(description)),
                     ),
@@ -278,7 +278,7 @@ impl Render for GeneralPage {
                     .child(
                         div()
                             .mt(px(4.0))
-                            .text_size(px(11.5))
+                            .text_size(crate::typography::ui_rems(11.5))
                             .text_color(theme.readable_muted(0.65))
                             .child("Choose whether Enter sends or inserts a line break."),
                     ),
@@ -318,7 +318,7 @@ impl Render for GeneralPage {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_size(px(12.0))
+                                .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(if selected {
                                     theme.text
                                 } else {
@@ -365,8 +365,8 @@ impl Render for GeneralPage {
                         div()
                             .mt(px(4.0))
                             .max_w(px(430.0))
-                            .text_size(px(11.5))
-                            .line_height(px(17.0))
+                            .text_size(crate::typography::ui_rems(11.5))
+                            .line_height(crate::typography::ui_rems(17.0))
                             .text_color(theme.readable_muted(0.65))
                             .child(SharedString::from(
                                 "Choose what sending a message does during a live run. Cmd/Ctrl+Shift+Enter performs the opposite once; Shift+Enter remains a line break.",
@@ -401,7 +401,7 @@ impl Render for GeneralPage {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(px(12.0))
+                                    .text_size(crate::typography::ui_rems(12.0))
                                     .text_color(if selected { theme.text } else { theme.text_muted })
                                     .when(selected, |el| el.bg(theme.bg).border_1().border_color(theme.border.opacity(0.8)))
                                     .cursor_pointer()
@@ -439,7 +439,7 @@ impl Render for GeneralPage {
                                     "Set default behavior for conversations and this device.",
                                 )
                                 .max_w(px(512.0))
-                                .line_height(px(20.0)),
+                                .line_height(crate::typography::ui_rems(20.0)),
                             )
                             .child(
                                 div()

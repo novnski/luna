@@ -279,6 +279,13 @@ pub fn card_height(body: &str) -> f32 {
     CARD_PAD_V + CARD_HEADER_HEIGHT + card_body_lines(body) as f32 * CARD_LINE_HEIGHT + CARD_GAP
 }
 
+pub fn card_height_for(body: &str, ui_font_size: f32) -> f32 {
+    CARD_PAD_V
+        + CARD_GAP
+        + (CARD_HEADER_HEIGHT + card_body_lines(body) as f32 * CARD_LINE_HEIGHT)
+            * (ui_font_size / 16.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

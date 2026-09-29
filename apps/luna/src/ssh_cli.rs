@@ -205,12 +205,13 @@ fn run_view(args: ViewArgs, data_dir: PathBuf) -> anyhow::Result<()> {
             Ok(())
         });
     }
+    let view_data_dir = data_dir.clone();
     let worker = std::thread::spawn(move || -> anyhow::Result<()> {
         tokio::runtime::Runtime::new()?
             .block_on(view_worker(args.probe, data_dir, state_tx, command_rx));
         Ok(())
     });
-    luna_ui::remote_read::run_remote_read_view(state_rx, command_tx.clone());
+    luna_ui::remote_read::run_remote_read_view(state_rx, command_tx.clone(), view_data_dir);
     let _ = command_tx.send(RemoteReadCommand::Exit);
     worker
         .join()

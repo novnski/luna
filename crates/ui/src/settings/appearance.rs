@@ -484,7 +484,7 @@ impl AppearancePage {
                     .child(
                         div()
                             .text_size(typography::ui_rems(12.0))
-                            .line_height(px(18.0))
+                            .line_height(crate::typography::ui_rems(18.0))
                             .text_color(theme.text_muted)
                             .child("Maximum width of messages. Adapts to smaller windows."),
                     ),
@@ -512,7 +512,7 @@ impl AppearancePage {
                             .flex()
                             .justify_between()
                             .text_size(typography::ui_rems(12.0))
-                            .line_height(px(16.0))
+                            .line_height(crate::typography::ui_rems(16.0))
                             .child(format!("{width:.0} px"))
                             .child(
                                 div()
@@ -538,7 +538,7 @@ impl AppearancePage {
                             .flex()
                             .justify_between()
                             .text_size(typography::ui_rems(11.0))
-                            .line_height(px(14.0))
+                            .line_height(crate::typography::ui_rems(14.0))
                             .text_color(theme.text_muted)
                             .child("560 px")
                             .child("1,200 px"),
@@ -1478,7 +1478,13 @@ fn preference_row(
                 .child(widgets::row_title(theme, title))
                 .child(widgets::meta_line(
                     theme,
-                    vec![div().child(description).into_any_element()],
+                    vec![
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(description)
+                            .into_any_element(),
+                    ],
                 )),
         )
         .child(div().flex_none().ml(px(10.0)).child(control))
@@ -1805,7 +1811,7 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> gpui::Stateful<gpui::Di
         .bg(theme.surface_raised.opacity(0.35))
         .p(px(10.0))
         .text_size(crate::typography::ui_rems(11.0))
-        .line_height(px(16.0))
+        .line_height(crate::typography::ui_rems(16.0))
         .text_color(theme.text_muted)
         .child(div().text_color(theme.text).child(summary))
         .children(report.adjustments.iter().map(|adjustment| {
@@ -2027,7 +2033,7 @@ impl AppearancePage {
             div()
                 .px(px(8.0))
                 .py(px(6.0))
-                .text_size(px(12.0))
+                .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.for_popup().text_faint)
                 .child(SharedString::from(if filtered {
                     "No matching fonts"
@@ -2827,7 +2833,7 @@ impl AppearancePage {
                     .items_start()
                     .gap(px(7.0))
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(16.0))
+                    .line_height(crate::typography::ui_rems(16.0))
                     .text_color(theme.text_muted)
                     .child(
                         icons::icon(icons::INFO_CIRCLE)
@@ -2850,7 +2856,7 @@ impl AppearancePage {
                     .items_start()
                     .gap(px(7.0))
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(16.0))
+                    .line_height(crate::typography::ui_rems(16.0))
                     .text_color(theme.danger)
                     .child(
                         icons::icon(icons::DANGER_TRIANGLE)
@@ -3421,7 +3427,7 @@ impl Render for AppearancePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let availability = typography::availability(cx);
-        let fixed = theme.font_sans_fixed.clone();
+        let fixed = theme.font_sans.clone();
         let current_mode = appearance::mode(cx);
         let current_themes = appearance::themes(cx);
         let current_accent = appearance::accent(cx);
@@ -3837,7 +3843,7 @@ impl Render for AppearancePage {
                                 div()
                                     .max_w(px(520.0))
                                     .text_size(typography::ui_rems(12.0))
-                                    .line_height(px(18.0))
+                                    .line_height(crate::typography::ui_rems(18.0))
                                     .text_color(theme.text_muted)
                                     .child(kind.description()),
                             ),
@@ -4136,7 +4142,7 @@ impl Render for AppearancePage {
                                     "Choose how LUNA looks. These settings stay on this device.",
                                 )
                                 .max_w(px(512.0))
-                                .line_height(px(20.0)),
+                                .line_height(crate::typography::ui_rems(20.0)),
                             )
                             .child(
                                 div()

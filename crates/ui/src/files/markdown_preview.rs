@@ -1067,7 +1067,7 @@ impl MarkdownPreview {
                             ),
                             Some(Err(error)) => div()
                                 .p(px(12.0))
-                                .text_size(px(12.0))
+                                .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.warning_muted)
                                 .child(error.clone())
                                 .into_any_element(),

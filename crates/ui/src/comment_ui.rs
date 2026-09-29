@@ -57,7 +57,10 @@ pub(crate) fn render_comment_card<T: 'static>(
     let id = comment.id.clone();
     div()
         .group(group.clone())
-        .h(px(comments::card_height(&comment.body)))
+        .h(px(comments::card_height_for(
+            &comment.body,
+            theme.ui_font_size,
+        )))
         .w_full()
         .flex_none()
         .flex()
@@ -86,7 +89,7 @@ pub(crate) fn render_comment_card<T: 'static>(
                 .py(px(comments::CARD_PAD_V / 2.0))
                 .child(
                     div()
-                        .h(px(comments::CARD_HEADER_HEIGHT))
+                        .h(crate::typography::ui_rems(comments::CARD_HEADER_HEIGHT))
                         .flex_none()
                         .flex()
                         .flex_row()
@@ -103,7 +106,7 @@ pub(crate) fn render_comment_card<T: 'static>(
                                 .min_w_0()
                                 .truncate()
                                 .font_family(theme.font_mono.clone())
-                                .text_size(px(11.0))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_faint)
                                 .child(SharedString::from(comment.location())),
                         )
@@ -135,8 +138,8 @@ pub(crate) fn render_comment_card<T: 'static>(
                         // Height is analytic, so an over-long body clips
                         // inside the card rather than past the fold height.
                         .overflow_hidden()
-                        .text_size(px(12.0))
-                        .line_height(px(comments::CARD_LINE_HEIGHT))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .line_height(crate::typography::ui_rems(comments::CARD_LINE_HEIGHT))
                         .text_color(theme.text_dim)
                         .child(SharedString::from(comment.body.clone())),
                 ),
@@ -202,7 +205,7 @@ pub(crate) fn render_comment_draft<T: 'static>(
                 cancel(this, cx);
             }
         }))
-        .h(px(comments::DRAFT_CARD_HEIGHT))
+        .h(crate::typography::ui_rems(comments::DRAFT_CARD_HEIGHT))
         .w_full()
         .flex_none()
         .flex()
@@ -229,7 +232,7 @@ pub(crate) fn render_comment_draft<T: 'static>(
                 .py(px(10.0))
                 .child(
                     div()
-                        .h(px(comments::CARD_HEADER_HEIGHT))
+                        .h(crate::typography::ui_rems(comments::CARD_HEADER_HEIGHT))
                         .flex_none()
                         .flex()
                         .flex_row()
@@ -246,7 +249,7 @@ pub(crate) fn render_comment_draft<T: 'static>(
                                 .min_w_0()
                                 .truncate()
                                 .font_family(theme.font_mono.clone())
-                                .text_size(px(11.0))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_faint)
                                 .child(SharedString::from(format!("{path}:{line}"))),
                         ),
@@ -256,7 +259,7 @@ pub(crate) fn render_comment_draft<T: 'static>(
                         .h(px(46.0))
                         .flex_none()
                         .overflow_hidden()
-                        .text_size(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .child(input.into_any_element()),
                 )
                 .child(
@@ -299,7 +302,7 @@ fn comment_action(
         .flex()
         .items_center()
         .rounded(px(6.0))
-        .text_size(px(11.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .cursor_pointer()
         .when(primary, |el| el.bg(theme.solid).text_color(theme.on_solid))

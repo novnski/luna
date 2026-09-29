@@ -75,6 +75,32 @@ use gpui::{App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOp
 pub use luna_proto::HarnessId;
 pub use state::{EngineBootConfig, EngineHandle};
 
+/// Install persisted appearance and typography before a desktop view's first frame.
+pub(crate) fn init_appearance(data_dir: &std::path::Path, cx: &mut App) -> settings::UiSettings {
+    let ui_settings = settings::UiSettings::load(data_dir);
+    settings::init(ui_settings.clone(), data_dir.to_path_buf(), cx);
+    let fonts = typography::register_fonts(cx);
+    typography::init(
+        ui_settings.ui_font_family.clone(),
+        ui_settings.ui_font_size,
+        ui_settings.terminal_font_family.clone(),
+        ui_settings.terminal_font_size,
+        ui_settings.code_font_family.clone(),
+        ui_settings.code_font_size,
+        fonts,
+        cx,
+    );
+    theme_library::init(data_dir.to_path_buf(), cx);
+    appearance::init(
+        ui_settings.appearance,
+        ui_settings.theme_selection.clone(),
+        ui_settings.accent,
+        ui_settings.surface,
+        cx,
+    );
+    ui_settings
+}
+
 /// Whether a control whose primary action is click activation may also start
 /// a GPUI drag from the same hitbox. GPUI promotes pointer travel above 2 px
 /// to a drag. Normal Windows click jitter can cross that threshold, cancel the
@@ -164,29 +190,7 @@ pub fn run_app(config: UiConfig) {
         gpui_tokio::init(cx);
         gpui_base::init(cx);
         let data_dir = config.boot().data_dir.clone();
-        let ui_settings = settings::UiSettings::load(&data_dir);
-        settings::init(ui_settings.clone(), data_dir.clone(), cx);
-        let font_availability = typography::register_fonts(cx);
-        // Typography first: theme installation reads the effective family, so
-        // the first frame has the final font and palette without a flash.
-        typography::init(
-            ui_settings.ui_font_family.clone(),
-            ui_settings.ui_font_size,
-            ui_settings.terminal_font_family.clone(),
-            ui_settings.terminal_font_size,
-            ui_settings.code_font_family.clone(),
-            ui_settings.code_font_size,
-            font_availability,
-            cx,
-        );
-        theme_library::init(data_dir.clone(), cx);
-        appearance::init(
-            ui_settings.appearance,
-            ui_settings.theme_selection,
-            ui_settings.accent,
-            ui_settings.surface,
-            cx,
-        );
+        let ui_settings = init_appearance(&data_dir, cx);
         history::init(
             ui_settings.git_history_columns,
             ui_settings.git_history_column_widths,

@@ -1868,14 +1868,14 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
     // line through narrow moving clips, which is the native equivalent of
     // CSS `background-clip: text` without duplicating accessible text.
     let overlay_text = text.clone();
-    let overlay_font = gpui::font(theme.font_sans_fixed.clone());
+    let overlay_font = gpui::font(theme.font_sans.clone());
     let base = theme.text_muted;
     let peak = theme.text;
     let overlay = canvas(
         move |bounds, window, _| {
             let probe = window.text_system().shape_line(
                 overlay_text.clone(),
-                px(TOOL_LABEL_SIZE),
+                crate::typography::ui_rems(TOOL_LABEL_SIZE).to_pixels(window.rem_size()),
                 &[TextRun {
                     len: overlay_text.len(),
                     font: overlay_font.clone(),
@@ -1899,7 +1899,7 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
                 }
                 let line = window.text_system().shape_line(
                     overlay_text.clone(),
-                    px(TOOL_LABEL_SIZE),
+                    crate::typography::ui_rems(TOOL_LABEL_SIZE).to_pixels(window.rem_size()),
                     &[TextRun {
                         len: overlay_text.len(),
                         font: overlay_font.clone(),
@@ -1923,7 +1923,8 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
                     },
                 };
                 window.with_content_mask(Some(mask), |window| {
-                    let line_height = px(TOOL_LABEL_LINE_HEIGHT);
+                    let line_height = crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT)
+                        .to_pixels(window.rem_size());
                     let _ = line.paint(
                         bounds.origin,
                         line_height,
@@ -1969,6 +1970,23 @@ pub fn chips_height(count: usize) -> f32 {
 /// [`crate::changes::body_height`]. The chip's own [`CHIP_HEIGHT`] is already
 /// counted by [`chips_height`].
 pub fn detail_height(detail: &ToolDetail) -> f32 {
+    detail_height_for(detail, None, 1.0)
+}
+
+fn tool_code_size(theme: &Theme) -> f32 {
+    theme.code_font_size * (TOOL_TEXT_SIZE / crate::typography::CODE_FONT_SIZE_DEFAULT)
+}
+
+fn tool_code_line_height(theme: &Theme) -> f32 {
+    tool_code_size(theme) * (OUTPUT_LINE_HEIGHT / TOOL_TEXT_SIZE)
+}
+
+fn tool_diff_height(file: &crate::changes::FileDiff, theme: &Theme) -> f32 {
+    crate::changes::body_height_for_theme(file, &[], None, crate::changes::DiffMode::Unified, theme)
+}
+
+fn detail_height_for(detail: &ToolDetail, theme: Option<&Theme>, ui_scale: f32) -> f32 {
+    let code_line_height = theme.map_or(OUTPUT_LINE_HEIGHT, tool_code_line_height);
     let body = match detail {
         ToolDetail::Output {
             lines,
@@ -1978,20 +1996,22 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
             let rows = lines.len() + usize::from(*truncated_by > 0);
             OUTPUT_CODE_HEADER_HEIGHT
                 + 2.0
-                + (rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD)
-                    .min(OUTPUT_VIEWPORT_MAX_HEIGHT)
+                + (rows as f32 * code_line_height + OUTPUT_BODY_PAD).min(OUTPUT_VIEWPORT_MAX_HEIGHT)
         }
         ToolDetail::Thought {
             lines,
             truncated_by,
         } => {
             let rows = lines.len() + usize::from(*truncated_by > 0);
-            rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD
+            rows as f32 * OUTPUT_LINE_HEIGHT * ui_scale + OUTPUT_BODY_PAD
         }
-        ToolDetail::Diff { file, .. } => {
-            crate::changes::body_height(file).min(DIFF_VIEWPORT_MAX_HEIGHT)
-        }
-        ToolDetail::Stats { stats } => stats.len() as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD,
+        ToolDetail::Diff { file, .. } => theme
+            .map_or_else(
+                || crate::changes::body_height(file),
+                |theme| tool_diff_height(file, theme),
+            )
+            .min(DIFF_VIEWPORT_MAX_HEIGHT),
+        ToolDetail::Stats { stats } => stats.len() as f32 * code_line_height + OUTPUT_BODY_PAD,
     };
     DETAIL_SEPARATOR + body
 }
@@ -5481,7 +5501,7 @@ impl Transcript {
                     AttachmentSnapshot::Loading => card.child(
                         image_frame.child(
                             div()
-                                .text_size(px(11.0))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_muted)
                                 .child(if sending {
                                     "Uploading Appshot…"
@@ -5493,7 +5513,7 @@ impl Transcript {
                     AttachmentSnapshot::Error { .. } => card.child(
                         image_frame.child(
                             div()
-                                .text_size(px(11.0))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_muted)
                                 .child(if sending {
                                     "Uploading Appshot…"
@@ -5532,7 +5552,7 @@ impl Transcript {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(11.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from(format!(
                                         "{} · Appshot",
@@ -5545,14 +5565,14 @@ impl Transcript {
                             .w_full()
                             .truncate()
                             .text_center()
-                            .text_size(px(12.0))
+                            .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text)
                             .child(SharedString::from(appshot.title().to_string())),
                     );
                 if sending && (has_image || uploading.is_some()) {
                     card = card.child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_muted)
                             .child(SharedString::from(
                                 uploading
@@ -5860,7 +5880,7 @@ impl Transcript {
                     div()
                         .max_w(px(640.0))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .line_height(px(16.0))
+                        .line_height(crate::typography::ui_rems(16.0))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(recovery.detail)),
                 )
@@ -6857,8 +6877,20 @@ impl Transcript {
             .map(|((((detail, invocation), affordance), open), fold)| {
                 let target = if *open {
                     base_row_height
-                        + invocation.as_deref().map_or(0.0, detail_height)
-                        + detail.as_deref().map_or(0.0, detail_height)
+                        + invocation.as_deref().map_or(0.0, |detail| {
+                            detail_height_for(
+                                detail,
+                                Some(theme),
+                                crate::typography::font_size(cx).pixels() / 16.0,
+                            )
+                        })
+                        + detail.as_deref().map_or(0.0, |detail| {
+                            detail_height_for(
+                                detail,
+                                Some(theme),
+                                crate::typography::font_size(cx).pixels() / 16.0,
+                            )
+                        })
                         + if affordance.is_some() {
                             BLOB_AFFORDANCE_HEIGHT
                         } else {
@@ -6963,8 +6995,8 @@ impl Transcript {
             .pr(px(4.0))
             .h(px(TOOL_GROUP_HEADER_HEIGHT))
             .cursor_pointer()
-            .text_size(px(TOOL_LABEL_SIZE))
-            .line_height(px(TOOL_LABEL_LINE_HEIGHT))
+            .text_size(crate::typography::ui_rems(TOOL_LABEL_SIZE))
+            .line_height(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
             // Quiet even when children failed: agents routinely have failed
             // probes mid-work, and a red HEADER read as "this whole step
             // broke" (user report). Failures still show on the individual
@@ -6999,7 +7031,7 @@ impl Transcript {
             .child(
                 div()
                     .min_w_0()
-                    .h(px(TOOL_LABEL_LINE_HEIGHT))
+                    .h(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
                     .flex()
                     .items_center()
                     .truncate()
@@ -7190,7 +7222,7 @@ impl Transcript {
                             .flex_none()
                             .flex()
                             .items_center()
-                            .text_size(px(TOOL_TEXT_SIZE))
+                            .text_size(crate::typography::ui_rems(TOOL_TEXT_SIZE))
                             .text_color(theme.text_faint)
                             .child(label);
                         if !loading {
@@ -7275,7 +7307,7 @@ impl Transcript {
             .flex_col()
             // Tool summaries and cards are code-adjacent chrome. Detail bodies
             // retain their explicit mono/diff typography below this boundary.
-            .font_family(theme.font_sans_fixed.clone())
+            .font_family(theme.font_sans.clone())
             .when(collapses, |el| {
                 el.child(reveal_tool_row(
                     header.into_any_element(),
@@ -7455,7 +7487,7 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_muted)
                         .child(crate::icons::icon(crate::icons::DANGER_TRIANGLE).size(px(13.0)))
                         .child("Run error")
@@ -7480,7 +7512,7 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
                 )
                 .child(
                     div()
-                        .text_size(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text)
                         .child(message),
                 ),
@@ -7517,7 +7549,7 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
                 .border_color(crate::theme::hairline(0.08))
                 .bg(crate::theme::ink(0.045))
                 .px(px(8.0))
-                .text_size(px(12.0))
+                .text_size(crate::typography::ui_rems(12.0))
                 .child(
                     div()
                         .flex_none()
@@ -7607,7 +7639,7 @@ fn detail_body(
                 .map(|(_, _, key)| format!("{key}-diff-scroll"))
                 .unwrap_or_else(|| format!("tool-diff-{}", file.path)))
             .h(px(
-                crate::changes::body_height(file).min(DIFF_VIEWPORT_MAX_HEIGHT)
+                tool_diff_height(file, theme).min(DIFF_VIEWPORT_MAX_HEIGHT)
             ))
             .overflow_y_scroll()
             .child(crate::changes::render_file_body_with_syntax(
@@ -7619,10 +7651,10 @@ fn detail_body(
         ToolDetail::Stats { stats } => body
             .py(px(6.0))
             .font_family(theme.font_mono.clone())
-            .text_size(px(TOOL_TEXT_SIZE))
+            .text_size(px(tool_code_size(theme)))
             .children(stats.iter().map(|stat| {
                 div()
-                    .h(px(OUTPUT_LINE_HEIGHT))
+                    .h(px(tool_code_line_height(theme)))
                     .w_full()
                     .min_w_0()
                     .flex()
@@ -7676,8 +7708,8 @@ fn detail_body(
                 .px(px(8.0))
                 .border_b_1()
                 .border_color(crate::theme::hairline(0.08))
-                .font_family(theme.font_sans_fixed.clone())
-                .text_size(px(10.0))
+                .font_family(theme.font_sans.clone())
+                .text_size(crate::typography::ui_rems(10.0))
                 .text_color(theme.text_muted)
                 .child(match copy.as_ref().map(|(_, ix, _)| *ix) {
                     Some(0) if invocation_is_command => "Command",
@@ -7709,7 +7741,7 @@ fn detail_body(
                 header
             };
             let rows = lines.len() + usize::from(*truncated_by > 0);
-            let viewport = (rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD)
+            let viewport = (rows as f32 * tool_code_line_height(theme) + OUTPUT_BODY_PAD)
                 .min(OUTPUT_VIEWPORT_MAX_HEIGHT);
             body.rounded(px(7.0))
                 .border_1()
@@ -7724,10 +7756,10 @@ fn detail_body(
                         .py(px(6.0))
                         .px(px(8.0))
                         .font_family(theme.font_mono.clone())
-                        .text_size(px(TOOL_TEXT_SIZE))
+                        .text_size(px(tool_code_size(theme)))
                         .children(lines.iter().map(|line| {
                             div()
-                                .h(px(OUTPUT_LINE_HEIGHT))
+                                .h(px(tool_code_line_height(theme)))
                                 .w_full()
                                 .min_w_0()
                                 .flex()
@@ -7736,7 +7768,7 @@ fn detail_body(
                                 .child(div().w_full().min_w_0().truncate().child(line.clone()))
                         }))
                         .when(*truncated_by > 0, |block| {
-                            block.child(more_lines_row(*truncated_by, theme))
+                            block.child(more_lines_row(*truncated_by, theme, true))
                         }),
                 )
                 .into_any_element()
@@ -7746,10 +7778,10 @@ fn detail_body(
             truncated_by,
         } => body
             .py(px(6.0))
-            .text_size(px(TOOL_TEXT_SIZE))
+            .text_size(crate::typography::ui_rems(TOOL_TEXT_SIZE))
             .children(lines.iter().map(|line| {
                 let row = div()
-                    .h(px(OUTPUT_LINE_HEIGHT))
+                    .h(crate::typography::ui_rems(OUTPUT_LINE_HEIGHT))
                     .w_full()
                     .min_w_0()
                     .flex()
@@ -7766,19 +7798,48 @@ fn detail_body(
                 )
             }))
             .when(*truncated_by > 0, |block| {
-                block.child(more_lines_row(*truncated_by, theme))
+                block.child(more_lines_row(*truncated_by, theme, false))
             })
             .into_any_element(),
     }
 }
 
-/// The counted-tail row under a truncated Output/Thought detail.
-fn more_lines_row(truncated_by: usize, theme: &Theme) -> gpui::Div {
+/// Exercise the production detail renderer and fold geometry in the appearance E2E fixture.
+#[cfg(feature = "appshots-fixture")]
+pub fn fixture_detail_panel(detail: &ToolDetail, theme: &Theme, ui_scale: f32) -> AnyElement {
     div()
-        .h(px(OUTPUT_LINE_HEIGHT))
+        .w_full()
+        .h(px(detail_height_for(detail, Some(theme), ui_scale)))
+        .overflow_hidden()
+        .border_1()
+        .border_color(theme.border)
+        .font_family(theme.font_sans.clone())
+        .child(detail_body(detail, None, theme, None, false))
+        .into_any_element()
+}
+
+#[cfg(feature = "appshots-fixture")]
+pub fn fixture_review_card<T: 'static>(theme: &Theme, cx: &Context<T>) -> AnyElement {
+    let comment = crate::comments::ReviewComment::new(
+        "demo.rs",
+        crate::comments::CommentSide::New,
+        2,
+        "Review text follows the interface font.\nThis second line must remain visible.",
+    );
+    crate::comment_ui::render_comment_card(&comment, theme, cx, |_, _, _, _| {}, |_, _, _| {}, None)
+}
+
+/// The counted-tail row under a truncated Output/Thought detail.
+fn more_lines_row(truncated_by: usize, theme: &Theme, code: bool) -> gpui::Div {
+    div()
+        .h(crate::typography::ui_rems(OUTPUT_LINE_HEIGHT))
         .flex()
         .items_center()
-        .text_size(px(TOOL_TEXT_SIZE))
+        .text_size(crate::typography::ui_rems(TOOL_TEXT_SIZE))
+        .when(code, |row| {
+            row.h(px(tool_code_line_height(theme)))
+                .text_size(px(tool_code_size(theme)))
+        })
         .text_color(theme.text_faint)
         .child(SharedString::from(format!("… {truncated_by} more lines")))
 }
@@ -7796,7 +7857,7 @@ fn thought_line_text(line: &[InlineRun], theme: &Theme) -> Option<(SharedString,
         let mut f = if run.style.code {
             gpui::font(theme.font_mono.clone())
         } else {
-            gpui::font(theme.font_sans_fixed.clone())
+            gpui::font(theme.font_sans.clone())
         };
         if run.style.bold {
             f.weight = gpui::FontWeight::SEMIBOLD;
@@ -7917,7 +7978,7 @@ impl gpui::Render for ChildInspectionTooltip {
             .gap(px(7.0))
             .children(self.lines.iter().map(|line| {
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text)
                     .child(line.clone())
             }));
@@ -7978,8 +8039,8 @@ fn chip_header_row(
         .items_center()
         .gap(px(8.0))
         .px(px(if activity { 0.0 } else { 8.0 }))
-        .text_size(px(TOOL_LABEL_SIZE))
-        .line_height(px(TOOL_LABEL_LINE_HEIGHT))
+        .text_size(crate::typography::ui_rems(TOOL_LABEL_SIZE))
+        .line_height(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
         .when(!activity, |row| {
             row.child(
                 // Subagent icon tile (`size-[18px] rounded-[5px] bg-white/[0.08]`,
@@ -8006,7 +8067,7 @@ fn chip_header_row(
         .child(
             div()
                 .flex_none()
-                .h(px(TOOL_LABEL_LINE_HEIGHT))
+                .h(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
                 .flex()
                 .items_center()
                 .when(!activity, |label| {
@@ -8135,7 +8196,7 @@ fn chip_header_row(
                     .h(px(18.0))
                     .flex()
                     .items_center()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_faint)
                     .child(SharedString::from(model.to_owned())),
             )
@@ -8146,7 +8207,7 @@ fn chip_header_row(
                 row.child(
                     div()
                         .flex_none()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(if failed {
                             theme.danger
                         } else {

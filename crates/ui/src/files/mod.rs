@@ -111,7 +111,7 @@ impl Render for WorkspacePathDragGhost {
             .bg(theme.surface_raised)
             .border_1()
             .border_color(theme.border_strong)
-            .text_size(px(11.5))
+            .text_size(crate::typography::ui_rems(11.5))
             .text_color(theme.text)
             .opacity(0.85)
             .child({
@@ -224,7 +224,7 @@ impl Render for FilesSurface {
                 .child(
                     div()
                         .text_center()
-                        .text_size(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
                         .child(error),
                 )
@@ -241,7 +241,7 @@ impl Render for FilesSurface {
                         .cursor_pointer()
                         .flex()
                         .items_center()
-                        .text_size(px(11.5))
+                        .text_size(crate::typography::ui_rems(11.5))
                         .text_color(theme.text)
                         .child("Retry")
                         .on_click(cx.listener(|this, _, _, cx| this.retry_root(cx))),
@@ -279,7 +279,7 @@ impl Render for FilesSurface {
                         .flex()
                         .items_center()
                         .gap(px(6.0))
-                        .text_size(px(10.0))
+                        .text_size(crate::typography::ui_rems(10.0))
                         .text_color(theme.warning_muted)
                         .child(
                             crate::icons::icon(crate::icons::REFRESH)

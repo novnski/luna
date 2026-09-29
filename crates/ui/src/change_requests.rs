@@ -83,7 +83,7 @@ impl Render for ChangeRequestTooltip {
             .shadow_md()
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(self.model.tone.color(theme))
                     .child(SharedString::from(format!(
@@ -96,7 +96,7 @@ impl Render for ChangeRequestTooltip {
                     .min_w_0()
                     .truncate()
                     .whitespace_nowrap()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_muted)
                     .child(self.model.title.clone()),
             );
@@ -134,7 +134,11 @@ pub(crate) fn pull_request_badge_with_query(
 
     div()
         .id(id)
-        .h(px(if composer { 20.0 } else { 16.0 }))
+        .h(crate::typography::ui_rems(if composer {
+            20.0
+        } else {
+            16.0
+        }))
         .flex_none()
         .flex()
         .flex_row()
@@ -143,7 +147,11 @@ pub(crate) fn pull_request_badge_with_query(
         .px(px(if composer { 7.0 } else { 4.0 }))
         .rounded(px(if composer { 6.0 } else { 4.0 }))
         .bg(color.opacity(0.08))
-        .text_size(px(if composer { 11.0 } else { 10.0 }))
+        .text_size(crate::typography::ui_rems(if composer {
+            11.0
+        } else {
+            10.0
+        }))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.readable_tone(color, 0.85))
         .cursor_pointer()

@@ -330,7 +330,7 @@ impl Render for CodeBlockTooltip {
             .border_color(theme.border_strong)
             .bg(theme.surface_raised)
             .shadow_md()
-            .text_size(px(11.0))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
             .child(self.0)
     }
@@ -1945,7 +1945,7 @@ fn code_copy_button(
                 crate::theme::ink(0.08),
             ))
             .on_hover(crate::motion::hover_listener(fade_key))
-            .text_size(px(10.5))
+            .text_size(crate::typography::ui_rems(10.5))
             .text_color(theme.text_muted)
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
@@ -1989,7 +1989,7 @@ fn code_block_header(
             .child(
                 div()
                     .min_w_0()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_muted)
                     .children(language.map(|lang| SharedString::from(lang.to_string()))),
             )

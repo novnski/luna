@@ -737,14 +737,13 @@ pub struct Theme {
     /// UI font family (bundling of Geist lands with asset work; until then the
     /// text system falls back to the system sans when the family is missing).
     pub font_sans: SharedString,
-    /// Fixed Geist chrome for code-adjacent surfaces and recovery controls.
-    pub font_sans_fixed: SharedString,
     /// User-selected family for code, diffs, and file editors.
     pub font_mono: SharedString,
     /// User-selected family for terminal output.
     pub font_terminal: SharedString,
-    /// Absolute pixel sizes for those two surfaces. They live on the theme
-    /// because every render site that needs them already holds a `Theme`.
+    /// Interface rem base for calculated card heights and animation geometry.
+    pub ui_font_size: f32,
+    /// Absolute code and terminal sizes, independent of the interface rem base.
     pub code_font_size: f32,
     pub terminal_font_size: f32,
     /// Explicit system fallbacks, for callers that want to skip the lookup.
@@ -1139,9 +1138,9 @@ impl Theme {
             diff_hunk_bg: hsla(0.6, 0.35, 0.6, 0.05),
             terminal: TerminalColors::luna(Appearance::Dark),
             font_sans: "Geist".into(),
-            font_sans_fixed: "Geist".into(),
             font_mono: "Geist Mono".into(),
             font_terminal: "Geist Mono".into(),
+            ui_font_size: crate::typography::UiFontSize::default().pixels(),
             code_font_size: crate::typography::CODE_FONT_SIZE_DEFAULT,
             terminal_font_size: crate::typography::TERMINAL_FONT_SIZE_DEFAULT,
             font_sans_fallback: system_sans().into(),
@@ -1238,9 +1237,9 @@ impl Theme {
             diff_hunk_bg: hsla(0.6, 0.35, 0.35, 0.07),
             terminal: TerminalColors::luna(Appearance::Light),
             font_sans: "Geist".into(),
-            font_sans_fixed: "Geist".into(),
             font_mono: "Geist Mono".into(),
             font_terminal: "Geist Mono".into(),
+            ui_font_size: crate::typography::UiFontSize::default().pixels(),
             code_font_size: crate::typography::CODE_FONT_SIZE_DEFAULT,
             terminal_font_size: crate::typography::TERMINAL_FONT_SIZE_DEFAULT,
             font_sans_fallback: system_sans().into(),
@@ -1262,6 +1261,11 @@ impl Theme {
 
     fn with_font_sans(mut self, family: SharedString) -> Self {
         self.font_sans = family;
+        self
+    }
+
+    fn with_ui_font_size(mut self, size: f32) -> Self {
+        self.ui_font_size = size;
         self
     }
 
@@ -1440,6 +1444,7 @@ impl Theme {
         set_current_appearance(appearance);
         let next = Self::for_preferences(appearance, accent)
             .with_font_sans(crate::typography::effective_family_name(cx))
+            .with_ui_font_size(crate::typography::font_size(cx).pixels())
             .with_font_mono(crate::typography::code_effective_family_name(cx))
             .with_font_terminal(crate::typography::terminal_effective_family_name(cx))
             .with_code_font_size(crate::typography::code_font_size(cx))
@@ -1503,6 +1508,7 @@ impl Theme {
         let next =
             Self::for_selection(appearance, variant_id, accent_selection, surface_preference)
                 .with_font_sans(crate::typography::effective_family_name(cx))
+                .with_ui_font_size(crate::typography::font_size(cx).pixels())
                 .with_font_mono(crate::typography::code_effective_family_name(cx))
                 .with_font_terminal(crate::typography::terminal_effective_family_name(cx))
                 .with_code_font_size(crate::typography::code_font_size(cx))
@@ -2752,7 +2758,6 @@ mod tests {
         for appearance in [Appearance::Dark, Appearance::Light] {
             let theme = Theme::for_appearance(appearance).with_font_sans("Inter".into());
             assert_eq!(theme.font_sans.as_ref(), "Inter");
-            assert_eq!(theme.font_sans_fixed.as_ref(), "Geist");
             assert_eq!(theme.font_mono.as_ref(), "Geist Mono");
         }
     }

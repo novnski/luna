@@ -70,7 +70,7 @@ pub fn render(
         .h(px(24.0))
         .px(px(6.0))
         .rounded(px(6.0))
-        .text_size(px(11.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(color)
         .hover(|s| s.bg(crate::theme::ink(0.05)))
         .child(ring)
@@ -142,7 +142,7 @@ impl Render for UsageCard {
             .gap(px(8.0))
             .child(
                 div()
-                    .text_size(px(12.0))
+                    .text_size(crate::typography::ui_rems(12.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child("Context window"),
@@ -151,8 +151,8 @@ impl Render for UsageCard {
                 // the lines break only at their own newlines: a tooltip sizes
                 // from the unwrapped text, so soft wrapping clipped the last line
                 div()
-                    .text_size(px(12.0))
-                    .line_height(px(19.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .line_height(crate::typography::ui_rems(19.0))
                     .whitespace_nowrap()
                     .text_color(theme.text_muted)
                     .child(SharedString::from(details(
@@ -171,8 +171,8 @@ impl Render for UsageCard {
                     "\nContext pressure is separate from account quota, rate limits, and cost.",
                 );
                 div()
-                    .text_size(px(11.0))
-                    .line_height(px(17.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .line_height(crate::typography::ui_rems(17.0))
                     .text_color(theme.text_faint)
                     .child(SharedString::from(detail))
             });

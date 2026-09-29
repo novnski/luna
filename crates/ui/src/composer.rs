@@ -72,16 +72,7 @@ fn composer_surface_radius(dock_amount: f32) -> f32 {
 
 /// The question wizard and the ordinary composer use the same pill chrome.
 fn composer_surface(theme: &Theme, radius: f32) -> gpui::Div {
-    // A translucent cool silver/slate edge sits more naturally on frost
-    // than the general-purpose white/black separator color.
-    let border = if theme.is_frost() {
-        match theme.appearance {
-            crate::theme::Appearance::Dark => gpui::hsla(210.0 / 360.0, 0.18, 0.78, 0.09),
-            crate::theme::Appearance::Light => gpui::hsla(210.0 / 360.0, 0.18, 0.32, 0.10),
-        }
-    } else {
-        theme.border
-    };
+    let border = theme.border;
     div()
         .rounded(px(radius))
         .border_1()
@@ -561,7 +552,7 @@ impl Render for AppshotActionTooltip {
             .border_color(theme.border_strong)
             .bg(theme.surface_raised)
             .shadow_md()
-            .text_size(px(11.0))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
             .child(self.0.clone())
     }
@@ -1256,17 +1247,16 @@ pub(crate) fn composer_chip_palette(
     kind: ComposerChipKind,
     theme: &Theme,
 ) -> (gpui::Hsla, gpui::Hsla) {
-    use crate::theme::Appearance;
-
-    let (text, wash_alpha) = match (kind, theme.appearance) {
-        (ComposerChipKind::Skill, Appearance::Dark) => (0xFFC185, 0.14),
-        (ComposerChipKind::Skill, Appearance::Light) => (0x8B5200, 0.10),
-        (ComposerChipKind::Folder, Appearance::Dark) => (0xA795FF, 0.17),
-        (ComposerChipKind::Folder, Appearance::Light) => (0x5D46B9, 0.10),
-        (ComposerChipKind::File, Appearance::Dark) => (0x80D9CE, 0.16),
-        (ComposerChipKind::File, Appearance::Light) => (0x006D66, 0.10),
+    let (text, dark_alpha) = match kind {
+        ComposerChipKind::Skill => (theme.warning, 0.14),
+        ComposerChipKind::Folder => (theme.accent, 0.17),
+        ComposerChipKind::File => (theme.success, 0.16),
     };
-    let text: gpui::Hsla = gpui::rgb(text).into();
+    let wash_alpha = if theme.appearance.is_dark() {
+        dark_alpha
+    } else {
+        0.10
+    };
     (text, text.opacity(wash_alpha))
 }
 
@@ -3783,7 +3773,7 @@ impl Render for MentionPathTooltip {
                 .border_color(theme.border_strong)
                 .bg(theme.surface_raised)
                 .font_family(theme.font_mono.clone())
-                .text_size(px(11.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.text_muted)
                 .child(self.path.clone()),
         )
@@ -7968,7 +7958,7 @@ impl Composer {
                         .max_w(px(tile_width - 20.0))
                         .truncate()
                         .text_center()
-                        .text_size(px(12.5))
+                        .text_size(crate::typography::ui_rems(12.5))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(source),
@@ -8377,7 +8367,7 @@ impl Composer {
                                 .child(
                                     div()
                                         .flex_none()
-                                        .text_size(px(13.0))
+                                        .text_size(crate::typography::ui_rems(13.0))
                                         .text_color(theme.text)
                                         .child(name),
                                 )
@@ -8388,7 +8378,7 @@ impl Composer {
                                             .flex_1()
                                             .overflow_hidden()
                                             .truncate()
-                                            .text_size(px(12.5))
+                                            .text_size(crate::typography::ui_rems(12.5))
                                             .text_color(theme.text_muted)
                                             .child(directory),
                                     )
@@ -10709,7 +10699,7 @@ impl Composer {
                         div()
                             .mt(px(6.0))
                             .text_size(crate::typography::ui_rems(15.0))
-                            .line_height(px(20.0))
+                            .line_height(crate::typography::ui_rems(20.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text)
                             .child(SharedString::from(question.question.clone())),
@@ -11420,8 +11410,8 @@ impl Render for Composer {
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .text_size(px(11.0))
-                            .line_height(px(14.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .line_height(crate::typography::ui_rems(14.0))
                             .text_color(theme.text_faint)
                             .child(div().size(px(5.0)).rounded_full().bg(dot))
                             .child(div().min_w_0().truncate().child(notice)),

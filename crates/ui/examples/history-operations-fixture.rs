@@ -521,6 +521,13 @@ async fn seed_history_task(
     effective_permission_mode: PermissionMode,
     prompts: &[&str],
 ) -> anyhow::Result<()> {
+    core.workspace.create_space(
+        "l13-ui-project",
+        &core.device_id,
+        root.to_str().unwrap(),
+        Some("Synthetic History project".into()),
+        false,
+    )?;
     if core.workspace.chat(task_id)?.is_none() {
         let created = execute(
             client,
@@ -528,6 +535,7 @@ async fn seed_history_task(
             &format!("{command_prefix}-create"),
             serde_json::json!({
                 "kind": "createChat",
+                "spaceId": "l13-ui-project",
                 "deviceId": core.device_id,
                 "cwd": root,
                 "config": chat_config(
@@ -606,6 +614,13 @@ async fn seed_unsupported_task(
     core: &EngineCore,
     root: &Path,
 ) -> anyhow::Result<()> {
+    core.workspace.create_space(
+        "l13-ui-project",
+        &core.device_id,
+        root.to_str().unwrap(),
+        Some("Synthetic History project".into()),
+        false,
+    )?;
     if core.workspace.chat(UNSUPPORTED_TASK_ID)?.is_none() {
         let unsupported = execute(
             client,
@@ -613,6 +628,7 @@ async fn seed_unsupported_task(
             "l13-create-unsupported",
             serde_json::json!({
                 "kind": "createChat",
+                "spaceId": "l13-ui-project",
                 "deviceId": core.device_id,
                 "cwd": root,
                 "config": chat_config(
@@ -689,6 +705,7 @@ async fn seed(
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
     let root = PathBuf::from(std::env::args().nth(1).expect("isolated fixture root"));
+    let capture_path = std::env::args().nth(2).map(PathBuf::from);
     anyhow::ensure!(root.is_absolute(), "fixture root must be absolute");
     std::fs::create_dir_all(&root)?;
     let root = root.canonicalize()?;
@@ -735,7 +752,7 @@ fn main() -> anyhow::Result<()> {
         &engine_data,
     ))?;
     let boot = EngineBootConfig {
-        data_dir: ui_data.clone(),
+        data_dir: engine_data.clone(),
         ipc_port,
         edge_url: String::new(),
         edge_token: None,
@@ -745,6 +762,7 @@ fn main() -> anyhow::Result<()> {
     };
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
     let chats = core.workspace.read_chats()?;
+    let spaces = core.workspace.read_spaces()?;
     let device = core.device_id.clone();
 
     gpui_platform::application()
@@ -795,26 +813,48 @@ fn main() -> anyhow::Result<()> {
                     .unwrap(),
                 ];
                 state.chats = chats;
+                state.spaces = spaces;
                 state.chats_synced = true;
                 state.spaces_synced = true;
                 state.select_chat(Some(TASK_ID.into()), cx);
                 state.fixture_attach_engine(handle, cx);
                 state
             });
-            cx.open_window(
-                WindowOptions {
-                    window_background: theme::Theme::of(cx).window_background_appearance(),
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                        gpui::point(px(80.), px(80.)),
-                        size(px(1100.), px(850.)),
-                    ))),
-                    ..Default::default()
-                },
-                |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
-            )
-            .unwrap();
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_background: theme::Theme::of(cx).window_background_appearance(),
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            gpui::point(px(80.), px(80.)),
+                            size(px(1100.), px(850.)),
+                        ))),
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
+                )
+                .unwrap();
             state.update(cx, |_, cx| cx.notify());
             cx.activate(true);
+            if let Some(path) = capture_path {
+                let screenshot_window: gpui::AnyWindowHandle = window.into();
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(5))
+                        .await;
+                    let result = screenshot_window.update(cx, |_, window, cx| {
+                        window.set_rem_size(px(typography::font_size(cx).pixels()));
+                        window.draw(cx).clear();
+                        window.render_to_image()?.save(path)?;
+                        Ok::<_, anyhow::Error>(())
+                    });
+                    if let Err(error) = result.and_then(|result| result) {
+                        eprintln!("history fixture capture failed: {error:#}");
+                        std::process::exit(1);
+                    }
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            }
         });
     runtime.block_on(core.shutdown());
     Ok(())

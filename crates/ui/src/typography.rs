@@ -688,8 +688,12 @@ pub fn set_font_size(size: UiFontSize, window: &mut Window, cx: &mut App) -> boo
     state.size = size;
     state.generation = state.generation.wrapping_add(1);
     window.set_rem_size(px(size.pixels()));
-    crate::theme::bump_style_generation();
-    cx.refresh_windows();
+    for handle in cx.windows() {
+        handle
+            .update(cx, |_, window, _| window.set_rem_size(px(size.pixels())))
+            .ok();
+    }
+    reinstall_theme(cx);
     settings::update(SavePolicy::Immediate, cx, |settings| {
         settings.ui_font_size = size;
     });

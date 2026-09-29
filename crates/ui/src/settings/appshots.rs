@@ -24,7 +24,7 @@ fn row(
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(12.0))
-                        .line_height(px(18.0))
+                        .line_height(crate::typography::ui_rems(18.0))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(description.to_string())),
                 ),
@@ -100,7 +100,7 @@ impl ShortcutsPage {
                     } else {
                         gpui::transparent_black()
                     })
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(if selected {
                         theme.text
                     } else {
@@ -308,14 +308,14 @@ impl ShortcutsPage {
                             .child(widgets::page_header(&theme, "Appshots", None))
                             .child(
                                 widgets::page_subtitle(&theme, capabilities.setup_description())
-                                    .line_height(px(20.0)),
+                                    .line_height(crate::typography::ui_rems(20.0)),
                             )
                             .child(card)
                             .child(
                                 div()
                                     .min_h(px(20.0))
                                     .mt(px(8.0))
-                                    .text_size(px(12.0))
+                                    .text_size(crate::typography::ui_rems(12.0))
                                     .text_color(theme.text_muted)
                                     .child(helper),
                             )
@@ -329,7 +329,7 @@ impl ShortcutsPage {
                                     .child(
                                         div()
                                             .flex_1()
-                                            .text_size(px(12.0))
+                                            .text_size(crate::typography::ui_rems(12.0))
                                             .text_color(theme.text_muted)
                                             .child(
                                                 "Changed a permission? Check again after returning to LUNA.",

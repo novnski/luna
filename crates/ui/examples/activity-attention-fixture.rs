@@ -247,6 +247,7 @@ async fn capture_activity(
     let screenshot_window: gpui::AnyWindowHandle = window.clone().into();
     cx.background_executor().timer(Duration::from_secs(3)).await;
     screenshot_window.update(cx, |_, window, cx| {
+        window.set_rem_size(px(typography::font_size(cx).pixels()));
         window.draw(cx).clear();
         window.render_to_image()?.save(output.join("sidebar.png"))?;
         Ok::<_, anyhow::Error>(())

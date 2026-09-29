@@ -741,6 +741,7 @@ async fn capture_after_load(
         .timer(Duration::from_secs(15))
         .await;
     window.update(cx, |_, window, cx| {
+        window.set_rem_size(px(typography::font_size(cx).pixels()));
         window.draw(cx).clear();
         window.render_to_image()?.save(path)?;
         Ok(())
@@ -1503,6 +1504,16 @@ fn initialize_fixture_workspace(
     let task_a_exists = existing.iter().any(|chat| chat.id == TASK_A);
     let task_b_exists = existing.iter().any(|chat| chat.id == TASK_B);
     let turn_recovery = mode == "turn-recovery";
+    let composer_project = mode.starts_with("composer-chips");
+    if composer_project {
+        core.workspace.create_space(
+            "composer-preview-project",
+            &core.device_id,
+            root.to_str().unwrap(),
+            Some("Synthetic composer project".into()),
+            false,
+        )?;
+    }
     let project = turn_recovery_project(root);
     if turn_recovery {
         std::fs::create_dir_all(&project)?;
@@ -1511,10 +1522,12 @@ fn initialize_fixture_workspace(
     if !task_a_exists {
         core.workspace.create_chat(
             TASK_A,
-            None,
+            composer_project.then_some("composer-preview-project"),
             Some(&core.device_id),
             Some(fixture_chat_config()),
-            turn_recovery.then(|| project.to_string_lossy().into_owned()),
+            turn_recovery
+                .then(|| project.to_string_lossy().into_owned())
+                .or_else(|| composer_project.then(|| root.to_string_lossy().into_owned())),
         )?;
         let title = match mode {
             "queue" => "L09 Durable Queue",
@@ -1524,8 +1537,13 @@ fn initialize_fixture_workspace(
         core.workspace.rename_chat(TASK_A, title)?;
     }
     if !task_b_exists {
-        core.workspace
-            .create_chat(TASK_B, None, Some(&core.device_id), None, None)?;
+        core.workspace.create_chat(
+            TASK_B,
+            composer_project.then_some("composer-preview-project"),
+            Some(&core.device_id),
+            None,
+            None,
+        )?;
         core.workspace.rename_chat(TASK_B, "L08 Draft B")?;
     }
 
@@ -1748,6 +1766,7 @@ fn main() -> anyhow::Result<()> {
     };
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
     let chats = core.workspace.read_chats()?;
+    let spaces = core.workspace.read_spaces()?;
     let device = core.device_id.clone();
     let seed = startup.stage_draft_evidence;
     let preview_chips = mode == "composer-chips";
@@ -1801,11 +1820,10 @@ fn main() -> anyhow::Result<()> {
                     .unwrap(),
                 ];
                 state.chats = chats;
+                state.spaces = spaces;
                 state.chats_synced = true;
                 state.spaces_synced = true;
-                // Use the production selection transition so project-less
-                // task state (`no_project`, selected device, empty-body
-                // visibility) is initialized before the first frame.
+                // Use the production selection transition before the first frame.
                 state.select_chat(Some(selected_task_id.into()), cx);
                 // Use the real attachment boundary after selection is known;
                 // it starts the transcript and queue watches exactly as the

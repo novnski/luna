@@ -30,7 +30,7 @@ pub fn notice_chip(
         .px(px(10.0))
         .py(px(8.0))
         .text_size(crate::typography::ui_rems(12.0))
-        .line_height(px(16.0))
+        .line_height(crate::typography::ui_rems(16.0))
         .text_color(theme.readable_tone(muted, 0.9))
         .child(
             div()

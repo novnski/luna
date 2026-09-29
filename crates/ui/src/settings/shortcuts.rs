@@ -582,7 +582,7 @@ impl Render for ShortcutsPage {
                                 .mt(px(4.0))
                                 .max_w(px(430.0))
                                 .text_size(crate::typography::ui_rems(11.5))
-                                .line_height(px(17.0))
+                                .line_height(crate::typography::ui_rems(17.0))
                                 .text_color(theme.readable_muted(0.65))
                                 .child(SharedString::from(
                                     "When no dialog, menu, picker, or terminal handles Escape, stop the agent in the active session.",
@@ -654,7 +654,7 @@ impl Render for ShortcutsPage {
                                 .items_center()
                                 .justify_center()
                                 .font_family(theme.font_mono.clone())
-                                .text_size(px(12.0))
+                                .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(if selected {
                                     theme.text
                                 } else {
@@ -692,8 +692,8 @@ impl Render for ShortcutsPage {
                                 div()
                                     .mt(px(4.0))
                                     .max_w(px(430.0))
-                                    .text_size(px(11.5))
-                                    .line_height(px(17.0))
+                                    .text_size(crate::typography::ui_rems(11.5))
+                                    .line_height(crate::typography::ui_rems(17.0))
                                     .text_color(theme.readable_muted(0.65))
                                     .child(SharedString::from(
                                         "Choose whether Enter sends immediately or starts a new paragraph. Cmd/Ctrl+Enter always submits; with an empty composer it sends the most recently queued message. Shift+Enter always inserts a line break.",
@@ -781,7 +781,7 @@ impl Render for ShortcutsPage {
                                                      this device.",
                                                 )
                                                 .max_w(px(512.0))
-                                                .line_height(px(20.0)),
+                                                .line_height(crate::typography::ui_rems(20.0)),
                                             ),
                                     )
                                     .child({

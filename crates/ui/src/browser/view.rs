@@ -242,7 +242,7 @@ impl BrowserSurface {
                     .border_1()
                     .border_color(theme.border)
                     .text_size(crate::typography::ui_rems(12.0))
-                    .line_height(px(19.0))
+                    .line_height(crate::typography::ui_rems(19.0))
                     .text_color(theme.text_muted)
                     .child(message),
             );
@@ -251,7 +251,7 @@ impl BrowserSurface {
             content = content.child(
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(17.0))
+                    .line_height(crate::typography::ui_rems(17.0))
                     .text_color(theme.text_muted)
                     .child(error.clone()),
             );
@@ -342,7 +342,7 @@ impl BrowserSurface {
                         div()
                             .text_center()
                             .text_size(crate::typography::ui_rems(12.0))
-                            .line_height(px(19.0))
+                            .line_height(crate::typography::ui_rems(19.0))
                             .text_color(theme.text_muted)
                             .child(description),
                     )

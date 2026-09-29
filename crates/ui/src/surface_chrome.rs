@@ -23,7 +23,7 @@ pub(crate) fn input() -> Div {
         .flex()
         .items_center()
         .gap(px(6.0))
-        .text_size(px(11.5))
+        .text_size(crate::typography::ui_rems(11.5))
 }
 
 pub(crate) fn toolbar(theme: &Theme) -> Div {

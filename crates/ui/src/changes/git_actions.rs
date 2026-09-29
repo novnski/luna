@@ -663,13 +663,15 @@ impl Changes {
             .id(id.into())
             .px(px(8.0))
             .py(px(5.0))
-            .rounded(px(6.0))
+            .rounded(px(Theme::CONTROL_RADIUS))
             .bg(theme.surface_raised)
             .border_1()
             .border_color(theme.border)
-            .text_size(px(11.0))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
             .cursor_pointer()
+            .hover(|style| style.bg(theme.surface_raised_hover))
+            .focus_visible(|style| style.border_color(theme.accent))
             .child(label)
     }
 
@@ -678,7 +680,7 @@ impl Changes {
             .flex()
             .items_center()
             .gap(px(6.0))
-            .text_size(px(11.0))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_dim);
         match self.git_pr_status.clone() {
             Some(GitPrStatus::Linked { change_request }) => {
@@ -724,7 +726,7 @@ impl Changes {
             .py(px(Theme::SPACE_SM))
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.surface);
+            .bg(theme.card_glass_bg());
         if let Some(preview) = preview {
             let branch = preview.branch.clone();
             let remote = preview
@@ -736,7 +738,7 @@ impl Changes {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(format!("Branch: {branch}  ·  Remote: {remote}"))
                     .child(
@@ -763,7 +765,7 @@ impl Changes {
                         div()
                             .id(SharedString::from(format!("git-select-{path}")))
                             .cursor_pointer()
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text)
                             .child(if selected.contains(&path) {
                                 "☑"
@@ -785,7 +787,7 @@ impl Changes {
                             .min_w_0()
                             .truncate()
                             .font_family(theme.font_mono.clone())
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text)
                             .child(path),
                     )
@@ -886,7 +888,7 @@ impl Changes {
         if let Some(notice) = &self.git_notice {
             card = card.child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(SharedString::from(notice.clone())),
             );
@@ -894,7 +896,7 @@ impl Changes {
         if busy {
             card = card.child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_faint)
                     .child("Working…"),
             );
@@ -912,7 +914,7 @@ impl Changes {
             .border_color(theme.border)
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text)
                     .child("File checkpoints"),
             );
@@ -920,7 +922,7 @@ impl Changes {
             if let Some(reason) = &list.restore_unavailable_reason {
                 section = section.child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_dim)
                         .child(SharedString::from(reason.clone())),
                 );
@@ -928,7 +930,7 @@ impl Changes {
             if list.checkpoints.is_empty() {
                 section = section.child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_dim)
                         .child("No completed turn checkpoints yet"),
                 );
@@ -944,7 +946,7 @@ impl Changes {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(format!("{stamp} · {outcome}"));
                 if row.before_available && row.after_available {
@@ -972,7 +974,7 @@ impl Changes {
                 if let Some(error) = &row.error {
                     section = section.child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_dim)
                             .child(format!("Capture failed: {error}")),
                     );
@@ -981,7 +983,7 @@ impl Changes {
             if list.checkpoints.len() > 5 {
                 section = section.child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_faint)
                         .child(format!(
                             "Showing 5 of {} recent turns",
@@ -992,7 +994,7 @@ impl Changes {
         } else {
             section = section.child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child("Checkpoints unavailable or loading…"),
             );
@@ -1006,7 +1008,7 @@ impl Changes {
                     .gap(px(4.0))
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_dim)
                             .child(format!(
                                 "{} changed paths · observed checkout changes",
@@ -1018,7 +1020,7 @@ impl Changes {
                             .id("checkpoint-diff-view")
                             .max_h(px(140.0))
                             .overflow_y_scroll()
-                            .text_size(px(10.0))
+                            .text_size(crate::typography::ui_rems(10.0))
                             .font_family(theme.font_mono.clone())
                             .text_color(theme.text)
                             .child(SharedString::from(snippet)),
@@ -1038,9 +1040,9 @@ impl Changes {
                     .join(", ")
             };
             section = section.child(div().flex().flex_col().gap(px(4.0))
-                .child(div().text_size(px(11.0)).text_color(theme.text_dim)
+                .child(div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_dim)
                     .child(format!("Restore will change {} paths: {path_text}", preview.paths.len())))
-                .child(div().text_size(px(11.0)).text_color(theme.text_dim)
+                .child(div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_dim)
                     .child("This changes files only. Conversation history and external actions remain as they are."))
                 .child(Self::git_button("checkpoint-restore", "Restore files", theme)
                     .on_click(cx.listener(|this, _, _, cx| this.restore_checkpoint(cx)))));
@@ -1048,7 +1050,7 @@ impl Changes {
         if let Some(notice) = &self.checkpoint_notice {
             section = section.child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(SharedString::from(notice.clone())),
             );
@@ -1056,7 +1058,7 @@ impl Changes {
         if let Some(receipt) = &self.checkpoint_receipt {
             section = section.child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(SharedString::from(receipt.clone())),
             );

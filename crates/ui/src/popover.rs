@@ -328,6 +328,7 @@ pub fn popover_card(theme: &Theme) -> gpui::Div {
         .gap(px(MENU_GAP))
         .overflow_hidden()
         .text_size(crate::typography::ui_rems(13.0))
+        .font_family(theme.font_sans.clone())
         .text_color(theme.text)
 }
 
@@ -890,6 +891,7 @@ pub fn palette_card(theme: &Theme, width: Pixels, corner_radius: f32) -> gpui::D
         .overflow_hidden()
         .flex()
         .flex_col()
+        .font_family(theme.font_sans.clone())
         .text_color(theme.text)
 }
 
@@ -963,7 +965,7 @@ pub fn key_hint_text(theme: &Theme, cap: &'static str, label: &'static str) -> g
         .gap(px(5.0))
         .child(
             key_cap(theme)
-                .text_size(px(11.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .font_family(theme.font_mono.clone())
                 .text_color(theme.text_muted)
                 .child(SharedString::from(cap)),
@@ -1080,7 +1082,7 @@ pub fn dialog_title(theme: &Theme, title: &str) -> gpui::Div {
 pub fn dialog_body(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
     div()
         .text_size(crate::typography::ui_rems(13.0))
-        .line_height(px(19.0))
+        .line_height(crate::typography::ui_rems(19.0))
         .text_color(theme.text_muted)
         .child(copy.into())
 }

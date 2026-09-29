@@ -101,7 +101,7 @@ impl Render for FilesSettingsPage {
                 } else {
                     crate::theme::wash(0.025)
                 })
-                .text_size(px(11.5))
+                .text_size(crate::typography::ui_rems(11.5))
                 .text_color(if active { theme.text } else { theme.text_muted })
                 .flex()
                 .items_center()
@@ -266,7 +266,7 @@ impl Render for FilesSettingsPage {
                                     "Control how workspace files are displayed and saved while you edit.",
                                 )
                                 .max_w(px(512.0))
-                                .line_height(px(20.0)),
+                                .line_height(crate::typography::ui_rems(20.0)),
                             )
                             .child(card),
                     ),
