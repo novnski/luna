@@ -1159,6 +1159,11 @@ impl AppState {
         self.apply_sessions_at(sessions, Utc::now())
     }
 
+    /// Startup settlement decisions need the first authoritative status frame.
+    pub(crate) fn sessions_synced(&self) -> bool {
+        self.session_presentation.is_some()
+    }
+
     fn apply_sessions_at(&mut self, sessions: Vec<Session>, now: DateTime<Utc>) -> bool {
         let presence: Vec<_> = sessions
             .iter()
@@ -2228,6 +2233,9 @@ impl AppState {
             .deferred_activity_seen
             .as_ref()
             .is_some_and(|(pending, _)| Some(pending.as_str()) == chat_id.as_deref());
+        // Choosing the empty canvas is also explicit navigation, even when
+        // it is already selected while the first engine watches are pending.
+        self.auto_selected = true;
         if self.selected_chat == chat_id {
             // Re-selecting still clears a fresh "completed" badge.
             if let Some(id) = chat_id {
@@ -2241,7 +2249,6 @@ impl AppState {
             self.transcript_baselines.remove(previous);
         }
         self.selected_chat = chat_id.clone();
-        self.auto_selected = true;
         self.transcript.clear();
         self.context_usage = None;
         self.context_control = Default::default();

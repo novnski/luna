@@ -71,24 +71,46 @@ impl Shell {
         }
     }
 
-    /// Boot landing: the most recently active visible chat once the first
-    /// chats frame has synced (manual selection wins; no chats → the
-    /// new-session canvas shows).
+    /// Boot landing: the most recent active chat after workspace and session
+    /// watches sync. Finished histories land on the same canvas as Cmd+N;
+    /// explicit navigation always wins.
     pub(super) fn boot_select_chat(&mut self, cx: &mut Context<Self>) {
-        let first = {
+        {
             let state = self.state.read(cx);
-            if !state.chats_synced || state.selected_chat.is_some() || state.auto_selected {
+            if !state.chats_synced
+                || !state.spaces_synced
+                || !state.sessions_synced()
+                || state.selected_chat.is_some()
+                || state.auto_selected
+            {
                 return;
             }
+        }
+        let now = Utc::now();
+        let mut attention_task_keys = self.activity_task_keys(cx);
+        attention_task_keys.extend(self.settlement_blocking_task_keys());
+        let first = {
+            let state = self.state.read(cx);
             state
-                .overview_chats(Utc::now())
-                .first()
+                .overview_chats(now)
+                .into_iter()
+                .find(|(status, chat)| {
+                    !spaces::is_settled_chat(
+                        chat,
+                        *status,
+                        now,
+                        self.settings.sidebar_auto_settle_after_days,
+                        attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
+                    )
+                })
                 .map(|(_, c)| c.id.clone())
         };
         if let Some(first) = first {
             self.focus_composer(cx);
             self.state
                 .update(cx, |s, cx| s.select_chat(Some(first), cx));
+        } else {
+            self.open_new_session(cx);
         }
     }
 
