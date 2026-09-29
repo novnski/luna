@@ -1820,6 +1820,7 @@ pub struct Shell {
     sidebar_pane: Entity<SidebarPane>,
     transcript: Entity<Transcript>,
     composer: Entity<Composer>,
+    onboarding_moon: Option<Entity<crate::empty_project_moon::AsciiMoon>>,
     /// Measured height of the bottom chrome stack (status strip + composer +
     /// terminal dock) the full-height transcript scrolls under. Paint-time
     /// measurement schedules another frame whenever this value changes.
@@ -2151,6 +2152,18 @@ pub struct Shell {
 }
 
 impl Shell {
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_welcome_moon_state(&self, cx: &App) -> Option<crate::MoonFixtureState> {
+        self.onboarding_moon
+            .as_ref()
+            .map(|moon| moon.read(cx).fixture_state())
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_welcome_picker_open(&self) -> bool {
+        self.add_space.is_some()
+    }
+
     pub fn new(state: Entity<AppState>, boot: EngineBootConfig, cx: &mut Context<Self>) -> Self {
         let observation = cx.observe(&state, |this: &mut Shell, state, cx| {
             this.on_state_changed(&state, cx);
@@ -2328,6 +2341,7 @@ impl Shell {
             sidebar_pane,
             transcript,
             composer,
+            onboarding_moon: None,
             // Seed with the compact composer stack's rough height so the
             // first frame's clearance isn't zero (the measure corrects it).
             bottom_stack: std::rc::Rc::new(std::cell::Cell::new(120.0)),
@@ -10816,6 +10830,9 @@ impl Shell {
         // centered new-thread composition; no spaces at all → the onboarding
         // card. New-chat mode mints the chat id on first send.
         let departing_transcript = !has_selection && dock_frame.transcript() > 0.0;
+        if has_spaces || has_selection || departing_transcript {
+            self.onboarding_moon = None;
+        }
         if !has_selection && !departing_transcript {
             self.transcript
                 .update(cx, |transcript, cx| transcript.finish_route_exit(cx));
@@ -10847,15 +10864,14 @@ impl Shell {
         } else if !has_spaces {
             // Onboarding (first boot / after the destructive wipe): no folders
             // to work in yet — one clear affordance.
-            // NASA LRO Moon mosaic, converted on inkmeascii.com with the
-            // 72-column Blocky and Bold preset and inverted colors. Keep the
-            // result as actual text so the art stays sharp at every scale.
-            // Source: https://science.nasa.gov/resource/moon-mosaic/
-            let moon = include_str!("../assets/illustrations/moon-full-ascii.txt");
             let moon_scale = (self.viewport_height / 900.0)
-                .min(main_content_width / 580.0)
+                .min(main_content_width / 440.0)
                 .clamp(0.58, 1.0);
-            let moon_line_height = 11.0 * moon_scale;
+            let diameter = 320.0 * moon_scale;
+            let moon = self.onboarding_moon.get_or_insert_with(|| {
+                cx.new(|_| crate::empty_project_moon::AsciiMoon::new(diameter))
+            });
+            moon.update(cx, |moon, cx| moon.set_diameter(diameter, cx));
             div()
                 .size_full()
                 .flex()
@@ -10868,46 +10884,20 @@ impl Shell {
                         .flex()
                         .flex_col()
                         .items_center()
-                        .child(
-                            div()
-                                .w(px(448.0 * moon_scale))
-                                .h(px(39.0 * moon_line_height))
-                                .overflow_hidden()
-                                .font_family(theme.font_mono.clone())
-                                .text_size(px(10.0 * moon_scale))
-                                .line_height(px(moon_line_height))
-                                .text_color(if theme.appearance.is_light() {
-                                    theme.text_muted
-                                } else {
-                                    theme.text.opacity(0.48)
-                                })
-                                .children(moon.lines().map(|line| {
-                                    div()
-                                        .h(px(moon_line_height))
-                                        .whitespace_nowrap()
-                                        .child(SharedString::from(line.to_owned()))
-                                })),
-                        )
+                        .child(moon.clone())
                         .child(
                             div()
                                 .mt(px(22.0))
-                                .text_size(crate::typography::ui_rems(18.0))
+                                .text_size(crate::typography::ui_rems(20.0))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(theme.text)
-                                .child(SharedString::from("Add a project to get started")),
+                                .child(SharedString::from("What will you build?")),
                         )
                         .child(
-                            div()
-                                .mt(px(8.0))
-                                .text_size(crate::typography::ui_rems(14.0))
-                                .text_color(theme.text_muted)
-                                .child(SharedString::from(
-                                    "A project is a folder on one of your devices.",
-                                )),
-                        )
-                        .child(
-                            popover::btn_primary(&theme_owned, "Add a project")
+                            popover::btn_primary(&theme_owned, "Add project")
                                 .id("onboarding-add-space")
+                                .role(gpui::accesskit::Role::Button)
+                                .aria_label("Add project")
                                 .mt(px(24.0))
                                 .px(px(20.0))
                                 .py(px(10.0))
