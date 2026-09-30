@@ -1800,10 +1800,11 @@ async fn run_session(session: Session) {
                         if !send(&event_tx, AgentEvent::GoalChanged { thread_id: thread_id.clone(), goal }).await { break 'main; }
                     }
                     "serverRequest/resolved" => {
-                        if params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str()) {
-                            if let Some(id) = params.get("requestId") {
-                                if let Some(cancel) = pending_approvals.remove(&id.to_string()) { cancel.cancel(); }
-                            }
+                        if params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str())
+                            && let Some(id) = params.get("requestId")
+                            && let Some(cancel) = pending_approvals.remove(&id.to_string())
+                        {
+                            cancel.cancel();
                         }
                     }
                     "turn/started" => {

@@ -132,14 +132,13 @@ fn command_choices(params: &Value) -> Vec<Choice> {
         if let Some(rule) = params
             .get("proposedExecpolicyAmendment")
             .filter(|v| !v.is_null())
-        {
-            if let Some(item) = command_choice(
+            && let Some(item) = command_choice(
                 &json!({"acceptWithExecpolicyAmendment": {"execpolicyAmendment": rule}}),
                 params,
                 &mut network_index,
-            ) {
-                choices.push(item);
-            }
+            )
+        {
+            choices.push(item);
         }
         for rule in params
             .get("proposedNetworkPolicyAmendments")
@@ -222,14 +221,14 @@ fn valid_permission_profile(value: &Value) -> bool {
     {
         return false;
     }
-    if let Some(network) = profile.get("network").filter(|v| !v.is_null()) {
-        if !network.as_object().is_some_and(|n| {
+    if let Some(network) = profile.get("network").filter(|v| !v.is_null())
+        && !network.as_object().is_some_and(|n| {
             n.keys().all(|key| key == "enabled")
                 && n.get("enabled")
                     .is_none_or(|v| v.is_null() || v.is_boolean())
-        }) {
-            return false;
-        }
+        })
+    {
+        return false;
     }
     if let Some(files) = profile.get("fileSystem").filter(|v| !v.is_null()) {
         let Some(files) = files.as_object() else {
@@ -244,13 +243,12 @@ fn valid_permission_profile(value: &Value) -> bool {
             return false;
         }
         for key in ["read", "write"] {
-            if let Some(paths) = files.get(key).filter(|v| !v.is_null()) {
-                if !paths
+            if let Some(paths) = files.get(key).filter(|v| !v.is_null())
+                && !paths
                     .as_array()
                     .is_some_and(|paths| paths.iter().all(Value::is_string))
-                {
-                    return false;
-                }
+            {
+                return false;
             }
         }
         if files
@@ -328,12 +326,11 @@ fn question(
         if let Some(rule) = choice
             .response
             .pointer("/decision/applyNetworkPolicyAmendment/networkPolicyAmendment")
+            && !details.proposed_network_policy_amendments.contains(rule)
         {
-            if !details.proposed_network_policy_amendments.contains(rule) {
-                details
-                    .proposed_network_policy_amendments
-                    .push(rule.clone());
-            }
+            details
+                .proposed_network_policy_amendments
+                .push(rule.clone());
         }
     }
     // Legacy question text remains readable by clients that ignore details.
@@ -486,13 +483,11 @@ pub(super) fn handle(
         return;
     }
     let mut question = question(method, params, &id, &context.permission_policy, &choices);
-    if permissions {
-        if let Some(contract) = context.runtime_contract {
-            question.question = format!(
-                "LUNA task {}. {}",
-                contract.context.thread_id, question.question
-            );
-        }
+    if permissions && let Some(contract) = context.runtime_contract {
+        question.question = format!(
+            "LUNA task {}. {}",
+            contract.context.thread_id, question.question
+        );
     }
     let cancel = CancellationToken::new();
     pending.insert(id.to_string(), cancel.clone());

@@ -733,15 +733,14 @@ impl Render for SideChatPanel {
                         .as_ref()
                         .and_then(|approval| approval.details.as_ref())
                     {
-                        if let Some(approval) = &question.approval {
-                            if let Some(expires) =
+                        if let Some(approval) = &question.approval
+                            && let Some(expires) =
                                 chrono::DateTime::from_timestamp_millis(approval.expires_at_ms)
-                            {
-                                card = card.child(format!(
-                                    "Approval expires: {}",
-                                    expires.with_timezone(&chrono::Local).format("%H:%M:%S")
-                                ));
-                            }
+                        {
+                            card = card.child(format!(
+                                "Approval expires: {}",
+                                expires.with_timezone(&chrono::Local).format("%H:%M:%S")
+                            ));
                         }
                         for (label, value) in details.display_rows() {
                             card = card.child(format!("{label}: {value}"));
