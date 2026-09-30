@@ -20,6 +20,12 @@ for line in sys.stdin:
     if method in ('thread/start', 'thread/resume'):
         cwd = params['cwd']
         log = pathlib.Path(cwd) / 'native-inputs-rpc.jsonl'
+        # Deterministic race gate: hold startup until the test has changed the
+        # durable receipt, independent of which catalog validator is linked.
+        if (pathlib.Path(cwd) / 'startup-hold').is_file():
+            deadline = time.time() + 15
+            while not (pathlib.Path(cwd) / 'startup-release').exists() and time.time() < deadline:
+                time.sleep(0.02)
     if log is not None:
         with log.open('a') as output:
             output.write(json.dumps(request) + '\n')

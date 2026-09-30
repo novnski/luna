@@ -41,6 +41,37 @@ pub mod native;
 mod normalize;
 mod subagents;
 
+/// JOINT-INTEGRATION POINT `composer-catalog` (native-inputs -> integrations-picker).
+///
+/// integrations-picker owns `pub(crate) mod composer_catalog`
+/// (`codex/composer_catalog.rs`) and its runtime `validate_inputs`, which reads
+/// the loaded account/thread catalog before any selected user turn. This branch
+/// only calls that exact signature. Until the joint branch lands, selected
+/// native inputs fail closed: no catalog read, no `SessionStarted`, no user
+/// `turn/start`, and the caller keeps the whole frozen input as a known
+/// `RejectedBeforeAcceptance`. Empty selections are unaffected.
+/// Joint branch: delete this inline module and keep the picker's file module.
+mod composer_catalog {
+    use crate::HarnessError;
+    use crate::jsonrpc::RpcClient;
+    use std::path::Path;
+
+    pub(crate) async fn validate_inputs(
+        _client: &RpcClient,
+        _cwd: &Path,
+        _thread: &str,
+        items: &[luna_proto::ComposerInput],
+    ) -> Result<(), HarnessError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        Err(HarnessError::RejectedBeforeAcceptance(
+            "Selected plugins, apps and skills cannot be verified by this build; remove them to send now. Your input remains available."
+                .into(),
+        ))
+    }
+}
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;

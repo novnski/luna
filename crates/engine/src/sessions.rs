@@ -6136,6 +6136,60 @@ fn stop_after_journal_failure(
     inner.set_status(chat_id, SessionStatus::Errored, false);
 }
 
+/// The adapter proved this startup was rejected before any user turn was
+/// accepted. Terminalize only its own exact pending Run receipt (fenced in the
+/// store) and make the same-device frozen submission recoverable. When the
+/// durable receipt already proves acceptance or ambiguous delivery, or a fence
+/// refused the exact Run receipt, recovery keeps the stronger claim so the
+/// whole input is never replayed automatically.
+fn settle_startup_rejection(
+    inner: &Arc<Inner>,
+    chat_id: &str,
+    correlation_id: &str,
+    message: &str,
+) -> RecoveryAcceptance {
+    let Some(host) = inner.doc_host() else {
+        return RecoveryAcceptance::RejectedBeforeAcceptance;
+    };
+    let expected_w = match inner
+        .recovery
+        .execution_workspace_repair_revision(chat_id, correlation_id)
+    {
+        Ok(revision) => revision,
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection workspace fence unavailable");
+            return RecoveryAcceptance::Unknown;
+        }
+    };
+    match host.reject_run_before_acceptance(chat_id, correlation_id, expected_w, message) {
+        Ok(rejected) if !rejected.is_empty() => {
+            return RecoveryAcceptance::RejectedBeforeAcceptance;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection receipt could not be finalized");
+            return RecoveryAcceptance::Unknown;
+        }
+    }
+    match host.task_command_receipt_for_correlation(chat_id, correlation_id) {
+        Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => {
+            RecoveryAcceptance::Accepted
+        }
+        // Committed-unknown, or the exact Run receipt left pending by a fence.
+        Ok(Some(receipt))
+            if receipt.status == CommandReceiptStatus::Pending
+                && (receipt.committed_at_ms.is_some() || receipt.intent == "run") =>
+        {
+            RecoveryAcceptance::Unknown
+        }
+        Ok(_) => RecoveryAcceptance::RejectedBeforeAcceptance,
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection receipt readback failed");
+            RecoveryAcceptance::Unknown
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn drive_run(
     inner: Arc<Inner>,
@@ -6212,6 +6266,14 @@ async fn drive_run(
                 return;
             }
             inner.remove_run(&chat_id, &run_id);
+            // Recovery attempts keep their chain's own acceptance rules.
+            let acceptance = if acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
+                && resume_state.recovery.is_none()
+            {
+                settle_startup_rejection(&inner, &chat_id, &resume_state.user_message_id, &message)
+            } else {
+                acceptance
+            };
             inner.set_status(&chat_id, SessionStatus::Errored, false);
             let engine = SessionsEngine {
                 inner: inner.clone(),

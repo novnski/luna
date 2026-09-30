@@ -1620,6 +1620,8 @@ impl Composer {
                         composer.appshots.insert(composer.current_key.clone(), loaded_appshots);
                         composer.focus_pending = true;
                         composer.set_input_text_without_draft_edit(text, cx);
+                        let restored_key = composer.current_key.clone();
+                        composer.trusted_native_envelope_restored(&restored_key, cx);
                         composer.start_queue_edit_renewal(engine.clone(), cx);
                     }
                     Ok(reply)
@@ -1704,6 +1706,8 @@ impl Composer {
             );
             self.appshots.insert(self.current_key.clone(), appshots);
             self.set_input_text_without_draft_edit(text, cx);
+            let restored_key = self.current_key.clone();
+            self.trusted_native_envelope_restored(&restored_key, cx);
             self.attachments
                 .insert(self.current_key.clone(), attachments);
         }

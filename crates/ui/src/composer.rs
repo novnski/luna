@@ -5189,6 +5189,25 @@ impl Composer {
         cx.notify();
     }
 
+    /// JOINT-INTEGRATION POINT `trusted-envelope-restore`
+    /// (native-inputs -> integrations-picker).
+    ///
+    /// Called only by trusted persistence restores (draft load and merge,
+    /// saved prompt, queue-edit start and end, displaced private draft,
+    /// failed send, recoverable submission) right after `key`'s exact text and
+    /// typed `input_items` were assembled under an established owner (engine
+    /// generation + draft key). Typed identities are written before the text.
+    ///
+    /// Standalone this is intentionally inert. Joint branch: when
+    /// `key == self.current_key`, hydrate via the picker-owned
+    /// `hydrate_native_input_envelope(cx)`, or replace the site's
+    /// `input_items.insert` + text set with the atomic
+    /// `restore_native_input_envelope(text, items, cx)`. Raw or pasted text
+    /// must never reach this hook or mint typed identity.
+    pub(crate) fn trusted_native_envelope_restored(&mut self, key: &str, cx: &mut Context<Self>) {
+        let _ = (key, cx);
+    }
+
     fn current_prompt_is_empty(&self, cx: &App) -> bool {
         self.input.read(cx).text().is_empty()
             && self
@@ -5570,6 +5589,7 @@ impl Composer {
                 composer.draft_comment_fingerprints.remove(&key);
                 composer.drafts.insert(key.clone(), entry.text.clone());
                 composer.set_input_text_without_draft_edit(entry.text.clone(), cx);
+                composer.trusted_native_envelope_restored(&key, cx);
                 let next_revision = composer.draft_revisions.entry(key.clone()).or_insert(0);
                 *next_revision = next_revision.saturating_add(1);
                 composer.stash_menu_open = false;
@@ -6301,6 +6321,7 @@ impl Composer {
             if key == self.current_key {
                 self.set_input_text_without_draft_edit(merged_text, cx);
             }
+            self.trusted_native_envelope_restored(key, cx);
             let message: SharedString =
                 "This draft changed while it was loading. Both versions were kept and are being saved."
                     .into();
@@ -6630,6 +6651,7 @@ impl Composer {
                     if key == composer.current_key {
                         composer.set_input_text_without_draft_edit(merged_text.clone(), cx);
                     }
+                    composer.trusted_native_envelope_restored(&key, cx);
                     let revision = composer.draft_revisions.entry(key.clone()).or_default();
                     *revision = (*revision)
                         .max(submission.snapshot.revision)
@@ -7236,6 +7258,7 @@ impl Composer {
                             restored.record.text.clone(),
                             cx,
                         );
+                        composer.trusted_native_envelope_restored(&load_key, cx);
                         composer.pickers.update(cx, |pickers, cx| {
                             pickers.restore_draft_execution(&restored.record.execution, cx)
                         });
@@ -8861,6 +8884,8 @@ impl Composer {
                 );
                 self.attachments
                     .insert(self.current_key.clone(), attachments);
+                let restored_key = self.current_key.clone();
+                self.trusted_native_envelope_restored(&restored_key, cx);
             }
             self.clear_queue_edit(cx);
         }
@@ -10105,6 +10130,7 @@ impl Composer {
                         // Already keyed to the restore target; no navigation
                         // swap can overwrite this prompt.
                         composer.set_input_text_without_draft_edit(restore_text, cx);
+                        composer.trusted_native_envelope_restored(&restore_key, cx);
                     }
                     if !has_newer_draft && !ordinary_staged.is_empty() {
                         // Merge by id (stashAttachments): files the user staged

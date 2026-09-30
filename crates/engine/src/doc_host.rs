@@ -1567,6 +1567,39 @@ impl DocHost {
         Ok(receipts)
     }
 
+    /// Record a provider startup the adapter PROVED was rejected before any
+    /// user turn was accepted. Rejects only the exact uncommitted pending `run`
+    /// receipt for `correlation_id` under the workspace-repair fence and the
+    /// live binding-generation fence (the same fence command execution uses),
+    /// and marks this device's frozen submission recoverable in the same
+    /// transaction. Returns the receipts it rejected; an empty result means the
+    /// receipt was already terminal, committed-unknown, accepted, of another
+    /// intent or fenced out, and nothing was changed.
+    pub fn reject_run_before_acceptance(
+        &self,
+        task_id: &str,
+        correlation_id: &str,
+        expected_workspace_repair_revision: u64,
+        message: &str,
+    ) -> Result<Vec<CommandReceipt>, EngineError> {
+        let binding_generation = self
+            .sessions()
+            .and_then(|sessions| sessions.task_binding_generation(task_id));
+        let receipts = self.inner.store.reject_run_before_acceptance(
+            self.device_id(),
+            task_id,
+            correlation_id,
+            expected_workspace_repair_revision,
+            binding_generation,
+            message,
+            "The provider did not start this message, so nothing was sent. Review the preserved input and send it again.",
+        )?;
+        for receipt in &receipts {
+            self.publish_task_receipt(receipt.clone());
+        }
+        Ok(receipts)
+    }
+
     /// Wire the sessions engine (engine assembly; see `SessionsEngine::set_doc_host`).
     pub fn set_sessions(&self, sessions: SessionsEngine) {
         let statuses = sessions.watch_sessions();
