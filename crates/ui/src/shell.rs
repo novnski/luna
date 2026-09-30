@@ -5488,7 +5488,7 @@ impl Shell {
             let state = self.state.read(cx);
             (
                 state.engine().cloned(),
-                HistoryEngineOrigin::capture(&state),
+                HistoryEngineOrigin::capture(state),
                 state.chats.iter().find(|chat| chat.id == task_id).cloned(),
                 state
                     .transcript
@@ -5533,7 +5533,7 @@ impl Shell {
                 if !history_flow_response_is_live(shell.history_flow_generation, generation) {
                     return;
                 }
-                if !origin.is_current(&shell.state.read(cx)) {
+                if !origin.is_current(shell.state.read(cx)) {
                     return;
                 }
                 let current = shell
