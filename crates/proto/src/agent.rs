@@ -590,6 +590,16 @@ pub enum ChildRuntimeStatus {
     Idle,
 }
 
+/// Live tool activity. Raw text stays on the owning host; documents retain a
+/// small display tail. Patch text is a serialized `ToolDiff`, not a terminal delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolActivityKind {
+    Stdout,
+    Stdin,
+    Patch,
+}
+
 /// The normalized streaming event every harness emits.
 ///
 /// Mirrors luna's `AgentEvent` tagged enum.
@@ -631,12 +641,18 @@ pub enum AgentEvent {
         call: ToolCall,
     },
     #[serde(rename_all = "camelCase")]
+    ToolActivity {
+        id: String,
+        kind: ToolActivityKind,
+        text: String,
+    },
+    #[serde(rename_all = "camelCase")]
     ToolResult {
         id: String,
         is_error: bool,
-        /// Tool output text, capped by the emitting harness (ACP tool-call
-        /// content; claude/codex adapters never populate it). The doc-side
-        /// fold applies its own byte cap before anything persists.
+        /// Complete output received by the adapter. The host journals it
+        /// before limiting live-event or synced-document previews. Provider
+        /// limits still apply; this does not recover bytes never received.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
         /// Inline file diff for edit-shaped tools (ACP `Diff` content).

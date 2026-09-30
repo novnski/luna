@@ -1760,6 +1760,13 @@ async fn run_session(session: Session) {
                         }
                     }
 
+                    "item/commandExecution/outputDelta" | "item/commandExecution/terminalInteraction"
+                    | "item/fileChange/outputDelta" | "item/fileChange/patchUpdated" => {
+                        for event in normalize::tool_activity(&method, &params) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
+                    }
+
                     "thread/tokenUsage/updated" => {
                         if let Some(usage) = normalize::context_usage_event(&params)
                             && !send(&event_tx, usage).await { break 'main; }
