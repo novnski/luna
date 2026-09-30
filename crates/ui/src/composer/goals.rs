@@ -1,6 +1,7 @@
 //! Explicit goal controls. Edits are bound to the chat that opened the editor;
 //! provider snapshots drive every status and usage label.
 use super::*;
+use gpui::AnyElement;
 use luna_proto::{GoalBudget, GoalOperation, GoalStatus};
 
 #[derive(Default)]
@@ -148,7 +149,7 @@ impl Composer {
         label: &'static str,
         enabled: bool,
         action: GoalAction,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx);
         let owner = self.state.read(cx).selected_chat.clone();
