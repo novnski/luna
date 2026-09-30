@@ -284,9 +284,9 @@ async fn host_native_tiff_and_unsupported_svg_follow_explicit_policy() {
     let mut req = request(dir.path());
     req.prompt = "TIFF fixture input".into();
     req.attachments = vec![tiff.to_string_lossy().into()];
-    let (controls, _, token) = controls();
+    let (tiff_controls, _, token) = controls();
     if cfg!(target_os = "macos") {
-        let mut stream = fixture().run(req, controls).await.unwrap();
+        let mut stream = fixture().run(req, tiff_controls).await.unwrap();
         tokio::time::timeout(Duration::from_secs(10), async {
             while let Some(event) = stream.next().await {
                 if matches!(event.unwrap(), AgentEvent::TextDelta { .. }) {
@@ -309,7 +309,7 @@ async fn host_native_tiff_and_unsupported_svg_follow_explicit_policy() {
                 .contains(&json!({"type":"localImage","path":tiff}))
         );
     } else {
-        assert!(fixture().run(req, controls).await.is_err());
+        assert!(fixture().run(req, tiff_controls).await.is_err());
     }
     let svg = dir.path().join("unsupported.svg");
     std::fs::write(&svg, b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
