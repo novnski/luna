@@ -1167,6 +1167,20 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
     let id = str_field(item, &["id"]);
     let status = str_field(item, &["status"]);
     match item_type(item) {
+        "enteredReviewMode" | "entered_review_mode" if phase == Phase::Started => {
+            vec![AgentEvent::NativeReview {
+                id: "native-review".into(),
+                completed: false,
+                text: str_field(item, &["review"]),
+            }]
+        }
+        "exitedReviewMode" | "exited_review_mode" if phase == Phase::Completed => {
+            vec![AgentEvent::NativeReview {
+                id: "native-review".into(),
+                completed: true,
+                text: str_field(item, &["review"]),
+            }]
+        }
         "imageGeneration" | "image_generation" => {
             let call = ToolCall::Unknown {
                 name: "Generate image".into(),

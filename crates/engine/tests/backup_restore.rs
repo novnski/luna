@@ -92,6 +92,7 @@ fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
         updated_at_ms: 1,
     };
     let request = luna_proto::RunRequest {
+        review: None,
         prompt: "old recovery".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,

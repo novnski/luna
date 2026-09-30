@@ -340,6 +340,13 @@ enum TaskCommandIntent {
         #[serde(default)]
         transfers: Vec<crate::uploads::AttachmentTransfer>,
     },
+    /// Distinct admission kind makes older execution hosts reject native
+    /// review instead of ignoring RunRequest.review and starting a text turn.
+    #[serde(rename_all = "camelCase")]
+    NativeReview {
+        request: luna_proto::RunRequest,
+        message_id: String,
+    },
     Rename {
         title: String,
     },
@@ -534,6 +541,7 @@ impl TaskCommandIntent {
                 SessionCommandPayload::RespondAsyncQuestion { .. } => "respondAsyncQuestion",
                 SessionCommandPayload::RespondApproval { .. } => "respondApproval",
             },
+            Self::NativeReview { .. } => "nativeReview",
             Self::Rename { .. } => "rename",
             Self::SetPinned { .. } => "setPinned",
             Self::SetRead { .. } => "setRead",
@@ -567,31 +575,32 @@ impl TaskCommandIntent {
     }
 
     fn requires_revision(&self) -> bool {
-        matches!(
-            self,
-            Self::Rename { .. }
-                | Self::RepairWorkspaceIdentity { .. }
-                | Self::SetPinned { .. }
-                | Self::SetRead { .. }
-                | Self::SetSettled { .. }
-                | Self::SetArchived { .. }
-                | Self::MoveProject { .. }
-                | Self::ForkTask { .. }
-                | Self::EditEarlierMessage { .. }
-                | Self::RestoreHistoryRecovery { .. }
-                | Self::Delete {}
-                | Self::SetBranch { .. }
-                | Self::SetCwd { .. }
-                | Self::SetHost { .. }
-                | Self::SetConfig { .. }
-                | Self::SetModel { .. }
-                | Self::CompactContext {}
-                | Self::ClearContext {}
-                | Self::SwitchProvider { .. }
-                | Self::SetPermission { .. }
-                | Self::SetProviderAccount { .. }
-                | Self::MarkSeen { .. }
-        )
+        matches!(self, Self::Session { command: SessionCommandPayload::Run { request, .. }, .. } if request.review.is_some())
+            || matches!(
+                self,
+                Self::Rename { .. }
+                    | Self::RepairWorkspaceIdentity { .. }
+                    | Self::SetPinned { .. }
+                    | Self::SetRead { .. }
+                    | Self::SetSettled { .. }
+                    | Self::SetArchived { .. }
+                    | Self::MoveProject { .. }
+                    | Self::ForkTask { .. }
+                    | Self::EditEarlierMessage { .. }
+                    | Self::RestoreHistoryRecovery { .. }
+                    | Self::Delete {}
+                    | Self::SetBranch { .. }
+                    | Self::SetCwd { .. }
+                    | Self::SetHost { .. }
+                    | Self::SetConfig { .. }
+                    | Self::SetModel { .. }
+                    | Self::CompactContext {}
+                    | Self::ClearContext {}
+                    | Self::SwitchProvider { .. }
+                    | Self::SetPermission { .. }
+                    | Self::SetProviderAccount { .. }
+                    | Self::MarkSeen { .. }
+            )
     }
 
     fn requires_turn(&self) -> bool {
@@ -609,24 +618,25 @@ impl TaskCommandIntent {
     }
 
     fn conflicts_with_active_turn(&self) -> bool {
-        matches!(
-            self,
-            Self::SetArchived { .. }
-                | Self::RepairWorkspaceIdentity { .. }
-                | Self::SetSettled { .. }
-                | Self::MoveProject { .. }
-                | Self::ForkTask { .. }
-                | Self::EditEarlierMessage { .. }
-                | Self::RestoreHistoryRecovery { .. }
-                | Self::SetBranch { .. }
-                | Self::SetCwd { .. }
-                | Self::SetHost { .. }
-                | Self::SetConfig { .. }
-                | Self::SetModel { .. }
-                | Self::CompactContext {}
-                | Self::ClearContext {}
-                | Self::SwitchProvider { .. }
-        )
+        matches!(self, Self::Session { command: SessionCommandPayload::Run { request, .. }, .. } if request.review.is_some())
+            || matches!(
+                self,
+                Self::SetArchived { .. }
+                    | Self::RepairWorkspaceIdentity { .. }
+                    | Self::SetSettled { .. }
+                    | Self::MoveProject { .. }
+                    | Self::ForkTask { .. }
+                    | Self::EditEarlierMessage { .. }
+                    | Self::RestoreHistoryRecovery { .. }
+                    | Self::SetBranch { .. }
+                    | Self::SetCwd { .. }
+                    | Self::SetHost { .. }
+                    | Self::SetConfig { .. }
+                    | Self::SetModel { .. }
+                    | Self::CompactContext {}
+                    | Self::ClearContext {}
+                    | Self::SwitchProvider { .. }
+            )
     }
 }
 
@@ -2884,6 +2894,22 @@ impl EngineRpc {
         legacy: bool,
         send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
     ) -> Result<CommandReceipt, RpcError> {
+        if let TaskCommandIntent::NativeReview {
+            request,
+            message_id,
+        } = &command.intent
+        {
+            if request.review.is_none() {
+                return Err(RpcError::Failed("Native review target is missing".into()));
+            }
+            command.intent = TaskCommandIntent::Session {
+                command: SessionCommandPayload::Run {
+                    request: request.clone(),
+                    message_id: message_id.clone(),
+                },
+                transfers: Vec::new(),
+            };
+        }
         if self.is_side_chat(&command.task_id) {
             let owned_delete = matches!(command.intent, TaskCommandIntent::Delete {})
                 && self
@@ -3435,6 +3461,7 @@ impl EngineRpc {
                 !self.task_identity.has_native_codex_binding(task_id)
             }
             TaskCommandIntent::Session { .. }
+            | TaskCommandIntent::NativeReview { .. }
             | TaskCommandIntent::ForkTask { .. }
             | TaskCommandIntent::EditEarlierMessage { .. }
             | TaskCommandIntent::RestoreHistoryRecovery { .. }
@@ -3921,6 +3948,7 @@ impl EngineRpc {
             .ok_or_else(|| {
                 crate::EngineError::Other("task execution settings are unavailable".into())
             })?;
+        request.review = None;
         request.prompt = prompt.to_string();
         request.harness = Some(config.harness);
         request.provider_account_id = config.provider_account_id.clone();
@@ -6362,6 +6390,9 @@ impl EngineRpc {
                         Ok(())
                     })?;
                 Ok(Some(receipt))
+            }
+            TaskCommandIntent::NativeReview { .. } => {
+                unreachable!("native review normalized at admission")
             }
             TaskCommandIntent::Session { .. } => unreachable!("session handled by command queue"),
         }

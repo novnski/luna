@@ -610,7 +610,11 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        request.attachments.is_empty() && self == &Self::from_request(harness_id, request)
+        // The warm mailbox carries text only. Native review targets require a
+        // fresh adapter dispatch (resuming the same binding) at a safe boundary.
+        request.review.is_none()
+            && request.attachments.is_empty()
+            && self == &Self::from_request(harness_id, request)
     }
 }
 
@@ -2994,6 +2998,24 @@ impl SessionsEngine {
                 "Side chat recovery never replays a send".into(),
             ));
         }
+        if let Some(review) = request.review.as_ref() {
+            if harness_id != HarnessId::Codex {
+                return Err(EngineError::Other(
+                    "Native code review requires Codex".into(),
+                ));
+            }
+            review.target.validate().map_err(EngineError::Other)?;
+            if self.turn_in_flight(chat_id) {
+                return Err(EngineError::Other(
+                    "Wait for the active turn to finish before starting a native review".into(),
+                ));
+            }
+            if !request.attachments.is_empty() || request.worktree.is_some() {
+                return Err(EngineError::Other(
+                    "A native review uses the task's existing checkout without attachments".into(),
+                ));
+            }
+        }
         // A run owns one ticket for its entire lifetime, including parked
         // persistent sessions. Acquire before account/chat gates and before
         // accepting a user message or starting a provider.
@@ -3007,6 +3029,29 @@ impl SessionsEngine {
         let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
+        if request.review.is_some() && self.turn_in_flight(chat_id) {
+            return Err(EngineError::Other(
+                "Wait for the active turn to finish before starting a native review".into(),
+            ));
+        }
+        if request.review.is_some()
+            && let Some(workspace) = self.inner.workspace()
+        {
+            let chat = workspace
+                .chat(chat_id)?
+                .ok_or_else(|| EngineError::Other("Review task is unavailable".into()))?;
+            let config = chat.config.ok_or_else(|| {
+                EngineError::Other("Review task has no provider configuration".into())
+            })?;
+            if config.harness != HarnessId::Codex
+                || config.provider_account_id != request.provider_account_id
+                || chat.cwd.as_deref() != Some(request.cwd.as_str())
+            {
+                return Err(EngineError::Other(
+                    "Review account or checkout changed; reopen the review picker".into(),
+                ));
+            }
+        }
         if self.inner.recovery.workspace_repair_revision(chat_id)? != workspace_repair_revision {
             return Err(EngineError::Other("Workspace association changed after dispatch admission; review and submit a new message.".into()));
         }
@@ -3047,6 +3092,9 @@ impl SessionsEngine {
                             .into()
                     }),
             ));
+        }
+        if request.review.is_some() && context_control.pending_handoff.is_some() {
+            return Err(EngineError::Other("Send the pending context handoff in an ordinary turn before starting a native review".into()));
         }
         if let Some(handoff) = context_control.pending_handoff.as_ref()
             && !request
@@ -4662,6 +4710,7 @@ impl SessionsEngine {
                     "Recovery needs a same-session continuation contract that this adapter does not provide.",
                 );
             }
+            request.review = None;
             request.prompt = "Continue from the preserved provider session. Do not repeat completed tool or external effects; first inspect the current state and resume only unfinished work.".into();
             request.attachments.clear();
             request.resume = Some(session_id);
@@ -7954,6 +8003,7 @@ async fn drive_run(
                     tracing::warn!(chat = %chat, "orphaned steer lost: no run config to re-dispatch");
                     break;
                 };
+                request.review = None;
                 request.prompt = steer.prompt.clone();
                 request.resume = None;
                 request.attachments = Vec::new();
@@ -13236,6 +13286,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            review: None,
             prompt: "first".into(),
             harness: None,
             provider_account_id: None,

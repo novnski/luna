@@ -756,6 +756,7 @@ impl Harness for CodexHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let codex_home = request.model_options.remove(LUNA_CODEX_HOME_OPTION);
         let codex_file_auth = request.model_options.remove(LUNA_CODEX_FILE_AUTH_OPTION);
+        request.review = None;
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
@@ -1143,6 +1144,36 @@ async fn start_turn(client: &RpcClient, params: Value) -> Result<String, Harness
     Ok(started["turn"]["id"].as_str().unwrap_or("").to_owned())
 }
 
+/// Review owns the already-resolved thread. A separate LUNA review chat starts
+/// a fresh native thread first; deprecated detached provider delivery is avoided.
+async fn start_review(
+    client: &RpcClient,
+    thread_id: &str,
+    review: &luna_proto::NativeReviewRequest,
+) -> Result<String, HarnessError> {
+    review.target.validate().map_err(HarnessError::Protocol)?;
+    let started = client
+        .request(
+            "review/start",
+            json!({
+                "threadId": thread_id,
+                "delivery": "inline",
+                "target": review.target,
+            }),
+        )
+        .await?;
+    if started["reviewThreadId"].as_str() != Some(thread_id) {
+        return Err(HarnessError::Protocol(
+            "Codex returned an unexpected review thread; the task binding was preserved".into(),
+        ));
+    }
+    let turn_id = started["turn"]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| HarnessError::Protocol("Codex review/start returned no turn id".into()))?;
+    Ok(turn_id.to_owned())
+}
+
 /// Awaiting a provider reply must not suspend Stop or consumer teardown.
 /// None is an uncertain outcome: dispatch may already have reached Codex.
 struct SessionLiveness<'a> {
@@ -1283,6 +1314,17 @@ async fn run_session(session: Session) {
         if let Some(tier) = &service_tier {
             p.insert("serviceTier".into(), Value::String(tier.clone()));
         }
+        if request.review.is_some()
+            && let Some(effort) = effort
+        {
+            // review/start has no per-turn effort field; freeze the selected
+            // reasoning setting into thread/start or thread/resume instead.
+            p.entry("config".to_string())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("thread config is an object")
+                .insert("model_reasoning_effort".into(), effort.into());
+        }
         p
     };
 
@@ -1351,6 +1393,11 @@ async fn run_session(session: Session) {
                 .await?
         };
         let thread_id = thread["thread"]["id"].as_str().unwrap_or("").to_owned();
+        if request.review.is_some() && thread_id.is_empty() {
+            return Err(HarnessError::Protocol(
+                "Codex returned no thread identity for native review".into(),
+            ));
+        }
         if !title_only
             && let Some(name) = request
                 .model_options
@@ -1482,10 +1529,13 @@ async fn run_session(session: Session) {
 
     let mut router = TurnRouter::default();
     let mut luna_call_ids = LunaCallIds::default();
-    let Some(started) = liveness
-        .wait(start_turn(&client, turn_params(&request.prompt)))
-        .await
-    else {
+    let initial_turn = async {
+        match request.review.as_ref() {
+            Some(review) => start_review(&client, &thread_id, review).await,
+            None => start_turn(&client, turn_params(&request.prompt)).await,
+        }
+    };
+    let Some(started) = liveness.wait(initial_turn).await else {
         if !event_tx.is_closed() {
             let _ = send(
                 &event_tx,
@@ -1531,6 +1581,7 @@ async fn run_session(session: Session) {
     // ---- main loop --------------------------------------------------------
     // Deltas seen per agent-message item, so a model that never streams
     // (item/completed only) still emits its text exactly once.
+    let mut review_output_pending = request.review.is_some();
     let mut streamed_text: HashSet<String> = HashSet::new();
     let mut async_questions_seen: HashSet<String> = HashSet::new();
     let mut reasoning_streams: HashMap<String, ReasoningStream> = HashMap::new();
@@ -1655,6 +1706,9 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
+                        if phase == Phase::Completed && matches!(item_type(item), "exitedReviewMode" | "exited_review_mode") {
+                            review_output_pending = false;
+                        }
                         // Item notifications carry the root `turnId`, not `turn.id`.
                         let item_turn = item_turn_id(&params);
                         if let Some(message_id) = native_steers.record(item, &item_turn) {
@@ -1813,9 +1867,18 @@ async fn run_session(session: Session) {
                                 == Some("failed"))
                             .then(|| "Codex turn failed".to_owned())
                         });
+                        // Native review: a turn that ends without reviewer output is
+                        // an error even when Codex reports it completed.
+                        let review_missing = !interrupted && review_output_pending;
+                        let error = error.or_else(|| {
+                            review_missing
+                                .then(|| "Native review ended without reviewer output".to_string())
+                        });
+                        review_output_pending = false;
                         let status = match params.pointer("/turn/status").and_then(Value::as_str) {
                             Some("interrupted") => DoneStatus::Interrupted,
                             Some("failed") => DoneStatus::Errored,
+                            Some("completed") if review_missing => DoneStatus::Errored,
                             Some("completed") => DoneStatus::Completed,
                             _ if interrupted => DoneStatus::Interrupted,
                             _ if error.is_some() => DoneStatus::Errored,

@@ -150,6 +150,7 @@ fn account_config(root: &std::path::Path) -> AgentAccountsConfig {
 
 fn request(cwd: &std::path::Path, account: &str, prompt: &str) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: prompt.into(),
         harness: Some(HarnessId::Codex),
         provider_account_id: Some(account.into()),

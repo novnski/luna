@@ -104,6 +104,7 @@ fn core(root: &Path, runs: Arc<AtomicUsize>) -> EngineCore {
 
 fn run_request(text: &str) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: text.into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,

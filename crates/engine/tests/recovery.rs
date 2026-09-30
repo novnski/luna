@@ -245,6 +245,7 @@ fn request(attachment: &str) -> RunRequest {
     let mut model_options = serde_json::Map::new();
     model_options.insert("fixtureChoice".into(), "frozen".into());
     RunRequest {
+        review: None,
         prompt: "perform the original synthetic request".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,

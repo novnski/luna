@@ -499,6 +499,53 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 });
             }
         }
+        AgentEvent::NativeReview {
+            id,
+            completed,
+            text,
+        } => {
+            let tool_id = format!("{id}:lifecycle");
+            if !completed || !out.iter().any(|part| part.id() == tool_id) {
+                fold_event_into_parts(
+                    out,
+                    &AgentEvent::ToolCall {
+                        id: tool_id.clone(),
+                        call: ToolCall::Unknown {
+                            name: "Native code review".into(),
+                            input: (!completed).then(|| serde_json::json!({ "target": text })),
+                        },
+                    },
+                );
+            }
+            if *completed {
+                fold_event_into_parts(
+                    out,
+                    &AgentEvent::ToolResult {
+                        id: tool_id,
+                        is_error: false,
+                        output: None,
+                        diff: None,
+                    },
+                );
+                let part_id = format!("{id}:findings");
+                let findings = if text.trim().is_empty() {
+                    "Review completed without findings text.".to_string()
+                } else {
+                    format!("### Review findings\n\n{text}")
+                };
+                if let Some(existing) = out.iter_mut().find(|part| part.id() == part_id) {
+                    *existing = MessagePart::Text {
+                        id: part_id,
+                        text: findings,
+                    };
+                } else {
+                    out.push(MessagePart::Text {
+                        id: part_id,
+                        text: findings,
+                    });
+                }
+            }
+        }
         AgentEvent::GeneratedImage {
             id,
             path,
@@ -698,7 +745,25 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 message: message.clone(),
             });
         }
-        AgentEvent::Done { error, .. } => {
+        AgentEvent::Done { error, status, .. } => {
+            // An interrupted/failed native review must not retain a running
+            // lifecycle chip or suggest that findings were delivered.
+            if let Some(MessagePart::Tool {
+                resolved, is_error, ..
+            }) = out
+                .iter_mut()
+                .find(|part| part.id() == "native-review:lifecycle")
+                && !*resolved
+            {
+                *resolved = true;
+                *is_error = true;
+                if *status == luna_proto::DoneStatus::Interrupted {
+                    out.push(MessagePart::Text {
+                        id: "native-review:outcome".into(),
+                        text: "Native review interrupted.".into(),
+                    });
+                }
+            }
             if let Some(message) = error {
                 let id = format!("e{}", out.len());
                 out.push(MessagePart::Error {

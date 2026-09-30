@@ -103,6 +103,7 @@ fn fake_codex() -> PathBuf {
 
 fn mock_request(prompt: &str, resume: Option<&str>) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: prompt.into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,

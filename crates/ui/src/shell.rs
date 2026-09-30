@@ -74,6 +74,7 @@ use crate::workspace_links::resolve_workspace_file_link;
 mod activity_center;
 mod agents;
 mod command_palette;
+mod native_review;
 mod side_chats;
 mod spaces;
 mod tabs;
@@ -1951,6 +1952,8 @@ pub struct Shell {
     /// Session-row context menu, including the Copy submenu.
     chat_menu: popover::Popup<ChatMenuState>,
     rename_dialog: Option<RenameChatDialog>,
+    native_review_dialog: Option<native_review::NativeReviewDialog>,
+    native_review_task: Option<Task<()>>,
     history_fork_dialog: Option<HistoryForkDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
     history_recovery_dialog: Option<HistoryRecoveryDialog>,
@@ -2434,6 +2437,8 @@ impl Shell {
             appearance_settings_sub: None,
             chat_menu: popover::Popup::default(),
             rename_dialog: None,
+            native_review_dialog: None,
+            native_review_task: None,
             history_fork_dialog: None,
             edit_earlier_message_dialog: None,
             history_recovery_dialog: None,
@@ -5145,6 +5150,7 @@ impl Shell {
 
     fn cancel_history_flow(&mut self, cx: &mut Context<Self>) {
         self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+        self.native_review_dialog = None;
         self.history_fork_dialog = None;
         self.edit_earlier_message_dialog = None;
         self.history_recovery_dialog = None;
@@ -9511,6 +9517,10 @@ impl Shell {
             cx.notify();
             return true;
         }
+        if self.native_review_dialog.is_some() {
+            self.cancel_history_flow(cx);
+            return true;
+        }
         if self.history_fork_dialog.is_some() {
             self.cancel_history_flow(cx);
             return true;
@@ -9634,6 +9644,9 @@ impl Shell {
     ) -> Vec<AnyElement> {
         let theme = Theme::of(cx).for_popup();
         let mut overlays: Vec<AnyElement> = Vec::new();
+        if let Some(review) = self.render_native_review(viewport, window, cx) {
+            overlays.push(review);
+        }
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -9712,6 +9725,15 @@ impl Shell {
             let read_id = chat_id.clone();
             let settle_id = chat_id.clone();
             let move_project_id = chat_id.clone();
+            let review_task_id = chat_id.clone();
+            let native_review_available = self
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .find(|chat| chat.id == chat_id)
+                .and_then(|chat| chat.config.as_ref())
+                .is_some_and(|config| config.harness == HarnessId::Codex);
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();
             let recover_task_id = chat_id.clone();
@@ -9831,6 +9853,21 @@ impl Shell {
                             )
                             .child(SharedString::from("Move to project…")),
                     )
+                    .when(native_review_available && !archived, |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-review-{chat_id}"))
+                                .id("chat-menu-review")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_native_review(review_task_id.clone(), cx);
+                                }))
+                                .child(
+                                    icon(icons::GIT_BRANCH)
+                                        .size(px(16.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child("Review code…"),
+                        )
+                    })
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-fork-{chat_id}"))
                             .id("chat-menu-fork")

@@ -103,6 +103,7 @@ async fn check_persistence(
     };
     let (core, profile) = assemble(dir.path(), Some(replay_kind));
     let request = RunRequest {
+        review: None,
         prompt: format!("scenario:{scenario}"),
         harness: None,
         provider_account_id: None,
@@ -307,6 +308,7 @@ async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
     let dir = tempfile::tempdir().unwrap();
     let (core, _profile) = assemble(dir.path(), None);
     let request = RunRequest {
+        review: None,
         prompt: "scenario:child-unobserved".into(),
         harness: None,
         provider_account_id: None,

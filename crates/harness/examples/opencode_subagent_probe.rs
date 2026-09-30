@@ -50,6 +50,7 @@ async fn main() {
             .into()
     });
     let request = RunRequest {
+        review: None,
         prompt,
         harness: None,
         provider_account_id: None,
