@@ -1524,7 +1524,18 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
             self.prompts.lock().unwrap().push(request.prompt.clone());
             let (tx, rx) = tokio::sync::mpsc::channel(16);
+            // Like a real adapter, confirm the provider session first: that is
+            // what settles a claimed queue row into the transcript.
+            let started = AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: vec![],
+                cwd: request.cwd.clone(),
+                session_id: "hs-1".into(),
+                assistant_message_id: format!("a-{}", request.prompt),
+            };
             tokio::spawn(async move {
+                let _ = tx.send(Ok(started)).await;
                 let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
                     id: "approval-question".into(),
                     header: "Approve command".into(),
