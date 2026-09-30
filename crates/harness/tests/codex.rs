@@ -3308,6 +3308,8 @@ async fn native_terminal_status_wins_the_local_interrupt_race() {
             })
             .collect::<Vec<_>>();
         assert_eq!(statuses, vec![expected], "{events:?}");
+    }
+}
 
 // Failure scenarios were recorded before this fixture/implementation in the
 // wave's evidence/mcp-prompts/failure-scenarios.md. This is synthetic adapter
