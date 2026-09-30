@@ -47,9 +47,7 @@ use crate::theme::Theme;
 
 mod integrations;
 #[cfg(feature = "appshots-fixture")]
-mod integrations_e2e;
-#[cfg(feature = "appshots-fixture")]
-pub use integrations_e2e::run_integrations_picker_e2e;
+pub use integrations::run_integrations_picker_e2e;
 
 // ---------------------------------------------------------------------------
 // Constants + pure decision logic
@@ -2607,9 +2605,8 @@ impl ComposerInput {
     }
 
     fn restore(&mut self, snapshot: EditSnapshot, cx: &mut Context<Self>) {
-        if snapshot.native_owner != self.native_owner {
-            return;
-        }
+        // Snapshots carry their typed anchors: only a real Undo/Redo of the
+        // same owner can bring an identity back; pasted text never does.
         self.native_spans = snapshot.native_spans;
         self.invalidate_mention_tooltip();
         self.content = snapshot.content;
@@ -2626,6 +2623,18 @@ impl ComposerInput {
         cx.notify();
     }
 
+    /// History recorded under another draft owner must never be replayed
+    /// here; owner binding clears it, and this guard keeps the stacks honest.
+    fn history_owned(&mut self, snapshot: &EditSnapshot) -> bool {
+        if snapshot.native_owner == self.native_owner {
+            return true;
+        }
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_edit = None;
+        false
+    }
+
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
@@ -2633,6 +2642,9 @@ impl ComposerInput {
         let Some(previous) = self.undo_stack.pop() else {
             return;
         };
+        if !self.history_owned(&previous) {
+            return;
+        }
         self.redo_stack.push(self.snapshot());
         self.restore(previous, cx);
     }
@@ -2644,6 +2656,9 @@ impl ComposerInput {
         let Some(next) = self.redo_stack.pop() else {
             return;
         };
+        if !self.history_owned(&next) {
+            return;
+        }
         self.undo_stack.push(self.snapshot());
         self.restore(next, cx);
     }
@@ -5107,7 +5122,10 @@ impl Composer {
         } else {
             format!("{existing}\n\n{result}")
         };
-        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        // Appending keeps existing chips; the inserted result stays plain text.
+        self.input.update(cx, |input, cx| {
+            input.set_text_keeping_native_prefix(text, cx)
+        });
         self.focus_pending = true;
         true
     }
@@ -8283,13 +8301,13 @@ impl Composer {
     }
 
     fn move_mention(&mut self, delta: isize, cx: &mut Context<Self>) {
-        self.mention.active = crate::popover::menu_step(
-            self.mention.active,
-            self.mention.results.len() + self.mention.native_results.len(),
-            delta,
-        );
-        if let Some(active) = self.mention.active {
+        self.mention.active =
+            crate::popover::menu_step(self.mention.active, self.mention_item_count(), delta);
+        if let Some(active) = self.mention.active.filter(|active| {
+            *active < self.mention.results.len() + self.mention.native_results.len()
+        }) {
             // Keep the keyboard cursor visible in the scrolled row stack.
+            // Retry sits in the fixed footer below the list.
             self.mention_scroll.scroll_to_item(active);
         }
         self.sync_mention_controls(cx);
@@ -8309,6 +8327,10 @@ impl Composer {
     }
 
     fn accept_mention(&mut self, cx: &mut Context<Self>) {
+        if self.mention.active.is_some() && self.mention.active == self.native_retry_index() {
+            self.retry_native_catalog(cx);
+            return;
+        }
         if let Some(index) = self
             .mention
             .active
@@ -8356,32 +8378,9 @@ impl Composer {
                 }),
             )
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_mention(cx)));
-        if let Some(notice) = self.native_catalog_notice() {
-            card = card.child(
-                div()
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.text_muted)
-                    .child(notice),
-            );
-        }
-        if self.integrations.loading
-            || self.integrations.error.is_some()
-            || self.native_catalog_notice().is_some()
-        {
-            card = card.child(
-                div()
-                    .id("retry-native-catalog")
-                    .px(px(12.0))
-                    .py(px(4.0))
-                    .cursor_pointer()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.accent)
-                    .child("Retry integrations")
-                    .on_click(cx.listener(|this, _, _, cx| this.retry_native_catalog(cx))),
-            );
-        }
+        let file_count = self.mention.results.len();
+        let set_size = self.mention_item_count();
+        let retry_index = self.native_retry_index();
         if self.mention.loading
             && self.mention.results.is_empty()
             && self.mention.native_results.is_empty()
@@ -8425,9 +8424,16 @@ impl Composer {
                     Some((directory, name)) => (directory.to_string(), name.to_string()),
                     None => (String::new(), result.path.clone()),
                 };
+                let kind = if result.is_dir { "Folder" } else { "File" };
                 rows.push(
                     crate::popover::menu_row(theme, selected, format!("file-mention-result-{ix}"))
                         .id(("file-mention-result", ix))
+                        .role(Role::ListBoxOption)
+                        .aria_label(format!("{kind} {}", result.path))
+                        .aria_selected(selected)
+                        .aria_position_in_set(ix + 1)
+                        .aria_size_of_set(set_size)
+                        .when(selected, |row| row.aria_active_descendant())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.mention.active = Some(ix);
                             this.accept_mention(cx);
@@ -8479,10 +8485,13 @@ impl Composer {
             }
             // Overflowing rows wheel-scroll inside a bounded viewport; the
             // floating rail mirrors the model-list scrollbar treatment.
-            let file_count = self.mention.results.len();
             for (index, result) in self.mention.native_results.iter().enumerate() {
                 let ix = file_count + index;
                 let selected = self.mention.active == Some(ix);
+                let Some(semantics) = self.native_row_semantics(index) else {
+                    continue;
+                };
+                let enabled = semantics.enabled;
                 rows.push(
                     crate::popover::menu_row(
                         theme,
@@ -8490,10 +8499,25 @@ impl Composer {
                         format!("native-mention-result-{ix}"),
                     )
                     .id(("native-mention-result", ix))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.mention.active = Some(ix);
-                        this.accept_mention(cx);
-                    }))
+                    .role(Role::ListBoxOption)
+                    .aria_label(semantics.label)
+                    .aria_description(semantics.description)
+                    .aria_selected(selected)
+                    .aria_position_in_set(ix + 1)
+                    .aria_size_of_set(set_size)
+                    .when(selected, |row| row.aria_active_descendant())
+                    // Disabled rows expose no Click action and report Disabled.
+                    .when(enabled, |row| {
+                        row.on_click(cx.listener(move |this, _, _, cx| {
+                            this.mention.active = Some(ix);
+                            this.accept_mention(cx);
+                        }))
+                    })
+                    .when(!enabled, |row| {
+                        row.cursor_default()
+                            .opacity(0.55)
+                            .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+                    })
                     .child(
                         div()
                             .w_full()
@@ -8542,6 +8566,8 @@ impl Composer {
                     .child(
                         div()
                             .id("mention-list")
+                            .role(Role::ListBox)
+                            .aria_label("Mention suggestions")
                             .max_h(px(312.0))
                             .flex()
                             .flex_col()
@@ -8551,6 +8577,49 @@ impl Composer {
                             .children(rows),
                     )
                     .children(crate::popover::rail(self, "mention-scrollbar", theme, cx)),
+            );
+        }
+        if let (Some(notice), Some(retry_index)) = (self.native_catalog_notice(), retry_index) {
+            // Status footer: keyboard order (rows, then Retry) matches the
+            // visual order, and Retry is reachable by arrows, Tab and AT.
+            let retry_active = self.mention.active == Some(retry_index);
+            let retry_focus = self.retry_focus_handle(cx);
+            let accent = theme.accent;
+            card = card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .px(px(4.0))
+                    .pt(px(6.0))
+                    .child(
+                        div()
+                            .id("native-catalog-status")
+                            .role(Role::Status)
+                            .aria_label(notice.clone())
+                            .px(px(8.0))
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.text_muted)
+                            .child(notice.clone()),
+                    )
+                    .child(
+                        crate::popover::menu_row(theme, retry_active, "retry-native-catalog")
+                            .id("retry-native-catalog")
+                            .role(Role::Button)
+                            .aria_label("Retry native integrations discovery")
+                            .aria_description(notice)
+                            .aria_keyshortcuts("Enter")
+                            .when(retry_active, |row| row.aria_active_descendant())
+                            .track_focus(&retry_focus)
+                            .tab_index(0)
+                            .focus_visible(move |style| {
+                                style.bg(accent.opacity(0.18)).text_color(accent)
+                            })
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.accent)
+                            .child("Retry integrations")
+                            .on_click(cx.listener(|this, _, _, cx| this.retry_native_catalog(cx))),
+                    ),
             );
         }
         Some(crate::popover::full_width_menu_above(
@@ -8984,6 +9053,8 @@ impl Composer {
             }
             self.schedule_draft_save(self.current_key.clone(), Duration::ZERO, cx);
             let draft = self.drafts.get(&key).cloned().unwrap_or_default();
+            // Keep the leaving draft's exact native anchors for navigation back.
+            self.park_native_editor(cx);
             self.current_key = key;
             // `failure` deliberately survives navigation: chat-scoped
             // failures render only under their own chat (see `failure_key`),
@@ -9024,6 +9095,9 @@ impl Composer {
                 self.route_snap_until = Some(Instant::now() + Duration::from_millis(ROUTE_SNAP_MS));
             }
             self.set_input_text_without_draft_edit(draft, cx);
+            // Bind the new owner now; byte-identical parked anchors return,
+            // anything else waits for a trusted durable restore.
+            self.ensure_native_editor_owner(cx);
         }
 
         self.load_draft(self.current_key.clone(), cx);
