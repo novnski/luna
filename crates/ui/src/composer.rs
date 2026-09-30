@@ -8356,6 +8356,7 @@ impl Composer {
     fn render_file_mention_popup(
         &mut self,
         theme: &Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         self.ensure_native_catalog(false, cx);
@@ -8581,6 +8582,9 @@ impl Composer {
             // visual order, and Retry is reachable by arrows, Tab and AT.
             let retry_active = self.mention.active == Some(retry_index);
             let retry_focus = self.retry_focus_handle(cx);
+            // Active descendant is for arrow navigation from the input; a
+            // Retry that holds real focus is already the focused node.
+            let retry_descendant = retry_active && !retry_focus.is_focused(window);
             let accent = theme.accent;
             card = card.child(
                 div()
@@ -8606,7 +8610,7 @@ impl Composer {
                             .aria_label("Retry native integrations discovery")
                             .aria_description(notice)
                             .aria_keyshortcuts("Enter")
-                            .when(retry_active, |row| row.aria_active_descendant())
+                            .when(retry_descendant, |row| row.aria_active_descendant())
                             .track_focus(&retry_focus)
                             .tab_index(0)
                             .focus_visible(move |style| {
@@ -12123,7 +12127,7 @@ impl Render for Composer {
             })
             // Both completion popups span the full pill width above it —
             // the file-mention and slash tokens are mutually exclusive.
-            .children(self.render_file_mention_popup(&theme, cx))
+            .children(self.render_file_mention_popup(&theme, window, cx))
             .children(self.render_slash_popup(&theme, cx));
         // Restore the original chip-only selector treatment: destination at
         // the top-right, no surrounding surface. Cancel the column gap as the
