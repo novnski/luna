@@ -109,12 +109,15 @@ pub struct TaskUi {
 #[derive(Clone)]
 pub struct MediaUi {
     pub diagram: Option<Rc<dyn Fn(&str, SharedString, &Theme) -> DiagramUi>>,
-    pub image: Rc<dyn Fn(&super::parser::InlineImage, SharedString, &Theme) -> AnyElement>,
+    pub image: Option<Rc<dyn Fn(&super::parser::InlineImage, SharedString, &Theme) -> AnyElement>>,
 }
 
 pub struct DiagramUi {
     pub body: AnyElement,
     pub show_source: bool,
+    pub can_toggle: bool,
+    /// Kept visible beside the source when a diagram cannot be rendered.
+    pub diagnostic: Option<SharedString>,
     pub toggle_source: Rc<dyn Fn(&mut Window, &mut gpui::App)>,
 }
 
@@ -862,7 +865,10 @@ fn render_table(
                 TableAlign::Center => cell.text_center(),
                 TableAlign::Right => cell.text_right(),
             };
-            if opts.media.is_some()
+            if opts
+                .media
+                .as_ref()
+                .is_some_and(|media| media.image.is_some())
                 && all[r]
                     .get(c)
                     .is_some_and(|runs| runs.iter().any(|run| run.style.image.is_some()))
@@ -1630,7 +1636,7 @@ fn text_element(
     opts: &RenderOptions,
     theme: &Theme,
 ) -> AnyElement {
-    if let Some(media) = &opts.media {
+    if let Some(image_handler) = opts.media.as_ref().and_then(|media| media.image.as_ref()) {
         if runs.iter().any(|run| run.style.image.is_some()) {
             let mut elements = Vec::new();
             let mut start = 0;
@@ -1648,7 +1654,7 @@ fn text_element(
                             theme,
                         ));
                     }
-                    elements.push((media.image)(
+                    elements.push(image_handler(
                         image,
                         format!("{}-image-{ix}-{index}", opts.row_key).into(),
                         theme,
@@ -1847,23 +1853,25 @@ fn render_code_block(
             let frame_id: SharedString = format!("{}-mermaid-{ix}", opts.row_key).into();
             let diagram = handler(code, frame_id.clone(), theme);
             let toggle = diagram.toggle_source.clone();
-            let toggle_action = code_icon_action(
-                format!("{frame_id}-source-toggle").into(),
-                if diagram.show_source {
-                    "Show diagram"
-                } else {
-                    "Show source"
-                },
-                if diagram.show_source {
-                    crate::icons::EYE
-                } else {
-                    crate::icons::FILE_CODE
-                },
-                Rc::new(move |window, cx| toggle(window, cx)),
-                theme,
-            );
+            let toggle_action = diagram.can_toggle.then(|| {
+                code_icon_action(
+                    format!("{frame_id}-source-toggle").into(),
+                    if diagram.show_source {
+                        "Show diagram"
+                    } else {
+                        "Show source"
+                    },
+                    if diagram.show_source {
+                        crate::icons::EYE
+                    } else {
+                        crate::icons::FILE_CODE
+                    },
+                    Rc::new(move |window, cx| toggle(window, cx)),
+                    theme,
+                )
+            });
             if diagram.show_source {
-                return render_code_block_source_with_actions(
+                let source = render_code_block_source_with_actions(
                     language,
                     code,
                     top_ix,
@@ -1871,16 +1879,47 @@ fn render_code_block(
                     opts,
                     theme,
                     highlight,
-                    vec![toggle_action],
+                    toggle_action.into_iter().collect(),
                 );
+                let Some(diagnostic) = diagram.diagnostic else {
+                    return source;
+                };
+                return div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(source)
+                    .child(
+                        div()
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.warning_muted)
+                            .child(diagnostic),
+                    )
+                    .into_any_element();
             }
-            let mut actions = vec![toggle_action];
+            let mut actions: Vec<_> = toggle_action.into_iter().collect();
             actions.extend(code_copy_button(code, ix, opts, theme));
             return code_block_frame(frame_id, language, actions, diagram.body, theme)
                 .into_any_element();
         }
     }
     render_code_block_source(language, code, top_ix, ix, opts, theme, highlight)
+}
+
+/// Native ghost-button semantics shared by diagram, copy and fit controls.
+/// GPUI handles keyboard activation through the existing click callback.
+fn code_action_button(
+    id: SharedString,
+    label: &'static str,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let accent = theme.accent;
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .focus_visible(move |style| style.bg(accent.opacity(0.18)).text_color(accent))
 }
 
 fn code_icon_action(
@@ -1891,8 +1930,7 @@ fn code_icon_action(
     theme: &Theme,
 ) -> AnyElement {
     let fade_key = id.to_string();
-    div()
-        .id(id)
+    code_action_button(id, label, theme)
         .size(px(CODE_ACTION_SIZE))
         .rounded(px(6.0))
         .flex()
@@ -1929,8 +1967,7 @@ fn code_copy_button(
         let code_text: SharedString = code.to_string().into();
         let handler = copy.handler.clone();
         let fade_key = format!("{}-copy{ix}", opts.row_key);
-        div()
-            .id(SharedString::from(fade_key.clone()))
+        code_action_button(SharedString::from(fade_key.clone()), "Copy code", theme)
             .h(px(CODE_ACTION_SIZE))
             .px(px(6.0))
             .rounded(px(5.0))
@@ -2116,14 +2153,18 @@ fn render_code_block_source_with_actions(
     let fit_button = code_ui.as_ref().map(|ui| {
         let toggle = ui.toggle_fit.clone();
         let fade_key = format!("{}-fit{ix}", opts.row_key);
+        let label = if fit_content {
+            "Use horizontal scrolling"
+        } else {
+            "Fit content"
+        };
         let base = if fit_content {
             crate::theme::ink(0.09)
         } else {
             gpui::transparent_black()
         };
         let hover = crate::theme::ink(if fit_content { 0.13 } else { 0.08 });
-        div()
-            .id(SharedString::from(fade_key.clone()))
+        code_action_button(SharedString::from(fade_key.clone()), label, theme)
             .size(px(CODE_ACTION_SIZE))
             .rounded(px(6.0))
             .flex()
@@ -2136,16 +2177,7 @@ fn render_code_block_source_with_actions(
                 cx.stop_propagation();
                 toggle(window, cx);
             })
-            .tooltip(move |_, cx| {
-                cx.new(move |_| {
-                    CodeBlockTooltip(if fit_content {
-                        "Use horizontal scrolling"
-                    } else {
-                        "Fit content"
-                    })
-                })
-                .into()
-            })
+            .tooltip(move |_, cx| cx.new(move |_| CodeBlockTooltip(label)).into())
             .child(
                 crate::icons::icon(crate::icons::WRAP_TEXT)
                     .size(px(13.0))
