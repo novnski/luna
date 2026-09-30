@@ -72,8 +72,10 @@ async fn permission_detail_wire_choices_and_scope() {
             environment_permission_ceiling: None,
             permission_policy: None,
             attachments: vec![],
+            input_items: Vec::new(),
             worktree: None,
             resume: None,
+            review: None,
         };
         let harness = CodexHarness::new().with_executable(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -177,8 +179,10 @@ async fn permission_detail_remote_resolution_closes_parked_answer() {
         environment_permission_ceiling: None,
         permission_policy: None,
         attachments: vec![],
+        input_items: Vec::new(),
         worktree: None,
         resume: None,
+        review: None,
     };
     let harness = CodexHarness::new().with_executable(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
