@@ -3,6 +3,7 @@
 import json
 import pathlib
 import sys
+import time
 
 log = None
 cwd = None
@@ -31,6 +32,9 @@ for line in sys.stdin:
     elif method in ('thread/start', 'thread/resume'):
         result = {'thread': {'id': 'native-input-thread'}}
     elif method == 'account/read':
+        delay = pathlib.Path(cwd) / 'catalog-delay' if cwd else None
+        if delay and delay.is_file():
+            time.sleep(float(delay.read_text()))
         result = {'account': {'type': 'apiKey'}}
     elif method == 'thread/read':
         result = {'thread': {'id': 'native-input-thread', 'disabledPluginIds': []}}

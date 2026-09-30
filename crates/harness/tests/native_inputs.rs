@@ -273,3 +273,59 @@ async fn correlated_warm_steer_fallback_keeps_the_complete_input() {
         .unwrap();
     }
 }
+
+#[tokio::test]
+async fn host_native_tiff_and_unsupported_svg_follow_explicit_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let tiff = dir.path().join("native.tiff");
+    std::fs::write(&tiff, b"II\x2a\x00\x08\x00\x00\x00").unwrap();
+    let mut req = request(dir.path());
+    req.prompt = "TIFF fixture input".into();
+    req.attachments = vec![tiff.to_string_lossy().into()];
+    let (controls, _, token) = controls();
+    if cfg!(target_os = "macos") {
+        let mut stream = fixture().run(req, controls).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = stream.next().await {
+                if matches!(event.unwrap(), AgentEvent::TextDelta { .. }) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        token.cancel();
+        let log = std::fs::read_to_string(dir.path().join("native-inputs-rpc.jsonl")).unwrap();
+        let rows: Vec<Value> = log
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert!(
+            rows.iter().find(|r| r["method"] == "turn/start").unwrap()["params"]["input"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"type":"localImage","path":tiff}))
+        );
+    } else {
+        assert!(fixture().run(req, controls).await.is_err());
+    }
+    let svg = dir.path().join("unsupported.svg");
+    std::fs::write(&svg, b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+    let mut req = request(dir.path());
+    req.prompt = "Keep ordinary text and all selections".into();
+    req.attachments = vec![svg.to_string_lossy().into()];
+    req.input_items = vec![ComposerInput::Mention {
+        name: "Selected".into(),
+        path: "plugin://native-plugin-id".into(),
+    }];
+    assert!(matches!(
+        fixture()
+            .run(req.clone(), controls().0)
+            .await
+            .err()
+            .unwrap(),
+        luna_harness::HarnessError::RejectedBeforeAcceptance(_)
+    ));
+    assert_eq!(req.input_items.len(), 1);
+    assert_eq!(req.attachments.len(), 1);
+}

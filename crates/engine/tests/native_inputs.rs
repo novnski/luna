@@ -239,3 +239,247 @@ async fn draft_restart_queue_edit_and_native_image_steer_preserve_inputs() {
         std::fs::write(output.join("engine-result.json"),json!({"passed":true,"proof":"offline engine RPC, SQLite restart, queue edit, upload staging and adapter subprocess","realProvider":false}).to_string()).unwrap();
     }
 }
+
+fn selected_draft(task: &str, revision: u64, text: &str, path: &str) -> ComposerDraft {
+    serde_json::from_value(json!({"version":1,"draftId":task,"taskId":task,"revision":revision,
+        "text":text,"inputItems":[{"type":"mention","name":"Selected","path":path}],"updatedAtMs":revision})).unwrap()
+}
+
+async fn prepare_rejected_startup(
+    root: &Path,
+    delay: Option<&str>,
+) -> (EngineCore, luna_rpc::RpcClient, ComposerDraft, String) {
+    if let Some(delay) = delay {
+        std::fs::write(root.join("catalog-delay"), delay).unwrap();
+    }
+    let core = assemble(root);
+    core.workspace
+        .create_space(
+            "rejection-project",
+            &core.device_id,
+            root.to_str().unwrap(),
+            None,
+            false,
+        )
+        .unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    client
+        .call(
+            methods::MUTATE,
+            json!({"op":"createChat","chatId":CHAT,"spaceId":"rejection-project"}),
+        )
+        .await
+        .unwrap();
+    core.workspace
+        .rename_chat(CHAT, "Pre-titled rejection fixture")
+        .unwrap();
+    let command_id = "rejected-selected-startup".to_string();
+    let draft = selected_draft(
+        CHAT,
+        1,
+        "Preserve this selected input",
+        "plugin://unavailable-id",
+    );
+    client
+        .call(methods::SAVE_COMPOSER_DRAFT, json!({"draft":draft}))
+        .await
+        .unwrap();
+    client
+        .call(
+            methods::BEGIN_DRAFT_SUBMISSION,
+            json!({"commandId":command_id,"taskId":CHAT,"snapshot":draft}),
+        )
+        .await
+        .unwrap();
+    let request: RunRequest = serde_json::from_value(json!({"prompt":draft.text,"harness":"codex","model":null,"reasoning":null,"cwd":root,"sandbox":"workspace-write","resume":null,"inputItems":draft.input_items})).unwrap();
+    client.call(methods::EXECUTE_TASK_COMMAND,json!({"commandId":command_id,"actorId":"fixture-user","clientId":"fixture-client","clientSessionId":"fixture-session","taskId":CHAT,
+        "intent":{"kind":"session","command":{"kind":"run","request":request,"messageId":command_id}}})).await.unwrap();
+    (core, client, draft, command_id)
+}
+
+async fn read_draft(client: &luna_rpc::RpcClient) -> ComposerDraftRead {
+    serde_json::from_value(
+        client
+            .call(
+                methods::GET_COMPOSER_DRAFT,
+                json!({"draftId":CHAT,"taskId":CHAT}),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+fn preserve_repair_evidence(name: &str, value: Value) {
+    if let Ok(output) = std::env::var("LUNA_NATIVE_INPUTS_EVIDENCE") {
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(
+            Path::new(&output).join(format!("{name}.json")),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn known_selected_startup_rejection_and_timeout_recover_frozen_snapshot_after_restart() {
+    for (label, delay) in [("rejected", None), ("timeout", Some("9"))] {
+        let root = tempfile::tempdir().unwrap();
+        let (core, client, draft, command_id) = prepare_rejected_startup(root.path(), delay).await;
+        wait_for(|| {
+            core.doc_host
+                .task_command_receipt(&command_id)
+                .unwrap()
+                .is_some_and(|r| r.status == luna_proto::CommandReceiptStatus::Rejected)
+        })
+        .await;
+        let receipt = core
+            .doc_host
+            .task_command_receipt(&command_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.correlation_id.as_deref(), Some(command_id.as_str()));
+        assert_eq!(receipt.intent, "run");
+        let read = read_draft(&client).await;
+        assert!(read.submissions.iter().any(|s| s.command_id == command_id
+            && s.state == luna_proto::DraftSubmissionState::Recoverable
+            && s.snapshot.same_message_content(&draft)));
+        assert!(
+            !requests(&root.path().join("native-inputs-rpc.jsonl"))
+                .iter()
+                .any(|r| r["method"] == "turn/start")
+        );
+        assert!(
+            core.doc_host
+                .reject_run_before_acceptance(CHAT, &command_id, 0, "repeat rejection")
+                .unwrap()
+                .is_empty()
+        );
+        drop(client);
+        drop(core);
+        let core = assemble(root.path());
+        let client = luna_rpc::memory_client(core.rpc_service());
+        let restarted = read_draft(&client).await;
+        assert!(
+            restarted
+                .submissions
+                .iter()
+                .any(|s| s.command_id == command_id
+                    && s.state == luna_proto::DraftSubmissionState::Recoverable
+                    && s.snapshot.same_message_content(&draft))
+        );
+        preserve_repair_evidence(
+            &format!("startup-{label}-recoverable"),
+            json!({"receipt":receipt,"restarted":restarted,"realProvider":false}),
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn startup_rejection_preserves_unknown_or_accepted_receipts_and_does_not_replay() {
+    for accepted in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let (core, client, draft, command_id) =
+            prepare_rejected_startup(root.path(), Some("1")).await;
+        let before = if accepted {
+            core.doc_host
+                .confirm_task_command_correlation(
+                    CHAT,
+                    &command_id,
+                    "accepted-turn",
+                    Some("accepted-binding"),
+                    Some(1),
+                )
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        } else {
+            core.doc_host
+                .mark_task_command_unknown(&command_id, "lost provider reply")
+                .unwrap()
+                .unwrap()
+        };
+        wait_for(|| {
+            core.sessions
+                .session_status(CHAT)
+                .is_some_and(|s| s.status == luna_proto::SessionStatus::Errored)
+        })
+        .await;
+        let after = core
+            .doc_host
+            .task_command_receipt(&command_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, before);
+        let read = read_draft(&client).await;
+        assert!(
+            read.submissions
+                .iter()
+                .any(|s| s.command_id == command_id && s.snapshot.same_message_content(&draft))
+        );
+        assert!(
+            !requests(&root.path().join("native-inputs-rpc.jsonl"))
+                .iter()
+                .any(|r| r["method"] == "turn/start")
+        );
+        let recovery =
+            serde_json::to_value(core.store.task_recovery(CHAT).unwrap().unwrap()).unwrap();
+        preserve_repair_evidence(
+            if accepted {
+                "startup-already-accepted"
+            } else {
+                "startup-already-unknown"
+            },
+            json!({"before":before,"after":after,"recovery":recovery,"snapshot":read,"realProvider":false}),
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recoverable_discard_clears_matching_native_inputs_but_keeps_newer_identity() {
+    for newer in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let (core, client, draft, command_id) = prepare_rejected_startup(root.path(), None).await;
+        wait_for(|| {
+            core.doc_host
+                .task_command_receipt(&command_id)
+                .unwrap()
+                .is_some_and(|r| r.status == luna_proto::CommandReceiptStatus::Rejected)
+        })
+        .await;
+        let replacement = selected_draft(CHAT, 2, &draft.text, "app://newer-native-id");
+        if newer {
+            client
+                .call(methods::SAVE_COMPOSER_DRAFT, json!({"draft":replacement}))
+                .await
+                .unwrap();
+        }
+        client
+            .call(
+                methods::SETTLE_DRAFT_SUBMISSION,
+                json!({"commandId":command_id,"outcome":"discarded"}),
+            )
+            .await
+            .unwrap();
+        let read = read_draft(&client).await;
+        assert!(read.submissions.iter().all(|s| s.command_id != command_id));
+        let saved = read.draft.unwrap();
+        if newer {
+            assert!(saved.same_message_content(&replacement));
+            assert_eq!(saved.revision, 2);
+        } else {
+            assert!(saved.text.is_empty());
+            assert!(saved.input_items.is_empty());
+            assert!(saved.attachments.is_empty());
+        }
+        preserve_repair_evidence(
+            if newer {
+                "discard-preserves-newer-identity"
+            } else {
+                "discard-clears-native-inputs"
+            },
+            json!({"draft":saved,"realProvider":false}),
+        );
+    }
+}
