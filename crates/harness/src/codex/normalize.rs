@@ -174,14 +174,14 @@ pub(crate) fn tool_activity(method: &str, params: &Value) -> Vec<AgentEvent> {
                     id: part_id.clone(),
                     call: file_change_call(&[(path, kind.to_owned())]),
                 });
-                if let Some(diff) = change_diff(change) {
-                    if let Ok(text) = serde_json::to_string(&diff) {
-                        events.push(AgentEvent::ToolActivity {
-                            id: part_id,
-                            kind: ToolActivityKind::Patch,
-                            text,
-                        });
-                    }
+                if let Some(diff) = change_diff(change)
+                    && let Ok(text) = serde_json::to_string(&diff)
+                {
+                    events.push(AgentEvent::ToolActivity {
+                        id: part_id,
+                        kind: ToolActivityKind::Patch,
+                        text,
+                    });
                 }
             }
             events
@@ -1294,14 +1294,14 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 matches!(status.as_str(), "failed" | "errored" | "cancelled")
                     || item.get("success").and_then(Value::as_bool) == Some(false),
             );
-            if phase == Phase::Completed {
-                if let Some(AgentEvent::ToolResult { output, .. }) = events.last_mut() {
-                    *output = Some(serde_json::json!({"lunaToolOutput": {
-                        "kind": "dynamic", "isError": matches!(status.as_str(), "failed" | "errored" | "cancelled") || item.get("success").and_then(Value::as_bool) == Some(false),
-                        "contentItems": field(item, &["contentItems", "content_items"]),
-                        "success": item.get("success"), "error": item.get("error"),
-                    }}).to_string());
-                }
+            if phase == Phase::Completed
+                && let Some(AgentEvent::ToolResult { output, .. }) = events.last_mut()
+            {
+                *output = Some(serde_json::json!({"lunaToolOutput": {
+                    "kind": "dynamic", "isError": matches!(status.as_str(), "failed" | "errored" | "cancelled") || item.get("success").and_then(Value::as_bool) == Some(false),
+                    "contentItems": field(item, &["contentItems", "content_items"]),
+                    "success": item.get("success"), "error": item.get("error"),
+                }}).to_string());
             }
             events
         }
@@ -1435,10 +1435,10 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 },
                 matches!(status.as_str(), "failed" | "errored" | "cancelled"),
             );
-            if phase == Phase::Completed {
-                if let Some(AgentEvent::ToolResult { output, .. }) = events.last_mut() {
-                    *output = Some(unknown_diagnostic(item));
-                }
+            if phase == Phase::Completed
+                && let Some(AgentEvent::ToolResult { output, .. }) = events.last_mut()
+            {
+                *output = Some(unknown_diagnostic(item));
             }
             events
         }

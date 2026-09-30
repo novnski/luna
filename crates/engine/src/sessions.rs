@@ -1087,13 +1087,13 @@ impl SessionsEngine {
         } else {
             self.inner.journal.tool_output(chat_id, part_id)?
         };
-        if output.is_none() {
-            if let Some((parent, _)) = chat_id.split_once("--sub--") {
-                return Ok(self
-                    .inner
-                    .journal
-                    .subagent_tool_blob(parent, chat_id, part_id, diff)?);
-            }
+        if output.is_none()
+            && let Some((parent, _)) = chat_id.split_once("--sub--")
+        {
+            return Ok(self
+                .inner
+                .journal
+                .subagent_tool_blob(parent, chat_id, part_id, diff)?);
         }
         Ok(output)
     }
