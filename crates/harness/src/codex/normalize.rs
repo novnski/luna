@@ -3,48 +3,165 @@
 //!
 //! Tolerant by construction: both field spellings the app server has shipped
 //! (`delta`/`textDelta`, `exitCode`/`exit_code`, camelCase/snake_case item
-//! types) are accepted, and unknown item types map to nothing.
+//! types) are accepted, and unknown items get bounded metadata diagnostics.
 
 use std::collections::{HashMap, VecDeque};
 
 use luna_proto::{
-    AgentEvent, ComputerUseStatus, ContextOperationStatus, DoneStatus, TodoItem, ToolCall, ToolDiff,
+    AgentEvent, ComputerUseStatus, ContextOperationStatus, DoneStatus, TodoItem, ToolActivityKind,
+    ToolCall, ToolDiff,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
-/// A command can print megabytes. Keep the host journal and lazy RPC response
-/// bounded while preserving ordinary command output verbatim.
-const COMMAND_OUTPUT_MAX_BYTES: usize = 64 * 1024;
-
+// Retain every received byte here. Limits belong after host journaling.
 fn command_output(item: &Value) -> Option<String> {
-    let output = field(item, &["aggregatedOutput", "aggregated_output"])
+    field(item, &["aggregatedOutput", "aggregated_output"])
         .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())?;
-    if output.len() <= COMMAND_OUTPUT_MAX_BYTES {
-        return Some(output.to_owned());
-    }
-    let mut end = COMMAND_OUTPUT_MAX_BYTES;
-    while !output.is_char_boundary(end) {
-        end -= 1;
-    }
-    Some(format!(
-        "{}\n… [command output truncated by LUNA after 64 KiB]",
-        &output[..end]
-    ))
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
 }
 
-fn bounded_text(text: &str) -> String {
-    if text.len() <= COMMAND_OUTPUT_MAX_BYTES {
-        return text.to_owned();
+/// Retain complete typed MCP content, structured content, metadata, app
+/// resource and error information in the host result, even for text-only calls.
+fn mcp_output(item: &Value) -> Option<String> {
+    let result = item.get("result").filter(|v| !v.is_null());
+    let error = item.get("error").filter(|v| !v.is_null());
+    let app = field(item, &["mcpAppUi", "mcp_app_ui"]).filter(|v| !v.is_null());
+    if result.is_none() && error.is_none() && app.is_none() {
+        return None;
     }
-    let mut end = COMMAND_OUTPUT_MAX_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}\n… [tool output truncated by LUNA after 64 KiB]",
-        &text[..end]
+    let is_error = matches!(
+        str_field(item, &["status"]).as_str(),
+        "failed" | "errored" | "cancelled" | "declined"
+    ) || error.is_some()
+        || item.pointer("/result/isError").and_then(Value::as_bool) == Some(true);
+    Some(
+        serde_json::json!({"lunaToolOutput": {
+            "kind": "mcp", "result": result, "error": error, "mcpAppUi": app, "isError": is_error,
+        }})
+        .to_string(),
     )
+}
+
+fn diagnostic_label(value: &str) -> String {
+    value.chars().filter(|c| !c.is_control()).take(80).collect()
+}
+
+fn diagnostic_id(id: &str) -> String {
+    if id.len() <= 180
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:#~-".contains(&b))
+    {
+        id.to_owned()
+    } else {
+        format!("unsupported-{:x}", Sha256::digest(id.as_bytes()))
+    }
+}
+
+fn unknown_diagnostic(item: &Value) -> String {
+    let fields: Vec<_> = item
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.keys())
+        .take(32)
+        .map(|key| diagnostic_label(key))
+        .collect();
+    serde_json::json!({"lunaToolOutput": {
+        "kind": "unsupported", "itemType": diagnostic_label(item_type(item)), "fields": fields,
+    }})
+    .to_string()
+}
+
+fn change_diff(change: &Value) -> Option<ToolDiff> {
+    let text = change
+        .get("diff")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())?
+        .to_owned();
+    let kind = change
+        .get("kind")
+        .and_then(|v| v.as_str().or_else(|| v.get("type")?.as_str()))
+        .unwrap_or("update");
+    let (old_text, new_text, unified_diff) =
+        if text.starts_with("diff --git ") || text.starts_with("@@ ") {
+            (None, String::new(), Some(text))
+        } else if kind == "add" {
+            (None, text, None)
+        } else if kind == "delete" {
+            (Some(text), String::new(), None)
+        } else {
+            (None, String::new(), Some(text))
+        };
+    Some(ToolDiff {
+        path: str_field(change, &["path"]),
+        old_text,
+        new_text,
+        unified_diff,
+    })
+}
+
+/// Notifications share the item ID with call/result. No synthetic transcript
+/// text is emitted: the engine folds activity into the original tool chip.
+pub(crate) fn tool_activity(method: &str, params: &Value) -> Vec<AgentEvent> {
+    let id = item_id(params);
+    if id.is_empty() {
+        return Vec::new();
+    }
+    match method {
+        "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => delta_text(params)
+            .map(|text| AgentEvent::ToolActivity {
+                id,
+                kind: ToolActivityKind::Stdout,
+                text,
+            })
+            .into_iter()
+            .collect(),
+        "item/commandExecution/terminalInteraction" => params
+            .get("stdin")
+            .and_then(Value::as_str)
+            .map(|text| AgentEvent::ToolActivity {
+                id,
+                kind: ToolActivityKind::Stdin,
+                text: text.to_owned(),
+            })
+            .into_iter()
+            .collect(),
+        "item/fileChange/patchUpdated" => {
+            let Some(changes) = params.get("changes").and_then(Value::as_array) else {
+                return Vec::new();
+            };
+            let mut events = Vec::new();
+            for (index, change) in changes.iter().enumerate() {
+                let part_id = if index == 0 {
+                    id.clone()
+                } else {
+                    format!("{id}#{index}")
+                };
+                let path = str_field(change, &["path"]);
+                let kind = change
+                    .get("kind")
+                    .and_then(|v| v.as_str().or_else(|| v.get("type")?.as_str()))
+                    .unwrap_or("update");
+                events.push(AgentEvent::ToolCall {
+                    id: part_id.clone(),
+                    call: file_change_call(&[(path, kind.to_owned())]),
+                });
+                if let Some(diff) = change_diff(change) {
+                    if let Ok(text) = serde_json::to_string(&diff) {
+                        events.push(AgentEvent::ToolActivity {
+                            id: part_id,
+                            kind: ToolActivityKind::Patch,
+                            text,
+                        });
+                    }
+                }
+            }
+            events
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn command_call(item: &Value) -> ToolCall {
@@ -121,7 +238,7 @@ fn web_search_call(item: &Value) -> ToolCall {
 fn web_search_output(item: &Value) -> Option<String> {
     let results = item.get("results").filter(|value| !value.is_null())?;
     let text = serde_json::to_string_pretty(results).ok()?;
-    (!text.is_empty() && text != "[]").then(|| bounded_text(&text))
+    (!text.is_empty() && text != "[]").then_some(text)
 }
 
 fn file_change_events(phase: Phase, id: String, item: &Value, failed: bool) -> Vec<AgentEvent> {
@@ -130,12 +247,6 @@ fn file_change_events(phase: Phase, id: String, item: &Value, failed: bool) -> V
     };
     if changes.is_empty() {
         return tool_lifecycle(phase, id, ToolCall::ApplyPatch { path: None }, failed);
-    }
-    if phase == Phase::Started && changes.len() > 1 {
-        return vec![AgentEvent::ToolCall {
-            id,
-            call: ToolCall::ApplyPatch { path: None },
-        }];
     }
     let mut events = Vec::new();
     for (index, change) in changes.iter().enumerate() {
@@ -156,25 +267,7 @@ fn file_change_events(phase: Phase, id: String, item: &Value, failed: bool) -> V
             call,
         });
         if phase == Phase::Completed {
-            let patch = change
-                .get("diff")
-                .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
-                .map(bounded_text);
-            let diff = patch.map(|text| {
-                let is_patch = text.starts_with("diff --git ") || text.starts_with("@@ ");
-                let (old_text, new_text, unified_diff) = match (kind.as_str(), is_patch) {
-                    ("add", false) => (None, text, None),
-                    ("delete", false) => (Some(text), String::new(), None),
-                    _ => (None, String::new(), Some(text)),
-                };
-                ToolDiff {
-                    path,
-                    old_text,
-                    new_text,
-                    unified_diff,
-                }
-            });
+            let diff = change_diff(change);
             events.push(AgentEvent::ToolResult {
                 id: part_id,
                 is_error: failed,
@@ -327,7 +420,7 @@ impl ComputerUseStream {
                     AgentEvent::ToolResult {
                         id: id.to_owned(),
                         is_error: failed,
-                        output: None,
+                        output: mcp_output(item),
                         diff: None,
                     },
                 ])
@@ -489,11 +582,11 @@ mod computer_use_tests {
             &events[1],
             AgentEvent::ToolResult {
                 is_error: false,
-                output: None,
+                output: Some(_),
                 ..
             }
         ));
-        assert!(!format!("{events:?}").contains("private pixels"));
+        assert!(!format!("{:?}", events[0]).contains("private pixels"));
         assert!(
             stream
                 .map_item(
@@ -1145,56 +1238,41 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
             }
             Phase::Completed => vec![AgentEvent::ToolResult {
                 id,
-                is_error: status == "failed",
-                output: item
-                    .pointer("/result/content")
-                    .and_then(Value::as_array)
-                    .and_then(|items| {
-                        let text = items
-                            .iter()
-                            .filter_map(|entry| {
-                                (entry.get("type").and_then(Value::as_str) == Some("text"))
-                                    .then(|| entry.get("text").and_then(Value::as_str))
-                                    .flatten()
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        (!text.is_empty()).then(|| bounded_text(&text))
-                    }),
+                is_error: matches!(status.as_str(), "failed" | "errored" | "cancelled")
+                    || item.get("error").is_some_and(|v| !v.is_null())
+                    || item.pointer("/result/isError").and_then(Value::as_bool) == Some(true),
+                output: mcp_output(item),
                 diff: None,
             }],
         },
-        "dynamicToolCall" | "dynamic_tool_call" => match phase {
-            Phase::Started => {
-                let tool = str_field(item, &["tool"]);
-                if tool != "luna_status" {
-                    return Vec::new();
+        "dynamicToolCall" | "dynamic_tool_call" => {
+            let tool = str_field(item, &["tool"]);
+            let mut events = tool_lifecycle(
+                phase,
+                id,
+                ToolCall::Mcp {
+                    server: item
+                        .get("namespace")
+                        .and_then(Value::as_str)
+                        .unwrap_or("luna")
+                        .to_owned(),
+                    tool,
+                    input: item.get("arguments").filter(|v| !v.is_null()).cloned(),
+                },
+                matches!(status.as_str(), "failed" | "errored" | "cancelled")
+                    || item.get("success").and_then(Value::as_bool) == Some(false),
+            );
+            if phase == Phase::Completed {
+                if let Some(AgentEvent::ToolResult { output, .. }) = events.last_mut() {
+                    *output = Some(serde_json::json!({"lunaToolOutput": {
+                        "kind": "dynamic", "isError": matches!(status.as_str(), "failed" | "errored" | "cancelled") || item.get("success").and_then(Value::as_bool) == Some(false),
+                        "contentItems": field(item, &["contentItems", "content_items"]),
+                        "success": item.get("success"), "error": item.get("error"),
+                    }}).to_string());
                 }
-                vec![AgentEvent::ToolCall {
-                    id,
-                    call: ToolCall::Mcp {
-                        server: "luna".into(),
-                        tool,
-                        input: item
-                            .get("arguments")
-                            .filter(|value| !value.is_null())
-                            .cloned(),
-                    },
-                }]
             }
-            Phase::Completed if str_field(item, &["tool"]) == "luna_status" => {
-                vec![AgentEvent::ToolResult {
-                    id,
-                    is_error: status == "failed"
-                        || item.get("success").and_then(Value::as_bool) == Some(false),
-                    // Tool results are untrusted data. Record the outcome without
-                    // copying the body into the transcript or activity index.
-                    output: None,
-                    diff: None,
-                }]
-            }
-            Phase::Completed => Vec::new(),
-        },
+            events
+        }
         "webSearch" | "web_search" => {
             let mut events = tool_lifecycle(phase, id, web_search_call(item), false);
             if phase == Phase::Completed {
@@ -1300,6 +1378,25 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
         // the doc). A CHILD thread's userMessage is different — the parent
         // steering its subagent — and is mapped where child items route
         // (mod.rs child branch), not here.
+        "userMessage" | "user_message" | "agentMessage" | "agent_message" | "reasoning"
+        | "plan" | "contextCompaction" | "context_compaction" => Vec::new(),
+        _ if !id.is_empty() => {
+            let mut events = tool_lifecycle(
+                phase,
+                diagnostic_id(&id),
+                ToolCall::Unknown {
+                    name: format!("Unsupported: {}", diagnostic_label(item_type(item))),
+                    input: None,
+                },
+                matches!(status.as_str(), "failed" | "errored" | "cancelled"),
+            );
+            if phase == Phase::Completed {
+                if let Some(AgentEvent::ToolResult { output, .. }) = events.last_mut() {
+                    *output = Some(unknown_diagnostic(item));
+                }
+            }
+            events
+        }
         _ => Vec::new(),
     }
 }
@@ -1429,6 +1526,10 @@ impl ChildStream {
             return Vec::new();
         }
         match method {
+            "item/commandExecution/outputDelta"
+            | "item/commandExecution/terminalInteraction"
+            | "item/fileChange/outputDelta"
+            | "item/fileChange/patchUpdated" => tool_activity(method, params),
             "thread/tokenUsage/updated" => usage_event(params).into_iter().collect(),
             "item/agentMessage/delta" => {
                 let id = item_id(params);
@@ -1539,6 +1640,10 @@ pub(crate) fn route_child_notification(method: &str) -> ChildRoute {
         | "item/reasoning/textDelta"
         | "item/reasoning/summaryTextDelta"
         | "item/reasoning/summaryPartAdded"
+        | "item/commandExecution/outputDelta"
+        | "item/commandExecution/terminalInteraction"
+        | "item/fileChange/outputDelta"
+        | "item/fileChange/patchUpdated"
         | "turn/started"
         | "turn/completed"
         | "turn/failed"
@@ -1551,10 +1656,7 @@ pub(crate) fn route_child_notification(method: &str) -> ChildRoute {
         // so it can never settle the PARENT turn (the exact bug class the
         // explicit table exists for).
         // Child chatter with no consumer on this wire.
-        "item/commandExecution/outputDelta"
-        | "item/fileChange/outputDelta"
-        | "item/fileChange/patchUpdated"
-        | "item/plan/delta"
+        "item/plan/delta"
         | "turn/plan/updated"
         | "turn/diff/updated"
         | "thread/name/updated"
@@ -1702,10 +1804,22 @@ mod tests {
         );
         assert_eq!(
             multi,
-            vec![AgentEvent::ToolCall {
-                id: "f3".into(),
-                call: ToolCall::ApplyPatch { path: None },
-            }]
+            vec![
+                AgentEvent::ToolCall {
+                    id: "f3".into(),
+                    call: ToolCall::EditFile {
+                        path: "/a".into(),
+                        old_string: None,
+                        new_string: None
+                    }
+                },
+                AgentEvent::ToolCall {
+                    id: "f3#1".into(),
+                    call: ToolCall::ApplyPatch {
+                        path: Some("/b".into())
+                    }
+                }
+            ]
         );
     }
 

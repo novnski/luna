@@ -1372,7 +1372,10 @@ pub fn rows_for_entry(
                 return;
             }
             let tools = std::mem::take(group);
-            let auto_open = streaming && last_ix == last_part_ix;
+            let auto_open = (streaming && last_ix == last_part_ix)
+                || tools
+                    .iter()
+                    .any(|tool| !tool.resolved && tool.detail.is_some());
             rows.push(Row {
                 id: format!("{}#g{}", entry.id, group_ix).into(),
                 version: tool_fingerprint(&tools, auto_open),
@@ -2032,6 +2035,122 @@ struct ChipAffordance {
 /// Line cap for a FETCHED full output (a defensive ceiling, not a doc cap).
 const FULL_OUTPUT_MAX_LINES: usize = 400;
 
+/// Readable fallback for typed MCP/dynamic content. Encoded media remains
+/// available in Copy; never dump base64 into a transcript or execute app UI.
+fn rich_output_display(text: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let payload = value.get("lunaToolOutput")?;
+    let mut sections = vec![
+        luna_doc::rich_tool_output_summary(
+            text,
+            payload.get("isError").and_then(serde_json::Value::as_bool) == Some(true)
+                || payload.get("error").is_some_and(|v| !v.is_null())
+                || payload.get("success").and_then(serde_json::Value::as_bool) == Some(false),
+        )
+        .unwrap_or_else(|| "Tool result".into()),
+    ];
+    let blocks = payload
+        .pointer("/result/content")
+        .or_else(|| payload.get("contentItems"))
+        .and_then(serde_json::Value::as_array);
+    for block in blocks.into_iter().flatten() {
+        let field = |name| {
+            block
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+        };
+        match field("type") {
+            "text" | "inputText" => sections.push(field("text").to_owned()),
+            "image" | "inputImage" => sections.push(format!(
+                "Image ({}) · media retained in full result",
+                field("mimeType")
+            )),
+            "audio" | "inputAudio" => sections.push(format!(
+                "Audio ({}) · media retained in full result",
+                field("mimeType")
+            )),
+            "resource_link" => {
+                sections.push(format!("Resource: {}\n{}", field("name"), field("uri")))
+            }
+            "resource" => {
+                if let Some(resource) = block.get("resource") {
+                    let uri = resource
+                        .get("uri")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    let body = resource
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Encoded resource retained in full result");
+                    sections.push(format!("Resource: {uri}\n{body}"));
+                }
+            }
+            _ => sections.push("Content block retained in full result".into()),
+        }
+    }
+    if let Some(structured) = payload
+        .pointer("/result/structuredContent")
+        .or_else(|| payload.pointer("/result/structured_content"))
+        .filter(|v| !v.is_null())
+    {
+        sections.push(format!(
+            "Structured content\n{}",
+            serde_json::to_string_pretty(structured).ok()?
+        ));
+    }
+    if let Some(error) = payload
+        .pointer("/error/message")
+        .and_then(serde_json::Value::as_str)
+    {
+        sections.push(format!("Error: {error}"));
+    }
+    if let Some(uri) = payload
+        .pointer("/mcpAppUi/resourceUri")
+        .and_then(serde_json::Value::as_str)
+    {
+        sections.push(format!("App resource: {uri}"));
+    }
+    if payload.get("kind").and_then(serde_json::Value::as_str) == Some("unsupported") {
+        sections.push(serde_json::to_string_pretty(payload).ok()?);
+    }
+    Some(sections.join("\n\n"))
+}
+
+/// Bound allocations while wrapping full received text. Copy keeps the raw
+/// payload, while only the first 400 wrapped rows enter the render model.
+fn fetched_output_lines(text: &str) -> (Vec<SharedString>, usize) {
+    let mut lines = Vec::new();
+    let mut total = 0usize;
+    let mut last_nonblank = 0usize;
+    for line in text.lines() {
+        let mut chunk = String::new();
+        let mut cols = 0;
+        let mut emit = |chunk: String| {
+            total += 1;
+            if !chunk.trim().is_empty() {
+                last_nonblank = total;
+            }
+            if lines.len() < FULL_OUTPUT_MAX_LINES {
+                lines.push(SharedString::from(chunk));
+            }
+        };
+        for ch in line.chars() {
+            chunk.push(ch);
+            cols += 1;
+            if cols == CALL_WRAP_COLS {
+                emit(std::mem::take(&mut chunk));
+                cols = 0;
+            }
+        }
+        if !chunk.is_empty() || line.is_empty() {
+            emit(chunk);
+        }
+    }
+    lines.truncate(last_nonblank.min(FULL_OUTPUT_MAX_LINES));
+    (lines, last_nonblank.saturating_sub(FULL_OUTPUT_MAX_LINES))
+}
+
 /// Build the upgraded detail from a fetched sidecar blob. Diff blobs parse
 /// the `ToolDiff` JSON through the same pipeline as inline diffs; output
 /// blobs render (near-)uncapped — fetching past the summary was the point.
@@ -2040,18 +2159,11 @@ fn blob_detail(text: &str, is_diff: bool) -> Option<ToolDetail> {
         let diff: luna_proto::ToolDiff = serde_json::from_str(text).ok()?;
         return tool_detail(None, Some(&diff), None);
     }
-    let mut lines: Vec<SharedString> = text
-        .lines()
-        .flat_map(|line| wrap_cols(line, CALL_WRAP_COLS))
-        .collect();
-    while lines.last().is_some_and(|l| l.trim().is_empty()) {
-        lines.pop();
-    }
+    let display = rich_output_display(text);
+    let (lines, truncated_by) = fetched_output_lines(display.as_deref().unwrap_or(text));
     if lines.is_empty() {
         return None;
     }
-    let truncated_by = lines.len().saturating_sub(FULL_OUTPUT_MAX_LINES);
-    lines.truncate(FULL_OUTPUT_MAX_LINES);
     Some(ToolDetail::Output {
         lines,
         truncated_by,
@@ -4307,6 +4419,19 @@ impl Transcript {
                 None => state.transcript.as_slice(),
             };
             for entry in entries {
+                for part in &entry.parts {
+                    if let MessagePart::Tool {
+                        resolved: false,
+                        output_ref,
+                        diff_ref,
+                        ..
+                    } = part
+                    {
+                        for blob_ref in [output_ref, diff_ref].into_iter().flatten() {
+                            self.blob_details.remove(blob_ref.as_str());
+                        }
+                    }
+                }
                 new_rows.extend(self.rows_for(entry, false));
             }
             if self.doc_override.is_none() {
@@ -4709,10 +4834,13 @@ impl Transcript {
             return;
         };
         let target_device = blob_ref.split_once('/').and_then(|(chat_id, _)| {
+            let owner_chat = chat_id
+                .split_once("--sub--")
+                .map_or(chat_id, |(parent, _)| parent);
             self.state
                 .read(cx)
                 .visible_chats()
-                .find(|chat| chat.id == chat_id)
+                .find(|chat| chat.id == owner_chat)
                 .map(|chat| chat.device_id.clone())
         });
         let is_diff = blob_ref.ends_with(".diff");
@@ -6778,6 +6906,11 @@ impl Transcript {
         let affordances: Vec<Option<ChipAffordance>> = tools
             .iter()
             .map(|tool| {
+                // The live preview updates continuously. Fetch once settled,
+                // so a cached live snapshot cannot masquerade as final output.
+                if !tool.resolved {
+                    return None;
+                }
                 // The currently-displayed ref (same recency rule as
                 // `details` above): its affordance is spent; any OTHER
                 // Ready ref stays offered as a no-fetch toggle.
@@ -6848,7 +6981,7 @@ impl Transcript {
                 // A STREAMING thought chip defaults open (the live thinking
                 // is the point); settled chips default closed. A user toggle
                 // overrides either way.
-                let default_open = tool.is_thought && !tool.resolved;
+                let default_open = !tool.resolved && (tool.is_thought || tool.detail.is_some());
                 (detail.is_some() || invocation.is_some()) && fold.open.unwrap_or(default_open)
             })
             .collect();

@@ -60,6 +60,74 @@ pub struct JournaledEvent {
     pub event: AgentEvent,
 }
 
+/// Transport previews are bounded independently of retained host payloads.
+fn tool_event_preview(event: &AgentEvent) -> AgentEvent {
+    fn cap(text: &str, limit: usize) -> String {
+        if text.len() <= limit {
+            return text.to_owned();
+        }
+        let mut end = limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{}\n… [preview limited; full received output is on the host]",
+            &text[..end]
+        )
+    }
+    fn diff_preview(diff: &luna_proto::ToolDiff) -> luna_proto::ToolDiff {
+        luna_proto::ToolDiff {
+            path: diff.path.clone(),
+            old_text: diff.old_text.as_deref().map(|t| cap(t, 64 * 1024)),
+            new_text: cap(&diff.new_text, 64 * 1024),
+            unified_diff: diff.unified_diff.as_deref().map(|t| cap(t, 64 * 1024)),
+        }
+    }
+    match event {
+        AgentEvent::ToolCall { id, call } => AgentEvent::ToolCall {
+            id: id.clone(),
+            call: sanitize_tool_call(call),
+        },
+        AgentEvent::ToolResult {
+            id,
+            is_error,
+            output,
+            diff,
+        } => AgentEvent::ToolResult {
+            id: id.clone(),
+            is_error: *is_error,
+            output: output.as_deref().map(|t| {
+                luna_doc::rich_tool_output_summary(t, *is_error)
+                    .unwrap_or_else(|| cap(t, 64 * 1024))
+            }),
+            diff: diff.as_ref().map(diff_preview),
+        },
+        AgentEvent::ToolActivity { id, kind, text } => {
+            let text = if *kind == luna_proto::ToolActivityKind::Patch {
+                serde_json::from_str::<luna_proto::ToolDiff>(text)
+                    .ok()
+                    .and_then(|d| serde_json::to_string(&diff_preview(&d)).ok())
+                    .unwrap_or_default()
+            } else {
+                cap(text, luna_doc::TOOL_ACTIVITY_PREVIEW_BYTES)
+            };
+            AgentEvent::ToolActivity {
+                id: id.clone(),
+                kind: *kind,
+                text,
+            }
+        }
+        AgentEvent::Subagent {
+            parent_tool_use_id,
+            event,
+        } => AgentEvent::Subagent {
+            parent_tool_use_id: parent_tool_use_id.clone(),
+            event: Box::new(tool_event_preview(event)),
+        },
+        _ => event.clone(),
+    }
+}
+
 /// Outcome of a steer attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SteerOutcome {
@@ -1011,11 +1079,23 @@ impl SessionsEngine {
         {
             return Err(EngineError::Other("invalid tool output ref".into()));
         }
-        if let Some(part_id) = part_id.strip_suffix(".diff") {
-            Ok(self.inner.journal.tool_diff(chat_id, part_id)?)
+        let (part_id, diff) = part_id
+            .strip_suffix(".diff")
+            .map_or((part_id, false), |id| (id, true));
+        let output = if diff {
+            self.inner.journal.tool_diff(chat_id, part_id)?
         } else {
-            Ok(self.inner.journal.tool_output(chat_id, part_id)?)
+            self.inner.journal.tool_output(chat_id, part_id)?
+        };
+        if output.is_none() {
+            if let Some((parent, _)) = chat_id.split_once("--sub--") {
+                return Ok(self
+                    .inner
+                    .journal
+                    .subagent_tool_blob(parent, chat_id, part_id, diff)?);
+            }
         }
+        Ok(output)
     }
 
     /// Bind generated-image intake to the same profile store used by attachment RPCs.
@@ -2657,7 +2737,10 @@ impl SessionsEngine {
             .journal
             .replay(chat_id, after_seq)?
             .into_iter()
-            .map(|(seq, event)| JournaledEvent { seq, event })
+            .map(|(seq, event)| JournaledEvent {
+                seq,
+                event: tool_event_preview(&event),
+            })
             .collect();
         Ok((replay, rx))
     }
@@ -5190,7 +5273,7 @@ impl Inner {
         if let Some(hub) = lock(&self.hubs).get(chat_id) {
             let _ = hub.send(JournaledEvent {
                 seq,
-                event: event.clone(),
+                event: tool_event_preview(event),
             });
         }
         Ok(seq)
@@ -6644,6 +6727,7 @@ async fn drive_run(
                 }
                 if !metadata_only {
                     luna_doc::fold_event_into_parts(&mut sink.folded, sub_event);
+                    luna_doc::apply_journal_output_refs(&sub_id, &mut sink.folded);
                     sink.dirty = true;
                 }
                 if !chip_streaming
@@ -6912,8 +6996,8 @@ async fn drive_run(
         // PRIOR segment (the fold reset at a steer or park since) belongs to
         // a chip that already rendered in its own entry. Folding the echo
         // would splice a phantom chip into the middle of the current
-        // segment's streaming text (the mid-word transcript splits). Dropped;
-        // same-segment refreshes still land in place.
+        // segment's streaming text (the mid-word transcript splits). Refresh
+        // its original entry; same-segment updates still fold in place.
         let in_segment = |folded: &[MessagePart], id: &str| {
             folded
                 .iter()
@@ -6928,13 +7012,55 @@ async fn drive_run(
             AgentEvent::ToolCall { id, .. } if id == luna_proto::LIVE_PLAN_TOOL_ID => {}
             AgentEvent::ToolResult { id, .. } if id == luna_proto::LIVE_PLAN_TOOL_ID => {}
             AgentEvent::ToolCall { id, .. } => {
-                if !in_segment(&folded, id) && seen_tools.contains(id) {
+                let owner = tool_entry_by_id.get(id).cloned().or_else(|| {
+                    // Per-file chips discovered by patchUpdated inherit the
+                    // original patch's entry, including after a steer split.
+                    id.rsplit_once('#')
+                        .filter(|(_, suffix)| {
+                            !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+                        })
+                        .and_then(|(root, _)| tool_entry_by_id.get(root))
+                        .cloned()
+                });
+                if !in_segment(&folded, id)
+                    && owner
+                        .as_deref()
+                        .is_some_and(|owner| owner != entry_id.as_str())
+                {
+                    let owner = owner.expect("checked above");
+                    seen_tools.insert(id.clone());
+                    tool_entry_by_id
+                        .entry(id.clone())
+                        .or_insert_with(|| owner.clone());
+                    if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                        journal_failure = Some(error);
+                        break SessionStatus::Errored;
+                    }
+                    if let Err(error) = doc_ref.apply_tool_event_in_entry(&owner, id, &event) {
+                        tracing::warn!(chat = %chat_id, tool = %id, %error, "prior tool call could not be refreshed");
+                    }
                     continue;
                 }
                 seen_tools.insert(id.clone());
                 tool_entry_by_id
                     .entry(id.clone())
                     .or_insert_with(|| entry_id.clone());
+            }
+            AgentEvent::ToolActivity { id, .. }
+                if !in_segment(&folded, id) && seen_tools.contains(id) =>
+            {
+                if let Some(original_entry) = tool_entry_by_id.get(id) {
+                    if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                        journal_failure = Some(error);
+                        break SessionStatus::Errored;
+                    }
+                    if let Err(error) =
+                        doc_ref.apply_tool_event_in_entry(original_entry, id, &event)
+                    {
+                        tracing::warn!(chat = %chat_id, tool = %id, %error, "prior tool activity could not be folded");
+                    }
+                }
+                continue;
             }
             AgentEvent::ToolResult {
                 id,
