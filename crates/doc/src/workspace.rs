@@ -245,6 +245,12 @@ impl WorkspaceDoc {
     /// Upsert a full chat row (host device, or CreateChat targeting a device).
     pub fn upsert_chat(&self, chat: &Chat) -> Result<(), DocError> {
         let row = self.row("chats", &chat.id)?;
+        match &chat.child_thread {
+            Some(child) => {
+                row.insert("childThread", LoroValue::from(serde_json::to_value(child)?))?
+            }
+            None => row.delete("childThread")?,
+        }
         row.insert("id", chat.id.as_str())?;
         row.insert("deviceId", chat.device_id.as_str())?;
         set_opt_str(&row, "title", chat.title.as_deref())?;
@@ -743,6 +749,8 @@ impl From<RawSpace> for Space {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RawChat {
+    #[serde(default)]
+    child_thread: Option<luna_proto::ChildThread>,
     id: String,
     device_id: String,
     #[serde(default)]
@@ -810,6 +818,7 @@ where
 impl From<RawChat> for Chat {
     fn from(raw: RawChat) -> Self {
         Chat {
+            child_thread: raw.child_thread,
             id: raw.id,
             device_id: raw.device_id,
             title: raw.title,
@@ -887,6 +896,7 @@ mod tests {
 
     fn chat(id: &str, device_id: &str) -> Chat {
         Chat {
+            child_thread: None,
             id: id.into(),
             device_id: device_id.into(),
             title: Some("First chat".into()),

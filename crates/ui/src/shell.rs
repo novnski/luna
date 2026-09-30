@@ -1113,6 +1113,15 @@ struct RenameChatDialog {
 }
 
 /// Confirmation surface for a provider-native independent task fork.
+struct ChildThreadDialog {
+    parent_id: String,
+    key: String,
+    prompt: Entity<ComposerInput>,
+    origin: HistoryEngineOrigin,
+    focus_pending: bool,
+    busy: bool,
+}
+
 struct HistoryForkDialog {
     source_task_id: String,
     boundary: ConversationForkBoundaryKind,
@@ -1951,6 +1960,7 @@ pub struct Shell {
     /// Session-row context menu, including the Copy submenu.
     chat_menu: popover::Popup<ChatMenuState>,
     rename_dialog: Option<RenameChatDialog>,
+    child_thread_dialog: Option<ChildThreadDialog>,
     history_fork_dialog: Option<HistoryForkDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
     history_recovery_dialog: Option<HistoryRecoveryDialog>,
@@ -2434,6 +2444,7 @@ impl Shell {
             appearance_settings_sub: None,
             chat_menu: popover::Popup::default(),
             rename_dialog: None,
+            child_thread_dialog: None,
             history_fork_dialog: None,
             edit_earlier_message_dialog: None,
             history_recovery_dialog: None,
@@ -5144,6 +5155,7 @@ impl Shell {
     }
 
     fn cancel_history_flow(&mut self, cx: &mut Context<Self>) {
+        self.child_thread_dialog = None;
         self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
         self.history_fork_dialog = None;
         self.edit_earlier_message_dialog = None;
@@ -5409,6 +5421,68 @@ impl Shell {
             })
             .ok();
         }));
+    }
+
+    fn open_child_thread_dialog(&mut self, parent_id: String, cx: &mut Context<Self>) {
+        self.close_chat_menu(cx);
+        let origin = HistoryEngineOrigin::capture(self.state.read(cx));
+        let prompt =
+            cx.new(|cx| ComposerInput::with_context("Describe the child task…", "DialogInput", cx));
+        self.child_thread_dialog = Some(ChildThreadDialog {
+            parent_id,
+            key: uuid::Uuid::new_v4().to_string(),
+            prompt,
+            origin,
+            focus_pending: true,
+            busy: false,
+        });
+        cx.notify();
+    }
+
+    fn submit_child_thread(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.child_thread_dialog.as_mut() else {
+            return;
+        };
+        if dialog.busy {
+            return;
+        }
+        let prompt = dialog.prompt.read(cx).text().trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+        let state = self.state.read(cx);
+        if !dialog.origin.is_current(state) {
+            self.child_thread_dialog = None;
+            cx.notify();
+            return;
+        }
+        let Some(engine) = state.engine().cloned() else {
+            return;
+        };
+        let origin = dialog.origin;
+        let device = state
+            .chats
+            .iter()
+            .find(|chat| chat.id == dialog.parent_id)
+            .map(|chat| chat.device_id.clone());
+        let params = serde_json::json!({"parentTaskId":dialog.parent_id, "targetDeviceId": device, "request":{"prompt":prompt,"idempotencyKey":dialog.key}});
+        dialog.busy = true;
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call(methods::CREATE_CHILD_THREAD, params).await;
+            this.update(cx, |shell, cx| {
+                if !origin.is_current(shell.state.read(cx)) { return; }
+                if let Some(dialog) = shell.child_thread_dialog.as_mut() { dialog.busy = false; }
+                match result {
+                    Ok(value) => match serde_json::from_value::<luna_proto::ChildThreadReceipt>(value) {
+                        Ok(receipt) => { shell.child_thread_dialog = None; shell.open_chat(receipt.task_id, cx); }
+                        Err(error) => shell.sidebar_notice = Some(format!("Child receipt could not be read; inspect the child before retrying: {error}").into()),
+                    },
+                    Err(error) => shell.sidebar_notice = Some(error.to_string().into()),
+                }
+                cx.notify();
+            }).ok();
+        }));
+        cx.notify();
     }
 
     fn submit_history_fork(&mut self, cx: &mut Context<Self>) {
@@ -9511,6 +9585,11 @@ impl Shell {
             cx.notify();
             return true;
         }
+        if self.child_thread_dialog.is_some() {
+            self.child_thread_dialog = None;
+            cx.notify();
+            return true;
+        }
         if self.history_fork_dialog.is_some() {
             self.cancel_history_flow(cx);
             return true;
@@ -9712,6 +9791,7 @@ impl Shell {
             let read_id = chat_id.clone();
             let settle_id = chat_id.clone();
             let move_project_id = chat_id.clone();
+            let child_parent_id = chat_id.clone();
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();
             let recover_task_id = chat_id.clone();
@@ -9724,6 +9804,16 @@ impl Shell {
                 .flex_col();
             let menu = match menu_state.page {
                 ChatMenuPage::Root => menu
+                    .when(!archived, |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-child-{chat_id}"))
+                                .id("chat-menu-child")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_child_thread_dialog(child_parent_id.clone(), cx)
+                                }))
+                                .child(SharedString::from("New child chat…")),
+                        )
+                    })
                     .when(!archived, |menu| {
                         menu.child(
                             popover::menu_row(&theme, false, format!("chat-menu-pin-{chat_id}"))
@@ -10068,6 +10158,23 @@ impl Shell {
                 )
                 .into_any_element();
             overlays.push(popover::modal("rename-chat-dialog", viewport, card));
+        }
+
+        if let Some(dialog) = &mut self.child_thread_dialog {
+            if std::mem::take(&mut dialog.focus_pending) {
+                window.focus(&dialog.prompt.focus_handle(cx), cx);
+            }
+            let prompt = dialog.prompt.clone();
+            let busy = dialog.busy;
+            let card = popover::dialog_card(&theme)
+                .child(popover::dialog_title(&theme, "New child chat"))
+                .child(div().mt(px(8.0)).text_xs().text_color(theme.text_muted).child("Fresh context in the parent's existing checkout. Project execution defaults apply within the parent's permission ceiling. Results appear in the parent without starting another turn."))
+                .child(div().mt(px(12.0)).child(popover::dialog_field(prompt.into_any_element())))
+                .child(div().mt(px(12.0)).flex().justify_end().gap(px(8.0))
+                    .child(popover::btn_secondary(&theme, "Cancel").id("child-chat-cancel").on_click(cx.listener(|this, _, _, cx| { this.child_thread_dialog = None; cx.notify(); })))
+                    .child(popover::btn_primary(&theme, if busy { "Creating…" } else { "Create child" }).id("child-chat-create").on_click(cx.listener(|this, _, _, cx| this.submit_child_thread(cx)))))
+                .into_any_element();
+            overlays.push(popover::modal("child-thread-dialog", viewport, card));
         }
 
         if let Some(dialog) = &mut self.history_fork_dialog {
@@ -10837,8 +10944,50 @@ impl Shell {
             self.transcript
                 .update(cx, |transcript, cx| transcript.finish_route_exit(cx));
         }
+        let parent_navigation = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| {
+                chat.child_thread
+                    .as_ref()
+                    .map(|child| child.parent_task_id.clone())
+            })
+            .and_then(|id| {
+                self.state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|chat| chat.id == id)
+                    .map(|chat| {
+                        (
+                            id,
+                            chat.title.clone().unwrap_or_else(|| "Parent chat".into()),
+                        )
+                    })
+            });
         let outlet: AnyElement = if has_selection || departing_transcript {
             div()
+                .flex()
+                .flex_col()
+                .when_some(parent_navigation, |el, (parent_id, title)| {
+                    el.child(
+                        div()
+                            .id("child-parent-navigation")
+                            .role(gpui::Role::Button)
+                            .aria_label("Open parent chat")
+                            .h(px(26.0))
+                            .flex_none()
+                            .px(px(16.0))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(format!("↑ {title}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_chat(parent_id.clone(), cx)
+                            })),
+                    )
+                })
                 .relative()
                 .size_full()
                 .overflow_hidden()
@@ -13764,6 +13913,7 @@ mod tests {
 
     fn history_chat(session: &str, cwd: &str, permission_mode: PermissionMode) -> luna_proto::Chat {
         luna_proto::Chat {
+            child_thread: None,
             id: "history-task".into(),
             device_id: "device".into(),
             title: None,

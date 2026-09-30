@@ -940,6 +940,7 @@ mod tests {
 
     fn chat() -> Chat {
         Chat {
+            child_thread: None,
             id: "task".into(),
             device_id: "machine".into(),
             title: Some("Synthetic".into()),

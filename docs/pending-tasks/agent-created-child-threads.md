@@ -1,6 +1,6 @@
 # Add agent created child threads to LUNA
 
-**Status:** Pending implementation. Research completed on 2026-09-30.
+**Status:** Implementation prepared for coordinator validation on 2026-09-30. Research and proposed design below are preserved; see [the implementation contract and acceptance handoff](../qa/child-chats.md) for current behavior, bounded limitations and pending checks.
 
 An agent should be able to create a fresh LUNA thread when the user asks it to delegate a task. The new thread should have its own conversation, execution identity, transcript, and normal chat controls, while appearing underneath the thread that created it. Results and requests for attention should return to the parent.
 

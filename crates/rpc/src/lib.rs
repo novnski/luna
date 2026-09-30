@@ -187,6 +187,7 @@ pub mod methods {
     /// Adopt a current preview; task and binding persist before chat visibility.
     pub const ADOPT_PROVIDER_TASK: &str = "AdoptProviderTask";
     /// L07 authoritative path for every existing local task mutation.
+    pub const CREATE_CHILD_THREAD: &str = "CreateChildThread";
     pub const EXECUTE_TASK_COMMAND: &str = "ExecuteTaskCommand";
     pub const GET_TASK_COMMAND_RECEIPT: &str = "GetTaskCommandReceipt";
     pub const GET_TASK_CLEANUP: &str = "GetTaskCleanup";
@@ -386,6 +387,7 @@ pub mod methods {
         REFRESH_TASK_BINDING,
         PREVIEW_PROVIDER_TASK_IMPORT,
         ADOPT_PROVIDER_TASK,
+        CREATE_CHILD_THREAD,
         EXECUTE_TASK_COMMAND,
         GET_TASK_COMMAND_RECEIPT,
         GET_TASK_CLEANUP,

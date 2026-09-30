@@ -36,19 +36,18 @@ pub fn resolve_new_task_defaults<'a>(
         .as_ref()
         .map(|provider| provider.harness)
         .or(global.harness);
-    let model = match &project.provider {
-        Some(provider) => provider.model.as_deref(),
-        None => harness
+    let selected = project.resolve(
+        global.harness,
+        harness
             .and_then(|harness| global.model_for(harness))
             .map(|model| model.id.as_str()),
-    };
+        harness.and_then(|harness| global.permission_by_harness.get(&harness).copied()),
+    );
     ResolvedNewTaskDefaults {
-        harness,
-        model,
-        permission_mode: project.permission_mode.or_else(|| {
-            harness.and_then(|harness| global.permission_by_harness.get(&harness).copied())
-        }),
-        checkout: project.checkout.unwrap_or(ProjectCheckout::Local),
+        harness: selected.harness,
+        model: selected.model,
+        permission_mode: selected.permission_mode,
+        checkout: selected.checkout,
     }
 }
 

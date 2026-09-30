@@ -119,6 +119,7 @@ enum PendingInputKind {
 
 #[derive(Debug)]
 struct LunaSendProposal {
+    child_request: Option<luna_proto::CreateChildThreadRequest>,
     request_id: String,
     claim: ClaimedProviderCall,
     fence: crate::cross_task_tools::ApprovedSendFence,
@@ -128,6 +129,39 @@ struct LunaSendProposal {
 
 impl LunaSendProposal {
     fn question(&self) -> UserInputQuestion {
+        if let Some(request) = &self.child_request {
+            return UserInputQuestion {
+                id: format!("question-{}", self.request_id),
+                header: "LUNA approval".into(),
+                question: format!(
+                    "Create a fresh persistent child {} under {} in project {} on {}?\nExisting checkout: {}\nModel: {:?}; reasoning: {:?}; title: {:?}\nResults: {}; queue parent continuation: {}. Permissions are capped by the parent. Only the explicit prompt is copied.\n\n{}",
+                    self.fence.request.task_id,
+                    self.claim.source_task_id,
+                    self.project_id,
+                    self.environment_id,
+                    request.cwd.as_deref().unwrap_or("parent checkout"),
+                    request.model,
+                    request.reasoning,
+                    request.title,
+                    request.report_results,
+                    request.continue_parent,
+                    request.prompt
+                ),
+                options: vec!["Deny".into(), "Allow once".into()],
+                multi_select: false,
+                approval: Some(luna_proto::ApprovalRequest {
+                    provider_request_id: self.claim.provider_call_id.clone(),
+                    provider: HarnessId::Codex,
+                    turn_id: Some(self.claim.provider_turn_id.clone()),
+                    machine_name: self.environment_id.clone(),
+                    action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
+                    summary: "Create a persistent child chat".into(),
+                    requested_scope: luna_proto::PermissionScope::Workspace,
+                    expires_at_ms: self.fence.expires_at_ms,
+                    supports_task_allowance: false,
+                }),
+            };
+        }
         UserInputQuestion {
             id: format!("question-{}", self.request_id),
             header: "LUNA approval".into(),
@@ -1349,12 +1383,33 @@ impl SessionsEngine {
         {
             return Err(fail(CrossTaskError::Scope));
         }
-        let request: CrossTaskSendRequest = serde_json::from_value(invocation.arguments)
-            .map_err(|_| fail(CrossTaskError::Input))?;
-        // The complete text appears in the local approval question.
+        let child_request = if invocation.name == "create_thread" {
+            let request: luna_proto::CreateChildThreadRequest =
+                serde_json::from_value(invocation.arguments.clone())
+                    .map_err(|_| fail(CrossTaskError::Input))?;
+            crate::cross_task_tools::validate_child_request(&request).map_err(fail)?;
+            Some(request)
+        } else {
+            None
+        };
+        let request: CrossTaskSendRequest = if let Some(child) = &child_request {
+            CrossTaskSendRequest {
+                task_id: crate::cross_task_tools::child_task_id(chat_id, &child.idempotency_key),
+                message: child.prompt.clone(),
+                mode: CrossTaskSendMode::Queue,
+                idempotency_key: child.idempotency_key.clone(),
+            }
+        } else {
+            serde_json::from_value(invocation.arguments).map_err(|_| fail(CrossTaskError::Input))?
+        };
         if request.mode != CrossTaskSendMode::Queue
             || request.message.trim().is_empty()
-            || request.message.chars().count() > crate::cross_task_tools::MAX_APPROVED_MESSAGE_CHARS
+            || request.message.chars().count()
+                > if child_request.is_some() {
+                    16_000
+                } else {
+                    crate::cross_task_tools::MAX_APPROVED_MESSAGE_CHARS
+                }
             || request.idempotency_key.is_empty()
             || request.idempotency_key.len() > 128
             || !request
@@ -1376,29 +1431,54 @@ impl SessionsEngine {
             )
             .await
             .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
-        let evidence = self
-            .prepare_luna_control_evidence(claim, &authority, &request.task_id)
-            .await
-            .map_err(fail)?;
+        let (claim, target_snapshot, project_id, environment_id) =
+            if let Some(child) = &child_request {
+                let snapshot = backend
+                    .child_creation_snapshot(child, &authority)
+                    .await
+                    .map_err(fail)?;
+                (
+                    claim,
+                    snapshot,
+                    contract
+                        .context
+                        .project_id
+                        .clone()
+                        .ok_or_else(|| fail(CrossTaskError::TargetScope))?,
+                    contract.context.environment_id.clone(),
+                )
+            } else {
+                let evidence = self
+                    .prepare_luna_control_evidence(claim, &authority, &request.task_id)
+                    .await
+                    .map_err(fail)?;
+                (
+                    evidence.claim,
+                    evidence.target_snapshot,
+                    evidence.source_project_id,
+                    evidence.source_environment_id,
+                )
+            };
         let expires_at_ms = now_ms().saturating_add(30_000);
         let fence = ApprovedSendFence {
-            source_task_id: evidence.claim.source_task_id.clone(),
-            source_run_id: evidence.claim.source_run_id.clone(),
-            source_binding_id: evidence.claim.source_binding.binding_id.clone(),
-            source_binding_generation: evidence.claim.source_binding.generation,
-            source_provider_thread_id: evidence.claim.source_binding.provider_thread_id.clone(),
-            source_provider_turn_id: evidence.claim.provider_turn_id.clone(),
-            source_provider_call_id: evidence.claim.provider_call_id.clone(),
-            target_snapshot: evidence.target_snapshot,
+            source_task_id: claim.source_task_id.clone(),
+            source_run_id: claim.source_run_id.clone(),
+            source_binding_id: claim.source_binding.binding_id.clone(),
+            source_binding_generation: claim.source_binding.generation,
+            source_provider_thread_id: claim.source_binding.provider_thread_id.clone(),
+            source_provider_turn_id: claim.provider_turn_id.clone(),
+            source_provider_call_id: claim.provider_call_id.clone(),
+            target_snapshot,
             request: request.clone(),
             expires_at_ms,
         };
         let proposal = LunaSendProposal {
+            child_request: child_request.clone(),
             request_id: new_id(),
-            claim: evidence.claim,
+            claim,
             fence,
-            project_id: evidence.source_project_id,
-            environment_id: evidence.source_environment_id,
+            project_id,
+            environment_id,
         };
         let request_id = proposal.request_id.clone();
         let question = proposal.question();
@@ -1449,6 +1529,17 @@ impl SessionsEngine {
         expire_pending_approval(&pending, &engine_tx, &request_id);
         let fence = grant.map_err(fail)?;
         self.with_live_approved_send(&fence, || Ok(()))?;
+        if let Some(child) = child_request {
+            let child_fence = crate::cross_task_tools::ApprovedChildFence {
+                source: fence,
+                request: child.clone(),
+            };
+            let receipt = backend
+                .create_child(child, &authority, &child_fence)
+                .await
+                .map_err(fail)?;
+            return serde_json::to_value(receipt).map_err(Into::into);
+        }
         let tools = CrossTaskTools::new(backend);
         tools
             .revalidate_control_target_snapshot(
@@ -3016,6 +3107,26 @@ impl SessionsEngine {
                 format!("{harness_id:?}").to_lowercase()
             )));
         }
+        let child = self
+            .inner
+            .workspace()
+            .and_then(|workspace| workspace.chat(chat_id).ok().flatten())
+            .and_then(|chat| chat.child_thread);
+        if let Some(child) = &child {
+            let current_parent_ceiling = self
+                .inner
+                .workspace()
+                .and_then(|workspace| workspace.chat(&child.parent_task_id).ok().flatten())
+                .and_then(|parent| parent.config)
+                .map(|config| config.effective_permission_mode)
+                .unwrap_or(child.permission_ceiling);
+            let ceiling = std::cmp::min(child.permission_ceiling, current_parent_ceiling);
+            request.parent_permission_ceiling = Some(
+                request
+                    .parent_permission_ceiling
+                    .map_or(ceiling, |requested| std::cmp::min(requested, ceiling)),
+            );
+        }
         // Side conversations preserve even a legacy stricter sandbox. The
         // ordinary resolver intentionally derives sandbox from product mode;
         // carrying a parent's ReadOnly value through that resolver would
@@ -3026,7 +3137,8 @@ impl SessionsEngine {
             .side_chat_lookup
             .get()
             .filter(|lookup| lookup(chat_id))
-            .map(|_| request.sandbox);
+            .map(|_| request.sandbox)
+            .or_else(|| child.as_ref().and_then(|child| child.sandbox_ceiling));
         if side_sandbox == Some(SandboxLevel::ReadOnly) {
             if !matches!(harness_id, HarnessId::Codex | HarnessId::Mock) {
                 return Err(EngineError::Other(
@@ -3363,7 +3475,10 @@ impl SessionsEngine {
                         let chat_id = chat_id.clone();
                         let run_id = run_id.clone();
                         Box::pin(async move {
-                            let result = if invocation.name == "send_message_to_thread" {
+                            let result = if matches!(
+                                invocation.name.as_str(),
+                                "send_message_to_thread" | "create_thread"
+                            ) {
                                 sessions
                                     .invoke_approved_luna_send(
                                         &chat_id, &run_id, &contract, invocation, &cancel, backend,
@@ -11963,6 +12078,7 @@ mod tests {
                 durable_queue: false,
                 approved_queue: false,
                 event_wait: false,
+                child_creation: false,
             }
         }
 

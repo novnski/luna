@@ -129,6 +129,28 @@ impl Shell {
         from_activity: bool,
         cx: &mut Context<Self>,
     ) {
+        let mut cursor = Some(chat_id.clone());
+        let mut seen = std::collections::HashSet::new();
+        while let Some(id) = cursor {
+            if !seen.insert(id.clone()) {
+                break;
+            }
+            self.settings
+                .collapsed_child_chats
+                .retain(|value| value != &id);
+            cursor = self
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .find(|chat| chat.id == id)
+                .and_then(|chat| {
+                    chat.child_thread
+                        .as_ref()
+                        .map(|child| child.parent_task_id.clone())
+                });
+        }
+        self.schedule_save(cx);
         self.dismiss_command_palette(cx);
         self.route = Route::Chat;
         self.focus_composer(cx);

@@ -14,6 +14,8 @@ use gpui::{FocusHandle, Window};
 use luna_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing, Space};
 
 struct ActiveChatRow {
+    depth: usize,
+    descendants: Vec<String>,
     status: ChatIndicator,
     chat: luna_proto::Chat,
     can_settle: bool,
@@ -21,6 +23,174 @@ struct ActiveChatRow {
     branch: Option<String>,
     change_request: Option<luna_proto::ChangeRequestSummary>,
     group: Option<(String, String)>,
+}
+
+/// One tree projection shared by rendering and keyboard navigation. Filtering
+/// or pinning that excludes a parent promotes its child to a reachable root.
+struct ChildVisibleRow {
+    id: String,
+    depth: usize,
+    descendants: Vec<String>,
+}
+fn child_visible_tree(
+    chats: &[luna_proto::Chat],
+    collapsed: &[String],
+    selected: Option<&str>,
+) -> Vec<ChildVisibleRow> {
+    use std::collections::{HashMap, HashSet};
+    let rows: HashMap<&str, &luna_proto::Chat> =
+        chats.iter().map(|chat| (chat.id.as_str(), chat)).collect();
+    let parent = |chat: &luna_proto::Chat| -> Option<String> {
+        let id = &chat.child_thread.as_ref()?.parent_task_id;
+        let root = rows.get(id.as_str())?;
+        (root.id != chat.id
+            && root.device_id == chat.device_id
+            && root.space_id == chat.space_id
+            && root.pinned_order.is_some() == chat.pinned_order.is_some())
+        .then(|| id.clone())
+    };
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for chat in chats {
+        if let Some(parent) = parent(chat) {
+            children.entry(parent).or_default().push(chat.id.clone());
+        }
+    }
+    let mut revealed = HashSet::new();
+    let mut cursor = selected.and_then(|id| rows.get(id).and_then(|chat| parent(chat)));
+    while let Some(id) = cursor {
+        if !revealed.insert(id.clone()) {
+            break;
+        }
+        cursor = rows.get(id.as_str()).and_then(|chat| parent(chat));
+    }
+    fn descendants(
+        id: &str,
+        children: &HashMap<String, Vec<String>>,
+        visited: &mut HashSet<String>,
+        output: &mut Vec<String>,
+    ) {
+        let mut pending = children.get(id).cloned().unwrap_or_default();
+        while let Some(child) = pending.pop() {
+            if visited.insert(child.clone()) {
+                pending.extend(children.get(&child).into_iter().flatten().cloned());
+                output.push(child);
+            }
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn visit(
+        id: &str,
+        depth: usize,
+        children: &HashMap<String, Vec<String>>,
+        collapsed: &[String],
+        revealed: &HashSet<String>,
+        visited: &mut HashSet<String>,
+        output: &mut Vec<ChildVisibleRow>,
+    ) {
+        if depth > 32 || !visited.insert(id.into()) {
+            return;
+        }
+        let mut all = Vec::new();
+        descendants(id, children, &mut HashSet::from([id.into()]), &mut all);
+        output.push(ChildVisibleRow {
+            id: id.into(),
+            depth,
+            descendants: all,
+        });
+        if collapsed.iter().any(|item| item == id) && !revealed.contains(id) {
+            let mut hidden = Vec::new();
+            descendants(id, children, visited, &mut hidden);
+            return;
+        }
+        for child in children.get(id).into_iter().flatten() {
+            visit(
+                child,
+                depth + 1,
+                children,
+                collapsed,
+                revealed,
+                visited,
+                output,
+            );
+        }
+    }
+    let mut output = Vec::new();
+    let mut visited = HashSet::new();
+    for chat in chats.iter().filter(|chat| parent(chat).is_none()) {
+        visit(
+            &chat.id,
+            0,
+            &children,
+            collapsed,
+            &revealed,
+            &mut visited,
+            &mut output,
+        );
+    }
+    // Malformed or cyclic imported lineage must never hide a row forever.
+    for chat in chats {
+        visit(
+            &chat.id,
+            0,
+            &children,
+            collapsed,
+            &revealed,
+            &mut visited,
+            &mut output,
+        );
+    }
+    output
+}
+
+/// Pagination selects families. Keep their available ancestors/descendants
+/// together without resurrecting archived rows or crossing the filter/pin scope.
+fn include_child_families<'a>(
+    mut selected: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    available: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
+    let mut ids: std::collections::HashSet<String> =
+        selected.iter().map(|(_, chat)| chat.id.clone()).collect();
+    loop {
+        let mut added = false;
+        for row in &available {
+            if ids.contains(&row.1.id) {
+                continue;
+            }
+            let related = selected.iter().any(|(_, chat)| {
+                chat.device_id == row.1.device_id
+                    && chat.space_id == row.1.space_id
+                    && chat.pinned_order.is_some() == row.1.pinned_order.is_some()
+                    && (chat
+                        .child_thread
+                        .as_ref()
+                        .is_some_and(|child| child.parent_task_id == row.1.id)
+                        || row
+                            .1
+                            .child_thread
+                            .as_ref()
+                            .is_some_and(|child| child.parent_task_id == chat.id))
+            });
+            if related {
+                ids.insert(row.1.id.clone());
+                selected.push(*row);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    selected
+}
+
+fn child_indicator_priority(status: ChatIndicator) -> u8 {
+    match status {
+        ChatIndicator::AwaitingApproval | ChatIndicator::AwaitingInput => 5,
+        ChatIndicator::Errored => 4,
+        ChatIndicator::Working => 3,
+        ChatIndicator::Completed => 2,
+        ChatIndicator::Idle => 1,
+    }
 }
 
 fn sidebar_thread_tooltip(
@@ -1475,7 +1645,8 @@ impl Shell {
             chats.sort_by(|left, right| {
                 compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
             });
-            active_page(
+            let available = chats.clone();
+            let selected = active_page(
                 chats,
                 state.selected_chat.as_deref(),
                 now,
@@ -1484,16 +1655,31 @@ impl Shell {
                 &self.pending_task_actions,
                 self.active_shown,
             )
-            .0
-            .into_iter()
-            .map(|(_, chat)| chat.clone())
-            .collect()
+            .0;
+            include_child_families(selected, available)
+                .into_iter()
+                .map(|(_, chat)| chat.clone())
+                .collect()
         };
         if self.activity.view_active {
-            return chats.into_iter().map(|chat| chat.id).collect();
+            return child_visible_tree(
+                &chats,
+                &self.settings.collapsed_child_chats,
+                state.selected_chat.as_deref(),
+            )
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
         }
         if self.settings.sidebar_organization != SidebarOrganization::ByDevice {
-            return chats.into_iter().map(|chat| chat.id).collect();
+            return child_visible_tree(
+                &chats,
+                &self.settings.collapsed_child_chats,
+                state.selected_chat.as_deref(),
+            )
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
         }
         let pinned_len = chats
             .iter()
@@ -1517,7 +1703,18 @@ impl Shell {
                 .flat_map(|(_, rows)| rows)
                 .map(|chat| chat.id),
         );
-        ordered
+        let chats: Vec<_> = ordered
+            .iter()
+            .filter_map(|id| state.chats.iter().find(|chat| &chat.id == id).cloned())
+            .collect();
+        child_visible_tree(
+            &chats,
+            &self.settings.collapsed_child_chats,
+            state.selected_chat.as_deref(),
+        )
+        .into_iter()
+        .map(|row| row.id)
+        .collect()
     }
 
     /// Normal sidebar: every session (idle included) under the saved project
@@ -1551,7 +1748,8 @@ impl Shell {
                 chats.sort_by(|left, right| {
                     compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
                 });
-                active_page(
+                let available = chats.clone();
+                let (selected, hidden) = active_page(
                     chats,
                     state.selected_chat.as_deref(),
                     now,
@@ -1559,7 +1757,8 @@ impl Shell {
                     &settlement_task_keys,
                     &self.pending_task_actions,
                     self.active_shown,
-                )
+                );
+                (include_child_families(selected, available), hidden)
             };
             self.sidebar_hidden_active_count = hidden_count;
             chats
@@ -1609,6 +1808,8 @@ impl Shell {
                         }
                     };
                     ActiveChatRow {
+                        depth: 0,
+                        descendants: Vec::new(),
                         status,
                         chat: chat.clone(),
                         can_settle,
@@ -1630,6 +1831,27 @@ impl Shell {
                 row.change_request = None;
             }
         }
+
+        let hierarchy_chats: Vec<_> = rows.iter().map(|row| row.chat.clone()).collect();
+        let hierarchy = child_visible_tree(
+            &hierarchy_chats,
+            &self.settings.collapsed_child_chats,
+            self.state.read(cx).selected_chat.as_deref(),
+        );
+        let mut mapped: std::collections::HashMap<String, ActiveChatRow> = rows
+            .into_iter()
+            .map(|row| (row.chat.id.clone(), row))
+            .collect();
+        rows = hierarchy
+            .into_iter()
+            .filter_map(|node| {
+                mapped.remove(&node.id).map(|mut row| {
+                    row.depth = node.depth;
+                    row.descendants = node.descendants;
+                    row
+                })
+            })
+            .collect();
 
         let mut groups: Vec<(Option<(String, String)>, Vec<ActiveChatRow>)> = Vec::new();
         for row in rows {
@@ -1673,7 +1895,9 @@ impl Shell {
             let mut rendered_rows = Vec::with_capacity(rows.len());
             for row in rows {
                 let ActiveChatRow {
-                    status,
+                    depth,
+                    descendants,
+                    mut status,
                     chat,
                     can_settle,
                     folder,
@@ -1681,6 +1905,21 @@ impl Shell {
                     change_request,
                     group: _,
                 } = row;
+                let collapsed = self.settings.collapsed_child_chats.contains(&chat.id)
+                    && !descendants.iter().any(|id| selected.as_ref() == Some(id));
+                if collapsed {
+                    let state = self.state.read(cx);
+                    for id in &descendants {
+                        if let Some(child) = state.chats.iter().find(|chat| &chat.id == id) {
+                            let indicator = state.display_status_for(child, now);
+                            if child_indicator_priority(indicator)
+                                > child_indicator_priority(status)
+                            {
+                                status = indicator;
+                            }
+                        }
+                    }
+                }
                 let time_ago: SharedString =
                     format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now).into();
                 let is_selected = selected.as_deref() == Some(chat.id.as_str());
@@ -1738,6 +1977,51 @@ impl Shell {
                     theme,
                     cx,
                 );
+                let has_children = !descendants.is_empty();
+                let toggle_id = chat.id.clone();
+                let element = div()
+                    .flex()
+                    .items_center()
+                    .pl(px((depth.min(4) * 14) as f32))
+                    .when(has_children, |row| {
+                        row.child(
+                            div()
+                                .id(SharedString::from(format!("child-disclosure-{}", chat.id)))
+                                .role(gpui::Role::Button)
+                                .aria_label(if collapsed {
+                                    "Expand child chats"
+                                } else {
+                                    "Collapse child chats"
+                                })
+                                .w(px(18.0))
+                                .h(px(28.0))
+                                .flex_none()
+                                .cursor_pointer()
+                                .text_color(theme.text_muted)
+                                .child(if collapsed { "▸" } else { "▾" })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this.settings.collapsed_child_chats.contains(&toggle_id) {
+                                        this.settings
+                                            .collapsed_child_chats
+                                            .retain(|id| id != &toggle_id);
+                                    } else {
+                                        this.settings.collapsed_child_chats.push(toggle_id.clone());
+                                    }
+                                    this.schedule_save(cx);
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .child(div().flex_1().min_w_0().child(element))
+                    .when(has_children && collapsed, |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(format!("{} children", descendants.len())),
+                        )
+                    })
+                    .into_any_element();
                 rendered_rows.push((format!("c:{}", chat.id), height, element));
             }
 
@@ -3883,6 +4167,7 @@ mod tests {
 
     fn chat(id: &str) -> luna_proto::Chat {
         luna_proto::Chat {
+            child_thread: None,
             id: id.into(),
             device_id: "device".into(),
             title: None,
