@@ -8692,6 +8692,19 @@ impl RpcService for EngineRpc {
             }
             methods::EXECUTE_TASK_COMMAND => {
                 let command: TaskCommandParams = parse_params(params)?;
+                // Child lineage, outcomes and delivery marks are engine-owned.
+                // Clients use CreateChildThread; they never forge the outbox.
+                if matches!(
+                    command.intent,
+                    TaskCommandIntent::CreateChildChat { .. }
+                        | TaskCommandIntent::ChildOutcome { .. }
+                        | TaskCommandIntent::ChildOutcomeDelivered { .. }
+                ) {
+                    return Err(RpcError::Failed(
+                        "Child chat creation and outcomes are engine-owned; use CreateChildThread"
+                            .into(),
+                    ));
+                }
                 let receipt = self.execute_task_command(command, false).await?;
                 RpcReply::value(&receipt)
             }
