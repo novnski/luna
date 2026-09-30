@@ -1385,10 +1385,6 @@ impl TextProjection {
         Self::project(raw, false, &[])
     }
 
-    fn for_composer(raw: &str) -> Self {
-        Self::project(raw, true, &[])
-    }
-
     fn push_chip(
         &mut self,
         raw: Range<usize>,
