@@ -186,8 +186,20 @@ impl ComposerInput {
     /// starts with no anchors and no undo/redo: nothing selected for another
     /// draft, canvas or engine generation can be restored into this one.
     pub(super) fn bind_native_owner(&mut self, owner: NativeEditorOwner) -> bool {
-        if self.native_owner.as_ref() == Some(&owner) {
-            return false;
+        match &self.native_owner {
+            Some(current) if *current == owner => return false,
+            None => {
+                // First binding of this editor. Anchors only exist under an
+                // owner, so earlier history is plain text of this same
+                // document: adopt it rather than dropping the first Undo.
+                for snapshot in self.undo_stack.iter_mut().chain(&mut self.redo_stack) {
+                    snapshot.native_owner = Some(owner.clone());
+                }
+                self.native_owner = Some(owner);
+                self.native_spans.clear();
+                return true;
+            }
+            Some(_) => {}
         }
         self.native_owner = Some(owner);
         self.clear_native_provenance();
@@ -556,9 +568,15 @@ impl Composer {
                     .collect()
             })
             .unwrap_or_default();
-        let count = self.mention_item_count();
-        if self.mention.active.is_none_or(|active| active >= count) {
-            self.mention.active = (count > 0).then_some(0);
+        // Auto-select the first row only. Retry is reached explicitly (arrows,
+        // Tab, pointer or AT) so Enter never retries when no row exists.
+        let rows = self.mention.results.len() + self.mention.native_results.len();
+        if self
+            .mention
+            .active
+            .is_none_or(|active| active >= self.mention_item_count())
+        {
+            self.mention.active = (rows > 0).then_some(0);
         }
     }
 
