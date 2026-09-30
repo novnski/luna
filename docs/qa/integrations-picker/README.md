@@ -4,6 +4,48 @@ The picker extends `@` file completion with distinct Plugin, App and Skill rows.
 Selected native identities live in `inputItems`; raw links are editor projections.
 A pasted link alone never grants a native selection. Names can collide; IDs cannot.
 
+## Editor provenance contract
+
+- A selected identity is an anchored byte span in the composer editor, bound to
+  an owner: engine generation plus the actual draft ID (canvas UUID or task ID,
+  never the empty canvas key). `inputItems` mirrors those anchors on every edit.
+- Edits before or after an anchor shift it; any edit touching it removes it.
+  Undo/Redo snapshots carry anchors, so only a real Undo restores an identity.
+  Paste, typing, IME, programmatic `set_text`, prompt history and result
+  insertion never create one, even for a byte-identical link.
+- A new owner (another task, a new canvas UUID, an engine/profile change)
+  starts without anchors or undo history. Navigating back to a byte-identical
+  draft returns its exact anchors; otherwise its trusted typed envelope is
+  hydrated.
+- Trusted durable restores (draft load, stash, queue edit enter/exit, failed
+  send or rejection recovery) call `Composer::restore_native_input_envelope`
+  or, after setting text and `input_items[current_key]`,
+  `Composer::hydrate_native_input_envelope`. Engine/profile resets call
+  `Composer::reset_native_picker_owner`.
+- Popup rows are `ListBoxOption`s named by kind, name and (for duplicates) ID,
+  described by exact identity and availability. Stale, loading or
+  unavailable rows expose no Click action and report Disabled. Retry is a
+  focusable tab-stop `Button` (Enter/Space when focused) and the last item in
+  the popup's arrow-key order; it is never auto-selected.
+
+## Headless GPUI fixture
+
+`crates/ui/examples/integrations-picker-fixture.rs` drives the production
+composer, editor, popup, key bindings and AccessKit tree with a synthetic
+catalog in a hidden window and temporary UI profile. It starts no engine or
+provider and never touches LUNA Dev or its data directory.
+
+```sh
+scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture --example integrations-picker-fixture
+target/debug/examples/integrations-picker-fixture /absolute/preserved/evidence/integrations-picker/fixture
+```
+
+It writes `editor-composer.json` (per-step text, anchors, `inputItems`, undo
+depth, popup semantics and AccessKit trees), `editor-composer.png`,
+`popup-ready.png`, `popup-stale-retry.png` and `integrations-picker.pass`, or
+`failure.txt` with a non-zero exit. It proves editor provenance and popup
+semantics only, not a real catalog, persistence or dispatch.
+
 ## Failure cases and artifact requirements
 
 Verify disabled/uninstalled/admin-blocked plugins, non-callable apps, disabled
@@ -17,8 +59,8 @@ actual UI/draft/dispatch are separate required proof.
 ## Coordinator checks
 
 Run these only from the coordinator-owned validation checkout after merging
-native-inputs and integrations-picker. The worker intentionally cannot compile
-this branch alone: native-inputs owns `ComposerInput` and the composer map.
+native-inputs and integrations-picker. This branch cannot compile alone:
+native-inputs owns `luna_proto::ComposerInput` and the composer map.
 
 ```sh
 scripts/cargo.sh check --locked -p luna-harness -p luna-engine -p luna-ui
