@@ -66,6 +66,10 @@ name = "session-history-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "chat-mermaid-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "startup-fixture"
 required-features = ["appshots-fixture"]
 
