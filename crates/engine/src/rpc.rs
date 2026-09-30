@@ -1141,6 +1141,7 @@ mod prompt_stash;
 mod side_chats;
 
 pub struct EngineRpc {
+    composer_catalog: std::sync::Mutex<crate::composer_catalog::CatalogCache>,
     github_pr: Option<crate::source_control::pull_requests::GitHubPullRequests>,
     side_chats: Option<crate::side_chats::SideChats>,
     backup_control: Option<BackupControl>,
@@ -1446,6 +1447,9 @@ impl EngineRpc {
             capabilities: luna_proto::capabilities::current(),
         };
         let rpc = Self {
+            composer_catalog: std::sync::Mutex::new(
+                crate::composer_catalog::CatalogCache::default(),
+            ),
             github_pr: None,
             side_chats: None,
             backup_control: None,
@@ -6539,6 +6543,7 @@ fn forwardable(method: &str) -> bool {
             | methods::SET_HARNESS_ENABLED
             | methods::LIST_MODELS
             | methods::LIST_COMMANDS
+            | methods::LIST_COMPOSER_CATALOG
             | methods::QUEUE_COMMAND
             | methods::EXECUTE_TASK_COMMAND
             | methods::GET_TASK_COMMAND_RECEIPT
@@ -8889,6 +8894,167 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&models)
+            }
+            methods::LIST_COMPOSER_CATALOG => {
+                let p: luna_proto::ComposerCatalogRequest = parse_params(params)?;
+                let chat = p
+                    .chat_id
+                    .as_deref()
+                    .map(|id| self.workspace.chat(id))
+                    .transpose()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?
+                    .flatten();
+                if p.chat_id.is_some() && chat.is_none() {
+                    return Err(RpcError::BadParams("unknown catalog task".into()));
+                }
+                let requested_account = p.provider_account_id.as_deref().or_else(|| {
+                    chat.as_ref()
+                        .and_then(|chat| chat.config.as_ref())
+                        .and_then(|config| config.provider_account_id.as_deref())
+                });
+                if chat
+                    .as_ref()
+                    .and_then(|chat| chat.config.as_ref())
+                    .is_some_and(|config| config.harness != HarnessId::Codex)
+                {
+                    return Err(RpcError::BadParams(
+                        "native integrations require Codex".into(),
+                    ));
+                }
+                let account = self
+                    .agent_accounts
+                    .resolve_execution(HarnessId::Codex, requested_account)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let home = account
+                    .codex_home
+                    .as_deref()
+                    .ok_or_else(|| RpcError::Failed("Codex home is unavailable".into()))?;
+                let root = self
+                    .file_search_root(&FileSearchParams {
+                        query: String::new(),
+                        chat_id: p.chat_id.clone(),
+                        space_id: p.space_id.clone(),
+                        path: p.path.clone(),
+                    })
+                    .await?
+                    .canonicalize()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let thread = p
+                    .chat_id
+                    .as_deref()
+                    .and_then(|id| self.task_identity.view(id))
+                    .and_then(|view| view.current_binding)
+                    .filter(|binding| binding.provider_id == HarnessId::Codex)
+                    .map(|binding| binding.provider_task_id)
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| {
+                        chat.as_ref()
+                            .and_then(|chat| chat.harness_session_id.clone())
+                    });
+                let harness = self
+                    .registry
+                    .resolve(HarnessId::Codex)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let source = harness.composer_catalog_source();
+                let scope = crate::repos::hex(&sha2::Sha256::digest(
+                    format!(
+                        "{:?}",
+                        (
+                            &self.engine_info.device_id,
+                            &account.account_id,
+                            &account.auth_instance_id,
+                            home,
+                            &root,
+                            &thread,
+                            &source
+                        )
+                    )
+                    .as_bytes(),
+                ));
+                // Live thread policy can change without a global plugin notification.
+                // Query the loaded runtime each open; only threadless catalogs use TTL reuse.
+                if !p.refresh
+                    && thread.is_none()
+                    && let Some(catalog) = self
+                        .composer_catalog
+                        .lock()
+                        .map_err(|_| RpcError::Failed("catalog cache unavailable".into()))?
+                        .fresh(&scope)
+                {
+                    return RpcReply::value(&catalog);
+                }
+                let result = tokio::time::timeout(
+                    Duration::from_secs(12),
+                    harness.composer_catalog(
+                        &root,
+                        home,
+                        account.codex_file_auth,
+                        thread.as_deref(),
+                    ),
+                )
+                .await;
+                // Never publish a response after account or native executable identity changed.
+                if self
+                    .agent_accounts
+                    .resolve_execution(HarnessId::Codex, requested_account)
+                    .ok()
+                    .as_ref()
+                    != Some(&account)
+                    || source != harness.composer_catalog_source()
+                {
+                    return Err(RpcError::Failed(
+                        "Execution account or Codex changed during discovery; retry".into(),
+                    ));
+                }
+                let current_root = self
+                    .file_search_root(&FileSearchParams {
+                        query: String::new(),
+                        chat_id: p.chat_id.clone(),
+                        space_id: p.space_id.clone(),
+                        path: p.path.clone(),
+                    })
+                    .await?
+                    .canonicalize()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let current_chat = p
+                    .chat_id
+                    .as_deref()
+                    .map(|id| self.workspace.chat(id))
+                    .transpose()
+                    .map_err(|error| RpcError::Failed(error.to_string()))?
+                    .flatten();
+                let current_thread = p
+                    .chat_id
+                    .as_deref()
+                    .and_then(|id| self.task_identity.view(id))
+                    .and_then(|view| view.current_binding)
+                    .filter(|binding| binding.provider_id == HarnessId::Codex)
+                    .map(|binding| binding.provider_task_id)
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| {
+                        current_chat
+                            .as_ref()
+                            .and_then(|chat| chat.harness_session_id.clone())
+                    });
+                if current_root != root
+                    || current_thread != thread
+                    || (p.chat_id.is_some() && current_chat.is_none())
+                {
+                    return Err(RpcError::Failed(
+                        "Execution workspace or native thread changed during discovery; retry"
+                            .into(),
+                    ));
+                }
+                let catalog = match result {
+                    Ok(Ok(catalog)) => catalog,
+                    _ => crate::composer_catalog::unavailable(),
+                };
+                let catalog = self
+                    .composer_catalog
+                    .lock()
+                    .map_err(|_| RpcError::Failed("catalog cache unavailable".into()))?
+                    .update(scope, catalog);
+                RpcReply::value(&catalog)
             }
             methods::LIST_COMMANDS => {
                 // Same shape as ListModels: resolve the installed provider,

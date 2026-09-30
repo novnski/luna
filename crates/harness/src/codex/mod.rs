@@ -37,6 +37,7 @@
 //!   always ends with `Done { status: Interrupted }`.
 
 pub(crate) mod catalog;
+pub(crate) mod composer_catalog;
 pub mod native;
 mod normalize;
 mod subagents;
@@ -129,6 +130,7 @@ pub(super) fn apply_file_auth_override(cmd: &mut Command) {
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
 /// fake app server with [`CodexHarness::with_executable`].
 pub struct CodexHarness {
+    catalog_connections: composer_catalog::CatalogConnections,
     executable: Option<PathBuf>,
     /// Grace between `turn/interrupt` and SIGTERM.
     interrupt_grace: Duration,
@@ -146,6 +148,7 @@ impl Default for CodexHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             commands: tokio::sync::OnceCell::new(),
+            catalog_connections: composer_catalog::CatalogConnections::default(),
         }
     }
 }
@@ -728,8 +731,45 @@ impl Harness for CodexHarness {
         self.discover_models(None, false).await
     }
 
-    /// Skills from a short-lived `skills/list` probe (see
-    /// [`Self::discover_commands`]); cached on success.
+    async fn composer_catalog(
+        &self,
+        cwd: &std::path::Path,
+        home: &std::path::Path,
+        force_file_auth: bool,
+        thread_id: Option<&str>,
+    ) -> Result<luna_proto::ComposerCatalog, HarnessError> {
+        let cwd = cwd.canonicalize().map_err(HarnessError::Io)?;
+        if let Some(client) =
+            thread_id.and_then(|thread| self.catalog_connections.get(home, &cwd, thread))
+        {
+            return tokio::time::timeout(
+                Duration::from_secs(8),
+                composer_catalog::read(&client, &cwd, thread_id),
+            )
+            .await
+            .map_err(|_| HarnessError::Protocol("native thread catalog timed out".into()))?;
+        }
+        native::CodexNativeClient::new(home)
+            .with_executable(self.resolve_executable()?)
+            .for_execution_home(home, force_file_auth)
+            .read_composer_catalog(&cwd, thread_id)
+            .await
+    }
+
+    fn composer_catalog_source(&self) -> String {
+        let Ok(path) = self.resolve_executable() else {
+            return "unavailable".into();
+        };
+        let metadata = std::fs::metadata(&path).ok();
+        format!(
+            "{}:{:?}:{:?}",
+            path.display(),
+            metadata.as_ref().map(|m| m.len()),
+            metadata.and_then(|m| m.modified().ok())
+        )
+    }
+
+    /// Skills from a short-lived `skills/list` probe, cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         self.commands
             .get_or_try_init(|| self.discover_commands())
@@ -848,11 +888,13 @@ impl CodexHarness {
             apply_file_auth_override(&mut cmd);
         }
         cmd.arg("app-server");
-        if let Some(codex_home) = request
+        let catalog_home = request
             .model_options
             .remove(LUNA_CODEX_HOME_OPTION)
             .and_then(|value| value.as_str().map(std::path::PathBuf::from))
-        {
+            .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
+            .or_else(|| crate::executable::home_dir().map(|home| home.join(".codex")));
+        if let Some(codex_home) = &catalog_home {
             cmd.env("CODEX_HOME", codex_home);
         }
         request
@@ -898,6 +940,8 @@ impl CodexHarness {
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
             title_only,
+            catalog_home,
+            catalog_connections: self.catalog_connections.clone(),
             child,
             client,
             incoming,
@@ -922,6 +966,8 @@ impl CodexHarness {
 
 struct Session {
     title_only: bool,
+    catalog_home: Option<PathBuf>,
+    catalog_connections: composer_catalog::CatalogConnections,
     child: Child,
     client: RpcClient,
     incoming: mpsc::Receiver<Incoming>,
@@ -1064,6 +1110,8 @@ impl SessionLiveness<'_> {
 async fn run_session(session: Session) {
     let Session {
         title_only,
+        catalog_home,
+        catalog_connections,
         mut child,
         client,
         mut incoming,
@@ -1249,6 +1297,16 @@ async fn run_session(session: Session) {
                 .await?
         };
         let thread_id = thread["thread"]["id"].as_str().unwrap_or("").to_owned();
+        // Native thread/start and thread/resume report this policy beside `thread`.
+        // thread/read does not expose it; keep the provider-reported loaded state.
+        client.set_composer_policy(
+            &thread_id,
+            thread
+                .get("disabledPluginIds")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
         if !title_only
             && let Some(name) = request
                 .model_options
@@ -1303,6 +1361,17 @@ async fn run_session(session: Session) {
             return;
         }
     };
+
+    // Metadata requests reuse the exact loaded native runtime. The lease drops
+    // with this session and never keeps a child alive after adapter shutdown.
+    let catalog_cwd = std::path::Path::new(&request.cwd)
+        .canonicalize()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| request.cwd.clone());
+    let _catalog_lease = catalog_home
+        .as_deref()
+        .map(|home| catalog_connections.register(home, &catalog_cwd, &thread_id, client.clone()));
 
     let turn_params = |text: &str| -> Value {
         let mut p = serde_json::Map::new();

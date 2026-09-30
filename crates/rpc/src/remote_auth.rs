@@ -496,7 +496,8 @@ fn method_policy(method: &str) -> Option<Option<RemoteScope>> {
         | methods::ENGINE_READY
         | methods::LIST_HARNESSES
         | methods::LIST_MODELS
-        | methods::LIST_COMMANDS => Some(RemoteScope::EnvironmentRead),
+        | methods::LIST_COMMANDS
+        | methods::LIST_COMPOSER_CATALOG => Some(RemoteScope::EnvironmentRead),
         methods::GET_TASK_IDENTITY
         | methods::GET_RUNTIME_CONTRACT
         | methods::GET_TASK_COMMAND_RECEIPT

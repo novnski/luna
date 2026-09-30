@@ -104,6 +104,24 @@ pub struct CodexNativeClient {
 }
 
 impl CodexNativeClient {
+    /// Read installed plugins/apps/skills without starting or resuming a thread.
+    pub async fn read_composer_catalog(
+        &self,
+        cwd: &Path,
+        thread_id: Option<&str>,
+    ) -> Result<luna_proto::ComposerCatalog, HarnessError> {
+        let cwd = cwd.canonicalize().map_err(HarnessError::Io)?;
+        let mut connection = self.connect(cwd.to_str()).await?;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            super::composer_catalog::read(&connection.client, &cwd, thread_id),
+        )
+        .await
+        .map_err(|_| HarnessError::Protocol("composer discovery timed out".into()));
+        connection.close().await;
+        result?
+    }
+
     /// Read the provider's native catalog for one explicit workspace and home.
     /// No thread is started or resumed. The result never asserts attachment.
     pub async fn read_skill_catalog(

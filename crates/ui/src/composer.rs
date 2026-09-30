@@ -45,6 +45,8 @@ use crate::settings::{ComposerSendBehavior, platform_combo};
 use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
 
+mod integrations;
+
 // ---------------------------------------------------------------------------
 // Constants + pure decision logic
 // ---------------------------------------------------------------------------
@@ -1427,24 +1429,38 @@ impl TextProjection {
                 raw_at = end;
             }
         }
-        for (link, label) in links.into_iter().zip(labels) {
-            if link.range.start < raw_at {
+        let mut projected: Vec<_> = links
+            .into_iter()
+            .zip(labels)
+            .map(|(link, label)| {
+                let kind = if link.is_dir {
+                    ComposerChipKind::Folder
+                } else {
+                    ComposerChipKind::File
+                };
+                (link.range.clone(), label, kind, Some(link))
+            })
+            .collect();
+        projected.extend(integrations::native_links(raw).into_iter().map(|link| {
+            let (name, _) = integrations::identity(&link.item);
+            (link.range, name.to_owned(), ComposerChipKind::Skill, None)
+        }));
+        projected.sort_by_key(|(range, _, _, _)| range.start);
+        for (range, label, kind, file) in projected {
+            if range.start < raw_at {
                 continue;
             }
-            projection.display.push_str(&raw[raw_at..link.range.start]);
+            projection.display.push_str(&raw[raw_at..range.start]);
             let mut chip_label = String::with_capacity(label.len() + 1);
             chip_label.push(MENTION_PREFIX);
             for ch in label.chars() {
                 chip_label.push(if ch == ' ' { '\u{00A0}' } else { ch });
             }
-            let kind = if link.is_dir {
-                ComposerChipKind::Folder
-            } else {
-                ComposerChipKind::File
-            };
-            let display = projection.push_chip(link.range.clone(), &chip_label, kind, with_icons);
-            projection.mentions.push((link.clone(), display));
-            raw_at = link.range.end;
+            let display = projection.push_chip(range.clone(), &chip_label, kind, with_icons);
+            if let Some(link) = file {
+                projection.mentions.push((link, display));
+            }
+            raw_at = range.end;
         }
         projection.display.push_str(&raw[raw_at..]);
         projection
@@ -4386,6 +4402,7 @@ struct SlashState {
 
 #[derive(Debug, Clone, Default)]
 struct FileMentionState {
+    native_results: Vec<luna_proto::ComposerCatalogEntry>,
     token: Option<MentionToken>,
     results: Vec<FileSearchMatch>,
     active: Option<usize>,
@@ -4503,6 +4520,7 @@ pub struct Composer {
     picker_task: Option<Task<()>>,
     mention_task: Option<Task<()>>,
     mention: FileMentionState,
+    integrations: integrations::IntegrationPicker,
     slash_task: Option<Task<()>>,
     slash: SlashState,
     /// Advertised commands per harness (one `ListCommands` per harness per
@@ -4784,6 +4802,7 @@ impl Composer {
                     this.mark_draft_dirty(cx);
                 }
             }
+            this.ensure_native_catalog(true, cx);
             cx.notify();
         });
         let picker_focus = cx.subscribe(
@@ -4908,6 +4927,7 @@ impl Composer {
             picker_task: None,
             mention_task: None,
             mention: FileMentionState::default(),
+            integrations: integrations::IntegrationPicker::default(),
             slash_task: None,
             slash: SlashState::default(),
             slash_cache: HashMap::new(),
@@ -8098,6 +8118,7 @@ impl Composer {
     }
 
     fn on_input_edited(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_native_selections(cx);
         let (text, cursor) = {
             let input = self.input.read(cx);
             (input.text().to_string(), input.cursor_offset())
@@ -8121,6 +8142,7 @@ impl Composer {
         }
         self.mention.dismissed = None;
         if token == self.mention.token {
+            self.ensure_native_catalog(false, cx);
             self.sync_mention_controls(cx);
             cx.notify();
             return;
@@ -8140,6 +8162,7 @@ impl Composer {
         }
         self.mention.error = None;
         self.mention.loading = token.is_some();
+        self.ensure_native_catalog(!refining, cx);
         self.sync_mention_controls(cx);
         let Some(token) = token else {
             cx.notify();
@@ -8227,6 +8250,7 @@ impl Composer {
                         composer.mention.error = Some(mention_error_message(&err));
                     }
                 }
+                composer.update_native_rows();
                 composer.sync_mention_controls(cx);
                 cx.notify();
             })
@@ -8236,8 +8260,11 @@ impl Composer {
     }
 
     fn move_mention(&mut self, delta: isize, cx: &mut Context<Self>) {
-        self.mention.active =
-            crate::popover::menu_step(self.mention.active, self.mention.results.len(), delta);
+        self.mention.active = crate::popover::menu_step(
+            self.mention.active,
+            self.mention.results.len() + self.mention.native_results.len(),
+            delta,
+        );
         if let Some(active) = self.mention.active {
             // Keep the keyboard cursor visible in the scrolled row stack.
             self.mention_scroll.scroll_to_item(active);
@@ -8259,6 +8286,14 @@ impl Composer {
     }
 
     fn accept_mention(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self
+            .mention
+            .active
+            .filter(|index| *index >= self.mention.results.len())
+        {
+            self.accept_native_mention(index - self.mention.results.len(), cx);
+            return;
+        }
         let Some(token) = self.mention.token.clone() else {
             return;
         };
@@ -8282,6 +8317,7 @@ impl Composer {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
+        self.ensure_native_catalog(false, cx);
         let theme = &theme.for_popup();
         let token = self.mention.token.as_ref()?;
         let mut card = crate::popover::popover_card(theme)
@@ -8297,7 +8333,36 @@ impl Composer {
                 }),
             )
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_mention(cx)));
-        if self.mention.loading && self.mention.results.is_empty() {
+        if let Some(notice) = self.native_catalog_notice() {
+            card = card.child(
+                div()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text_muted)
+                    .child(notice),
+            );
+        }
+        if self.integrations.loading
+            || self.integrations.error.is_some()
+            || self.native_catalog_notice().is_some()
+        {
+            card = card.child(
+                div()
+                    .id("retry-native-catalog")
+                    .px(px(12.0))
+                    .py(px(4.0))
+                    .cursor_pointer()
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.accent)
+                    .child("Retry integrations")
+                    .on_click(cx.listener(|this, _, _, cx| this.retry_native_catalog(cx))),
+            );
+        }
+        if self.mention.loading
+            && self.mention.results.is_empty()
+            && self.mention.native_results.is_empty()
+        {
             card = card.child(crate::popover::skeleton_rows(
                 "file-mention-loading",
                 theme,
@@ -8305,7 +8370,9 @@ impl Composer {
                 cx.entity_id(),
                 cx,
             ));
-        } else if let Some(error) = self.mention.error.clone() {
+        } else if self.mention.native_results.is_empty()
+            && let Some(error) = self.mention.error.clone()
+        {
             card = card.child(
                 div()
                     .px(px(12.0))
@@ -8314,7 +8381,7 @@ impl Composer {
                     .text_color(theme.danger_muted)
                     .child(error),
             );
-        } else if self.mention.results.is_empty() {
+        } else if self.mention.results.is_empty() && self.mention.native_results.is_empty() {
             card = card.child(
                 div()
                     .px(px(12.0))
@@ -8389,6 +8456,61 @@ impl Composer {
             }
             // Overflowing rows wheel-scroll inside a bounded viewport; the
             // floating rail mirrors the model-list scrollbar treatment.
+            let file_count = self.mention.results.len();
+            for (index, result) in self.mention.native_results.iter().enumerate() {
+                let ix = file_count + index;
+                let selected = self.mention.active == Some(ix);
+                rows.push(
+                    crate::popover::menu_row(
+                        theme,
+                        selected,
+                        format!("native-mention-result-{ix}"),
+                    )
+                    .id(("native-mention-result", ix))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.mention.active = Some(ix);
+                        this.accept_mention(cx);
+                    }))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                crate::icons::icon(crate::icons::MAGIC_WAND_3)
+                                    .size(px(14.0))
+                                    .text_color(theme.warning),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_color(theme.text)
+                                    .child(result.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
+                                    .child(integrations::kind_label(result.kind)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .pl(px(22.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text_muted)
+                            .child(
+                                result
+                                    .description
+                                    .clone()
+                                    .unwrap_or_else(|| result.id.clone()),
+                            ),
+                    )
+                    .into_any_element(),
+                );
+            }
             card = card.child(
                 div()
                     .id("mention-scroll-host")
@@ -9107,6 +9229,9 @@ impl Composer {
         follow_up_behavior: Option<luna_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_native_send(&text, follow_up_behavior, cx) {
+            return;
+        }
         if !self.require_project_for_new_session(cx) {
             return;
         }
