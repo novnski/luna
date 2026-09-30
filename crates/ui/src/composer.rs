@@ -8379,7 +8379,8 @@ impl Composer {
             )
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_mention(cx)));
         let file_count = self.mention.results.len();
-        let set_size = self.mention_item_count();
+        // Options only; Retry is a separate button after the listbox.
+        let set_size = file_count + self.mention.native_results.len();
         let retry_index = self.native_retry_index();
         if self.mention.loading
             && self.mention.results.is_empty()
