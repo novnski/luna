@@ -118,11 +118,15 @@ pub(crate) fn child_task_id(parent: &str, key: &str) -> String {
     uuid::Uuid::from_bytes(bytes).to_string()
 }
 
+/// Child briefs live in the synced task row, which must stay under the
+/// registry's per-op cap together with its title, checkout and settings.
+pub(crate) const MAX_CHILD_PROMPT_CHARS: usize = 8_000;
+
 pub(crate) fn validate_child_request(
     request: &luna_proto::CreateChildThreadRequest,
 ) -> Result<(), CrossTaskError> {
     if request.prompt.trim().is_empty()
-        || request.prompt.chars().count() > 16_000
+        || request.prompt.chars().count() > MAX_CHILD_PROMPT_CHARS
         || !valid_key(&request.idempotency_key)
         || request
             .title
@@ -1049,7 +1053,7 @@ fn tool_description(name: &str) -> &'static str {
 fn input_schema(name: &str) -> serde_json::Value {
     match name {
         "create_thread" => serde_json::json!({"type":"object","properties":{
-            "prompt":{"type":"string","minLength":1,"maxLength":16000},
+            "prompt":{"type":"string","minLength":1,"maxLength":8000},
             "idempotencyKey":{"type":"string","minLength":1,"maxLength":128},
             "title":{"type":"string","maxLength":160},"model":{"type":"string","maxLength":512},
             "reasoning":{"type":"string","enum":["minimal","low","medium","high","xhigh","max","ultra","ultracode","ultrathink"]},

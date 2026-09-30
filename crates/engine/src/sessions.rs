@@ -1406,7 +1406,7 @@ impl SessionsEngine {
             || request.message.trim().is_empty()
             || request.message.chars().count()
                 > if child_request.is_some() {
-                    16_000
+                    crate::cross_task_tools::MAX_CHILD_PROMPT_CHARS
                 } else {
                     crate::cross_task_tools::MAX_APPROVED_MESSAGE_CHARS
                 }
