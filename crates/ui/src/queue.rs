@@ -143,7 +143,9 @@ impl QueuePrimaryBlock {
             Self::ReviewRequired => "Review this message before sending",
             Self::DeliveryPending => "A delivery is already in progress",
             Self::Claimed => "This message is already being delivered",
-            Self::SteeringAccepted => "Waiting for provider incorporation",
+            Self::SteeringAccepted => {
+                "Accepted and pending native recording; model receipt is unconfirmed"
+            }
             Self::DeliveryUnknown => "Delivery outcome is unknown",
         }
     }
@@ -591,7 +593,7 @@ impl Composer {
             }
             (QueueMessageStatus::SteeringAccepted { .. }, _, _) if !being_edited => {
                 SharedString::from(format!(
-                    "Accepted for steering · {}",
+                    "Steer accepted, pending · {}",
                     one_line(&queue_visible_text(&item.text, &item.attachments))
                 ))
             }
@@ -2363,7 +2365,7 @@ mod tests {
             ),
             (
                 QueuePrimaryBlock::SteeringAccepted,
-                "Waiting for provider incorporation",
+                "Accepted and pending native recording; model receipt is unconfirmed",
             ),
             (
                 QueuePrimaryBlock::DeliveryUnknown,

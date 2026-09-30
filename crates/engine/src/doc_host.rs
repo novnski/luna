@@ -4159,11 +4159,7 @@ impl DocHost {
             .into_iter()
             .find(|item| item.id == message_id)
             .and_then(|item| match item.status {
-                QueueMessageStatus::Claimed {
-                    command_id,
-                    mode: QueueClaimMode::SteerNow,
-                    ..
-                }
+                QueueMessageStatus::Claimed { command_id, .. }
                 | QueueMessageStatus::SteeringAccepted { command_id, .. } => Some(command_id),
                 _ => None,
             })
@@ -4173,7 +4169,7 @@ impl DocHost {
         self.mark_queue_task_unknown(
             &handle,
             &command_id,
-            "the provider ended before native steer acceptance could be confirmed",
+            "the provider ended before native steer recording could be confirmed",
             |doc| {
                 doc.mark_queued_claim_unknown(message_id, &command_id, now_ms())?;
                 Ok(())
@@ -5298,21 +5294,23 @@ impl DocHost {
                 Ok(QueueDispatchOutcome::Started)
             }
             QueueProviderOutcome::Unknown => {
-                let (row, _) = self.mark_queue_task_unknown(
-                    &handle,
-                    command_id,
+                let (row, receipt) = self.mark_queue_task_unknown(
+                    &handle, command_id,
                     "native steer acceptance is unknown; the queued row will not be replayed automatically",
                     |doc| {
-                        if !doc.mark_queued_claim_unknown(id, command_id, now_ms())? {
-                            return Err(EngineError::Other("queued steer claim vanished".into()));
-                        }
-                        doc.read_queue()?
-                            .into_iter()
-                            .find(|item| item.id == id)
-                            .ok_or_else(|| EngineError::Other("queued steer row vanished".into()))
+                        doc.mark_queued_claim_unknown(id, command_id, now_ms())?;
+                        Ok(doc.read_queue()?.into_iter().find(|item| item.id == id))
                     },
                 )?;
-                Ok(QueueDispatchOutcome::Unknown(row))
+                match row {
+                    Some(row) => Ok(QueueDispatchOutcome::Unknown(row)),
+                    None if receipt.status == CommandReceiptStatus::Applied => {
+                        Ok(QueueDispatchOutcome::Started)
+                    }
+                    None => Err(EngineError::Other(
+                        "queued steer claim vanished without native confirmation".into(),
+                    )),
+                }
             }
             QueueProviderOutcome::Rejected(reason) => {
                 let row = self.reject_queue_task(&handle, id, command_id, reason)?;

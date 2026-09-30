@@ -58,6 +58,19 @@ impl RpcRequestFailure {
 
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, RpcRequestFailure>>>>>;
 
+/// A bounded/cancelled caller stops waiting without retaining an unreachable
+/// reply sender for the lifetime of a persistent native connection.
+struct PendingRequest {
+    id: i64,
+    pending: Pending,
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.pending.lock().expect("pending lock").remove(&self.id);
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RpcClient {
     next_id: Arc<AtomicI64>,
@@ -102,6 +115,10 @@ impl RpcClient {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         self.pending.lock().expect("pending lock").insert(id, tx);
+        let _pending_request = PendingRequest {
+            id,
+            pending: self.pending.clone(),
+        };
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if self.writer.send(line.to_string()).is_err() {
             self.pending.lock().expect("pending lock").remove(&id);

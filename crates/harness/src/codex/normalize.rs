@@ -1373,6 +1373,7 @@ impl ChildStream {
                 // userMessage. Reopen the existing document without inventing
                 // a user prompt or attributing an activity id as a new spawn.
                 return vec![AgentEvent::Steered {
+                    user_message_id: None,
                     assistant_message_id: None,
                     next_assistant_message_id: None,
                 }];

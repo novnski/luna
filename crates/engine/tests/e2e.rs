@@ -2210,6 +2210,7 @@ async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
                     .await;
                 let _ = tx
                     .send(Ok(AgentEvent::Steered {
+                        user_message_id: None,
                         assistant_message_id: None,
                         next_assistant_message_id: None,
                     }))
@@ -3270,6 +3271,7 @@ async fn stale_tool_echo_after_steer_boundary_does_not_split_text() {
             },
         },
         AgentEvent::Steered {
+            user_message_id: None,
             assistant_message_id: Some("a-1".into()),
             next_assistant_message_id: Some("a-2".into()),
         },
@@ -3414,6 +3416,7 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
                 if let Some(_msg) = controls.steering.recv().await {
                     let _ = tx
                         .send(Ok(AgentEvent::Steered {
+                            user_message_id: None,
                             assistant_message_id: None,
                             next_assistant_message_id: None,
                         }))
@@ -3679,6 +3682,7 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
             continue;
         }
         tx.send(AgentEvent::Steered {
+            user_message_id: None,
             assistant_message_id: Some("a-1".into()),
             next_assistant_message_id: Some("a-steered".into()),
         })

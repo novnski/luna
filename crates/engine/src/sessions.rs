@@ -488,7 +488,12 @@ impl RuntimeConfig {
             provider_account_id: request.provider_account_id.clone(),
             model: request.model.clone(),
             reasoning: request.reasoning,
-            model_options: request.model_options.clone(),
+            model_options: request
+                .model_options
+                .iter()
+                .filter(|(key, _)| key.as_str() != luna_harness::codex::LUNA_STEER_RECONCILE_OPTION)
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
             cwd: request.cwd.clone(),
             sandbox: request.sandbox,
             auto_approve: request.auto_approve,
@@ -861,8 +866,8 @@ impl RunHandle {
 }
 
 /// One accepted-but-unconfirmed steer. `delivery` decides whether run exit may
-/// re-dispatch it (ordinary warm route) or must preserve it as unknown
-/// (explicit native steer).
+/// re-dispatch it (legacy warm route) or must preserve it as unknown.
+/// Codex correlation IDs never authorize automatic replay.
 #[derive(Debug, Clone)]
 struct RoutedSteer {
     prompt: String,
@@ -3181,6 +3186,11 @@ impl SessionsEngine {
                     self.inner.note_message(chat_id, &request.prompt);
                     return Ok(run_id);
                 }
+                if harness_id == HarnessId::Codex {
+                    return Err(EngineError::Other(
+                        "Native steering delivery is unknown after runtime exit; reconcile provider history before retrying. Input was not replayed.".into(),
+                    ));
+                }
                 // The run died around the send. If its exit drain already
                 // claimed the entry, that re-dispatch owns the message —
                 // otherwise reclaim it and fall through to a fresh run.
@@ -3290,6 +3300,28 @@ impl SessionsEngine {
                 luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION.into(),
                 format!("[LUNA] {title}").into(),
             );
+        }
+        if harness_id == HarnessId::Codex && request.resume.is_some() {
+            let ids = handle
+                .doc()
+                .read_queue()?
+                .into_iter()
+                .filter(|row| {
+                    matches!(
+                        row.status,
+                        luna_doc::QueueMessageStatus::Claimed { .. }
+                            | luna_doc::QueueMessageStatus::SteeringAccepted { .. }
+                            | luna_doc::QueueMessageStatus::DeliveryUnknown { .. }
+                    )
+                })
+                .map(|row| row.id)
+                .collect::<Vec<_>>();
+            if !ids.is_empty() {
+                request.model_options.insert(
+                    luna_harness::codex::LUNA_STEER_RECONCILE_OPTION.into(),
+                    serde_json::json!(ids),
+                );
+            }
         }
         lock(&self.inner.last_requests).insert(chat_id.to_string(), request.clone());
 
@@ -3528,9 +3560,10 @@ impl SessionsEngine {
                     h.run_id.clone(),
                     h.steer_tx.clone(),
                     h.routed_steers.clone(),
+                    h.runtime_config.harness_id,
                 )
             });
-        let Some((run_id, steer_tx, ledger)) = target else {
+        let Some((run_id, steer_tx, ledger, harness_id)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
         let user_id = message_id.unwrap_or_else(new_id);
@@ -3551,12 +3584,10 @@ impl SessionsEngine {
         {
             // Serialize mailbox acceptance with confirmation and Done-time
             // inspection: a fast consumer must never outrun its ledger entry.
-            // Explicit native steering is intentionally single-flight. The
-            // native Codex/Claude wires expose no correlation id on echoed
-            // user content, so allowing a second pending row would let an
-            // identity-free boundary retire the wrong durable receipt.
+            // Codex confirms exact client IDs and can accept multiple pending
+            // inputs. Legacy identity-free adapters remain single-flight.
             let mut pending = lock(&ledger);
-            if !pending.is_empty() {
+            if harness_id != HarnessId::Codex && !pending.is_empty() {
                 return Ok(SteerOutcome::Busy);
             }
             if steer_tx.try_send(message).is_err() {
@@ -6840,9 +6871,18 @@ async fn drive_run(
         // self-continued turn starts a whole new agent round trip (seconds
         // at minimum, minutes in the incident). Inside the gate everything
         // non-boundary stays inert, exactly as before.
+        let historical_steer = harness_id == HarnessId::Codex
+            && matches!(
+                &event,
+                AgentEvent::Steered {
+                    user_message_id: Some(_),
+                    next_assistant_message_id: None,
+                    ..
+                }
+            );
         let turn_was_active = idle_since.is_none();
         const RESUME_GATE: std::time::Duration = std::time::Duration::from_secs(1);
-        if idle_since.is_some() {
+        if idle_since.is_some() && !historical_steer {
             let self_continued = idle_since
                 .is_some_and(|parked_at| parked_at.elapsed() >= RESUME_GATE)
                 && (matches!(
@@ -6971,11 +7011,52 @@ async fn drive_run(
 
         // A steer boundary splits the assistant entry exactly where the fold resets.
         if let AgentEvent::Steered {
+            user_message_id,
             next_assistant_message_id,
             ..
         } = &event
         {
-            if harness_id == HarnessId::Codex {
+            // Identity-bearing boundaries match the exact ledger entry. A late
+            // native record can recover a durable unknown claim after Done/restart.
+            let confirmed_steer = lock(&inner.runs)
+                .get(&chat_id)
+                .filter(|h| h.run_id == run_id)
+                .and_then(|h| {
+                    let mut pending = lock(&h.routed_steers);
+                    if let Some(id) = user_message_id {
+                        let position = pending.iter().position(|steer| &steer.message_id == id)?;
+                        if harness_id == HarnessId::Codex {
+                            pending.get(position).cloned()
+                        } else {
+                            pending.remove(position)
+                        }
+                    } else if harness_id != HarnessId::Codex {
+                        pending.pop_front()
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    let id = user_message_id.as_deref()?;
+                    let row = inner.doc_host()?.queued_message(&chat_id, id).ok()??;
+                    if !matches!(
+                        row.status,
+                        luna_doc::QueueMessageStatus::Claimed { .. }
+                            | luna_doc::QueueMessageStatus::SteeringAccepted { .. }
+                            | luna_doc::QueueMessageStatus::DeliveryUnknown { .. }
+                    ) {
+                        return None;
+                    }
+                    Some(RoutedSteer {
+                        prompt: row.text,
+                        message_id: row.id,
+                        delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                    })
+                });
+            if harness_id == HarnessId::Codex && confirmed_steer.is_none() {
+                continue;
+            }
+            if harness_id == HarnessId::Codex && !historical_steer {
                 inner.rearm_codex_checkpoint_after_done(
                     &chat_id,
                     &run_id,
@@ -6986,46 +7067,41 @@ async fn drive_run(
                 journal_failure = Some(error);
                 break SessionStatus::Errored;
             }
-            // A steer boundary means a real prompt owns the turn again — its
-            // Done will come; the short self-continued window stands down.
-            self_continued_turn = false;
-            if let Err(err) = finish_segment(
-                doc_ref,
-                writer.take(),
-                &entry_id,
-                &device_id,
-                segment_started,
-                &folded,
-                MessageStatus::Complete,
-            ) {
-                tracing::warn!(chat = %chat_id, error = %err, "segment finish failed");
+            if !historical_steer {
+                // A steer boundary means a real prompt owns the turn again — its
+                // Done will come; the short self-continued window stands down.
+                self_continued_turn = false;
+                if let Err(err) = finish_segment(
+                    doc_ref,
+                    writer.take(),
+                    &entry_id,
+                    &device_id,
+                    segment_started,
+                    &folded,
+                    MessageStatus::Complete,
+                ) {
+                    tracing::warn!(chat = %chat_id, error = %err, "segment finish failed");
+                }
+                inner.note_message(&chat_id, &folded_text(&folded));
+                folded.clear();
+                dirty = false;
+                entry_id = next_assistant_message_id.clone().unwrap_or_else(new_id);
+                segment_started = now_ms();
+                // The elapsed timer is per user message, not per child process: a
+                // steer boundary restarts it (matches the parked-resume path and
+                // the composer's optimistic overlay, which already reads 0:00).
+                inner.set_status(&chat_id, SessionStatus::Working, true);
             }
-            inner.note_message(&chat_id, &folded_text(&folded));
-            folded.clear();
-            dirty = false;
-            entry_id = next_assistant_message_id.clone().unwrap_or_else(new_id);
-            segment_started = now_ms();
-            // The elapsed timer is per user message, not per child process: a
-            // steer boundary restarts it (matches the parked-resume path and
-            // the composer's optimistic overlay, which already reads 0:00).
-            inner.set_status(&chat_id, SessionStatus::Working, true);
-            // The boundary confirms delivery of the oldest accepted steer —
-            // retire its at-least-once ledger entry.
-            let confirmed_steer = if let Some(h) = lock(&inner.runs)
-                .get(&chat_id)
-                .filter(|h| h.run_id == run_id)
-            {
-                lock(&h.routed_steers).pop_front()
-            } else {
-                None
-            };
+            // Native recording confirms this exact input in history, not that
+            // a model request has sampled it.
             if let Some(steer) = confirmed_steer
                 && let Some(host) = inner.doc_host()
             {
                 let turn_cwd = lock(&inner.last_requests)
                     .get(&chat_id)
                     .map(|request| request.cwd.clone());
-                if let Some(cwd) = turn_cwd.as_deref()
+                if !historical_steer
+                    && let Some(cwd) = turn_cwd.as_deref()
                     && let Some(checkpoints) = inner.git_checkpoints.get()
                 {
                     checkpoints.end(&chat_id, &run_id, "steered").await;
@@ -7055,7 +7131,7 @@ async fn drive_run(
                         }
                         continue;
                     }
-                    if let Some(cwd) = turn_cwd.as_deref() {
+                    if !historical_steer && let Some(cwd) = turn_cwd.as_deref() {
                         SessionsEngine {
                             inner: inner.clone(),
                         }
@@ -7076,7 +7152,17 @@ async fn drive_run(
                     binding.as_ref().map(|binding| binding.generation),
                 ) {
                     tracing::error!(chat = %chat_id, run = %run_id, %error,
-                        "steer acceptance receipt finalization failed");
+                        "steer recording receipt finalization failed");
+                } else if harness_id == HarnessId::Codex
+                    && host
+                        .queued_message(&chat_id, &steer.message_id)
+                        .is_ok_and(|row| row.is_none())
+                    && let Some(handle) = lock(&inner.runs)
+                        .get(&chat_id)
+                        .filter(|h| h.run_id == run_id)
+                {
+                    lock(&handle.routed_steers)
+                        .retain(|pending| pending.message_id != steer.message_id);
                 }
             }
             continue;
@@ -7468,7 +7554,17 @@ async fn drive_run(
             // EOF would leave its ledger entry blocking every later user turn.
             // Retire it now as unknown/no-replay. Ordinary warm routes retain
             // their legacy continuation/fallback semantics.
-            let terminal_explicit = inner.take_terminal_explicit_steers(&chat_id, &run_id);
+            let mut terminal_explicit = inner.take_terminal_explicit_steers(&chat_id, &run_id);
+            if harness_id == HarnessId::Codex
+                && let Some(handle) = lock(&inner.runs)
+                    .get(&chat_id)
+                    .filter(|h| h.run_id == run_id)
+            {
+                // Warm native mailbox delivery may also be unresolved when the
+                // old turn ends. Preserve its fallback ownership, but show the
+                // queue claim as unknown until exact evidence arrives.
+                terminal_explicit.extend(lock(&handle.routed_steers).iter().cloned());
+            }
             if let Some(host) = inner.doc_host() {
                 for steer in terminal_explicit {
                     if let Err(error) =
@@ -7570,9 +7666,10 @@ async fn drive_run(
         .unwrap_or_default();
     inner.remove_run(&chat_id, &run_id);
     inner.set_status_with_completion(&chat_id, final_status, false, final_completed_turn);
-    let (redispatch, explicit): (Vec<_>, Vec<_>) = orphans
-        .into_iter()
-        .partition(|steer| steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn);
+    let (redispatch, explicit): (Vec<_>, Vec<_>) = orphans.into_iter().partition(|steer| {
+        harness_id != HarnessId::Codex
+            && steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn
+    });
     if let Some(host) = inner.doc_host() {
         for steer in explicit {
             if let Err(error) = host.mark_steer_correlation_unknown(&chat_id, &steer.message_id) {
@@ -7685,6 +7782,7 @@ mod tests {
         }
         if tx
             .send(Ok(luna_proto::AgentEvent::Steered {
+                user_message_id: None,
                 assistant_message_id: None,
                 next_assistant_message_id: None,
             }))

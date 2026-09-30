@@ -95,13 +95,29 @@ async fn run_to_end(
     req: RunRequest,
     controls: RunControls,
 ) -> Vec<AgentEvent> {
+    let scenario = req.prompt.clone();
     let stream = harness.run(req, controls).await.expect("run starts");
-    tokio::time::timeout(
+    let events = tokio::time::timeout(
         Duration::from_secs(10),
         stream.map(|r| r.expect("stream event")).collect::<Vec<_>>(),
     )
     .await
-    .expect("run finished in time")
+    .expect("run finished in time");
+    if let Some(directory) = std::env::var_os("LUNA_STEERING_EVIDENCE_DIR") {
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let name = scenario
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let artifact = serde_json::json!({"provider": "deterministic native protocol fixture", "scenario": scenario, "events": events});
+        std::fs::write(
+            directory.join(format!("{name}-{}.json", uuid::Uuid::new_v4())),
+            serde_json::to_vec_pretty(&artifact).unwrap(),
+        )
+        .unwrap();
+    }
+    events
 }
 
 fn synthetic_runtime_contract() -> luna_proto::LunaAgentRuntimeContract {
@@ -1151,6 +1167,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
             AgentEvent::Steered {
                 assistant_message_id,
                 next_assistant_message_id,
+                ..
             } => Some((
                 assistant_message_id.clone(),
                 next_assistant_message_id.clone(),
@@ -1177,7 +1194,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
 }
 
 #[tokio::test]
-async fn explicit_steer_correlated_ack_emits_one_boundary_despite_text_echo() {
+async fn explicit_steer_native_record_emits_one_correlated_boundary() {
     let (controls, steer, _token) = controls("Yes");
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
@@ -1201,7 +1218,7 @@ async fn explicit_steer_correlated_ack_emits_one_boundary_despite_text_echo() {
             .filter(|event| matches!(event, AgentEvent::Steered { .. }))
             .count(),
         1,
-        "only the correlated ACK, not the text echo, splits the transcript: {events:?}"
+        "only the native clientId record splits the transcript: {events:?}"
     );
     assert!(events.contains(&AgentEvent::TextDelta {
         text: "steered".into()
@@ -1362,7 +1379,7 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
 }
 
 #[tokio::test]
-async fn explicit_steer_correlated_ack_settles_without_provider_echo() {
+async fn explicit_steer_ack_only_remains_pending_without_boundary() {
     let (controls, steer, _token) = controls("Yes");
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
@@ -1391,8 +1408,8 @@ async fn explicit_steer_correlated_ack_settles_without_provider_echo() {
             .iter()
             .filter(|event| matches!(event, AgentEvent::Steered { .. }))
             .count(),
-        1,
-        "the matching turnId acknowledges steering without requiring an echo: {events:?}"
+        0,
+        "acceptance alone must not manufacture incorporation: {events:?}"
     );
 }
 
@@ -3108,4 +3125,188 @@ async fn real_image_generation_smoke() {
     assert!(std::path::Path::new(path).is_absolute());
     assert!(std::path::Path::new(path).is_file());
     assert!(serde_json::to_vec(&events).unwrap().len() < 64 * 1024);
+}
+
+// Failure scenarios were recorded before the delivery implementation.
+// The peer is deterministic native-protocol coverage, not a real model.
+#[tokio::test]
+async fn native_steering_reconciles_lost_ack_and_terminal_readback() {
+    for scenario in ["scenario:steer-record-lost-ack", "scenario:steer-readback"] {
+        let (controls, steer, _token) = controls("Yes");
+        let (tx, rx) = oneshot::channel();
+        steer
+            .send(SteerMessage {
+                prompt: "redirect please".into(),
+                message_id: Some("native-correlated-steer".into()),
+                delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                acceptance: Some(tx),
+            })
+            .await
+            .unwrap();
+        drop(steer);
+        let events = run_to_end(&harness(), request(scenario), controls).await;
+        let acceptance = rx.await.unwrap();
+        if scenario.ends_with("lost-ack") {
+            assert!(matches!(acceptance, SteerAcceptance::Unknown(_)));
+        } else {
+            assert_eq!(acceptance, SteerAcceptance::Accepted);
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event,
+            AgentEvent::Steered { user_message_id: Some(id), .. }
+                if id == "native-correlated-steer"))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::Done { .. }))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_steering_records_multiple_ids_once_in_order() {
+    let (controls, steer, _token) = controls("Yes");
+    let mut replies = Vec::new();
+    for id in ["native-a", "native-b"] {
+        let (tx, rx) = oneshot::channel();
+        replies.push(rx);
+        steer
+            .send(SteerMessage {
+                prompt: "same prompt".into(),
+                message_id: Some(id.into()),
+                delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                acceptance: Some(tx),
+            })
+            .await
+            .unwrap();
+    }
+    drop(steer);
+    let events = run_to_end(
+        &harness(),
+        request("scenario:steer-multiple-records"),
+        controls,
+    )
+    .await;
+    for reply in replies {
+        assert_eq!(reply.await.unwrap(), SteerAcceptance::Accepted);
+    }
+    let ids = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Steered {
+                user_message_id, ..
+            } => user_message_id.as_deref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["native-a", "native-b"], "{events:?}");
+}
+
+#[tokio::test]
+async fn native_terminal_interruption_is_truthful_without_local_stop() {
+    let (controls, steer, _token) = controls("Yes");
+    drop(steer);
+    let events = run_to_end(
+        &harness(),
+        request("scenario:external-interruption"),
+        controls,
+    )
+    .await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn native_steering_resume_readback_does_not_reopen_old_turn() {
+    let (controls, steer, _token) = controls("Yes");
+    drop(steer);
+    let mut req = request("scenario:resume-steering-reconciliation");
+    req.resume = Some("th-resumed".into());
+    req.model_options.insert(
+        luna_harness::codex::LUNA_STEER_RECONCILE_OPTION.into(),
+        serde_json::json!(["prior-steer", "missing-steer"]),
+    );
+    let events = run_to_end(&harness(), req, controls).await;
+    let records = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Steered {
+                user_message_id,
+                next_assistant_message_id,
+                ..
+            } => Some((
+                user_message_id.as_deref(),
+                next_assistant_message_id.as_deref(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records, vec![(Some("prior-steer"), None)], "{events:?}");
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn native_terminal_status_wins_the_local_interrupt_race() {
+    for (scenario, expected) in [
+        ("completed", DoneStatus::Completed),
+        ("failed", DoneStatus::Errored),
+        ("interrupted", DoneStatus::Interrupted),
+    ] {
+        let (controls, steer, token) = controls("Yes");
+        let mut stream = harness()
+            .run(
+                request(&format!("scenario:terminal-race:{scenario}")),
+                controls,
+            )
+            .await
+            .unwrap();
+        let events = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                let event = event.unwrap();
+                if matches!(&event, AgentEvent::TextDelta { text } if text == "terminal-race-ready")
+                {
+                    token.cancel();
+                }
+                events.push(event);
+            }
+            events
+        })
+        .await
+        .unwrap();
+        drop(steer);
+        let statuses = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::Done { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(statuses, vec![expected], "{events:?}");
+    }
 }

@@ -906,6 +906,7 @@ async fn run_session(session: Session) {
                         // boundary/follow-up behavior.
                         let (prev, next) = norm.rotate_for_steer();
                         let ev = AgentEvent::Steered {
+                            user_message_id: None,
                             assistant_message_id: Some(prev),
                             next_assistant_message_id: Some(next),
                         };

@@ -6,6 +6,7 @@
 # by crates/harness/tests/codex.rs.
 
 emit() { printf '%s\n' "$1"; }
+cid() { printf '%s' "$1" | sed 's/.*"clientUserMessageId":"\([^"]*\)".*/\1/'; }
 rid() { printf '%s' "$1" | sed 's/.*"id":\([0-9]*\).*/\1/'; }
 has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
 [ -z "$CODEX_HOME" ] || mkdir -p "$CODEX_HOME"
@@ -228,9 +229,18 @@ if has "$turnline" '"method":"thread/name/set"'; then
   emit "{\"id\":$(rid "$turnline"),\"result\":{}}"
   read -r turnline || exit 1
 fi
+if has "$turnline" '"method":"thread/read"' && has "$turnline" '"threadId":"th-resumed"'; then
+  emit "{\"id\":$(rid "$turnline"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"id\":\"prior-turn\",\"items\":[{\"type\":\"userMessage\",\"clientId\":\"prior-steer\"},{\"type\":\"userMessage\",\"clientId\":\"unrelated-input\"}]}]}}}"
+  read -r turnline || exit 1
+fi
 tid=$(rid "$turnline")
 
 case "$turnline" in
+*scenario:resume-steering-reconciliation*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"new-turn\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-resumed","turn":{"id":"new-turn"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-resumed","turn":{"id":"new-turn","status":"completed"}}}'
+  ;;
 
 *scenario:computer-use:response-before-start*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t1\"}}}"
@@ -688,6 +698,59 @@ case "$turnline" in
   ;;
 
 # NOTE: specific steer scenarios before steer — `case` takes the first match.
+*scenario:terminal-race:*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  emit '{"method":"item/agentMessage/delta","params":{"threadId":"th-1","turnId":"t-1","itemId":"m1","delta":"terminal-race-ready"}}'
+  read -r interruptline || exit 1
+  has "$interruptline" '"method":"turn/interrupt"' || exit 1
+  emit "{\"id\":$(rid "$interruptline"),\"result\":{}}"
+  status=completed
+  if has "$turnline" 'terminal-race:failed'; then status=failed; fi
+  if has "$turnline" 'terminal-race:interrupted'; then status=interrupted; fi
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"th-1\",\"turn\":{\"id\":\"t-1\",\"status\":\"$status\"}}}"
+  ;;
+
+*scenario:external-interruption*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"interrupted"}}}'
+  ;;
+
+*scenario:steer-record-lost-ack*|*scenario:steer-readback*|*scenario:steer-multiple-records*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  read -r steerline || exit 1
+  has "$steerline" '"method":"turn/steer"' || exit 1
+  client_id=$(cid "$steerline")
+  case "$client_id" in native-correlated-steer|native-a) ;; *) exit 1 ;; esac
+  if has "$turnline" 'scenario:steer-record-lost-ack'; then
+    emit "{\"method\":\"item/started\",\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-1\",\"item\":{\"id\":\"u1\",\"type\":\"userMessage\",\"clientId\":\"$client_id\",\"content\":[]}}}"
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+  else
+    emit "{\"id\":$(rid "$steerline"),\"result\":{\"turnId\":\"t-1\"}}"
+    if has "$turnline" 'scenario:steer-multiple-records'; then
+      read -r second || exit 1
+      has "$second" '"clientUserMessageId":"native-b"' || exit 1
+      emit "{\"id\":$(rid "$second"),\"result\":{\"turnId\":\"t-1\"}}"
+      # Foreign/stale/missing identity must not consume either accepted input.
+      emit '{"method":"item/started","params":{"threadId":"foreign","turnId":"t-1","item":{"type":"userMessage","clientId":"native-a"}}}'
+      emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"stale","item":{"type":"userMessage","clientId":"native-a"}}}'
+      emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-1","item":{"type":"userMessage","text":"same prompt"}}}'
+      for id in native-a native-a native-b native-b; do
+        emit "{\"method\":\"item/started\",\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-1\",\"item\":{\"type\":\"userMessage\",\"clientId\":\"$id\"}}}"
+      done
+      emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+    else
+      emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+      read -r readback || exit 1
+      has "$readback" '"method":"thread/read"' || exit 1
+      has "$readback" '"includeTurns":true' || exit 1
+      emit "{\"id\":$(rid "$readback"),\"result\":{\"thread\":{\"id\":\"th-1\",\"turns\":[{\"id\":\"t-1\",\"items\":[{\"type\":\"userMessage\",\"clientId\":\"$client_id\"}]}]}}}"
+    fi
+  fi
+  ;;
+
 *scenario:steer-correlation-ambiguous*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
@@ -695,11 +758,14 @@ case "$turnline" in
   sid=$(rid "$steerline")
   has "$steerline" '"method":"turn/steer"' || exit 1
   emit "{\"id\":$sid,\"result\":{\"turnId\":\"t-1\"}}"
+  client_id=$(cid "$steerline")
   # None of these identity-free text echoes can prove which durable request
   # was incorporated: one is stale, two are duplicate same-turn content.
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-stale","item":{"id":"u-stale","type":"userMessage","text":"same prompt"}}}'
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"id":"u-first","type":"userMessage","text":"same prompt"}}}'
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"id":"u-duplicate","type":"userMessage","text":"same prompt"}}}'
+  emit "{\"method\":\"item/started\",\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-1\",\"item\":{\"type\":\"userMessage\",\"clientId\":\"$client_id\"}}}"
+  emit "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-1\",\"item\":{\"type\":\"userMessage\",\"clientId\":\"$client_id\"}}}"
   emit '{"method":"item/agentMessage/delta","params":{"threadId":"th-1","turnId":"t-1","itemId":"m1","delta":"ambiguous-echoes-observed"}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
   ;;
@@ -736,7 +802,7 @@ case "$turnline" in
   sid=$(rid "$steerline")
   has "$steerline" '"method":"turn/steer"' || exit 1
   emit "{\"id\":$sid,\"result\":{\"turnId\":\"t-1\"}}"
-  # The correlated ACK settles this input without needing a userMessage echo.
+  # Acceptance schedules input; without native evidence it stays unconfirmed.
   emit '{"method":"item/agentMessage/delta","params":{"itemId":"m1","delta":"accepted-without-incorporation"}}'
   emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
   ;;
@@ -774,7 +840,8 @@ case "$turnline" in
     has "$steerline" '"expectedTurnId":"t-1"' &&
     has "$steerline" 'redirect please'; then
     emit "{\"id\":$sid,\"result\":{\"turnId\":\"t-1\"}}"
-    emit '{"method":"item/completed","params":{"item":{"id":"u-steer","type":"userMessage","text":"redirect please"}}}'
+    client_id=$(cid "$steerline")
+    emit "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-1\",\"item\":{\"id\":\"u-steer\",\"type\":\"userMessage\",\"clientId\":\"$client_id\",\"content\":[]}}}"
     emit '{"method":"item/agentMessage/delta","params":{"itemId":"m1","delta":"steered"}}'
     emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
   else

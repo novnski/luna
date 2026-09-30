@@ -1860,6 +1860,7 @@ async fn run_session(session: Session) {
             if let Some(steer) = queued_steers.pop_front() {
                 let (prev, next) = rotate(&mut assistant_message_id);
                 if !send(&event_tx, AgentEvent::Steered {
+                    user_message_id: None,
                     assistant_message_id: Some(prev),
                     next_assistant_message_id: Some(next),
                 }).await {
@@ -1996,6 +1997,7 @@ async fn run_session(session: Session) {
                             // steers live runs — but deliver, don't drop).
                             let (prev, next) = rotate(&mut assistant_message_id);
                             let _ = send(&event_tx, AgentEvent::Steered {
+                                user_message_id: None,
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
                             }).await;

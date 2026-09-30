@@ -1466,6 +1466,7 @@ mod tests {
             &AgentEvent::Subagent {
                 parent_tool_use_id: "toolu_sub".into(),
                 event: Box::new(AgentEvent::Steered {
+                    user_message_id: None,
                     assistant_message_id: None,
                     next_assistant_message_id: None,
                 }),
@@ -1572,6 +1573,7 @@ mod tests {
         fold_event_into_parts(
             &mut parts,
             &tagged(AgentEvent::Steered {
+                user_message_id: None,
                 assistant_message_id: None,
                 next_assistant_message_id: None,
             }),
